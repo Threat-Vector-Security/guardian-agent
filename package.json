@@ -1,0 +1,55 @@
+{
+  "name": "guardianagent",
+  "version": "1.0.0",
+  "description": "Security-first AI agent orchestration with three-layer defense system",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "guardianagent": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm test && npm run build"
+  },
+  "keywords": ["ai", "agent", "llm", "ollama", "guardian", "security", "orchestration", "personal-assistant"],
+  "author": "Alex Kenley",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexkenley/guardian-agent.git"
+  },
+  "homepage": "https://github.com/alexkenley/guardian-agent",
+  "bugs": {
+    "url": "https://github.com/alexkenley/guardian-agent/issues"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "croner": "^10.0.1",
+    "grammy": "^1.40.0",
+    "js-yaml": "^4.1.1",
+    "openai": "^6.24.0",
+    "pino": "^10.3.1"
+  }
+}

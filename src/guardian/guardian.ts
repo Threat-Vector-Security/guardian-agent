@@ -1,0 +1,266 @@
+/**
+ * Guardian — admission controller pipeline for agent actions.
+ *
+ * Composable pipeline of controllers that validate and optionally
+ * mutate agent actions before they're executed. Protects users
+ * from agents (and agents from themselves).
+ */
+
+import * as path from 'node:path';
+import { hasCapability } from './capabilities.js';
+import type { Capability } from './capabilities.js';
+import { SecretScanner } from './secret-scanner.js';
+import { InputSanitizer } from './input-sanitizer.js';
+import type { InputSanitizerConfig } from './input-sanitizer.js';
+import { RateLimiter } from './rate-limiter.js';
+import type { RateLimiterConfig } from './rate-limiter.js';
+import { createLogger } from '../util/logging.js';
+
+const log = createLogger('guardian');
+
+/** An action an agent wants to perform. */
+export interface AgentAction {
+  /** Action type (e.g., 'write_file', 'execute_command', 'send_message', 'message_dispatch'). */
+  type: string;
+  /** Agent requesting the action. */
+  agentId: string;
+  /** Capabilities the agent holds. */
+  capabilities: readonly string[];
+  /** Action parameters. */
+  params: Record<string, unknown>;
+}
+
+/** Result of an admission check. */
+export interface AdmissionResult {
+  /** Whether the action is allowed. */
+  allowed: boolean;
+  /** Reason for denial (if denied). */
+  reason?: string;
+  /** Controller that made the decision. */
+  controller: string;
+  /** Modified action (for mutating controllers). */
+  mutatedAction?: AgentAction;
+}
+
+/** Phase of the admission pipeline. */
+export type AdmissionPhase = 'mutating' | 'validating';
+
+/** An admission controller in the Guardian pipeline. */
+export interface AdmissionController {
+  /** Controller name for logging. */
+  name: string;
+  /** Phase: mutating runs first, validating runs second. */
+  phase: AdmissionPhase;
+  /** Check an action. Return null to pass through. */
+  check(action: AgentAction): AdmissionResult | null;
+}
+
+/** Built-in: checks agent capabilities against action requirements. */
+export class CapabilityController implements AdmissionController {
+  readonly name = 'CapabilityController';
+  readonly phase: AdmissionPhase = 'validating';
+
+  private actionCapabilityMap: Map<string, Capability>;
+
+  constructor() {
+    this.actionCapabilityMap = new Map([
+      ['read_file', 'read_files'],
+      ['write_file', 'write_files'],
+      ['execute_command', 'execute_commands'],
+      ['http_request', 'network_access'],
+      ['read_email', 'read_email'],
+      ['draft_email', 'draft_email'],
+      ['send_email', 'send_email'],
+      ['git_operation', 'git_operations'],
+      ['install_package', 'install_packages'],
+    ]);
+  }
+
+  check(action: AgentAction): AdmissionResult | null {
+    const requiredCap = this.actionCapabilityMap.get(action.type);
+    if (!requiredCap) {
+      return null; // Unknown action type — pass through
+    }
+
+    if (!hasCapability(action.capabilities, requiredCap)) {
+      return {
+        allowed: false,
+        reason: `Agent '${action.agentId}' lacks capability '${requiredCap}' for action '${action.type}'`,
+        controller: this.name,
+      };
+    }
+
+    return null; // Allowed — pass through
+  }
+}
+
+/** Built-in: scans content for secrets. */
+export class SecretScanController implements AdmissionController {
+  readonly name = 'SecretScanController';
+  readonly phase: AdmissionPhase = 'validating';
+
+  private scanner: SecretScanner;
+
+  constructor(additionalPatterns?: string[]) {
+    this.scanner = new SecretScanner(additionalPatterns);
+  }
+
+  check(action: AgentAction): AdmissionResult | null {
+    // Scan content params for secrets
+    const content = action.params['content'] as string | undefined;
+    if (content) {
+      const secrets = this.scanner.scanContent(content);
+      if (secrets.length > 0) {
+        return {
+          allowed: false,
+          reason: `Secret detected in content: ${secrets.map(s => s.pattern).join(', ')}`,
+          controller: this.name,
+        };
+      }
+    }
+
+    return null;
+  }
+}
+
+/** Built-in: blocks access to denied file paths with path normalization. */
+export class DeniedPathController implements AdmissionController {
+  readonly name = 'DeniedPathController';
+  readonly phase: AdmissionPhase = 'validating';
+
+  private scanner: SecretScanner;
+
+  constructor(additionalPatterns?: string[], deniedPaths?: string[]) {
+    this.scanner = new SecretScanner(additionalPatterns);
+    if (deniedPaths && deniedPaths.length > 0) {
+      this.scanner.addDeniedPaths(deniedPaths);
+    }
+  }
+
+  check(action: AgentAction): AdmissionResult | null {
+    const filePath = action.params['path'] as string | undefined;
+    if (!filePath) return null;
+
+    // Normalize path: convert backslashes to forward slashes for cross-platform,
+    // then apply path.normalize for traversal resolution
+    const normalized = path.normalize(filePath).replace(/\\/g, '/');
+
+    // Check for path traversal attempts (.. after normalization)
+    if (normalized.includes('..')) {
+      return {
+        allowed: false,
+        reason: `Path traversal detected in '${filePath}'`,
+        controller: this.name,
+      };
+    }
+
+    const result = this.scanner.isDeniedPath(normalized);
+    if (result.denied) {
+      return {
+        allowed: false,
+        reason: `Access denied to path '${normalized}': ${result.reason}`,
+        controller: this.name,
+      };
+    }
+
+    return null;
+  }
+}
+
+/** Options for creating a default Guardian pipeline. */
+export interface GuardianCreateOptions {
+  logDenials?: boolean;
+  additionalSecretPatterns?: string[];
+  deniedPaths?: string[];
+  inputSanitization?: Partial<InputSanitizerConfig> & { enabled?: boolean };
+  rateLimit?: Partial<RateLimiterConfig>;
+}
+
+/** Guardian — composable admission controller pipeline. */
+export class Guardian {
+  private controllers: AdmissionController[] = [];
+  private logDenials: boolean;
+
+  constructor(options?: { logDenials?: boolean }) {
+    this.logDenials = options?.logDenials ?? true;
+  }
+
+  /** Add a controller to the pipeline. */
+  use(controller: AdmissionController): this {
+    this.controllers.push(controller);
+    // Sort: mutating first, then validating
+    this.controllers.sort((a, b) => {
+      if (a.phase === 'mutating' && b.phase === 'validating') return -1;
+      if (a.phase === 'validating' && b.phase === 'mutating') return 1;
+      return 0;
+    });
+    return this;
+  }
+
+  /** Run an action through the admission pipeline. */
+  check(action: AgentAction): AdmissionResult {
+    let currentAction = action;
+
+    for (const controller of this.controllers) {
+      const result = controller.check(currentAction);
+      if (result === null) continue;
+
+      if (!result.allowed) {
+        if (this.logDenials) {
+          log.warn({
+            agentId: action.agentId,
+            actionType: action.type,
+            controller: result.controller,
+            reason: result.reason,
+          }, 'Guardian denied action');
+        }
+        return result;
+      }
+
+      // Mutating controller may have modified the action
+      if (result.mutatedAction) {
+        currentAction = result.mutatedAction;
+      }
+    }
+
+    return {
+      allowed: true,
+      controller: 'guardian',
+      mutatedAction: currentAction !== action ? currentAction : undefined,
+    };
+  }
+
+  /** Get all registered controllers. */
+  getControllers(): readonly AdmissionController[] {
+    return this.controllers;
+  }
+
+  /**
+   * Create a Guardian with all built-in controllers.
+   *
+   * Pipeline order:
+   *   MUTATING:   1. InputSanitizer
+   *   VALIDATING: 2. RateLimiter → 3. CapabilityController →
+   *               4. SecretScanController → 5. DeniedPathController
+   */
+  static createDefault(options?: GuardianCreateOptions): Guardian {
+    const guardian = new Guardian({ logDenials: options?.logDenials });
+
+    // Mutating phase
+    if (options?.inputSanitization?.enabled !== false) {
+      guardian.use(new InputSanitizer(options?.inputSanitization));
+    }
+
+    // Validating phase
+    if (options?.rateLimit) {
+      guardian.use(new RateLimiter(options.rateLimit));
+    } else {
+      guardian.use(new RateLimiter());
+    }
+    guardian.use(new CapabilityController());
+    guardian.use(new SecretScanController(options?.additionalSecretPatterns));
+    guardian.use(new DeniedPathController(options?.additionalSecretPatterns, options?.deniedPaths));
+
+    return guardian;
+  }
+}
