@@ -78,7 +78,7 @@ docs/           — Architecture docs & research
 
 ## Configuration
 
-Config loaded from `~/.openagent/config.yaml` with `${ENV_VAR}` interpolation:
+Config loaded from `~/.guardianagent/config.yaml` with `${ENV_VAR}` interpolation:
 
 ```yaml
 llm:

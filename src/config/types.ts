@@ -1,7 +1,7 @@
 /**
  * Configuration types for GuardianAgent.
  *
- * Loaded from ~/.openagent/config.yaml with environment variable
+ * Loaded from ~/.guardianagent/config.yaml with environment variable
  * interpolation and deep-merged with defaults.
  */
 
@@ -178,7 +178,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   llm: {
     ollama: {
       provider: 'ollama',
-      baseUrl: 'http://localhost:11434',
+      baseUrl: 'http://127.0.0.1:11434',
       model: 'llama3.2',
       maxTokens: 2048,
       temperature: 0.7,
@@ -190,7 +190,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   channels: {
     cli: { enabled: true },
     telegram: { enabled: false, polling: true },
-    web: { enabled: false, port: 3000, host: 'localhost' },
+    web: { enabled: true, port: 3000, host: 'localhost' },
   },
   guardian: {
     enabled: true,

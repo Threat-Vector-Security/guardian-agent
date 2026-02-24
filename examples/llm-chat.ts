@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const provider = createProvider({
     provider: 'ollama',
     model: 'llama3.2',
-    baseUrl: 'http://localhost:11434',
+    baseUrl: 'http://127.0.0.1:11434',
   });
 
   // List available models

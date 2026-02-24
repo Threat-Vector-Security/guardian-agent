@@ -96,12 +96,27 @@ function generateId(): string {
  * Events are stored in a fixed-size buffer. When full, oldest events
  * are evicted. Events are also logged to pino at appropriate levels.
  */
+/** Listener callback for real-time audit event notifications. */
+export type AuditListener = (event: AuditEvent) => void;
+
 export class AuditLog {
   private events: AuditEvent[] = [];
   private maxEvents: number;
+  private listeners: Set<AuditListener> = new Set();
 
   constructor(maxEvents: number = 10_000) {
     this.maxEvents = maxEvents;
+  }
+
+  /**
+   * Add a listener that is notified on every new audit event.
+   * Returns an unsubscribe function.
+   */
+  addListener(listener: AuditListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /** Record a new audit event. */
@@ -137,6 +152,15 @@ export class AuditLog {
         break;
       default:
         log.info(logData, `[AUDIT] ${full.type}`);
+    }
+
+    // Notify listeners
+    for (const listener of this.listeners) {
+      try {
+        listener(full);
+      } catch {
+        // Listener errors must not break recording
+      }
     }
 
     return full;

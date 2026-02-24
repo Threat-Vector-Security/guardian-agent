@@ -1,7 +1,7 @@
 /**
  * Configuration loader.
  *
- * Loads from ~/.openagent/config.yaml with ${ENV_VAR} interpolation,
+ * Loads from ~/.guardianagent/config.yaml with ${ENV_VAR} interpolation,
  * deep-merges with defaults, and validates required fields.
  */
 
@@ -13,7 +13,7 @@ import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 
 /** Default config file path. */
-export const DEFAULT_CONFIG_PATH = join(homedir(), '.openagent', 'config.yaml');
+export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yaml');
 
 /** Interpolate ${ENV_VAR} references in a string. */
 export function interpolateEnvVars(value: string): string {
