@@ -49,7 +49,7 @@ There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction po
 npm install guardianagent
 ```
 
-Create `~/.openagent/config.yaml`:
+Create `~/.guardianagent/config.yaml`:
 
 ```yaml
 llm:

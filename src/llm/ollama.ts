@@ -62,7 +62,7 @@ export class OllamaProvider implements LLMProvider {
   private timeoutMs: number;
 
   constructor(config: LLMConfig) {
-    this.baseUrl = (config.baseUrl ?? 'http://localhost:11434').replace(/\/$/, '');
+    this.baseUrl = (config.baseUrl ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
     this.model = config.model;
     this.maxTokens = config.maxTokens ?? 2048;
     this.temperature = config.temperature ?? 0.7;

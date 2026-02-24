@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GuardianAgent Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Auth Modal -->
+  <div id="auth-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h2>GuardianAgent</h2>
+      <p>Enter your authentication token to continue.</p>
+      <input type="password" id="auth-token-input" placeholder="Bearer token" autocomplete="off">
+      <button id="auth-submit" class="btn btn-primary">Connect</button>
+      <button id="auth-skip" class="btn btn-secondary">Skip (no auth)</button>
+      <p id="auth-error" class="error-text" style="display:none;"></p>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="app" style="display:none;">
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">GuardianAgent</h1>
+      </div>
+      <div class="header-right">
+        <span id="connection-indicator" class="indicator disconnected">Disconnected</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar">
+        <a href="#/" class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">&#9632;</span> Dashboard
+        </a>
+        <a href="#/chat" class="nav-item" data-page="chat">
+          <span class="nav-icon">&#9993;</span> Chat
+        </a>
+        <a href="#/security" class="nav-item" data-page="security">
+          <span class="nav-icon">&#9888;</span> Security
+        </a>
+        <a href="#/monitoring" class="nav-item" data-page="monitoring">
+          <span class="nav-icon">&#9881;</span> Monitoring
+        </a>
+        <a href="#/config" class="nav-item" data-page="config">
+          <span class="nav-icon">&#9998;</span> Config
+        </a>
+      </nav>
+
+      <main id="content" class="content">
+        <!-- Pages render here -->
+      </main>
+    </div>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

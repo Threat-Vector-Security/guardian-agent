@@ -157,4 +157,51 @@ describe('AuditLog', () => {
       expect(auditLog.size).toBe(0);
     });
   });
+
+  describe('listeners', () => {
+    it('should notify listeners when events are recorded', () => {
+      const received: AuditEvent[] = [];
+      auditLog.addListener((event) => received.push(event));
+
+      auditLog.record({ type: 'action_denied', severity: 'warn', agentId: 'a1', details: {} });
+      auditLog.record({ type: 'secret_detected', severity: 'critical', agentId: 'a2', details: {} });
+
+      expect(received.length).toBe(2);
+      expect(received[0].type).toBe('action_denied');
+      expect(received[1].type).toBe('secret_detected');
+    });
+
+    it('should unsubscribe when calling the returned function', () => {
+      const received: AuditEvent[] = [];
+      const unsubscribe = auditLog.addListener((event) => received.push(event));
+
+      auditLog.record({ type: 'action_allowed', severity: 'info', agentId: 'a1', details: {} });
+      expect(received.length).toBe(1);
+
+      unsubscribe();
+
+      auditLog.record({ type: 'action_denied', severity: 'warn', agentId: 'a2', details: {} });
+      expect(received.length).toBe(1);
+    });
+
+    it('should not break recording if a listener throws', () => {
+      auditLog.addListener(() => { throw new Error('listener error'); });
+
+      const event = auditLog.record({ type: 'action_allowed', severity: 'info', agentId: 'a1', details: {} });
+      expect(event.id).toMatch(/^audit-/);
+      expect(auditLog.size).toBe(1);
+    });
+
+    it('should support multiple listeners', () => {
+      let count1 = 0;
+      let count2 = 0;
+      auditLog.addListener(() => { count1++; });
+      auditLog.addListener(() => { count2++; });
+
+      auditLog.record({ type: 'action_allowed', severity: 'info', agentId: 'a1', details: {} });
+
+      expect(count1).toBe(1);
+      expect(count2).toBe(1);
+    });
+  });
 });
