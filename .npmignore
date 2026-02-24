@@ -1,0 +1,14 @@
+src/
+**/*.test.ts
+docs/
+examples/
+.claude/
+.github/
+CLAUDE.md
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+tsconfig.json
+*.log
+scripts/
