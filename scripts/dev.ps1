@@ -119,6 +119,175 @@ function Get-TestWaitMessages {
     )
 }
 
+function Get-WebAuthTokenFromContent {
+    param(
+        [string]$Content
+    )
+
+    $lines = $Content -split "`r?`n"
+    $inWeb = $false
+    $webIndent = 0
+    $inAuth = $false
+    $authIndent = 0
+
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $line = $lines[$i]
+        $trimmed = $line.Trim()
+        $indent = $line.Length - $line.TrimStart().Length
+
+        if (-not $inWeb -and $line -match '^\s*web:\s*$') {
+            $inWeb = $true
+            $webIndent = $indent
+            $inAuth = $false
+            continue
+        }
+
+        if ($inWeb) {
+            $isNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $webIndent)
+            if ($isNextBlock) {
+                $inWeb = $false
+                $inAuth = $false
+                continue
+            }
+        }
+
+        if (-not $inWeb) { continue }
+
+        if (-not $inAuth -and $line -match '^\s*auth:\s*$') {
+            $inAuth = $true
+            $authIndent = $indent
+            continue
+        }
+
+        if ($inAuth) {
+            $isAuthNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $authIndent)
+            if ($isAuthNextBlock) {
+                $inAuth = $false
+            }
+        }
+
+        if ($line -match '^\s*authToken:\s*(.+?)\s*$') {
+            return Resolve-WebTokenValue -RawValue $Matches[1]
+        }
+
+        if ($inAuth -and $line -match '^\s*token:\s*(.+?)\s*$') {
+            return Resolve-WebTokenValue -RawValue $Matches[1]
+        }
+    }
+
+    return $null
+}
+
+function Resolve-WebTokenValue {
+    param(
+        [string]$RawValue
+    )
+
+    $raw = $RawValue.Trim().Trim("'`"")
+    if (-not $raw) { return $null }
+
+    if ($raw -match '^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$') {
+        $envName = $Matches[1]
+        $envValue = [Environment]::GetEnvironmentVariable($envName)
+        if ($envValue) {
+            return $envValue
+        }
+        return $null
+    }
+
+    return $raw
+}
+
+function Ensure-WebAuthTokenInContent {
+    param(
+        [string]$Content,
+        [string]$Token
+    )
+
+    $lines = $Content -split "`r?`n"
+    $result = New-Object System.Collections.Generic.List[string]
+
+    $inWeb = $false
+    $webIndent = 0
+    $hasToken = $false
+    $updated = $false
+    $effectiveToken = $null
+
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $line = $lines[$i]
+        $trimmed = $line.Trim()
+        $indent = $line.Length - $line.TrimStart().Length
+
+        if (-not $inWeb -and $line -match '^\s*web:\s*$') {
+            $inWeb = $true
+            $webIndent = $indent
+            $hasToken = $false
+            $result.Add($line)
+            continue
+        }
+
+        if ($inWeb) {
+            $isNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $webIndent)
+            if ($isNextBlock) {
+                if (-not $hasToken) {
+                    $result.Add((' ' * ($webIndent + 2)) + "authToken: $Token")
+                    $effectiveToken = $Token
+                    $hasToken = $true
+                    $updated = $true
+                }
+                $inWeb = $false
+            }
+        }
+
+        if ($inWeb) {
+            if ($line -match '^\s*authToken:\s*(.*)$') {
+                $raw = $Matches[1].Trim().Trim("'`"")
+                if ($raw -match '^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$') {
+                    $envName = $Matches[1]
+                    $envValue = [Environment]::GetEnvironmentVariable($envName)
+                    if ($envValue) {
+                        $effectiveToken = $envValue
+                    } else {
+                        $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
+                        $effectiveToken = $Token
+                        $updated = $true
+                    }
+                    $hasToken = $true
+                } elseif ($raw) {
+                    $effectiveToken = $raw
+                    $hasToken = $true
+                } else {
+                    $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
+                    $effectiveToken = $Token
+                    $hasToken = $true
+                    $updated = $true
+                }
+            } elseif ($line -match '^\s*#\s*authToken:\s*') {
+                if (-not $hasToken) {
+                    $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
+                    $effectiveToken = $Token
+                    $hasToken = $true
+                    $updated = $true
+                }
+            }
+        }
+
+        $result.Add($line)
+    }
+
+    if ($inWeb -and -not $hasToken) {
+        $result.Add((' ' * ($webIndent + 2)) + "authToken: $Token")
+        $effectiveToken = $Token
+        $updated = $true
+    }
+
+    return @{
+        Content = ($result -join "`r`n")
+        Updated = $updated
+        Token = $effectiveToken
+    }
+}
+
 try {
 
 # --- ASCII Art Banner ---
@@ -287,7 +456,7 @@ try {
     Write-Host "  Ollama: Not running" -ForegroundColor DarkCyan
     Write-Host "  The CLI will start but LLM responses will fail without a provider." -ForegroundColor DarkCyan
     Write-Host "  To fix: Start Ollama and run 'ollama pull llama3.2'" -ForegroundColor DarkCyan
-    Write-Host "  Or: Configure an API provider (Anthropic/OpenAI) via the web Config Center or CLI /setup" -ForegroundColor DarkCyan
+    Write-Host "  Or: Configure an API provider (Anthropic/OpenAI) via the web Config Center or CLI /config" -ForegroundColor DarkCyan
 }
 
 # --- Check config file ---
@@ -372,6 +541,7 @@ runtime:
 # --- Check if web channel is enabled in existing config ---
 $webEnabled = $false
 $webPort = 3000
+$webAuthToken = $null
 if (Test-Path $configFile) {
     $configContent = Get-Content $configFile -Raw
     if ($configContent -match 'web:\s*\n\s*enabled:\s*true') {
@@ -386,6 +556,20 @@ if (Test-Path $configFile) {
         $configContent = $configContent -replace '(web:\s*\n\s*enabled:\s*)false', '${1}true'
         Set-Content -Path $configFile -Value $configContent -Encoding UTF8
         $webEnabled = $true
+    }
+
+    if ($webEnabled) {
+        $webAuthToken = Get-WebAuthTokenFromContent -Content $configContent
+        if (-not $webAuthToken) {
+            $generatedToken = [Guid]::NewGuid().ToString('N')
+            $ensureResult = Ensure-WebAuthTokenInContent -Content $configContent -Token $generatedToken
+            $configContent = [string]$ensureResult.Content
+            if ([bool]$ensureResult.Updated) {
+                Set-Content -Path $configFile -Value $configContent -Encoding UTF8
+                Write-Host "  Web auth token set in config for dashboard access." -ForegroundColor Green
+            }
+            $webAuthToken = [string]$ensureResult.Token
+        }
     }
 }
 
@@ -411,6 +595,11 @@ Write-Host "  └─────────────────────
 Write-Host ""
 if ($webEnabled) {
     Write-Host "  Dashboard: " -NoNewline -ForegroundColor DarkCyan; Write-Host "http://localhost:$webPort" -ForegroundColor Green
+    if ($webAuthToken) {
+        Write-Host "  Bearer token: " -NoNewline -ForegroundColor DarkCyan; Write-Host "$webAuthToken" -ForegroundColor Green
+    } else {
+        Write-Host "  Bearer token: " -NoNewline -ForegroundColor DarkCyan; Write-Host "Not available (check startup logs)." -ForegroundColor DarkCyan
+    }
 }
 Write-Host ""
 Write-Host "  Spawning GuardianAgent... please wait" -ForegroundColor DarkCyan

@@ -172,6 +172,41 @@ describe('SentinelAgent', () => {
       await sentinel.onSchedule(ctx);
       expect(auditLog.size).toBe(sizeBefore);
     });
+
+    it('should apply Guardian core mission to sentinel LLM analysis prompt', async () => {
+      for (let i = 0; i < 40; i++) {
+        auditLog.record({
+          type: 'action_denied',
+          severity: 'warn',
+          agentId: 'bad-agent',
+          details: {},
+        });
+      }
+
+      const llmCalls: Array<Array<{ role: string; content: string }>> = [];
+      const ctx = {
+        agentId: 'sentinel',
+        capabilities: [] as string[],
+        emit: async () => {},
+        checkAction: () => {},
+        schedule: '*/5 * * * *',
+        auditLog,
+        llm: {
+          chat: async (messages: Array<{ role: string; content: string }>) => {
+            llmCalls.push(messages);
+            return { content: '{"findings":[]}' };
+          },
+        },
+      };
+
+      await sentinel.onSchedule(ctx);
+
+      expect(llmCalls.length).toBe(1);
+      expect(llmCalls[0][0].role).toBe('system');
+      expect(llmCalls[0][0].content).toContain('You are Guardian Agent');
+      expect(llmCalls[0][0].content).toContain('Primary mission');
+      expect(llmCalls[0][0].content).toContain('Sentinel');
+    });
   });
 
   describe('agent properties', () => {

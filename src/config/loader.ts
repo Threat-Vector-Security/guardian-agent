@@ -105,6 +105,14 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push('channels.telegram.botToken is required when Telegram is enabled');
   }
 
+  const webAuth = config.channels.web?.auth;
+  if (webAuth?.mode && !['bearer_required', 'localhost_no_auth', 'disabled'].includes(webAuth.mode)) {
+    errors.push("channels.web.auth.mode must be 'bearer_required', 'localhost_no_auth', or 'disabled'");
+  }
+  if (webAuth?.sessionTtlMinutes !== undefined && webAuth.sessionTtlMinutes < 1) {
+    errors.push('channels.web.auth.sessionTtlMinutes must be >= 1');
+  }
+
   const assistant = config.assistant;
   if (!assistant.identity.primaryUserId?.trim()) {
     errors.push('assistant.identity.primaryUserId is required');
@@ -132,6 +140,24 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
 
   if (assistant.quickActions.enabled && Object.keys(assistant.quickActions.templates).length === 0) {
     errors.push('assistant.quickActions.templates must contain at least one template when enabled');
+  }
+
+  if (!['approve_each', 'approve_by_policy', 'autonomous'].includes(assistant.tools.policyMode)) {
+    errors.push("assistant.tools.policyMode must be 'approve_each', 'approve_by_policy', or 'autonomous'");
+  }
+  if (!Array.isArray(assistant.tools.allowedPaths) || assistant.tools.allowedPaths.length === 0) {
+    errors.push('assistant.tools.allowedPaths must include at least one path');
+  }
+  if (!Array.isArray(assistant.tools.allowedCommands) || assistant.tools.allowedCommands.length === 0) {
+    errors.push('assistant.tools.allowedCommands must include at least one command prefix');
+  }
+  if (!Array.isArray(assistant.tools.allowedDomains)) {
+    errors.push('assistant.tools.allowedDomains must be an array');
+  }
+  for (const [toolName, decision] of Object.entries(assistant.tools.toolPolicies)) {
+    if (!['auto', 'policy', 'manual', 'deny'].includes(decision)) {
+      errors.push(`assistant.tools.toolPolicies.${toolName} must be auto, policy, manual, or deny`);
+    }
   }
 
   const threatIntel = assistant.threatIntel;

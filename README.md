@@ -83,15 +83,15 @@ npx guardianagent
 guardianagent              # if installed globally
 ```
 
-Then run setup from UI/CLI (no manual YAML editing required):
+Then configure from web/CLI (no manual YAML editing required):
 - Web: open `#/config` (Configuration Center)
-- CLI: run `/setup`
+- CLI: use `/config`, `/auth`, and `/tools` commands as needed
 
-This configures Ollama/external LLM, optional Telegram, and marks setup completion.
+This configures local/external LLM providers, optional Telegram, web auth, and tool policy.
 
 ## Configuration
 
-Most users should configure the assistant via the web Config Center or CLI `/setup` and `/config` commands.
+Most users should configure the assistant via the web Config Center or CLI `/config`, `/auth`, and `/tools` commands.
 `config.yaml` is created/updated automatically by those flows.
 Manual editing is optional and intended only for advanced troubleshooting.
 
@@ -117,7 +117,11 @@ channels:
   web:
     enabled: true
     port: 3000
-    authToken: ${WEB_AUTH_TOKEN}
+    auth:
+      mode: bearer_required
+      token: ${WEB_AUTH_TOKEN}
+      rotateOnStartup: false
+      sessionTtlMinutes: 120
 
 assistant:
   setup:
@@ -133,6 +137,15 @@ assistant:
     enabled: true
     sqlitePath: ~/.guardianagent/assistant-analytics.sqlite
     retentionDays: 30
+  tools:
+    enabled: true
+    policyMode: approve_by_policy
+    allowExternalPosting: false
+    allowedPaths: [./docs, ./workspace]
+    allowedCommands: [npm, node, git]
+    allowedDomains: [github.com, openai.com, anthropic.com, gmail.googleapis.com]
+    toolPolicies:
+      forum_post: deny
   quickActions:
     enabled: true
     templates:
@@ -190,10 +203,13 @@ guardian:
 
 ## Personal Assistant UX Features
 
-- Unified configuration center in web (`#/config`) and CLI (`/setup`, `/config`)
+- Unified configuration center in web (`#/config`) and CLI (`/config`)
+- Web authentication control plane in web Config Center and CLI (`/auth`)
 - Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
 - SQLite-persisted conversation memory with sessions
 - SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
+- Tools control plane in web (`#/tools`) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
+- Campaign automation tools for contact discovery and approval-gated Gmail send workflows (`/campaign`)
 - Quick actions for `email`, `task`, and `calendar` workflows
 - Threat-intel workflow for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
 - Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
@@ -201,9 +217,11 @@ guardian:
 
 ### Key Commands
 
-- CLI: `/setup`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
+- CLI: `/config`, `/auth`, `/tools`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Config Center, Chat quick-actions bar, Threat Intel tab, Reference Guide tab
+- Web: Config Center, Chat quick-actions bar, Tools tab, Assistant tab, Threat Intel tab, Reference Guide tab
+
+For Gmail campaign sends, provide OAuth token via `GOOGLE_OAUTH_ACCESS_TOKEN` (scope: `gmail.send`) or `accessToken` tool arg.
 
 ## Development
 
@@ -224,6 +242,11 @@ Full documentation in `docs/architecture/`:
 
 Implementation specs in `docs/specs/`:
 - [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)
+- [Config Center](docs/specs/CONFIG-CENTER-SPEC.md)
+- [Assistant Orchestrator](docs/specs/ASSISTANT-ORCHESTRATOR-SPEC.md)
+- [Web Auth Configuration](docs/specs/WEB-AUTH-CONFIG-SPEC.md)
+- [Tools Control Plane](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [Marketing Campaign Automation](docs/specs/MARKETING-CAMPAIGN-SPEC.md)
 - [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
 - [Analytics](docs/specs/ANALYTICS-SPEC.md)
 - [Quick Actions](docs/specs/QUICK-ACTIONS-SPEC.md)

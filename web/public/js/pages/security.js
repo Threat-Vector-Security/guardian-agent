@@ -5,6 +5,7 @@
 import { api } from '../api.js';
 import { createStatusCard } from '../components/status-card.js';
 import { onSSE, offSSE } from '../app.js';
+import { applyInputTooltips } from '../tooltip.js';
 
 let auditHandler = null;
 let auditTableBody = null;
@@ -88,6 +89,7 @@ export async function renderSecurity(container) {
 
     // Filter button
     document.getElementById('filter-apply').addEventListener('click', loadAuditEvents);
+    applyInputTooltips(container);
 
     // Top denied agents
     if (summary.topDeniedAgents.length > 0) {

@@ -15,15 +15,19 @@ export interface ReferenceGuide {
 
 export function getReferenceGuide(): ReferenceGuide {
   return {
-    title: 'GuardianAgent Reference Guide',
+    title: 'Guardian Agent Reference Guide',
     intro: 'How to use your assistant, configure LLMs, and connect channels.',
     sections: [
       {
         title: 'Quick Start',
         items: [
           'Run: npx guardianagent',
-          'Complete first-run setup in web Config Center or CLI /setup (config is created/updated automatically)',
           'Open web dashboard at http://localhost:3000 (if web channel enabled)',
+          'Open Config Center in web or use CLI /config to set provider details (config is created/updated automatically)',
+          'Use Config Center Web Authentication panel or CLI /auth status to manage bearer token mode',
+          'Set default provider with web Config Center or CLI /config set default <provider>',
+          'Check assistant runtime state with web Assistant State tab or CLI /assistant',
+          'Web auth token: if not configured, Guardian Agent generates an ephemeral token at startup (shown in console)',
           'Verify provider connectivity: web Config page or CLI /providers',
           'In CLI, type /help for commands and /guide for this reference',
         ],
@@ -39,30 +43,57 @@ export function getReferenceGuide(): ReferenceGuide {
         ],
       },
       {
+        title: 'Assistant Control Plane',
+        items: [
+          'Use web Assistant State to inspect session queues, priority scheduling, latency, traces, background jobs, and policy decisions',
+          'CLI: /assistant summary for top-level state, /assistant sessions for queue detail',
+          'CLI: /assistant jobs to inspect scan/config jobs and failures',
+          'CLI: /assistant policy to review recent allow/deny/rate-limit decisions',
+          'CLI: /assistant traces to inspect per-request step traces and timing',
+          'Use web Tools tab or CLI /tools to run approved workstation tools and review approvals/jobs',
+          'For local file discovery, use tool fs_search (chat can call it) and include your folder in Tools -> Allowed Paths',
+          'CLI policy shortcut: /tools policy paths <comma,separated,paths> (supports C:\\... and /mnt/c/... formats)',
+          'Campaign automation commands: CLI /campaign help (discover contacts, create campaigns, preview, run with approvals)',
+        ],
+      },
+      {
         title: 'Connect Ollama (Local)',
         items: [
           'Install and run Ollama locally',
           'Pull a model first, for example: ollama pull llama3.2',
-          'Run setup: choose Local Ollama, provider name, and model in web Config Center or CLI /setup',
+          'In Config Center choose Local (Ollama), then set profile name and model',
+          'CLI equivalent: /config add ollama ollama llama3.2 and /config set default ollama',
           'Use CLI /providers or web Config to verify connectivity',
         ],
       },
       {
         title: 'Connect OpenAI or Anthropic',
         items: [
-          'Run setup: choose External API and select openai or anthropic',
-          'Enter API key and model in web Config Center or CLI /setup',
+          'In Config Center choose External API, then set provider type, API key, and model',
+          'CLI equivalent: /config add <name> openai|anthropic <model> <apiKey>',
           'Switch default provider via CLI /config set default <name> or web Config page',
           'Optional advanced path: use CLI /config add and /config set for provider fine-tuning',
+        ],
+      },
+      {
+        title: 'Gmail Campaign Automation',
+        items: [
+          'Set Google OAuth access token in env var GOOGLE_OAUTH_ACCESS_TOKEN (gmail.send scope)',
+          'Discover contacts from sites: /campaign discover <url> [tagsCsv]',
+          'Import contacts from CSV: /campaign import <csvPath> [source]',
+          'Create campaign: /campaign create <name> | <subjectTemplate> | <bodyTemplate>',
+          'Preview content before sending: /campaign preview <campaignId> [limit]',
+          'Run campaign send: /campaign run <campaignId> [maxRecipients] (approval required before send)',
+          'Use placeholders in templates: {name}, {company}, {email}',
         ],
       },
       {
         title: 'Connect Telegram',
         items: [
           'Create a bot via @BotFather and get BOT_TOKEN',
-          'Enable Telegram in web Config Center or CLI /setup and paste the bot token',
-          'Set allowed chat IDs during setup to restrict access',
-          'Check setup status in web Config Center or CLI /setup status',
+          'Enable Telegram in web Config Center and paste the bot token',
+          'Set allowed chat IDs in Config Center to restrict access',
+          'Restart after Telegram channel structural changes (enable/disable/token updates)',
           'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>',
         ],
       },
@@ -72,7 +103,7 @@ export function getReferenceGuide(): ReferenceGuide {
           "Identity mode 'single_user' shares one assistant identity across web/CLI/Telegram",
           "Identity mode 'channel_user' keeps identities separate unless alias-mapped",
           'Conversation memory is persisted in SQLite with retention policy controls',
-          'Use setup/config to adjust retention and default identity',
+          'Use Config Center to adjust retention and default identity',
         ],
       },
       {
@@ -80,7 +111,7 @@ export function getReferenceGuide(): ReferenceGuide {
         items: [
           'Assistant interactions are logged to SQLite analytics storage',
           'View analytics in web Monitoring or CLI /analytics [minutes]',
-          'Track command usage, message errors, quick actions, setup/config outcomes',
+          'Track command usage, message errors, quick actions, and config outcomes',
         ],
       },
       {
@@ -99,7 +130,10 @@ export function getReferenceGuide(): ReferenceGuide {
         title: 'Security And Troubleshooting',
         items: [
           'Guardian blocks prompt-injection and secret leaks by default',
+          'Web dashboard supports configurable auth modes (bearer_required, localhost_no_auth, disabled)',
+          'Manage/rotate token via Config Center Web Authentication panel or CLI /auth rotate',
           'Review events in web Security tab or CLI /audit /security',
+          'If file access is denied, add the target root folder in Tools policy Allowed Paths, then retry',
           'Check model connectivity with CLI /providers or web LLM status',
           'If config changes are not reflected, use /config test and confirm provider status',
         ],

@@ -3,6 +3,7 @@
  */
 
 import { api } from '../api.js';
+import { applyInputTooltips } from '../tooltip.js';
 
 export async function renderIntel(container) {
   container.innerHTML = '<h2 class="page-title">Threat Intel</h2><div class="loading">Loading...</div>';
@@ -300,6 +301,7 @@ export async function renderIntel(container) {
         }
       });
     });
+    applyInputTooltips(container);
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Threat Intel</h2><div class="loading">Error: ${esc(err.message)}</div>`;
   }

@@ -48,6 +48,23 @@ async function request(path, options = {}) {
 
 export const api = {
   status:       () => request('/api/status'),
+  authStatus:   () => request('/api/auth/status'),
+  updateAuth:   (input) => request('/api/auth/config', {
+    method: 'POST',
+    body: JSON.stringify(input || {}),
+  }),
+  rotateAuthToken: () => request('/api/auth/token/rotate', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
+  revealAuthToken: () => request('/api/auth/token/reveal', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
+  revokeAuthToken: () => request('/api/auth/token/revoke', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
   agents:       () => request('/api/agents'),
   agentDetail:  (id) => request(`/api/agents/${encodeURIComponent(id)}`),
   audit:        (params = {}) => {
@@ -63,6 +80,10 @@ export const api = {
   reference:    () => request('/api/reference'),
   setupStatus:  () => request('/api/setup/status'),
   applySetup:   (input) => request('/api/setup/apply', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  applyConfig:  (input) => request('/api/setup/apply', {
     method: 'POST',
     body: JSON.stringify(input),
   }),
@@ -103,6 +124,20 @@ export const api = {
   }),
   providers:    () => request('/api/providers'),
   providersStatus: () => request('/api/providers/status'),
+  assistantState: () => request('/api/assistant/state'),
+  toolsState: (limit = 50) => request(`/api/tools?limit=${limit}`),
+  runTool: (payload) => request('/api/tools/run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  updateToolPolicy: (payload) => request('/api/tools/policy', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  decideToolApproval: (payload) => request('/api/tools/approvals/decision', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   quickActions: () => request('/api/quick-actions'),
   runQuickAction: (payload) => request('/api/quick-actions/run', {
     method: 'POST',

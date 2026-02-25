@@ -10,6 +10,9 @@ import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
 import { renderConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
 import { renderIntel } from './pages/intel.js';
+import { renderAssistant } from './pages/assistant.js';
+import { renderTools } from './pages/tools.js';
+import { applyInputTooltips } from './tooltip.js';
 
 const content = document.getElementById('content');
 const authModal = document.getElementById('auth-modal');
@@ -37,6 +40,7 @@ async function initAuth() {
   if (ok) {
     authModal.style.display = 'none';
     app.style.display = '';
+    applyInputTooltips(document);
     startApp();
     return;
   }
@@ -62,6 +66,7 @@ async function initAuth() {
     if (ok) {
       authModal.style.display = 'none';
       app.style.display = '';
+      applyInputTooltips(document);
       startApp();
     } else {
       errorEl.textContent = 'Invalid token';
@@ -78,6 +83,8 @@ async function initAuth() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') submit.click();
   });
+
+  applyInputTooltips(authModal);
 }
 
 // ─── SSE ─────────────────────────────────────────────────
@@ -142,6 +149,8 @@ const routes = {
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
   '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
   '/intel': { render: renderIntel, name: 'intel' },
+  '/tools': { render: renderTools, name: 'tools' },
+  '/assistant': { render: renderAssistant, name: 'assistant' },
   '/config': { render: renderConfig, name: 'config' },
   '/reference': { render: renderReference, name: 'reference' },
 };
