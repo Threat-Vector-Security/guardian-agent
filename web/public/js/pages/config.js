@@ -3,27 +3,30 @@
  */
 
 import { api } from '../api.js';
+import { applyInputTooltips } from '../tooltip.js';
 
 export async function renderConfig(container) {
   container.innerHTML = '<h2 class="page-title">Configuration Center</h2><div class="loading">Loading...</div>';
 
   try {
-    const [config, providers, setupStatus] = await Promise.all([
+    const [config, providers, setupStatus, authStatus] = await Promise.all([
       api.config(),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
       api.setupStatus().catch(() => null),
+      api.authStatus().catch(() => null),
     ]);
 
     container.innerHTML = '<h2 class="page-title">Configuration Center</h2>';
 
     const intro = document.createElement('div');
     intro.className = 'config-intro';
-    intro.textContent = 'Configure AI providers, onboarding status, and channel readiness from one place.';
+    intro.textContent = 'Configure AI providers, channel access, and assistant readiness from one place.';
     container.appendChild(intro);
 
     container.appendChild(createOverview(config, providers, setupStatus));
-    container.appendChild(createProviderPanel(config, providers, setupStatus, container));
+    container.appendChild(createProviderPanel(config, providers, container));
     container.appendChild(createProviderStatusTable(config, providers));
+    container.appendChild(createAuthPanel(config, authStatus, container));
 
     container.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
     container.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
@@ -47,7 +50,7 @@ function createOverview(config, providers, setupStatus) {
     : 'Unknown';
   const connectedTone = defaultProvider && defaultProvider.connected === false ? 'error' : 'success';
 
-  cards.appendChild(createMiniCard('Setup', setupStatus?.completed ? 'Complete' : 'Pending', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'success' : 'warning'));
+  cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Default Provider', config.defaultProvider || 'None', connectedText, connectedTone));
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
   cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure below', config.channels?.telegram?.enabled ? 'success' : 'warning'));
@@ -88,7 +91,7 @@ function createMiniCard(title, value, subtitle, tone) {
   return card;
 }
 
-function createProviderPanel(config, providers, setupStatus, container) {
+function createProviderPanel(config, providers, container) {
   const section = document.createElement('div');
   section.className = 'table-container';
 
@@ -114,9 +117,9 @@ function createProviderPanel(config, providers, setupStatus, container) {
   };
 
   section.innerHTML = `
-    <div class="table-header">
+      <div class="table-header">
       <h3>AI Provider Configuration</h3>
-      <span class="cfg-header-note">Local vs external switching, keys, and onboarding</span>
+      <span class="cfg-header-note">Local vs external switching, keys, and channel access</span>
     </div>
     <div class="cfg-center-body">
       <div class="cfg-mode-toggle" role="tablist" aria-label="Provider mode">
@@ -187,14 +190,6 @@ function createProviderPanel(config, providers, setupStatus, container) {
           <label>Allowed Chat IDs</label>
           <input id="cfg-telegram-chatids" type="text" placeholder="12345,67890">
         </div>
-
-        <div class="cfg-field">
-          <label>Mark Setup Complete</label>
-          <select id="cfg-setup-complete">
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        </div>
       </div>
 
       <div class="cfg-actions">
@@ -215,13 +210,11 @@ function createProviderPanel(config, providers, setupStatus, container) {
   const telegramEnabledEl = section.querySelector('#cfg-telegram-enabled');
   const telegramTokenEl = section.querySelector('#cfg-telegram-token');
   const telegramChatIdsEl = section.querySelector('#cfg-telegram-chatids');
-  const setupCompleteEl = section.querySelector('#cfg-setup-complete');
   const providerTypeFieldEl = section.querySelector('#cfg-provider-type-field');
   const apiKeyFieldEl = section.querySelector('#cfg-api-key-field');
   const saveStatusEl = section.querySelector('#cfg-save-status');
 
   telegramEnabledEl.value = config.channels?.telegram?.enabled ? 'true' : 'false';
-  setupCompleteEl.value = setupStatus?.completed || config.assistant?.setupCompleted ? 'true' : 'false';
 
   function buildProfiles(mode) {
     const names = mode === 'local' ? localNames : externalNames;
@@ -384,14 +377,14 @@ function createProviderPanel(config, providers, setupStatus, container) {
       telegramEnabled: telegramEnabledEl.value === 'true',
       telegramBotToken: telegramTokenEl.value.trim() || undefined,
       telegramAllowedChatIds: parseChatIdsOrUndefined(telegramChatIdsEl.value),
-      setupCompleted: setupCompleteEl.value === 'true',
+      setupCompleted: true,
     };
 
     saveStatusEl.textContent = 'Saving configuration...';
     saveStatusEl.style.color = 'var(--text-muted)';
 
     try {
-      const result = await api.applySetup(payload);
+      const result = await api.applyConfig(payload);
       saveStatusEl.textContent = result.message;
       saveStatusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
 
@@ -406,6 +399,7 @@ function createProviderPanel(config, providers, setupStatus, container) {
 
   syncModeUI();
   syncTelegramFields();
+  applyInputTooltips(section);
 
   return section;
 }
@@ -451,6 +445,135 @@ function createProviderStatusTable(config, providers) {
     </table>
   `;
 
+  return section;
+}
+
+function createAuthPanel(config, authStatus, container) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const mode = authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required';
+  const tokenConfigured = !!authStatus?.tokenConfigured;
+  const tokenSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
+  const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? '';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Web Authentication</h3>
+      <span class="cfg-header-note">Bearer token controls for dashboard and API access</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Auth Mode</label>
+          <select id="auth-mode">
+            <option value="bearer_required" ${mode === 'bearer_required' ? 'selected' : ''}>bearer_required</option>
+            <option value="localhost_no_auth" ${mode === 'localhost_no_auth' ? 'selected' : ''}>localhost_no_auth</option>
+            <option value="disabled" ${mode === 'disabled' ? 'selected' : ''}>disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Token Source</label>
+          <input id="auth-token-source" type="text" value="${esc(tokenSource)}" readonly>
+        </div>
+        <div class="cfg-field">
+          <label>Session TTL Minutes (optional)</label>
+          <input id="auth-ttl" type="number" min="1" placeholder="120" value="${esc(String(ttl))}">
+        </div>
+        <div class="cfg-field">
+          <label>Current Token</label>
+          <input id="auth-token-preview" type="text" readonly value="${tokenConfigured ? esc(authStatus?.tokenPreview || 'configured') : 'not configured'}">
+        </div>
+        <div class="cfg-field">
+          <label>Set/New Token (optional)</label>
+          <input id="auth-token-input-new" type="password" placeholder="Leave empty to keep existing token">
+        </div>
+      </div>
+
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="auth-save" type="button">Save Auth Settings</button>
+        <button class="btn btn-secondary" id="auth-rotate" type="button">Rotate Token</button>
+        <button class="btn btn-secondary" id="auth-reveal" type="button">Reveal Token</button>
+        <button class="btn btn-secondary" id="auth-revoke" type="button">Disable Auth</button>
+        <span id="auth-save-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const modeEl = section.querySelector('#auth-mode');
+  const ttlEl = section.querySelector('#auth-ttl');
+  const tokenInputEl = section.querySelector('#auth-token-input-new');
+  const tokenPreviewEl = section.querySelector('#auth-token-preview');
+  const statusEl = section.querySelector('#auth-save-status');
+
+  const setStatus = (text, color) => {
+    statusEl.textContent = text;
+    statusEl.style.color = color;
+  };
+
+  section.querySelector('#auth-save')?.addEventListener('click', async () => {
+    const payload = {
+      mode: modeEl.value,
+      token: tokenInputEl.value.trim() || undefined,
+      sessionTtlMinutes: ttlEl.value ? Number(ttlEl.value) : undefined,
+    };
+    setStatus('Saving auth settings...', 'var(--text-muted)');
+    try {
+      const result = await api.updateAuth(payload);
+      setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
+      if (result.status?.tokenPreview) {
+        tokenPreviewEl.value = result.status.tokenPreview;
+      }
+      if (result.success) {
+        tokenInputEl.value = '';
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  section.querySelector('#auth-rotate')?.addEventListener('click', async () => {
+    setStatus('Rotating token...', 'var(--text-muted)');
+    try {
+      const result = await api.rotateAuthToken();
+      if (result.token) {
+        tokenPreviewEl.value = `${result.token.slice(0, 4)}...${result.token.slice(-4)}`;
+      }
+      setStatus(result.message || 'Token rotated.', result.success ? 'var(--success)' : 'var(--warning)');
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  section.querySelector('#auth-reveal')?.addEventListener('click', async () => {
+    setStatus('Revealing token...', 'var(--text-muted)');
+    try {
+      const result = await api.revealAuthToken();
+      if (result.success && result.token) {
+        tokenPreviewEl.value = result.token;
+        setStatus('Token revealed in field above. Keep it private.', 'var(--warning)');
+      } else {
+        setStatus('No active token.', 'var(--warning)');
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  section.querySelector('#auth-revoke')?.addEventListener('click', async () => {
+    setStatus('Disabling auth...', 'var(--text-muted)');
+    try {
+      const result = await api.revokeAuthToken();
+      setStatus(result.message || 'Auth disabled.', result.success ? 'var(--warning)' : 'var(--error)');
+      if (result.success) {
+        await renderConfig(container);
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  applyInputTooltips(section);
   return section;
 }
 

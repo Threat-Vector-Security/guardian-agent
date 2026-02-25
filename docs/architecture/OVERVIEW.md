@@ -75,6 +75,7 @@ Core principles:
 Runtime (src/runtime/runtime.ts)
 ├── Config (src/config/)                — YAML config with env var interpolation
 ├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI
+├── Assistant Orchestrator (src/runtime/orchestrator.ts) — per-session queueing + timing state
 ├── Registry (src/agent/registry.ts)    — agent registration/discovery
 ├── EventBus (src/queue/event-bus.ts)   — inter-agent events (immediate dispatch)
 ├── Identity (src/runtime/identity.ts)  — channel user → canonical identity mapping
@@ -233,5 +234,8 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`)
-- **Configuration Center**: web `#/config` and CLI `/setup` onboarding + provider/channel setup flow
+- **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; if no token is configured, runtime can generate an ephemeral bearer token per process start
+- **Assistant State**: web `#/assistant` and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
+- **Configuration Center**: web `#/config` + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
+- **Tools Control Plane**: web `#/tools` + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
 - **Threat Intel**: web `#/intel`, CLI `/intel`, Telegram `/intel` command surfaces

@@ -324,7 +324,7 @@ export class TelegramChannel implements ChannelAdapter {
 
   private buildHelpText(): string {
     return [
-      'GuardianAgent Telegram',
+      'Guardian Agent Telegram',
       '',
       `Default agent: ${this.defaultAgent}`,
       '',

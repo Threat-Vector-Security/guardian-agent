@@ -97,7 +97,7 @@ export interface ThreatIntelServiceOptions {
 }
 
 const DEFAULT_PLAN: ThreatIntelPlan = {
-  title: 'GuardianAgent Threat Intel Operating Plan',
+  title: 'Guardian Agent Threat Intel Operating Plan',
   principles: [
     'Protect users with evidence-based monitoring, not speculation.',
     'Prioritize identity abuse and deepfake risk by severity and confidence.',

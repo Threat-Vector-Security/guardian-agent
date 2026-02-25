@@ -5,7 +5,7 @@
  * Keeps web.ts and index.ts decoupled from internal runtime types.
  */
 
-import type { AuditEvent, AuditFilter, AuditSummary } from '../guardian/audit-log.js';
+import type { AuditEvent, AuditEventType, AuditFilter, AuditSeverity, AuditSummary } from '../guardian/audit-log.js';
 import type { WatchdogResult } from '../runtime/watchdog.js';
 import type { BudgetRecord } from '../runtime/budget.js';
 import type { ReferenceGuide } from '../reference-guide.js';
@@ -13,6 +13,7 @@ import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
+import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type {
   ThreatIntelSummary,
   ThreatIntelPlan,
@@ -23,6 +24,7 @@ import type {
   IntelActionType,
   IntelResponseMode,
 } from '../runtime/threat-intel.js';
+import type { ToolApprovalRequest, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -54,7 +56,18 @@ export interface RedactedConfig {
   channels: {
     cli?: { enabled: boolean };
     telegram?: { enabled: boolean };
-    web?: { enabled: boolean; port?: number; host?: string };
+    web?: {
+      enabled: boolean;
+      port?: number;
+      host?: string;
+      auth?: {
+        mode: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+        tokenConfigured: boolean;
+        tokenSource?: 'config' | 'env' | 'ephemeral';
+        rotateOnStartup: boolean;
+        sessionTtlMinutes?: number;
+      };
+    };
   };
   guardian: {
     enabled: boolean;
@@ -98,7 +111,34 @@ export interface RedactedConfig {
         allowActiveResponse: boolean;
       };
     };
+    tools: {
+      enabled: boolean;
+      policyMode: 'approve_each' | 'approve_by_policy' | 'autonomous';
+      allowExternalPosting: boolean;
+      allowedPathsCount: number;
+      allowedCommandsCount: number;
+      allowedDomainsCount: number;
+    };
   };
+}
+
+export interface DashboardAuthStatus {
+  mode: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+  tokenConfigured: boolean;
+  tokenSource: 'config' | 'env' | 'ephemeral';
+  tokenPreview?: string;
+  rotateOnStartup: boolean;
+  sessionTtlMinutes?: number;
+  host?: string;
+  port?: number;
+}
+
+export interface DashboardToolsState {
+  enabled: boolean;
+  tools: ToolDefinition[];
+  policy: ToolPolicySnapshot;
+  approvals: ToolApprovalRequest[];
+  jobs: ToolJobRecord[];
 }
 
 /** Budget info returned by GET /api/budget. */
@@ -126,6 +166,46 @@ export interface DashboardProviderInfo {
   availableModels?: string[];
 }
 
+/** Assistant orchestrator snapshot for UI/CLI visibility. */
+export interface DashboardAssistantState {
+  orchestrator: AssistantOrchestratorState;
+  jobs: {
+    summary: {
+      total: number;
+      running: number;
+      succeeded: number;
+      failed: number;
+      lastStartedAt?: number;
+      lastCompletedAt?: number;
+    };
+    jobs: Array<{
+      id: string;
+      type: string;
+      source: 'manual' | 'scheduled' | 'system';
+      status: 'running' | 'succeeded' | 'failed';
+      startedAt: number;
+      completedAt?: number;
+      durationMs?: number;
+      detail?: string;
+      error?: string;
+      metadata?: Record<string, unknown>;
+    }>;
+  };
+  lastPolicyDecisions: Array<{
+    id: string;
+    timestamp: number;
+    type: AuditEventType;
+    severity: AuditSeverity;
+    agentId: string;
+    controller?: string;
+    reason?: string;
+  }>;
+  defaultProvider: string;
+  guardianEnabled: boolean;
+  providerCount: number;
+  providers: string[];
+}
+
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
   type: 'audit' | 'metrics' | 'watchdog';
@@ -146,6 +226,7 @@ export interface DashboardCallbacks {
   onWatchdog?: () => WatchdogResult[];
   onProviders?: () => DashboardProviderInfo[];
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
+  onAssistantState?: () => DashboardAssistantState;
   onSSESubscribe?: (listener: SSEListener) => () => void;
   onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }) => Promise<{ content: string }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<{ success: boolean; message: string }>;
@@ -206,6 +287,40 @@ export interface DashboardCallbacks {
     type: IntelActionType;
   }) => { success: boolean; message: string; action?: ThreatIntelAction };
   onThreatIntelSetResponseMode?: (mode: IntelResponseMode) => { success: boolean; message: string };
+  onAuthStatus?: () => DashboardAuthStatus;
+  onAuthUpdate?: (input: {
+    mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+    token?: string;
+    rotateOnStartup?: boolean;
+    sessionTtlMinutes?: number;
+  }) => Promise<{ success: boolean; message: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; status?: DashboardAuthStatus };
+  onAuthRotate?: () => Promise<{ success: boolean; message: string; token?: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; token?: string; status?: DashboardAuthStatus };
+  onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
+  onAuthRevoke?: () => Promise<{ success: boolean; message: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; status?: DashboardAuthStatus };
+  onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
+  onToolsRun?: (input: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    origin?: 'assistant' | 'cli' | 'web';
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+  }) => Promise<ToolRunResponse> | ToolRunResponse;
+  onToolsPolicyUpdate?: (input: {
+    mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
+    toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
+    sandbox?: {
+      allowedPaths?: string[];
+      allowedCommands?: string[];
+      allowedDomains?: string[];
+    };
+  }) => { success: boolean; message: string; policy?: ToolPolicySnapshot };
+  onToolsApprovalDecision?: (input: {
+    approvalId: string;
+    decision: 'approved' | 'denied';
+    actor: string;
+    reason?: string;
+  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
 }
 
 /** Fields that can be updated via POST /api/config. */

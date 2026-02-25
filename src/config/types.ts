@@ -102,6 +102,19 @@ export interface ChannelsConfig {
     defaultAgent?: string;
     /** Bearer token for authentication. If set, all non-health requests require it. */
     authToken?: string;
+    /** Structured auth configuration (preferred over authToken). */
+    auth?: {
+      /** Auth mode for web/API endpoints. */
+      mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+      /** Bearer token value (supports ${ENV_VAR} interpolation). */
+      token?: string;
+      /** Rotate token on startup and persist generated value. */
+      rotateOnStartup?: boolean;
+      /** Optional client session TTL hint in minutes. */
+      sessionTtlMinutes?: number;
+      /** Runtime metadata about where the active token came from. */
+      tokenSource?: 'config' | 'env' | 'ephemeral';
+    };
     /** Allowed CORS origins (default: none / same-origin). */
     allowedOrigins?: string[];
     /** Maximum request body size in bytes (default: 1 MB). */
@@ -271,6 +284,24 @@ export interface AssistantThreatIntelMoltbookConfig {
   allowActiveResponse: boolean;
 }
 
+/** Assistant tool execution policy and sandbox settings. */
+export interface AssistantToolsConfig {
+  /** Enable assistant tool runtime and LLM tool-calling. */
+  enabled: boolean;
+  /** Global approval strategy. */
+  policyMode: 'approve_each' | 'approve_by_policy' | 'autonomous';
+  /** Optional per-tool overrides. */
+  toolPolicies: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
+  /** Whether external posting tools are allowed. */
+  allowExternalPosting: boolean;
+  /** Allowed filesystem roots for tool operations. */
+  allowedPaths: string[];
+  /** Allowed command prefixes for shell tools. */
+  allowedCommands: string[];
+  /** Allowed domains for network/browser tools. */
+  allowedDomains: string[];
+}
+
 /** Personal assistant feature configuration. */
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
@@ -279,6 +310,7 @@ export interface AssistantConfig {
   analytics: AssistantAnalyticsConfig;
   quickActions: AssistantQuickActionsConfig;
   threatIntel: AssistantThreatIntelConfig;
+  tools: AssistantToolsConfig;
 }
 
 /** Default configuration values. */
@@ -298,7 +330,15 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   channels: {
     cli: { enabled: true },
     telegram: { enabled: false, polling: true },
-    web: { enabled: true, port: 3000, host: 'localhost' },
+    web: {
+      enabled: true,
+      port: 3000,
+      host: 'localhost',
+      auth: {
+        mode: 'bearer_required',
+        rotateOnStartup: false,
+      },
+    },
   },
   guardian: {
     enabled: true,
@@ -381,6 +421,34 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         allowedHosts: ['moltbook.com', 'api.moltbook.com'],
         allowActiveResponse: false,
       },
+    },
+    tools: {
+      enabled: true,
+      policyMode: 'approve_by_policy',
+      toolPolicies: {
+        forum_post: 'manual',
+      },
+      allowExternalPosting: false,
+      allowedPaths: ['.'],
+      allowedCommands: [
+        'node',
+        'npm',
+        'npx',
+        'git status',
+        'git diff',
+        'git log',
+        'ollama',
+        'ls',
+        'dir',
+        'pwd',
+      ],
+      allowedDomains: [
+        'localhost',
+        '127.0.0.1',
+        'moltbook.com',
+        'gmail.googleapis.com',
+        'www.googleapis.com',
+      ],
     },
   },
 };

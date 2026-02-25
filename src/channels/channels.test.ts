@@ -182,7 +182,19 @@ describe('CLIChannel with DashboardCallbacks', () => {
     onConfig: () => ({
       llm: { ollama: { provider: 'ollama', model: 'llama3.2' }, claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' } },
       defaultProvider: 'ollama',
-      channels: { cli: { enabled: true }, web: { enabled: true, port: 3000 } },
+      channels: {
+        cli: { enabled: true },
+        web: {
+          enabled: true,
+          port: 3000,
+          auth: {
+            mode: 'bearer_required',
+            tokenConfigured: true,
+            tokenSource: 'config',
+            rotateOnStartup: false,
+          },
+        },
+      },
       guardian: {
         enabled: true,
         rateLimit: { maxPerMinute: 60, maxPerHour: 500, burstAllowed: 5 },
@@ -209,6 +221,14 @@ describe('CLIChannel with DashboardCallbacks', () => {
             allowActiveResponse: false,
           },
         },
+        tools: {
+          enabled: true,
+          policyMode: 'approve_by_policy',
+          allowExternalPosting: false,
+          allowedPathsCount: 1,
+          allowedCommandsCount: 3,
+          allowedDomainsCount: 2,
+        },
       },
     }),
     onBudget: () => ({
@@ -230,6 +250,45 @@ describe('CLIChannel with DashboardCallbacks', () => {
       { name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true, availableModels: ['llama3.2', 'llama3.3', 'mistral'] },
       { name: 'claude', type: 'anthropic', model: 'claude-sonnet-4-20250514', locality: 'external' as const, connected: false },
     ],
+    onAssistantState: () => ({
+      orchestrator: {
+        summary: {
+          startedAt: Date.now() - 60_000,
+          uptimeMs: 60_000,
+          sessionCount: 1,
+          runningCount: 0,
+          queuedCount: 0,
+          totalRequests: 3,
+          completedRequests: 3,
+          failedRequests: 0,
+          avgExecutionMs: 180,
+          avgEndToEndMs: 240,
+          queuedByPriority: {
+            high: 0,
+            normal: 0,
+            low: 0,
+          },
+        },
+        sessions: [],
+        traces: [],
+      },
+      jobs: {
+        summary: {
+          total: 2,
+          running: 0,
+          succeeded: 2,
+          failed: 0,
+          lastStartedAt: Date.now() - 30_000,
+          lastCompletedAt: Date.now() - 20_000,
+        },
+        jobs: [],
+      },
+      lastPolicyDecisions: [],
+      defaultProvider: 'ollama',
+      guardianEnabled: true,
+      providerCount: 2,
+      providers: ['ollama', 'claude'],
+    }),
     onDispatch: async (agentId, msg) => ({ content: `Reply from ${agentId}: ${msg.content}` }),
     onConfigUpdate: async (updates) => ({ success: true, message: 'Config saved. Restart to apply changes.' }),
     onThreatIntelSummary: () => ({
@@ -344,12 +403,33 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('/providers');
     expect(text).toContain('/budget');
     expect(text).toContain('/watchdog');
+    expect(text).toContain('/assistant');
     expect(text).toContain('/config');
     expect(text).toContain('/audit');
     expect(text).toContain('/security');
     expect(text).toContain('/models');
     expect(text).toContain('/clear');
     expect(text).toContain('/quit');
+
+    await cli.stop();
+  });
+
+  it('/campaign help should show campaign workflow commands', async () => {
+    const { input, output, cli } = makeCli({
+      onToolsRun: async () => ({
+        success: true,
+        status: 'succeeded',
+        jobId: randomUUID(),
+        message: 'ok',
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/campaign help');
+    const text = readOutput(output);
+
+    expect(text).toContain('/campaign discover');
+    expect(text).toContain('/campaign run');
 
     await cli.stop();
   });
@@ -490,6 +570,151 @@ describe('CLIChannel with DashboardCallbacks', () => {
 
     expect(text).toContain('ollama');
     expect(text).toContain('60000');
+
+    await cli.stop();
+  });
+
+  it('/assistant should show orchestrator summary', async () => {
+    const { input, output, cli } = makeCli({
+      onAssistantState: () => ({
+        orchestrator: {
+          summary: {
+            startedAt: Date.now() - 10_000,
+            uptimeMs: 10_000,
+            sessionCount: 2,
+            runningCount: 1,
+            queuedCount: 1,
+            totalRequests: 5,
+            completedRequests: 4,
+            failedRequests: 1,
+            avgExecutionMs: 230,
+            avgEndToEndMs: 420,
+            queuedByPriority: {
+              high: 0,
+              normal: 1,
+              low: 0,
+            },
+          },
+          sessions: [
+            {
+              sessionId: 'cli:owner:agent-1',
+              channel: 'cli',
+              userId: 'owner',
+              agentId: 'agent-1',
+              status: 'running',
+              queueDepth: 1,
+              totalRequests: 3,
+              successCount: 2,
+              errorCount: 1,
+              avgExecutionMs: 220,
+              avgEndToEndMs: 410,
+              lastExecutionMs: 250,
+              lastEndToEndMs: 470,
+            },
+          ],
+          traces: [],
+        },
+        jobs: {
+          summary: {
+            total: 3,
+            running: 1,
+            succeeded: 2,
+            failed: 0,
+            lastStartedAt: Date.now() - 1_000,
+            lastCompletedAt: Date.now() - 2_000,
+          },
+          jobs: [],
+        },
+        lastPolicyDecisions: [],
+        defaultProvider: 'ollama',
+        guardianEnabled: true,
+        providerCount: 2,
+        providers: ['ollama', 'claude'],
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant');
+    const text = readOutput(output);
+
+    expect(text).toContain('Assistant Orchestrator');
+    expect(text).toContain('ollama');
+    expect(text).toContain('Requests');
+    expect(text).toContain('Avg exec latency');
+
+    await cli.stop();
+  });
+
+  it('/assistant traces should show request trace table', async () => {
+    const now = Date.now();
+    const { input, output, cli } = makeCli({
+      onAssistantState: () => ({
+        orchestrator: {
+          summary: {
+            startedAt: now - 10_000,
+            uptimeMs: 10_000,
+            sessionCount: 1,
+            runningCount: 0,
+            queuedCount: 0,
+            totalRequests: 1,
+            completedRequests: 1,
+            failedRequests: 0,
+            avgExecutionMs: 150,
+            avgEndToEndMs: 180,
+            queuedByPriority: {
+              high: 0,
+              normal: 0,
+              low: 0,
+            },
+          },
+          sessions: [],
+          traces: [
+            {
+              requestId: 'req-1',
+              sessionId: 'cli:owner:agent-1',
+              agentId: 'agent-1',
+              userId: 'owner',
+              channel: 'cli',
+              requestType: 'chat',
+              priority: 'high',
+              status: 'succeeded',
+              queuedAt: now - 500,
+              startedAt: now - 450,
+              completedAt: now - 300,
+              queueWaitMs: 50,
+              executionMs: 150,
+              endToEndMs: 200,
+              steps: [
+                { name: 'queue_wait', status: 'succeeded', startedAt: now - 500, completedAt: now - 450, durationMs: 50 },
+                { name: 'runtime_dispatch_message', status: 'succeeded', startedAt: now - 450, completedAt: now - 300, durationMs: 150 },
+              ],
+            },
+          ],
+        },
+        jobs: {
+          summary: {
+            total: 0,
+            running: 0,
+            succeeded: 0,
+            failed: 0,
+          },
+          jobs: [],
+        },
+        lastPolicyDecisions: [],
+        defaultProvider: 'ollama',
+        guardianEnabled: true,
+        providerCount: 1,
+        providers: ['ollama'],
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant traces');
+    const text = readOutput(output);
+
+    expect(text).toContain('runtime_dispatch_message');
+    expect(text).toContain('chat');
+    expect(text).toContain('high');
 
     await cli.stop();
   });
@@ -1187,7 +1412,19 @@ describe('WebChannel', () => {
       onConfig: () => ({
         llm: { ollama: { provider: 'ollama', model: 'llama3.2' } },
         defaultProvider: 'ollama',
-        channels: { cli: { enabled: true }, web: { enabled: true, port: 3000 } },
+        channels: {
+          cli: { enabled: true },
+          web: {
+            enabled: true,
+            port: 3000,
+            auth: {
+              mode: 'bearer_required',
+              tokenConfigured: true,
+              tokenSource: 'config',
+              rotateOnStartup: false,
+            },
+          },
+        },
         guardian: { enabled: true },
         runtime: { maxStallDurationMs: 60000, watchdogIntervalMs: 10000, logLevel: 'info' },
         assistant: {
@@ -1208,6 +1445,14 @@ describe('WebChannel', () => {
               allowActiveResponse: false,
             },
           },
+          tools: {
+            enabled: true,
+            policyMode: 'approve_by_policy',
+            allowExternalPosting: false,
+            allowedPathsCount: 1,
+            allowedCommandsCount: 3,
+            allowedDomainsCount: 2,
+          },
         },
       }),
       onBudget: () => ({
@@ -1216,6 +1461,45 @@ describe('WebChannel', () => {
       }),
       onWatchdog: () => [{ agentId: 'agent-1', action: 'ok' as const }],
       onProviders: () => [{ name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true }],
+      onAssistantState: () => ({
+        orchestrator: {
+          summary: {
+            startedAt: Date.now() - 120_000,
+            uptimeMs: 120_000,
+            sessionCount: 2,
+            runningCount: 1,
+            queuedCount: 1,
+            totalRequests: 9,
+            completedRequests: 8,
+            failedRequests: 1,
+            avgExecutionMs: 210,
+            avgEndToEndMs: 320,
+            queuedByPriority: {
+              high: 1,
+              normal: 0,
+              low: 0,
+            },
+          },
+          sessions: [],
+          traces: [],
+        },
+        jobs: {
+          summary: {
+            total: 4,
+            running: 1,
+            succeeded: 2,
+            failed: 1,
+            lastStartedAt: Date.now() - 5_000,
+            lastCompletedAt: Date.now() - 2_500,
+          },
+          jobs: [],
+        },
+        lastPolicyDecisions: [],
+        defaultProvider: 'ollama',
+        guardianEnabled: true,
+        providerCount: 1,
+        providers: ['ollama'],
+      }),
       onThreatIntelSummary: () => ({
         enabled: true,
         watchlistCount: 1,
@@ -1372,6 +1656,21 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as Array<{ name: string; type: string }>;
       expect(body[0].name).toBe('ollama');
+    });
+
+    it('GET /api/assistant/state should return orchestrator state', async () => {
+      web = new WebChannel({ port: 18960, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18960/api/assistant/state');
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        orchestrator: { summary: { totalRequests: number; sessionCount: number } };
+        defaultProvider: string;
+      };
+      expect(body.defaultProvider).toBe('ollama');
+      expect(body.orchestrator.summary.totalRequests).toBe(9);
+      expect(body.orchestrator.summary.sessionCount).toBe(2);
     });
 
     it('GET /api/threat-intel/summary should return threat summary', async () => {

@@ -39,6 +39,16 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
+export type WebAuthMode = 'bearer_required' | 'localhost_no_auth' | 'disabled';
+
+export interface WebAuthRuntimeConfig {
+  mode: WebAuthMode;
+  token?: string;
+  tokenSource?: 'config' | 'env' | 'ephemeral';
+  rotateOnStartup?: boolean;
+  sessionTtlMinutes?: number;
+}
+
 export interface WebChannelOptions {
   /** Port to listen on. */
   port?: number;
@@ -48,6 +58,8 @@ export interface WebChannelOptions {
   defaultAgent?: string;
   /** Bearer token for authentication. If set, all non-health requests require it. */
   authToken?: string;
+  /** Structured auth configuration. */
+  auth?: WebAuthRuntimeConfig;
   /** Allowed CORS origins (default: none / same-origin). Use ['*'] to allow all (not recommended). */
   allowedOrigins?: string[];
   /** Maximum request body size in bytes (default: 1 MB). */
@@ -64,7 +76,11 @@ export class WebChannel implements ChannelAdapter {
   private onMessage: MessageCallback | null = null;
   private port: number;
   private host: string;
+  private authMode: WebAuthMode;
   private authToken: string | undefined;
+  private authTokenSource: 'config' | 'env' | 'ephemeral';
+  private authRotateOnStartup: boolean;
+  private authSessionTtlMinutes?: number;
   private allowedOrigins: string[];
   private maxBodyBytes: number;
   private staticDir: string | undefined;
@@ -74,7 +90,12 @@ export class WebChannel implements ChannelAdapter {
   constructor(options: WebChannelOptions = {}) {
     this.port = options.port ?? 3000;
     this.host = options.host ?? 'localhost';
-    this.authToken = options.authToken;
+    const auth = options.auth;
+    this.authMode = auth?.mode ?? (options.authToken ? 'bearer_required' : 'disabled');
+    this.authToken = auth?.token ?? options.authToken;
+    this.authTokenSource = auth?.tokenSource ?? (options.authToken ? 'config' : 'ephemeral');
+    this.authRotateOnStartup = auth?.rotateOnStartup ?? false;
+    this.authSessionTtlMinutes = auth?.sessionTtlMinutes;
     this.allowedOrigins = options.allowedOrigins ?? [];
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
     this.staticDir = options.staticDir;
@@ -112,10 +133,10 @@ export class WebChannel implements ChannelAdapter {
     return new Promise((resolve, reject) => {
       this.server!.listen(this.port, this.host, () => {
         log.info({ port: this.port, host: this.host }, 'Web channel started');
-        if (!this.authToken) {
+        if (this.authMode === 'disabled' || (this.authMode === 'bearer_required' && !this.authToken)) {
           log.warn(
-            { port: this.port, host: this.host },
-            'Web channel started WITHOUT authentication — all non-health endpoints are open. Set authToken in config to enable bearer token auth.',
+            { port: this.port, host: this.host, authMode: this.authMode },
+            'Web channel started WITHOUT strict bearer authentication.',
           );
         }
         resolve();
@@ -162,9 +183,61 @@ export class WebChannel implements ChannelAdapter {
     return this.allowedOrigins.includes(origin);
   }
 
+  setAuthConfig(auth: WebAuthRuntimeConfig): void {
+    this.authMode = auth.mode;
+    this.authToken = auth.token?.trim() || undefined;
+    this.authTokenSource = auth.tokenSource ?? this.authTokenSource;
+    this.authRotateOnStartup = auth.rotateOnStartup ?? this.authRotateOnStartup;
+    this.authSessionTtlMinutes = auth.sessionTtlMinutes;
+  }
+
+  getAuthStatus(): {
+    mode: WebAuthMode;
+    tokenConfigured: boolean;
+    tokenSource: 'config' | 'env' | 'ephemeral';
+    tokenPreview?: string;
+    rotateOnStartup: boolean;
+    sessionTtlMinutes?: number;
+    host: string;
+    port: number;
+  } {
+    return {
+      mode: this.authMode,
+      tokenConfigured: !!this.authToken,
+      tokenSource: this.authTokenSource,
+      tokenPreview: this.authToken ? previewToken(this.authToken) : undefined,
+      rotateOnStartup: this.authRotateOnStartup,
+      sessionTtlMinutes: this.authSessionTtlMinutes,
+      host: this.host,
+      port: this.port,
+    };
+  }
+
+  getAuthToken(): string | undefined {
+    return this.authToken;
+  }
+
+  private shouldRequireAuth(req: IncomingMessage): boolean {
+    if (this.authMode === 'disabled') return false;
+    if (this.authMode === 'localhost_no_auth' && this.isLocalRequest(req)) return false;
+    return true;
+  }
+
+  private isLocalRequest(req: IncomingMessage): boolean {
+    const remote = req.socket.remoteAddress ?? '';
+    return remote === '127.0.0.1'
+      || remote === '::1'
+      || remote.endsWith(':127.0.0.1')
+      || remote.endsWith(':0:0:0:0:0:0:0:1');
+  }
+
   /** Verify bearer token authentication. Returns true if auth passes. */
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
-    if (!this.authToken) return true; // no auth configured
+    if (!this.shouldRequireAuth(req)) return true;
+    if (!this.authToken) {
+      sendJSON(res, 401, { error: 'Authentication required' });
+      return false;
+    }
 
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -182,8 +255,12 @@ export class WebChannel implements ChannelAdapter {
   }
 
   /** Check auth via query param (for SSE/EventSource which can't set headers). */
-  private checkAuthForSSE(url: URL, res: ServerResponse): boolean {
-    if (!this.authToken) return true;
+  private checkAuthForSSE(req: IncomingMessage, url: URL, res: ServerResponse): boolean {
+    if (!this.shouldRequireAuth(req)) return true;
+    if (!this.authToken) {
+      sendJSON(res, 401, { error: 'Authentication required' });
+      return false;
+    }
 
     const token = url.searchParams.get('token');
     if (!token) {
@@ -211,7 +288,7 @@ export class WebChannel implements ChannelAdapter {
     if (url.pathname.startsWith('/api/') || url.pathname === '/sse') {
       // SSE uses query param auth; everything else uses header auth
       if (url.pathname === '/sse') {
-        if (!this.checkAuthForSSE(url, res)) return;
+        if (!this.checkAuthForSSE(req, url, res)) return;
       } else {
         if (!this.checkAuth(req, res)) return;
       }
@@ -219,6 +296,234 @@ export class WebChannel implements ChannelAdapter {
       // GET /api/status — Runtime status
       if (req.method === 'GET' && url.pathname === '/api/status') {
         sendJSON(res, 200, { status: 'running', timestamp: Date.now() });
+        return;
+      }
+
+      // GET /api/auth/status — web auth runtime status
+      if (req.method === 'GET' && url.pathname === '/api/auth/status') {
+        if (!this.dashboard.onAuthStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAuthStatus());
+        return;
+      }
+
+      // POST /api/auth/config — update auth mode and token settings
+      if (req.method === 'POST' && url.pathname === '/api/auth/config') {
+        if (!this.dashboard.onAuthUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: {
+          mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+          token?: string;
+          rotateOnStartup?: boolean;
+          sessionTtlMinutes?: number;
+        };
+        try {
+          parsed = body.trim()
+            ? (JSON.parse(body) as {
+              mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+              token?: string;
+              rotateOnStartup?: boolean;
+              sessionTtlMinutes?: number;
+            })
+            : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const result = await this.dashboard.onAuthUpdate(parsed);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/auth/token/rotate — rotate bearer token
+      if (req.method === 'POST' && url.pathname === '/api/auth/token/rotate') {
+        if (!this.dashboard.onAuthRotate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onAuthRotate());
+        return;
+      }
+
+      // POST /api/auth/token/reveal — reveal current bearer token
+      if (req.method === 'POST' && url.pathname === '/api/auth/token/reveal') {
+        if (!this.dashboard.onAuthReveal) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onAuthReveal());
+        return;
+      }
+
+      // POST /api/auth/token/revoke — disable auth token and auth mode
+      if (req.method === 'POST' && url.pathname === '/api/auth/token/revoke') {
+        if (!this.dashboard.onAuthRevoke) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onAuthRevoke());
+        return;
+      }
+
+      // GET /api/tools — tools catalog + policy + jobs + approvals
+      if (req.method === 'GET' && url.pathname === '/api/tools') {
+        if (!this.dashboard.onToolsState) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+        sendJSON(res, 200, this.dashboard.onToolsState({ limit: Number.isFinite(limit) ? limit : 50 }));
+        return;
+      }
+
+      // POST /api/tools/run — execute a tool
+      if (req.method === 'POST' && url.pathname === '/api/tools/run') {
+        if (!this.dashboard.onToolsRun) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: {
+          toolName?: string;
+          args?: Record<string, unknown>;
+          origin?: 'assistant' | 'cli' | 'web';
+          agentId?: string;
+          userId?: string;
+          channel?: string;
+        };
+        try {
+          parsed = JSON.parse(body) as {
+            toolName?: string;
+            args?: Record<string, unknown>;
+            origin?: 'assistant' | 'cli' | 'web';
+            agentId?: string;
+            userId?: string;
+            channel?: string;
+          };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.toolName) {
+          sendJSON(res, 400, { error: 'toolName is required' });
+          return;
+        }
+        const result = await this.dashboard.onToolsRun({
+          toolName: parsed.toolName,
+          args: parsed.args ?? {},
+          origin: parsed.origin ?? 'web',
+          agentId: parsed.agentId,
+          userId: parsed.userId,
+          channel: parsed.channel,
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/tools/policy — update tool policy/sandbox
+      if (req.method === 'POST' && url.pathname === '/api/tools/policy') {
+        if (!this.dashboard.onToolsPolicyUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: {
+          mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
+          toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
+          sandbox?: {
+            allowedPaths?: string[];
+            allowedCommands?: string[];
+            allowedDomains?: string[];
+          };
+        };
+        try {
+          parsed = body.trim()
+            ? (JSON.parse(body) as {
+              mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
+              toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
+              sandbox?: {
+                allowedPaths?: string[];
+                allowedCommands?: string[];
+                allowedDomains?: string[];
+              };
+            })
+            : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onToolsPolicyUpdate(parsed));
+        return;
+      }
+
+      // POST /api/tools/approvals/decision — approve or deny pending request
+      if (req.method === 'POST' && url.pathname === '/api/tools/approvals/decision') {
+        if (!this.dashboard.onToolsApprovalDecision) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: {
+          approvalId?: string;
+          decision?: 'approved' | 'denied';
+          actor?: string;
+          reason?: string;
+        };
+        try {
+          parsed = JSON.parse(body) as {
+            approvalId?: string;
+            decision?: 'approved' | 'denied';
+            actor?: string;
+            reason?: string;
+          };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.approvalId || !parsed.decision) {
+          sendJSON(res, 400, { error: 'approvalId and decision are required' });
+          return;
+        }
+        const result = await this.dashboard.onToolsApprovalDecision({
+          approvalId: parsed.approvalId,
+          decision: parsed.decision,
+          actor: parsed.actor ?? 'web-user',
+          reason: parsed.reason,
+        });
+        sendJSON(res, 200, result);
         return;
       }
 
@@ -684,6 +989,16 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/assistant/state — orchestrator/session state
+      if (req.method === 'GET' && url.pathname === '/api/assistant/state') {
+        if (!this.dashboard.onAssistantState) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAssistantState());
+        return;
+      }
+
       // POST /api/message — Send a message to an agent
       if (req.method === 'POST' && url.pathname === '/api/message') {
         let body: string;
@@ -1025,4 +1340,9 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
   });
+}
+
+function previewToken(token: string): string {
+  if (token.length <= 8) return token;
+  return `${token.slice(0, 4)}...${token.slice(-4)}`;
 }

@@ -2,8 +2,8 @@
  * CLI channel adapter.
  *
  * Interactive readline prompt with full dashboard parity.
- * Commands: /chat, /agents, /agent, /status, /providers, /budget, /watchdog,
- * /config, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
+ * Commands: /chat, /agents, /agent, /status, /assistant, /providers, /budget, /watchdog,
+ * /config, /campaign, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
  *
  * Accepts the same DashboardCallbacks interface as the web channel for
  * instant feature parity with zero duplication.
@@ -15,8 +15,6 @@ import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
-import type { SetupApplyInput } from '../runtime/setup.js';
-import { parseAllowedChatIds } from '../runtime/setup.js';
 
 const log = createLogger('channel:cli');
 
@@ -91,13 +89,8 @@ export class CLIChannel implements ChannelAdapter {
       prompt: this.prompt,
     });
 
-    this.write('\nGuardianAgent CLI — Type a message or /help for commands.\n\n');
+    this.write('\nGuardian Agent CLI — Type a message or /help for commands.\n\n');
     this.rl.prompt();
-    this.maybeRunFirstTimeSetup().catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.write(`\n${this.yellow('[setup]')} ${msg}\n\n`);
-      this.rl?.prompt();
-    });
 
     this.rl.on('line', async (line) => {
       const trimmed = line.trim();
@@ -256,8 +249,20 @@ export class CLIChannel implements ChannelAdapter {
       case 'watchdog':
         this.handleWatchdog();
         break;
+      case 'assistant':
+        this.handleAssistant(args);
+        break;
+      case 'tools':
+        await this.handleTools(args);
+        break;
+      case 'campaign':
+        await this.handleCampaign(args);
+        break;
       case 'config':
         await this.handleConfig(args);
+        break;
+      case 'auth':
+        await this.handleAuth(args);
         break;
       case 'audit':
         this.handleAudit(args);
@@ -273,9 +278,6 @@ export class CLIChannel implements ChannelAdapter {
         break;
       case 'guide':
         this.handleGuide();
-        break;
-      case 'setup':
-        await this.handleSetup(args);
         break;
       case 'session':
         await this.handleSession(args);
@@ -317,6 +319,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /providers                             Provider connectivity check\n');
     this.write('  /budget                                Per-agent resource usage\n');
     this.write('  /watchdog                              Watchdog check results\n');
+    this.write('  /assistant [summary|sessions|jobs|policy|traces] [limit]  Assistant control-plane state\n');
     this.write('\n');
     this.write(this.bold('Configuration\n'));
     this.write('  /config                                View full config (redacted)\n');
@@ -325,6 +328,17 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
+    this.write('  /auth [status|mode|rotate|reveal|revoke]  Manage web auth/token settings\n');
+    this.write('\n');
+    this.write(this.bold('Tools\n'));
+    this.write('  /tools [list|run|approvals|jobs|policy]  Tool runtime control plane\n');
+    this.write('  /tools run <tool> [jsonArgs]            Execute a tool manually\n');
+    this.write('  /tools approve <approvalId>             Approve pending tool action\n');
+    this.write('  /tools deny <approvalId> [reason]       Deny pending tool action\n');
+    this.write('  /tools policy paths <csv>               Set allowed filesystem roots\n');
+    this.write('  /tools policy commands <csv>            Set allowlisted shell command prefixes\n');
+    this.write('  /tools policy domains <csv>             Set allowlisted network domains\n');
+    this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
     this.write('  /audit [limit]                         Recent audit events\n');
@@ -348,7 +362,6 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /session [list|use|new] ...            Session controls\n');
     this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
     this.write('  /analytics [minutes]                   Interaction analytics summary\n');
-    this.write('  /setup [run|status]                    First-run setup/status\n');
     this.write('  /guide                                 Show reference guide\n');
     this.write('  /clear                                 Clear screen\n');
     this.write('  /help                                  Show this help\n');
@@ -639,6 +652,179 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
   }
 
+  // ─── /assistant ──────────────────────────────────────────────
+
+  private handleAssistant(args: string[]): void {
+    if (!this.dashboard?.onAssistantState) {
+      this.write('\nAssistant state is not available.\n\n');
+      return;
+    }
+
+    const mode = (args[0] ?? 'summary').toLowerCase();
+    const state = this.dashboard.onAssistantState();
+    const { summary } = state.orchestrator;
+
+    if (mode === 'sessions') {
+      const parsed = args[1] ? Number.parseInt(args[1], 10) : 12;
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+      const sessions = state.orchestrator.sessions.slice(0, limit);
+      if (sessions.length === 0) {
+        this.write('\nNo assistant sessions have run yet.\n\n');
+        return;
+      }
+
+      const headers = ['Session', 'Status', 'Queue', 'Reqs', 'Wait', 'Exec', 'E2E', 'Last'];
+      const rows = sessions.map((session) => [
+        `${session.channel}:${session.userId}:${session.agentId}`,
+        session.status === 'running'
+          ? this.green('running')
+          : session.status === 'queued'
+          ? this.yellow('queued')
+          : this.dim('idle'),
+        String(session.queueDepth),
+        String(session.totalRequests),
+        session.lastQueueWaitMs !== undefined ? `${session.lastQueueWaitMs}ms` : '-',
+        session.lastExecutionMs !== undefined ? `${session.lastExecutionMs}ms` : '-',
+        session.lastEndToEndMs !== undefined ? `${session.lastEndToEndMs}ms` : '-',
+        session.lastCompletedAt ? this.formatTimeAgo(session.lastCompletedAt) : '-',
+      ]);
+
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (mode === 'jobs') {
+      const parsed = args[1] ? Number.parseInt(args[1], 10) : 12;
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+      const jobs = state.jobs.jobs.slice(0, limit);
+      if (jobs.length === 0) {
+        this.write('\nNo tracked jobs yet.\n\n');
+        return;
+      }
+      const headers = ['Job', 'Source', 'Status', 'Started', 'Duration', 'Detail', 'Error'];
+      const rows = jobs.map((job) => [
+        job.type,
+        job.source,
+        job.status === 'failed'
+          ? this.red('failed')
+          : job.status === 'running'
+          ? this.yellow('running')
+          : this.green('succeeded'),
+        this.formatTimeAgo(job.startedAt),
+        job.durationMs !== undefined ? `${job.durationMs}ms` : '-',
+        job.detail ?? '-',
+        job.error ?? '-',
+      ]);
+
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (mode === 'policy') {
+      const parsed = args[1] ? Number.parseInt(args[1], 10) : 12;
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+      const decisions = state.lastPolicyDecisions.slice(0, limit);
+      if (decisions.length === 0) {
+        this.write('\nNo recent policy decisions.\n\n');
+        return;
+      }
+      const headers = ['Time', 'Type', 'Severity', 'Agent', 'Controller', 'Reason'];
+      const rows = decisions.map((decision) => [
+        this.formatTimeAgo(decision.timestamp),
+        decision.type,
+        this.colorSeverity(decision.severity),
+        decision.agentId,
+        decision.controller ?? '-',
+        decision.reason ?? '-',
+      ]);
+
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (mode === 'traces') {
+      const parsed = args[1] ? Number.parseInt(args[1], 10) : 12;
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+      const traces = state.orchestrator.traces.slice(0, limit);
+      if (traces.length === 0) {
+        this.write('\nNo recent assistant traces.\n\n');
+        return;
+      }
+
+      const headers = ['Type', 'Priority', 'Status', 'Session', 'Queue', 'Exec', 'E2E', 'Last Step'];
+      const rows = traces.map((trace) => {
+        const lastStep = trace.steps.length > 0 ? trace.steps[trace.steps.length - 1] : null;
+        const status = trace.status === 'failed'
+          ? this.red('failed')
+          : trace.status === 'running'
+          ? this.yellow('running')
+          : trace.status === 'queued'
+          ? this.yellow('queued')
+          : this.green('succeeded');
+        return [
+          trace.requestType,
+          trace.priority,
+          status,
+          `${trace.channel}:${trace.userId}:${trace.agentId}`,
+          trace.queueWaitMs !== undefined ? `${trace.queueWaitMs}ms` : '-',
+          trace.executionMs !== undefined ? `${trace.executionMs}ms` : '-',
+          trace.endToEndMs !== undefined ? `${trace.endToEndMs}ms` : '-',
+          lastStep ? `${lastStep.name} (${lastStep.status})` : '-',
+        ];
+      });
+
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    this.write('\n');
+    this.write(this.bold('Assistant Orchestrator\n'));
+    this.write(`  Default provider: ${state.defaultProvider}\n`);
+    this.write(`  Providers:        ${state.providers.join(', ') || 'none'}\n`);
+    this.write(`  Guardian:         ${state.guardianEnabled ? this.green('enabled') : this.red('disabled')}\n`);
+    this.write(`  Uptime:           ${this.formatDuration(summary.uptimeMs)}\n`);
+    this.write('\n');
+    this.write(`  Sessions:         ${summary.sessionCount}\n`);
+    this.write(`  Running:          ${summary.runningCount}\n`);
+    this.write(`  Queued:           ${summary.queuedCount}\n`);
+    this.write(`  Queue priority:   high=${summary.queuedByPriority.high}, normal=${summary.queuedByPriority.normal}, low=${summary.queuedByPriority.low}\n`);
+    this.write(`  Requests:         ${summary.totalRequests} (${summary.completedRequests} success, ${summary.failedRequests} failed)\n`);
+    this.write(`  Avg exec latency: ${summary.avgExecutionMs}ms\n`);
+    this.write(`  Avg e2e latency:  ${summary.avgEndToEndMs}ms\n`);
+    this.write(`  Jobs:             ${state.jobs.summary.running} running, ${state.jobs.summary.failed} failed, ${state.jobs.summary.total} tracked\n`);
+    this.write(`  Policy events:    ${state.lastPolicyDecisions.length} recent decisions\n`);
+
+    if (state.orchestrator.sessions.length > 0) {
+      this.write('\n');
+      this.write(this.bold('  Recent sessions:\n'));
+      for (const session of state.orchestrator.sessions.slice(0, 5)) {
+        const status = session.status === 'running'
+          ? this.green('running')
+          : session.status === 'queued'
+          ? this.yellow('queued')
+          : this.dim('idle');
+        const queue = session.queueDepth > 0 ? `queue=${session.queueDepth}` : 'queue=0';
+        const exec = session.lastExecutionMs !== undefined ? `exec=${session.lastExecutionMs}ms` : 'exec=-';
+        const e2e = session.lastEndToEndMs !== undefined ? `e2e=${session.lastEndToEndMs}ms` : 'e2e=-';
+        this.write(`    ${status} ${session.channel}:${session.userId}:${session.agentId} (${queue}, ${exec}, ${e2e})\n`);
+      }
+      this.write(`\n  Use ${this.cyan('/assistant sessions')} for full table.\n`);
+    }
+    this.write(`  Use ${this.cyan('/assistant jobs')} for background jobs.\n`);
+    this.write(`  Use ${this.cyan('/assistant policy')} for recent policy decisions.\n`);
+    this.write(`  Use ${this.cyan('/assistant traces')} for request step traces.\n`);
+
+    this.write('\n');
+  }
+
   // ─── /config ─────────────────────────────────────────────────
 
   private async handleConfig(args: string[]): Promise<void> {
@@ -694,6 +880,9 @@ export class CLIChannel implements ChannelAdapter {
       this.write(`  Web:      ${config.channels.web.enabled ? 'enabled' : 'disabled'}`);
       if (config.channels.web.port) this.write(` (port ${config.channels.web.port})`);
       this.write('\n');
+      if (config.channels.web.auth) {
+        this.write(`  Web auth: ${config.channels.web.auth.mode} (${config.channels.web.auth.tokenConfigured ? 'token configured' : 'no token'})\n`);
+      }
     }
 
     this.write('\n');
@@ -720,7 +909,7 @@ export class CLIChannel implements ChannelAdapter {
 
     this.write('\n');
     this.write(this.bold('Assistant\n'));
-    this.write(`  Setup completed: ${config.assistant.setupCompleted ? this.green('yes') : this.yellow('no')}\n`);
+    this.write(`  Config baseline: ${config.assistant.setupCompleted ? this.green('yes') : this.yellow('no')}\n`);
     this.write(`  Identity mode:   ${config.assistant.identity.mode}\n`);
     this.write(`  Memory:          ${config.assistant.memory.enabled ? 'enabled' : 'disabled'} (${config.assistant.memory.retentionDays}d retention)\n`);
     this.write(`  Analytics:       ${config.assistant.analytics.enabled ? 'enabled' : 'disabled'} (${config.assistant.analytics.retentionDays}d retention)\n`);
@@ -855,6 +1044,441 @@ export class CLIChannel implements ChannelAdapter {
       if (p.availableModels && p.availableModels.length > 0) {
         this.write(`    Models: ${p.availableModels.join(', ')}\n`);
       }
+    }
+    this.write('\n');
+  }
+
+  // ─── /auth ───────────────────────────────────────────────────
+
+  private async handleAuth(args: string[]): Promise<void> {
+    if (!this.dashboard?.onAuthStatus) {
+      this.write('\nAuth controls are not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'status').toLowerCase();
+    if (sub === 'status') {
+      const status = this.dashboard.onAuthStatus();
+      this.write('\n');
+      this.write(this.bold('Web Auth\n'));
+      this.write(`  Mode:            ${status.mode}\n`);
+      this.write(`  Token:           ${status.tokenConfigured ? this.green('configured') : this.red('missing')}\n`);
+      this.write(`  Token source:    ${status.tokenSource}\n`);
+      if (status.tokenPreview) this.write(`  Token preview:   ${status.tokenPreview}\n`);
+      this.write(`  Rotate startup:  ${status.rotateOnStartup ? 'yes' : 'no'}\n`);
+      if (status.sessionTtlMinutes) this.write(`  Session TTL:     ${status.sessionTtlMinutes} minutes\n`);
+      this.write(`  Endpoint:        http://${status.host}:${status.port}\n`);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'mode') {
+      if (!this.dashboard.onAuthUpdate) {
+        this.write('\nAuth updates are not available.\n\n');
+        return;
+      }
+      const mode = args[1];
+      if (!mode || !['bearer_required', 'localhost_no_auth', 'disabled'].includes(mode)) {
+        this.write('\nUsage: /auth mode <bearer_required|localhost_no_auth|disabled>\n\n');
+        return;
+      }
+      const result = await this.dashboard.onAuthUpdate({
+        mode: mode as 'bearer_required' | 'localhost_no_auth' | 'disabled',
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'rotate') {
+      if (!this.dashboard.onAuthRotate) {
+        this.write('\nToken rotation is not available.\n\n');
+        return;
+      }
+      const result = await this.dashboard.onAuthRotate();
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+      if (result.token) {
+        this.write(`  New token: ${this.cyan(result.token)}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'reveal') {
+      if (!this.dashboard.onAuthReveal) {
+        this.write('\nToken reveal is not available.\n\n');
+        return;
+      }
+      const result = await this.dashboard.onAuthReveal();
+      if (result.success && result.token) {
+        this.write(`\nToken: ${this.cyan(result.token)}\n\n`);
+      } else {
+        this.write('\nNo token configured.\n\n');
+      }
+      return;
+    }
+
+    if (sub === 'revoke') {
+      if (!this.dashboard.onAuthRevoke) {
+        this.write('\nToken revoke is not available.\n\n');
+        return;
+      }
+      const result = await this.dashboard.onAuthRevoke();
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write('\nUsage: /auth [status|mode|rotate|reveal|revoke]\n\n');
+  }
+
+  // ─── /tools ──────────────────────────────────────────────────
+
+  private async handleTools(args: string[]): Promise<void> {
+    if (!this.dashboard?.onToolsState) {
+      this.write('\nTools runtime is not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'list').toLowerCase();
+    const state = this.dashboard.onToolsState({ limit: 40 });
+
+    if (sub === 'list') {
+      if (state.tools.length === 0) {
+        this.write('\nNo tools are registered.\n\n');
+        return;
+      }
+      const headers = ['Name', 'Risk', 'Description'];
+      const rows = state.tools.map((tool) => [
+        tool.name,
+        tool.risk,
+        tool.description,
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'run') {
+      if (!this.dashboard.onToolsRun) {
+        this.write('\nTool execution is not available.\n\n');
+        return;
+      }
+      const toolName = args[1];
+      if (!toolName) {
+        this.write('\nUsage: /tools run <toolName> [jsonArgs]\n\n');
+        return;
+      }
+      let parsedArgs: Record<string, unknown> = {};
+      const jsonRaw = args.slice(2).join(' ').trim();
+      if (jsonRaw) {
+        try {
+          parsedArgs = JSON.parse(jsonRaw) as Record<string, unknown>;
+        } catch {
+          this.write('\nInvalid JSON args. Example: /tools run fs_list {"path":"docs"}\n\n');
+          return;
+        }
+      }
+      const result = await this.dashboard.onToolsRun({
+        toolName,
+        args: parsedArgs,
+        origin: 'cli',
+        agentId: this.activeAgentId ?? this.defaultAgentId,
+        userId: this.defaultUserId,
+        channel: 'cli',
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
+      this.write(`  Job: ${result.jobId}\n`);
+      if (result.approvalId) this.write(`  Approval: ${result.approvalId}\n`);
+      if (result.output !== undefined) {
+        const rendered = JSON.stringify(result.output, null, 2);
+        this.write(`  Output:\n${this.dim(rendered)}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'approvals') {
+      const pendingOnly = args[1] === 'pending';
+      const approvals = pendingOnly
+        ? state.approvals.filter((approval) => approval.status === 'pending')
+        : state.approvals;
+      if (approvals.length === 0) {
+        this.write('\nNo approvals found.\n\n');
+        return;
+      }
+      const headers = ['Approval', 'Tool', 'Status', 'Risk', 'Origin', 'Created'];
+      const rows = approvals.map((approval) => [
+        approval.id,
+        approval.toolName,
+        approval.status,
+        approval.risk,
+        approval.origin,
+        new Date(approval.createdAt).toLocaleTimeString(),
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'approve' || sub === 'deny') {
+      if (!this.dashboard.onToolsApprovalDecision) {
+        this.write('\nApproval decisions are not available.\n\n');
+        return;
+      }
+      const approvalId = args[1];
+      if (!approvalId) {
+        this.write(`\nUsage: /tools ${sub} <approvalId>${sub === 'deny' ? ' [reason]' : ''}\n\n`);
+        return;
+      }
+      const reason = sub === 'deny' ? args.slice(2).join(' ').trim() : undefined;
+      const result = await this.dashboard.onToolsApprovalDecision({
+        approvalId,
+        decision: sub === 'approve' ? 'approved' : 'denied',
+        actor: 'cli-user',
+        reason: reason || undefined,
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'jobs') {
+      if (state.jobs.length === 0) {
+        this.write('\nNo tool jobs yet.\n\n');
+        return;
+      }
+      const headers = ['Job', 'Tool', 'Status', 'Origin', 'Duration', 'Details'];
+      const rows = state.jobs.map((job) => [
+        job.id,
+        job.toolName,
+        job.status,
+        job.origin,
+        job.durationMs !== undefined ? `${job.durationMs}ms` : '-',
+        job.error ?? job.resultPreview ?? '-',
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'policy') {
+      if (args[1] === 'mode') {
+        if (!this.dashboard.onToolsPolicyUpdate) {
+          this.write('\nTool policy updates are not available.\n\n');
+          return;
+        }
+        const mode = args[2];
+        if (!mode || !['approve_each', 'approve_by_policy', 'autonomous'].includes(mode)) {
+          this.write('\nUsage: /tools policy mode <approve_each|approve_by_policy|autonomous>\n\n');
+          return;
+        }
+        const result = this.dashboard.onToolsPolicyUpdate({
+          mode: mode as 'approve_each' | 'approve_by_policy' | 'autonomous',
+        });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      if (args[1] === 'paths' || args[1] === 'commands' || args[1] === 'domains') {
+        if (!this.dashboard.onToolsPolicyUpdate) {
+          this.write('\nTool policy updates are not available.\n\n');
+          return;
+        }
+        const field = args[1];
+        const csv = args.slice(2).join(' ').trim();
+        if (!csv) {
+          this.write(`\nUsage: /tools policy ${field} <comma,separated,values>\n\n`);
+          return;
+        }
+        const values = csv.split(',').map((item) => item.trim()).filter(Boolean);
+        if (values.length === 0) {
+          this.write(`\nUsage: /tools policy ${field} <comma,separated,values>\n\n`);
+          return;
+        }
+        const sandbox = field === 'paths'
+          ? { allowedPaths: values }
+          : field === 'commands'
+          ? { allowedCommands: values }
+          : { allowedDomains: values };
+        const result = this.dashboard.onToolsPolicyUpdate({ sandbox });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      this.write('\n');
+      this.write(this.bold('Tool Policy\n'));
+      this.write(`  Mode: ${state.policy.mode}\n`);
+      this.write(`  Allowed paths: ${state.policy.sandbox.allowedPaths.join(', ') || 'none'}\n`);
+      this.write(`  Allowed commands: ${state.policy.sandbox.allowedCommands.join(', ') || 'none'}\n`);
+      this.write(`  Allowed domains: ${state.policy.sandbox.allowedDomains.join(', ') || 'none'}\n`);
+      const overrides = Object.entries(state.policy.toolPolicies);
+      if (overrides.length > 0) {
+        this.write('  Overrides:\n');
+        for (const [tool, value] of overrides) {
+          this.write(`    ${tool}: ${value}\n`);
+        }
+      }
+      this.write('\n');
+      return;
+    }
+
+    this.write('\nUsage: /tools [list|run|approvals|approve|deny|jobs|policy]\n');
+    this.write('       /tools policy mode <approve_each|approve_by_policy|autonomous>\n');
+    this.write('       /tools policy paths <comma,separated,paths>\n');
+    this.write('       /tools policy commands <comma,separated,prefixes>\n');
+    this.write('       /tools policy domains <comma,separated,domains>\n\n');
+  }
+
+  // ─── /campaign ───────────────────────────────────────────────
+
+  private async handleCampaign(args: string[]): Promise<void> {
+    if (!this.dashboard?.onToolsRun) {
+      this.write('\nCampaign tools are not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'help').toLowerCase();
+
+    if (sub === 'help') {
+      this.write('\n');
+      this.write(this.bold('Campaign Commands\n'));
+      this.write('  /campaign discover <url> [tagsCsv]\n');
+      this.write('  /campaign import <csvPath> [source]\n');
+      this.write('  /campaign contacts [limit] [query]\n');
+      this.write('  /campaign create <name> | <subjectTemplate> | <bodyTemplate>\n');
+      this.write('  /campaign add <campaignId> <contactId[,contactId...]>\n');
+      this.write('  /campaign list [limit]\n');
+      this.write('  /campaign preview <campaignId> [limit]\n');
+      this.write('  /campaign run <campaignId> [maxRecipients]\n');
+      this.write('\n');
+      this.write('Notes:\n');
+      this.write('  - /campaign run is approval-gated before any email is sent.\n');
+      this.write('  - Provide Gmail OAuth token via tool args or GOOGLE_OAUTH_ACCESS_TOKEN env var.\n\n');
+      return;
+    }
+
+    if (sub === 'discover') {
+      const url = args[1];
+      if (!url) {
+        this.write('\nUsage: /campaign discover <url> [tagsCsv]\n\n');
+        return;
+      }
+      const tags = parseCsvList(args[2]);
+      await this.runToolFromCLI('contacts_discover_browser', { url, tags });
+      return;
+    }
+
+    if (sub === 'import') {
+      const path = args[1];
+      if (!path) {
+        this.write('\nUsage: /campaign import <csvPath> [source]\n\n');
+        return;
+      }
+      const source = args.slice(2).join(' ').trim();
+      await this.runToolFromCLI('contacts_import_csv', {
+        path,
+        source: source || undefined,
+      });
+      return;
+    }
+
+    if (sub === 'contacts') {
+      const limit = args[1] ? Number.parseInt(args[1], 10) : 25;
+      const query = args.slice(2).join(' ').trim();
+      await this.runToolFromCLI('contacts_list', {
+        limit: Number.isFinite(limit) ? limit : 25,
+        query: query || undefined,
+      });
+      return;
+    }
+
+    if (sub === 'create') {
+      const raw = args.slice(1).join(' ');
+      const parts = raw.split(/\s*\|\s*/).map((part) => part.trim()).filter(Boolean);
+      if (parts.length < 3) {
+        this.write('\nUsage: /campaign create <name> | <subjectTemplate> | <bodyTemplate>\n\n');
+        return;
+      }
+      await this.runToolFromCLI('campaign_create', {
+        name: parts[0],
+        subjectTemplate: parts[1],
+        bodyTemplate: parts.slice(2).join(' | '),
+      });
+      return;
+    }
+
+    if (sub === 'add') {
+      const campaignId = args[1];
+      const contactCsv = args[2];
+      if (!campaignId || !contactCsv) {
+        this.write('\nUsage: /campaign add <campaignId> <contactId[,contactId...]>\n\n');
+        return;
+      }
+      await this.runToolFromCLI('campaign_add_contacts', {
+        campaignId,
+        contactIds: parseCsvList(contactCsv),
+      });
+      return;
+    }
+
+    if (sub === 'list') {
+      const limit = args[1] ? Number.parseInt(args[1], 10) : 25;
+      await this.runToolFromCLI('campaign_list', {
+        limit: Number.isFinite(limit) ? limit : 25,
+      });
+      return;
+    }
+
+    if (sub === 'preview') {
+      const campaignId = args[1];
+      if (!campaignId) {
+        this.write('\nUsage: /campaign preview <campaignId> [limit]\n\n');
+        return;
+      }
+      const limit = args[2] ? Number.parseInt(args[2], 10) : 10;
+      await this.runToolFromCLI('campaign_dry_run', {
+        campaignId,
+        limit: Number.isFinite(limit) ? limit : 10,
+      });
+      return;
+    }
+
+    if (sub === 'run') {
+      const campaignId = args[1];
+      if (!campaignId) {
+        this.write('\nUsage: /campaign run <campaignId> [maxRecipients]\n\n');
+        return;
+      }
+      const maxRecipients = args[2] ? Number.parseInt(args[2], 10) : 100;
+      await this.runToolFromCLI('campaign_run', {
+        campaignId,
+        maxRecipients: Number.isFinite(maxRecipients) ? maxRecipients : 100,
+      });
+      return;
+    }
+
+    this.write('\nUsage: /campaign help\n\n');
+  }
+
+  private async runToolFromCLI(toolName: string, args: Record<string, unknown>): Promise<void> {
+    if (!this.dashboard?.onToolsRun) {
+      this.write('\nTool execution is not available.\n\n');
+      return;
+    }
+
+    const result = await this.dashboard.onToolsRun({
+      toolName,
+      args,
+      origin: 'cli',
+      agentId: this.activeAgentId ?? this.defaultAgentId,
+      userId: this.defaultUserId,
+      channel: 'cli',
+    });
+    this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
+    this.write(`  Job: ${result.jobId}\n`);
+    if (result.approvalId) this.write(`  Approval: ${result.approvalId}\n`);
+    if (result.output !== undefined) {
+      const rendered = JSON.stringify(result.output, null, 2);
+      this.write(`  Output:\n${this.dim(rendered)}\n`);
     }
     this.write('\n');
   }
@@ -1573,114 +2197,6 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /intel mode <manual|assisted|autonomous>\n\n');
   }
 
-  // ─── /setup ──────────────────────────────────────────────────
-
-  private async handleSetup(args: string[]): Promise<void> {
-    const sub = (args[0] ?? 'run').toLowerCase();
-
-    if (!this.dashboard?.onSetupStatus) {
-      this.write('\nSetup flow is not available.\n\n');
-      return;
-    }
-
-    if (sub === 'status') {
-      const status = await this.dashboard.onSetupStatus();
-      this.write('\n');
-      this.write(this.bold('Setup Status\n'));
-      this.write(`  Completed: ${status.completed ? this.green('yes') : this.yellow('no')}\n`);
-      this.write(`  Ready: ${status.ready ? this.green('yes') : this.yellow('no')}\n`);
-      for (const step of status.steps) {
-        const color = step.status === 'complete'
-          ? this.green
-          : step.status === 'warning'
-          ? this.yellow
-          : this.red;
-        this.write(`  ${color(step.status.toUpperCase())} ${step.title}: ${step.detail}\n`);
-      }
-      this.write('\n');
-      return;
-    }
-
-    await this.runSetupWizard();
-  }
-
-  private async runSetupWizard(): Promise<void> {
-    if (!this.dashboard?.onSetupApply) {
-      this.write('\nSetup updates are not available.\n\n');
-      return;
-    }
-
-    this.write('\nSetup\n');
-    this.write('Press Enter to accept defaults shown in [brackets].\n\n');
-
-    const modeInput = (await this.ask('LLM mode [ollama/external] (ollama): ')).trim().toLowerCase();
-    const llmMode = modeInput === 'external' ? 'external' : 'ollama';
-
-    const update: SetupApplyInput = {
-      llmMode,
-      setupCompleted: true,
-      setDefaultProvider: true,
-    };
-
-    if (llmMode === 'ollama') {
-      const providerName = (await this.ask('Provider name [ollama]: ')).trim() || 'ollama';
-      const model = (await this.ask('Model [llama3.2]: ')).trim() || 'llama3.2';
-      const baseUrl = (await this.ask('Base URL [http://127.0.0.1:11434]: ')).trim() || 'http://127.0.0.1:11434';
-      update.providerName = providerName;
-      update.providerType = 'ollama';
-      update.model = model;
-      update.baseUrl = baseUrl;
-    } else {
-      const providerName = (await this.ask('Provider name [primary]: ')).trim() || 'primary';
-      const providerTypeInput = (await this.ask('Provider type [openai/anthropic] (openai): ')).trim().toLowerCase();
-      const providerType = providerTypeInput === 'anthropic' ? 'anthropic' : 'openai';
-      const modelDefault = providerType === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4.1-mini';
-      const model = (await this.ask(`Model [${modelDefault}]: `)).trim() || modelDefault;
-      const apiKey = (await this.ask('API key: ')).trim();
-      const baseUrl = (await this.ask('Base URL (optional): ')).trim();
-
-      update.providerName = providerName;
-      update.providerType = providerType;
-      update.model = model;
-      update.apiKey = apiKey;
-      if (baseUrl) update.baseUrl = baseUrl;
-    }
-
-    const tgEnabledInput = (await this.ask('Enable Telegram? [y/N]: ')).trim().toLowerCase();
-    const telegramEnabled = tgEnabledInput === 'y' || tgEnabledInput === 'yes';
-    update.telegramEnabled = telegramEnabled;
-    if (telegramEnabled) {
-      const botToken = (await this.ask('Telegram bot token: ')).trim();
-      const allowedInput = (await this.ask('Allowed chat IDs (comma-separated, optional): ')).trim();
-      update.telegramBotToken = botToken;
-      if (allowedInput) {
-        update.telegramAllowedChatIds = parseAllowedChatIds(allowedInput);
-      }
-    }
-
-    this.write('\nApplying setup...\n');
-    const result = await this.dashboard.onSetupApply(update);
-    this.write(`${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
-  }
-
-  private async maybeRunFirstTimeSetup(): Promise<void> {
-    if (!this.dashboard?.onSetupStatus) return;
-    const status = await this.dashboard.onSetupStatus();
-    if (status.completed) return;
-
-    this.write(`${this.yellow('[setup]')} First-run setup is incomplete. Run ${this.cyan('/setup')} to configure Ollama/API + Telegram.\n\n`);
-  }
-
-  private ask(question: string): Promise<string> {
-    return new Promise((resolve) => {
-      if (!this.rl) {
-        resolve('');
-        return;
-      }
-      this.rl.question(question, (answer) => resolve(answer));
-    });
-  }
-
   // ─── /clear ──────────────────────────────────────────────────
 
   private handleClear(): void {
@@ -1778,6 +2294,17 @@ export class CLIChannel implements ChannelAdapter {
     return `${Math.round(diff / 3_600_000)}h ago`;
   }
 
+  private formatDuration(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    if (totalSec < 60) return `${totalSec}s`;
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    if (minutes < 60) return `${minutes}m ${seconds}s`;
+    const hours = Math.floor(minutes / 60);
+    const remMin = minutes % 60;
+    return `${hours}h ${remMin}m`;
+  }
+
   private writeTable(headers: string[], rows: string[][]): void {
     // Calculate column widths (use stripped text for width calculation)
     const colWidths = headers.map((h, i) => {
@@ -1829,4 +2356,12 @@ export class CLIChannel implements ChannelAdapter {
     this.write(`  Providers: ${status.providers.length > 0 ? status.providers.join(', ') : 'none'}\n`);
     this.write('\n');
   }
+}
+
+function parseCsvList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

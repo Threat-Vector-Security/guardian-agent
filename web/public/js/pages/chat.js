@@ -4,6 +4,7 @@
  */
 
 import { api } from '../api.js';
+import { applyInputTooltips } from '../tooltip.js';
 
 const chatHistoryByAgent = new Map();
 const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
@@ -259,6 +260,7 @@ export async function renderChat(container) {
   wrapper.appendChild(inputArea);
 
   container.appendChild(wrapper);
+  applyInputTooltips(container);
   input.focus();
 }
 

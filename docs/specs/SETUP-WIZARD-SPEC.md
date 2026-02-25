@@ -1,35 +1,21 @@
-# Setup And Config Center Spec
+# Setup Wizard Spec (Deprecated)
 
-## Goal
-Provide a first-run onboarding flow and ongoing configuration surface that gets a personal assistant usable in one pass:
-- Configure local Ollama or external API provider
-- Apply default provider immediately (no restart for LLM changes)
-- Optionally configure Telegram bot token + allowed chat IDs
-- Mark setup completion state and expose diagnostics
+## Status
+Deprecated. The interactive CLI `/setup` wizard is no longer part of the primary UX.
 
-## Scope
-- Web: `#/config` Configuration Center with readiness panel and unified apply form
-- CLI: `/setup` command with interactive prompts
-- Backend API:
-  - `GET /api/setup/status`
-  - `POST /api/setup/apply`
+## Replacement
+- Use `docs/specs/CONFIG-CENTER-SPEC.md` for current behavior.
+- Configure providers/channels via:
+  - Web: `#/config`
+  - CLI: `/config ...`
+- Runtime/orchestration visibility via:
+  - Web: `#/assistant`
+  - CLI: `/assistant`
 
-## Data Model
-- `assistant.setup.completed: boolean`
-- Provider settings in `llm.<provider>`
-- Optional Telegram updates in `channels.telegram`
+## Legacy Endpoint Note
+The backend still exposes:
+- `GET /api/setup/status`
+- `POST /api/setup/apply`
 
-## Runtime Behavior
-- Setup apply writes `config.yaml`
-- Runtime applies LLM/default provider changes live via `runtime.applyLLMConfiguration()`
-- Telegram channel structural changes (enable/disable/token updates) require restart
+These endpoints are retained for Config Center readiness/apply flows, not for an interactive wizard.
 
-## Validation Rules
-- `model` required
-- `apiKey` required for external providers unless an existing key is already configured
-- Config is validated through `validateConfig()` before persistence
-
-## UX Requirements
-- Config Center includes step-by-step readiness state
-- CLI setup supports defaults for fast local onboarding
-- Web config supports both fresh values and quick-fill from detected providers

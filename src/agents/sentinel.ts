@@ -10,6 +10,7 @@ import { BaseAgent } from '../agent/agent.js';
 import type { AgentContext, ScheduleContext } from '../agent/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import type { AuditLog, AuditSummary } from '../guardian/audit-log.js';
+import { composeGuardianSystemPrompt } from '../prompts/guardian-core.js';
 
 /** Anomaly detected by the Sentinel. */
 export interface Anomaly {
@@ -42,15 +43,21 @@ const DEFAULT_THRESHOLDS: AnomalyThresholds = {
 };
 
 /** System prompt for LLM-based anomaly analysis. */
-const SENTINEL_SYSTEM_PROMPT = `You are a security analyst reviewing an audit log summary for an AI agent system.
-Analyze the provided data for:
-1. Unusual patterns suggesting an attack or compromise
-2. Agents behaving outside their normal patterns
-3. Potential data exfiltration attempts
-4. Privilege escalation patterns
-
-Respond with a JSON object: { "findings": [{ "severity": "warn"|"critical", "description": "...", "recommendation": "..." }] }
-If no issues found, return: { "findings": [] }`;
+const SENTINEL_SYSTEM_PROMPT = composeGuardianSystemPrompt([
+  'You are Sentinel, the Guardian Agent defensive intelligence analyst.',
+  'Review the provided audit log summary for security threats and policy abuse.',
+  '',
+  'Analyze the data for:',
+  '1. Unusual patterns suggesting attack or compromise',
+  '2. Agents behaving outside normal patterns',
+  '3. Potential data exfiltration attempts',
+  '4. Privilege escalation patterns',
+  '',
+  'Output requirements:',
+  '- Respond with strict JSON only.',
+  '- Schema: { "findings": [{ "severity": "warn"|"critical", "description": "...", "recommendation": "..." }] }',
+  '- If no issues found, return: { "findings": [] }',
+].join('\n'));
 
 /**
  * Sentinel security agent — analyzes audit logs for anomalies.

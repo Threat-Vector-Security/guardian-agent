@@ -21,7 +21,7 @@ export async function renderDashboard(container) {
       api.auditSummary(300000).catch(() => null),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
     ]);
-    const setupStatus = await api.setupStatus().catch(() => null);
+    const readiness = await api.setupStatus().catch(() => null);
 
     container.innerHTML = '<h2 class="page-title">Dashboard</h2>';
 
@@ -48,14 +48,14 @@ export async function renderDashboard(container) {
       cards.llm = createStatusCard('LLM Provider', 'None', 'No providers configured', 'warning');
     }
 
-    cards.setup = createStatusCard(
-      'Setup',
-      setupStatus?.completed ? 'Complete' : 'Pending',
-      setupStatus?.ready ? 'Ready for daily use' : 'Review Config Center',
-      setupStatus?.completed ? 'success' : 'warning',
+    cards.readiness = createStatusCard(
+      'Readiness',
+      readiness?.ready ? 'Ready' : 'Needs Review',
+      readiness?.completed ? 'Config baseline complete' : 'Complete Config Center',
+      readiness?.ready ? 'success' : 'warning',
     );
 
-    grid.append(cards.runtime, cards.agents, cards.guardian, cards.llm, cards.setup);
+    grid.append(cards.runtime, cards.agents, cards.guardian, cards.llm, cards.readiness);
     container.appendChild(grid);
 
     // LLM Provider Status section
