@@ -5,10 +5,11 @@
  */
 
 import type { LLMProvider } from './types.js';
-import type { LLMConfig } from '../config/types.js';
+import type { LLMConfig, FailoverConfig } from '../config/types.js';
 import { OllamaProvider } from './ollama.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAIProvider } from './openai.js';
+import { FailoverProvider } from './failover-provider.js';
 
 /** Create an LLM provider from configuration. */
 export function createProvider(config: LLMConfig): LLMProvider {
@@ -33,4 +34,24 @@ export function createProviders(
     providers.set(name, createProvider(config));
   }
   return providers;
+}
+
+/**
+ * Create a FailoverProvider that wraps all configured providers
+ * with circuit breakers and priority-based failover.
+ */
+export function createFailoverProvider(
+  configs: Record<string, LLMConfig>,
+  failoverConfig?: FailoverConfig,
+): FailoverProvider {
+  const providerEntries = Object.entries(configs).map(([name, config]) => ({
+    name,
+    provider: createProvider(config),
+    priority: config.priority ?? 10,
+  }));
+
+  return new FailoverProvider(providerEntries, {
+    failureThreshold: failoverConfig?.failureThreshold ?? 3,
+    resetTimeoutMs: failoverConfig?.resetTimeoutMs ?? 30_000,
+  });
 }

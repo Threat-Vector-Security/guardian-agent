@@ -9,8 +9,7 @@
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { exec } from 'node:child_process';
-import { platform, homedir } from 'node:os';
+import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
 import type { GuardianAgentConfig } from './config/types.js';
@@ -543,6 +542,8 @@ function buildDashboardCallbacks(
     onAuditQuery: (filter) => runtime.auditLog.query(filter),
 
     onAuditSummary: (windowMs) => runtime.auditLog.getSummary(windowMs),
+
+    onAuditVerifyChain: () => runtime.auditLog.verifyChain(),
 
     onConfig: () => redactConfig(configRef.current),
 
@@ -1341,19 +1342,6 @@ function buildDashboardCallbacks(
   };
 }
 
-/** Open a URL in the user's default browser. */
-function openBrowser(url: string): void {
-  const os = platform();
-  const cmd = os === 'win32' ? `start "" "${url}"`
-    : os === 'darwin' ? `open "${url}"`
-    : `xdg-open "${url}"`;
-
-  exec(cmd, (err) => {
-    if (err) {
-      log.info({ url }, 'Dashboard available at');
-    }
-  });
-}
 
 function resolveAssistantDbPath(configuredPath: string | undefined, fallbackFileName: string): string {
   const fallback = join(homedir(), '.guardianagent', fallbackFileName);
@@ -1616,12 +1604,13 @@ async function main(): Promise<void> {
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
 
   const webMode = config.channels.web?.auth?.mode
-    ?? (config.channels.web?.authToken ? 'bearer_required' : 'bearer_required');
+    ?? (config.channels.web?.authToken ? 'bearer_required' : 'localhost_no_auth');
   const configuredToken = config.channels.web?.auth?.token?.trim() || config.channels.web?.authToken?.trim();
   const rotateOnStartup = config.channels.web?.auth?.rotateOnStartup ?? false;
-  const shouldGenerateToken = webMode !== 'disabled' && (!configuredToken || rotateOnStartup);
-  const effectiveToken = webMode === 'disabled'
-    ? undefined
+  const needsToken = webMode === 'bearer_required';
+  const shouldGenerateToken = needsToken && (!configuredToken || rotateOnStartup);
+  const effectiveToken = !needsToken
+    ? configuredToken || undefined
     : (shouldGenerateToken ? randomUUID().replace(/-/g, '') : configuredToken);
   const webAuthStateRef: { current: WebAuthRuntimeConfig } = {
     current: {
@@ -1664,10 +1653,19 @@ async function main(): Promise<void> {
       }));
     }
   } else {
-    // Default agent
+    // Default agent — grant standard capabilities so Guardian allows tool actions
     const defaultAgent = new ChatAgent('default', 'Guardian Agent', undefined, conversations, toolExecutor);
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
+      grantedCapabilities: [
+        'read_files',
+        'write_files',
+        'execute_commands',
+        'network_access',
+        'read_email',
+        'draft_email',
+        'send_email',
+      ],
     }));
   }
 
@@ -1699,6 +1697,12 @@ async function main(): Promise<void> {
     applyWebAuthRuntime,
     configPath,
   );
+
+  // Killswitch: triggers graceful shutdown from CLI or web
+  dashboardCallbacks.onKillswitch = () => {
+    log.warn('Killswitch activated — shutting down all services');
+    process.kill(process.pid, 'SIGTERM');
+  };
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
   let autoScanInFlight = false;
@@ -1773,12 +1777,14 @@ async function main(): Promise<void> {
     log.info({ intervalMinutes: autoScanMinutes }, 'Threat-intel auto-scan enabled');
   }
 
+  let cliChannel: CLIChannel | null = null;
+
   if (config.channels.cli?.enabled) {
     const enabledChannels: string[] = ['cli'];
     if (config.channels.web?.enabled) enabledChannels.push('web');
     if (config.channels.telegram?.enabled) enabledChannels.push('telegram');
 
-    const cli = new CLIChannel({
+    cliChannel = new CLIChannel({
       defaultAgent: config.channels.cli.defaultAgent ?? defaultAgentId,
       defaultUserId: 'cli',
       dashboard: dashboardCallbacks,
@@ -1788,6 +1794,10 @@ async function main(): Promise<void> {
         guardianEnabled: config.guardian.enabled,
         providerName: config.defaultProvider,
         channels: enabledChannels,
+        dashboardUrl: config.channels.web?.enabled
+          ? `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`
+          : undefined,
+        authToken: effectiveToken,
       },
       onAgents: () => runtime.registry.getAll().map(inst => ({
         id: inst.agent.id,
@@ -1802,7 +1812,7 @@ async function main(): Promise<void> {
         providers: [...runtime.providers.keys()],
       }),
     });
-    await cli.start(async (msg) => {
+    await cliChannel.start(async (msg) => {
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
           configRef.current.channels.cli?.defaultAgent ?? defaultAgentId,
@@ -1811,7 +1821,7 @@ async function main(): Promise<void> {
       }
       return runtime.dispatchMessage(configRef.current.channels.cli?.defaultAgent ?? defaultAgentId, msg);
     });
-    channels.push({ name: 'cli', stop: () => cli.stop() });
+    channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
   }
 
   if (config.channels.telegram?.enabled && config.channels.telegram.botToken) {
@@ -1869,7 +1879,7 @@ async function main(): Promise<void> {
         tokenSource: 'ephemeral',
       };
     }
-    if (webAuthStateRef.current.mode !== 'disabled' && webAuthStateRef.current.tokenSource === 'ephemeral') {
+    if (webAuthStateRef.current.mode === 'bearer_required' && webAuthStateRef.current.tokenSource === 'ephemeral') {
       log.warn(
         {
           token: webAuthStateRef.current.token,
@@ -1878,6 +1888,15 @@ async function main(): Promise<void> {
           port: config.channels.web.port ?? 3000,
         },
         'No web auth token configured. Generated an ephemeral token for this run.',
+      );
+    } else if (webAuthStateRef.current.mode === 'localhost_no_auth') {
+      log.info(
+        {
+          mode: webAuthStateRef.current.mode,
+          host: config.channels.web.host ?? 'localhost',
+          port: config.channels.web.port ?? 3000,
+        },
+        'Web dashboard: localhost access without auth token.',
       );
     }
 
@@ -1904,17 +1923,59 @@ async function main(): Promise<void> {
     });
     channels.push({ name: 'web', stop: () => web.stop() });
 
-    // Open browser to dashboard
+    // Log the dashboard URL prominently
     const webUrl = `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`;
-    openBrowser(webUrl);
+    log.info({ url: webUrl }, 'Dashboard available at');
   }
 
   // Start runtime
   await runtime.start();
 
+  // Post-start: AI greeting or setup wizard
+  if (cliChannel) {
+    const providers = dashboardCallbacks.onProvidersStatus
+      ? await dashboardCallbacks.onProvidersStatus()
+      : [];
+    const providerReady = providers.some(
+      (p: DashboardProviderInfo) => p.name === config.defaultProvider && p.connected,
+    );
+
+    cliChannel.postStart({
+      providerReady,
+      onGreeting: async () => {
+        try {
+          const response = await runtime.dispatchMessage(
+            defaultAgentId,
+            {
+              id: randomUUID(),
+              userId: 'system',
+              channel: 'cli',
+              content: 'You have just started up. Greet the user briefly — one short sentence to let them know you are online and ready.',
+              timestamp: Date.now(),
+            },
+          );
+          return response.content;
+        } catch {
+          return 'Guardian Agent is online and ready.';
+        }
+      },
+      onSetupApply: dashboardCallbacks.onSetupApply!,
+    });
+  }
+
   // Graceful shutdown
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return; // prevent double-shutdown on repeated Ctrl+C
+    shuttingDown = true;
     log.info({ signal }, 'Shutting down...');
+
+    // Force exit after 5s if graceful cleanup stalls
+    const forceExitTimer = setTimeout(() => {
+      log.warn('Graceful shutdown timed out, forcing exit');
+      process.exit(1);
+    }, 5_000);
+    forceExitTimer.unref();
 
     for (const channel of channels) {
       try {
@@ -1932,6 +1993,7 @@ async function main(): Promise<void> {
     await runtime.stop();
     conversations.close();
     analytics.close();
+
     process.exit(0);
   };
 

@@ -42,10 +42,10 @@ Core principles:
 │  ║  │  Input    │→│   Rate    │→│Capability│→│  Secret  │→┐     ║  │
 │  ║  │Sanitizer  │ │  Limiter  │ │Controller│ │  Scanner │ │     ║  │
 │  ║  └───────────┘ └───────────┘ └──────────┘ └──────────┘ │     ║  │
-│  ║  ┌──────────┐                                           │     ║  │
-│  ║  │  Denied  │←──────────────────────────────────────────┘     ║  │
-│  ║  │  Path    │                                                  ║  │
-│  ║  └──────────┘                                                  ║  │
+│  ║  ┌──────────┐  ┌──────────┐                              │     ║  │
+│  ║  │  Denied  │→ │  Shell   │←─────────────────────────────┘     ║  │
+│  ║  │  Path    │  │ Command  │                                    ║  │
+│  ║  └──────────┘  └──────────┘                                    ║  │
 │  ║                                                                ║  │
 │  ║  Layer 2: OUTPUT (inline, after agent)                         ║  │
 │  ║  ┌───────────────┐  ┌───────────────┐                         ║  │
@@ -54,10 +54,11 @@ Core principles:
 │  ║  └───────────────┘  └───────────────┘                         ║  │
 │  ║                                                                ║  │
 │  ║  Layer 3: SENTINEL (retrospective, scheduled)                  ║  │
-│  ║  ┌───────────────┐  ┌───────────────┐                         ║  │
-│  ║  │ AuditLog      │→ │ SentinelAgent │                         ║  │
-│  ║  │ (ring buffer) │  │ (anomaly det) │                         ║  │
-│  ║  └───────────────┘  └───────────────┘                         ║  │
+│  ║  ┌───────────────┐  ┌───────────────┐  ┌──────────────┐      ║  │
+│  ║  │ AuditLog      │→ │ SentinelAgent │  │   Audit      │      ║  │
+│  ║  │ (ring buffer) │  │ (anomaly det) │  │ Persistence  │      ║  │
+│  ║  └───────┬───────┘  └───────────────┘  │ (hash chain) │      ║  │
+│  ║          └────────────────────────────▶ └──────────────┘      ║  │
 │  ═══════════════════════════════════════════════════════════════════  │
 │                                │                                      │
 │  ┌─────────────────────────────▼──────────────────────────────────┐  │
@@ -90,8 +91,12 @@ Runtime (src/runtime/runtime.ts)
 │   ├── rate-limiter.ts                — request throttling (Layer 1)
 │   ├── capabilities.ts               — per-agent permission model (Layer 1)
 │   ├── secret-scanner.ts             — 28+ credential patterns (Layer 1 & 2)
+│   ├── shell-validator.ts            — POSIX shell tokenizer + command validation (Layer 1)
+│   ├── shell-command-controller.ts   — shell command admission controller (Layer 1)
 │   ├── output-guardian.ts             — response redaction (Layer 2)
-│   └── audit-log.ts                   — structured event logging (Layer 3)
+│   ├── audit-log.ts                   — structured event logging (Layer 3)
+│   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 3)
+│   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
 ├── Sentinel (src/agents/sentinel.ts)   — retrospective anomaly detection (Layer 3)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
@@ -228,6 +233,8 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - Ollama uses OpenAI-compatible `/v1/chat/completions` + native `/api/tags`
 - Both `chat()` (full response) and `stream()` (AsyncGenerator) methods
 - Each agent gets its own provider assignment via config
+- **Failover Provider** (`src/llm/failover-provider.ts`): wraps multiple providers with priority-based failover and per-provider circuit breakers. On transient/quota/timeout errors, automatically retries with the next available provider.
+- **Circuit Breaker** (`src/llm/circuit-breaker.ts`): per-provider state machine (closed → open → half_open) that prevents cascading failures by short-circuiting requests to unhealthy providers.
 
 ## Channel Adapters
 

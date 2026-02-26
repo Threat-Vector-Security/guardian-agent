@@ -29,6 +29,8 @@ export interface ToolExecutionRequest {
    * When present, tool actions are checked using ctx.checkAction().
    */
   agentContext?: Pick<AgentContext, 'checkAction'>;
+  /** When true, validate but do not execute mutating operations. */
+  dryRun?: boolean;
 }
 
 export interface ToolResult {
@@ -36,6 +38,10 @@ export interface ToolResult {
   output?: unknown;
   error?: string;
   metadata?: Record<string, unknown>;
+  /** Whether this result is from a dry-run (no side effects). */
+  dryRun?: boolean;
+  /** Preview description of what would happen (dry-run mode). */
+  preview?: string;
 }
 
 export type ToolJobStatus =

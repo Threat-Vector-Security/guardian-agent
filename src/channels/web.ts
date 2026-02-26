@@ -154,17 +154,22 @@ export class WebChannel implements ChannelAdapter {
 
     return new Promise((resolve) => {
       if (this.server) {
-        // Node's keep-alive sockets can keep server.close() pending for ~5s.
-        // Close idle sockets first so stop() returns promptly in tests and shutdown.
-        const closable = this.server as Server & { closeIdleConnections?: () => void };
-        closable.closeIdleConnections?.();
-
+        // Stop accepting new connections
         this.server.close(() => {
           this.server = null;
           this.onMessage = null;
           log.info('Web channel stopped');
           resolve();
         });
+
+        // Force-close all connections so server.close() resolves immediately.
+        // closeAllConnections (Node 18.2+) destroys active sockets;
+        // closeIdleConnections is a fallback for idle keep-alive sockets.
+        const s = this.server as Server & {
+          closeAllConnections?: () => void;
+          closeIdleConnections?: () => void;
+        };
+        s.closeAllConnections?.() ?? s.closeIdleConnections?.();
       } else {
         resolve();
       }
@@ -554,6 +559,21 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, detail);
+        return;
+      }
+
+      // GET /api/audit/verify — Verify audit hash chain integrity
+      if (req.method === 'GET' && url.pathname === '/api/audit/verify') {
+        if (!this.dashboard.onAuditVerifyChain) {
+          sendJSON(res, 404, { error: 'Audit persistence not available' });
+          return;
+        }
+        try {
+          const result = await this.dashboard.onAuditVerifyChain();
+          sendJSON(res, 200, result);
+        } catch (err) {
+          sendJSON(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
 
@@ -1206,6 +1226,18 @@ export class WebChannel implements ChannelAdapter {
       // GET /sse — Server-Sent Events stream
       if (req.method === 'GET' && url.pathname === '/sse') {
         this.handleSSE(req, res);
+        return;
+      }
+
+      // POST /api/killswitch — Shut down the entire process
+      if (req.method === 'POST' && url.pathname === '/api/killswitch') {
+        sendJSON(res, 200, { success: true, message: 'Shutting down...' });
+        if (this.dashboard.onKillswitch) {
+          // Small delay so the HTTP response is flushed before the process exits
+          setTimeout(() => this.dashboard.onKillswitch!(), 100);
+        } else {
+          sendJSON(res, 404, { error: 'Not available' });
+        }
         return;
       }
 

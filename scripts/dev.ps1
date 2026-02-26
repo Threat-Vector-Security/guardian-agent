@@ -433,7 +433,7 @@ Write-Host "[5/6] Checking Ollama..." -ForegroundColor DarkCyan
 Write-WaitLine "Calibrating local model links..."
 $ollamaRunning = $false
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
     $ollamaRunning = $true
     $models = ($response.Content | ConvertFrom-Json).models
     $modelCount = $models.Count
@@ -602,11 +602,6 @@ Write-Host ""
 Write-Host "  Spawning GuardianAgent... please wait" -ForegroundColor DarkCyan
 Write-Host "  Press " -NoNewline -ForegroundColor DarkGreen; Write-Host "Ctrl+C" -NoNewline -ForegroundColor Green; Write-Host " to stop." -ForegroundColor DarkGreen
 Write-Host ""
-
-# Open browser to dashboard
-if ($webEnabled) {
-    Start-Process "http://localhost:$webPort"
-}
 
 # Run with tsx for dev mode (TypeScript direct execution)
 $tsxPath = Join-Path $Root "node_modules\.bin\tsx.cmd"

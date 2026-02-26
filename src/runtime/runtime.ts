@@ -12,7 +12,9 @@
 import type { GuardianAgentConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 import type { LLMProvider } from '../llm/types.js';
-import { createProviders } from '../llm/provider.js';
+import { createProviders, createFailoverProvider } from '../llm/provider.js';
+import type { FailoverProvider, ProviderCircuitState } from '../llm/failover-provider.js';
+import { AuditPersistence } from '../guardian/audit-persistence.js';
 import { AgentRegistry } from '../agent/registry.js';
 import { LifecycleManager } from '../agent/lifecycle.js';
 import type { AgentDefinition, AgentContext, ScheduleContext, UserMessage, AgentResponse } from '../agent/types.js';
@@ -47,6 +49,8 @@ export class Runtime {
   private guardianEnabled: boolean;
   private outputScanningEnabled: boolean;
   private redactSecrets: boolean;
+  private auditPersistence?: AuditPersistence;
+  private failoverProvider?: FailoverProvider;
 
   constructor(config?: Partial<GuardianAgentConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -67,9 +71,16 @@ export class Runtime {
       deniedPaths: guardianConfig.deniedPaths,
       inputSanitization: guardianConfig.inputSanitization,
       rateLimit: guardianConfig.rateLimit,
+      allowedCommands: this.config.assistant?.tools?.allowedCommands,
     });
 
     this.auditLog = new AuditLog(guardianConfig.auditLog?.maxEvents ?? 10_000);
+
+    // Audit persistence — hash-chained JSONL storage
+    if (guardianConfig.auditLog?.persistenceEnabled !== false) {
+      this.auditPersistence = new AuditPersistence(guardianConfig.auditLog?.auditDir);
+    }
+
     this.outputGuardian = new OutputGuardian(guardianConfig.additionalSecretPatterns);
 
     this.budget = new BudgetTracker();
@@ -79,7 +90,14 @@ export class Runtime {
       this.auditLog,
     );
     this.scheduler = new CronScheduler();
+
+    // Create individual providers
     this.providers = createProviders(this.config.llm);
+
+    // Create failover wrapper if enabled and multiple providers configured
+    if (this.config.failover?.enabled && this.providers.size > 1) {
+      this.failoverProvider = createFailoverProvider(this.config.llm, this.config.failover);
+    }
   }
 
   /** Register an agent with the runtime. */
@@ -391,10 +409,26 @@ export class Runtime {
     return this.eventBus.emit(event);
   }
 
+  /** Get circuit breaker states for all providers (for monitoring). */
+  getCircuitStates(): ProviderCircuitState[] {
+    return this.failoverProvider?.getCircuitStates() ?? [];
+  }
+
   /** Start the runtime. */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+
+    // Initialize audit persistence
+    if (this.auditPersistence) {
+      try {
+        await this.auditPersistence.init();
+        this.auditLog.setPersistence(this.auditPersistence);
+        log.info('Audit persistence initialized');
+      } catch (err) {
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to initialize audit persistence');
+      }
+    }
 
     // Start all agents (call onStart)
     for (const instance of this.registry.getAll()) {

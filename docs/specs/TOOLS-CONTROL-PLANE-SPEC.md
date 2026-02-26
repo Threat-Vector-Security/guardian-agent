@@ -50,6 +50,22 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
   - `allowedPaths` and tool path args accept both native and Windows/WSL formats.
   - Examples: `C:\Users\kenle\OneDrive\Technical and GRC` and `/mnt/c/Users/kenle/OneDrive/Technical and GRC`.
 
+## Dry-Run Mode
+- Tools support a `dryRun` flag on execution requests.
+- When `dryRun: true` and the tool has a mutating risk level (`!= 'read_only'`), the executor:
+  1. Runs all validation (Guardian checks, path allowlists, policy approval)
+  2. Returns a preview result instead of executing the side effect
+  3. Sets `dryRun: true` and `preview: string` on the result
+- Read-only tools execute normally regardless of the flag.
+- Tool-specific preview messages describe what would happen:
+  - `fs_write` / `doc_create` → "Would write to <path>"
+  - `run_command` / `shell_safe` → "Would execute: <command>"
+  - `http_fetch` → "Would fetch: <url>"
+  - `forum_post` → "Would post to forum"
+  - `intel_action` → "Would execute threat intel action"
+- Configuration: `assistant.tools.dryRunDefault` sets the default dry-run state.
+- Web Tools page includes a "Dry Run" toggle checkbox.
+
 ## Security + Audit
 - Tool execution checks route through Guardian action checks when available.
 - All runs/approvals/denials are recorded in tool job history.

@@ -347,6 +347,22 @@ export class ToolExecutor {
     job.status = 'running';
     job.startedAt = this.now();
 
+    // Dry-run mode: validate but don't execute mutating operations
+    if (request.dryRun && job.risk !== 'read_only') {
+      job.status = 'succeeded';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.resultPreview = '[dry-run preview]';
+      const preview = this.buildDryRunPreview(job.toolName, args);
+      return {
+        success: true,
+        status: job.status,
+        jobId: job.id,
+        message: `[DRY RUN] Tool '${job.toolName}' validated. ${preview}`,
+        output: { dryRun: true, preview, args },
+      };
+    }
+
     try {
       const result = await handler(args, request);
       if (!result.success) {
@@ -385,6 +401,25 @@ export class ToolExecutor {
         jobId: job.id,
         message: job.error,
       };
+    }
+  }
+
+  private buildDryRunPreview(toolName: string, args: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'fs_write':
+        return `Would ${args.append ? 'append to' : 'write'} file '${args.path}' (${String(args.content ?? '').length} chars)`;
+      case 'doc_create':
+        return `Would create document '${args.filename}'`;
+      case 'run_command':
+        return `Would execute: ${args.command}`;
+      case 'http_fetch':
+        return `Would fetch URL: ${args.url}`;
+      case 'forum_post':
+        return `Would post to forum thread '${args.threadId}'`;
+      case 'intel_action':
+        return `Would perform intel action '${args.action}' on finding '${args.findingId}'`;
+      default:
+        return `Would execute tool '${toolName}' with args: ${sanitizePreview(JSON.stringify(args))}`;
     }
   }
 

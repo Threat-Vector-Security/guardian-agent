@@ -42,6 +42,21 @@ export async function renderTools(container) {
       </div>
 
       <div class="table-container">
+        <div class="table-header">
+          <h3>Execution Mode</h3>
+        </div>
+        <div style="padding:0.75rem 1rem;display:flex;align-items:center;gap:0.75rem;">
+          <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:0.5rem;">
+            <input type="checkbox" id="dry-run-toggle" ${state.dryRunDefault ? 'checked' : ''}>
+            Dry Run Mode
+          </label>
+          <span style="font-size:0.72rem;color:var(--text-muted);">
+            When enabled, mutating tools validate but do not execute side effects.
+          </span>
+        </div>
+      </div>
+
+      <div class="table-container">
         <div class="table-header"><h3>Policy & Sandbox Register</h3></div>
         <div class="intel-controls" style="pointer-events: none; opacity: 0.8;">
           <div class="intel-control-row">

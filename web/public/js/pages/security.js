@@ -35,6 +35,39 @@ export async function renderSecurity(container) {
 
     container.appendChild(grid);
 
+    // Audit Chain Verification
+    const verifySection = document.createElement('div');
+    verifySection.className = 'table-container';
+    verifySection.innerHTML = `
+      <div class="table-header">
+        <h3>Audit Chain Integrity</h3>
+        <button class="btn btn-primary" id="verify-chain" style="font-size:0.7rem;padding:0.3rem 0.6rem;">Verify Audit Chain</button>
+      </div>
+      <div id="chain-result" style="padding:0.75rem 1rem;font-size:0.8rem;color:var(--text-secondary);">
+        Click "Verify Audit Chain" to check tamper-evident hash chain integrity.
+      </div>
+    `;
+    container.appendChild(verifySection);
+
+    verifySection.querySelector('#verify-chain')?.addEventListener('click', async () => {
+      const resultEl = verifySection.querySelector('#chain-result');
+      resultEl.textContent = 'Verifying chain...';
+      resultEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.verifyAuditChain();
+        if (result.valid) {
+          resultEl.textContent = `Chain valid. ${result.totalEntries} entries verified.`;
+          resultEl.style.color = 'var(--success)';
+        } else {
+          resultEl.textContent = `Chain BROKEN at entry ${result.brokenAt} of ${result.totalEntries}. Possible tampering detected.`;
+          resultEl.style.color = 'var(--error)';
+        }
+      } catch (err) {
+        resultEl.textContent = `Verification failed: ${err.message || String(err)}`;
+        resultEl.style.color = 'var(--error)';
+      }
+    });
+
     // Filters
     const filters = document.createElement('div');
     filters.className = 'filters';

@@ -5,6 +5,7 @@
  * security events, and anomalies for retrospective analysis.
  */
 
+import type { AuditPersistence, ChainVerifyResult } from './audit-persistence.js';
 import { createLogger } from '../util/logging.js';
 
 const log = createLogger('audit-log');
@@ -103,9 +104,36 @@ export class AuditLog {
   private events: AuditEvent[] = [];
   private maxEvents: number;
   private listeners: Set<AuditListener> = new Set();
+  private persistence?: AuditPersistence;
 
   constructor(maxEvents: number = 10_000) {
     this.maxEvents = maxEvents;
+  }
+
+  /** Wire a persistence backend for durable, hash-chained storage. */
+  setPersistence(persistence: AuditPersistence): void {
+    this.persistence = persistence;
+  }
+
+  /** Verify the hash chain in the persistence layer. */
+  async verifyChain(): Promise<ChainVerifyResult> {
+    if (!this.persistence) {
+      return { valid: true, totalEntries: 0 };
+    }
+    return this.persistence.verifyChain();
+  }
+
+  /** Rehydrate the in-memory buffer from persisted entries. */
+  async rehydrate(count: number = 100): Promise<number> {
+    if (!this.persistence) return 0;
+    const entries = await this.persistence.readTail(count);
+    for (const entry of entries) {
+      // Only add if not already present
+      if (!this.events.some((e) => e.id === entry.event.id)) {
+        this.events.push(entry.event);
+      }
+    }
+    return entries.length;
   }
 
   /**
@@ -128,6 +156,11 @@ export class AuditLog {
     };
 
     this.events.push(full);
+
+    // Persist to durable storage (fire-and-forget so hot path isn't blocked)
+    this.persistence?.persist(full).catch((err) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to persist audit event');
+    });
 
     // Evict oldest if over capacity
     if (this.events.length > this.maxEvents) {

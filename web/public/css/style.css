@@ -1,24 +1,29 @@
-/* GuardianAgent Dashboard — Dark Theme */
+/* GuardianAgent Dashboard — Guardian Angel Theme */
 
 :root {
-  --bg-primary: #1a1a2e;
-  --bg-surface: #16213e;
-  --bg-elevated: #1e2d4a;
-  --bg-input: #0f1629;
-  --accent: #e94560;
-  --accent-hover: #ff6b81;
-  --text-primary: #e0e0e0;
-  --text-secondary: #8892a4;
-  --text-muted: #5a6478;
-  --border: #2a3550;
+  --bg-primary: #0f0f1a;
+  --bg-surface: #161625;
+  --bg-elevated: #1e1e32;
+  --bg-input: #0a0a14;
+  --accent: #D4A017;
+  --accent-hover: #F0C040;
+  --text-primary: #e8e4dc;
+  --text-secondary: #9a9484;
+  --text-muted: #655f50;
+  --border: #2a2840;
   --success: #4caf50;
   --warning: #ff9800;
-  --error: #f44336;
-  --info: #2196f3;
+  --error: #e05555;
+  --info: #5cacee;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Georgia', 'Palatino', serif;
   --radius: 6px;
   --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  --accent-glow: rgba(212, 160, 23, 0.15);
+  --guardian-halo: 0 0 20px rgba(212, 160, 23, 0.12);
+  --guardian-border: rgba(212, 160, 23, 0.2);
+  --celestial-gradient: linear-gradient(135deg, rgba(212,160,23,0.05), rgba(92,172,238,0.03));
 }
 
 * {
@@ -129,14 +134,22 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1.5rem;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--celestial-gradient), var(--bg-surface);
+  border-bottom: 1px solid var(--guardian-border);
 }
 
 .logo {
   font-size: 1.1rem;
   color: var(--accent);
   font-weight: 700;
+  font-family: var(--font-display);
+  text-shadow: 0 0 12px rgba(212, 160, 23, 0.3);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .indicator {
@@ -149,11 +162,39 @@ body {
 .indicator.connected {
   background: rgba(76, 175, 80, 0.2);
   color: var(--success);
+  animation: guardian-pulse 3s ease-in-out infinite;
+}
+
+@keyframes guardian-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(76, 175, 80, 0.2); }
+  50% { box-shadow: 0 0 12px rgba(76, 175, 80, 0.4); }
 }
 
 .indicator.disconnected {
   background: rgba(244, 67, 54, 0.2);
   color: var(--error);
+}
+
+.btn-killswitch {
+  background: rgba(224, 85, 85, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(224, 85, 85, 0.4);
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: 0.75rem;
+}
+.btn-killswitch:hover {
+  background: rgba(224, 85, 85, 0.3);
+  border-color: var(--error);
+  box-shadow: 0 0 12px rgba(224, 85, 85, 0.25);
+}
+.btn-killswitch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ─── Layout ─────────────────────────────────────────────── */
@@ -195,7 +236,7 @@ body {
 .nav-item.active {
   color: var(--accent);
   border-left-color: var(--accent);
-  background: rgba(233, 69, 96, 0.05);
+  background: var(--accent-glow);
 }
 
 .nav-icon {
@@ -223,6 +264,12 @@ body {
   border-radius: var(--radius);
   padding: 1.25rem;
   box-shadow: var(--shadow);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.status-card:hover {
+  box-shadow: var(--guardian-halo);
+  border-color: var(--guardian-border);
 }
 
 .status-card .card-title {
@@ -301,7 +348,7 @@ tr:last-child td {
 }
 
 tr:hover td {
-  background: rgba(233, 69, 96, 0.03);
+  background: var(--accent-glow);
 }
 
 /* ─── State Badges ───────────────────────────────────────── */
@@ -453,7 +500,7 @@ tr:hover td {
 }
 
 .chat-message.user .msg-body {
-  background: rgba(233, 69, 96, 0.15);
+  background: rgba(212, 160, 23, 0.12);
   color: var(--text-primary);
 }
 
@@ -1099,6 +1146,7 @@ tr:hover td {
   .nav-item.active {
     border-left-color: transparent;
     border-bottom-color: var(--accent);
+    background: var(--accent-glow);
   }
 
   .chat-panel {
@@ -1143,12 +1191,12 @@ tr:hover td {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: #3a3555;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: #4a4565;
 }
 
 /* ─── Loading ────────────────────────────────────────────── */
@@ -1158,4 +1206,36 @@ tr:hover td {
   padding: 2rem;
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+/* ─── Guardian Angel Enhancements ────────────────────────── */
+
+.event-entry.critical {
+  animation: wing-spread 0.4s ease-out;
+}
+
+@keyframes wing-spread {
+  0% { transform: scaleY(0.8); opacity: 0.5; }
+  100% { transform: scaleY(1); opacity: 1; }
+}
+
+.chat-panel-header {
+  background: var(--celestial-gradient), var(--bg-surface);
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--guardian-border);
+  font-family: var(--font-display);
+}
+
+.badge-closed { background: rgba(76,175,80,0.15); color: var(--success); }
+.badge-open { background: rgba(224,85,85,0.15); color: var(--error); }
+.badge-half_open { background: rgba(255,152,0,0.15); color: var(--warning); }
+
+.dry-run-banner {
+  background: rgba(212, 160, 23, 0.1);
+  border: 1px solid var(--guardian-border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
 }

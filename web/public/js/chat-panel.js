@@ -33,8 +33,9 @@ export async function initChatPanel(container) {
 
   // Header
   const header = document.createElement('div');
+  header.className = 'chat-panel-header';
   header.style.marginBottom = '1rem';
-  header.innerHTML = '<h3 style="font-size:0.9rem;color:var(--accent);">Assistant</h3>';
+  header.innerHTML = '<h3 style="font-size:0.9rem;color:var(--accent);font-family:var(--font-display);">&#x1F6E1; Guardian Assistant</h3>';
   wrapper.appendChild(header);
 
   // Toolbar with agent selector

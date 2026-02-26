@@ -29,9 +29,9 @@ export async function renderDashboard(container) {
     const grid = document.createElement('div');
     grid.className = 'cards-grid';
 
-    cards.runtime = createStatusCard('Runtime', 'Online', 'System operational', 'success');
+    cards.runtime = createStatusCard('Guardian Core', 'Online', 'System operational', 'success');
     cards.agents = createStatusCard('Agents', agents.length, `${agents.filter(a => a.state === 'idle' || a.state === 'running').length} active`, 'info');
-    cards.guardian = createStatusCard('Guardian', summary ? 'Active' : 'N/A', summary ? `${summary.totalEvents} events (5m)` : 'No data', 'accent');
+    cards.guardian = createStatusCard('Shield Status', summary ? 'Active' : 'N/A', summary ? `${summary.totalEvents} events (5m)` : 'No data', 'accent');
 
     // LLM card - show primary provider status
     const primaryProvider = providers[0];
@@ -121,10 +121,11 @@ function renderLLMStatus(container, providers) {
       <button class="btn btn-secondary" id="refresh-llm" style="font-size:0.7rem;padding:0.3rem 0.6rem;">Refresh</button>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Endpoint</th><th>Status</th><th>Available Models</th></tr></thead>
+      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Endpoint</th><th>Status</th><th>Circuit</th><th>Available Models</th></tr></thead>
       <tbody>${providers.map(p => {
         const connected = p.connected !== false;
         const locality = p.locality === 'local' ? 'Local' : 'External API';
+        const circuit = p.circuitState || 'closed';
         return `
           <tr>
             <td>${esc(p.name)}</td>
@@ -132,6 +133,7 @@ function renderLLMStatus(container, providers) {
             <td><strong>${esc(p.model)}</strong></td>
             <td>${esc(p.baseUrl || locality)}</td>
             <td><span class="badge ${connected ? 'badge-idle' : 'badge-errored'}">${connected ? 'Connected' : 'Disconnected'}</span></td>
+            <td><span class="badge badge-${esc(circuit)}">${esc(circuit)}</span></td>
             <td>${p.availableModels ? p.availableModels.slice(0, 5).map(m => esc(m)).join(', ') : '-'}</td>
           </tr>
         `;

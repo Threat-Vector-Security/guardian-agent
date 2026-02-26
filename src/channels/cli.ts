@@ -13,6 +13,7 @@ import { createInterface, type Interface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks } from './web-types.js';
+import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
 
@@ -60,6 +61,8 @@ export interface CLIChannelOptions {
     guardianEnabled?: boolean;
     providerName?: string;
     channels?: string[];
+    dashboardUrl?: string;
+    authToken?: string;
   };
 }
 
@@ -108,7 +111,7 @@ export class CLIChannel implements ChannelAdapter {
     if (this.useColor) {
       this.writeBanner();
     } else {
-      this.write('\nGuardian Agent CLI — Type a message or /help for commands.\n\n');
+      this.write('\nGuardian Agent CLI\n  /help — list all commands  |  /kill — shutdown all services\n\n');
     }
     this.rl.prompt();
 
@@ -320,10 +323,17 @@ export class CLIChannel implements ChannelAdapter {
       case 'clear':
         this.handleClear();
         break;
+      case 'kill':
+      case 'killswitch':
       case 'quit':
       case 'exit':
-        this.write('\nShutting down...\n');
+      case 'close':
+      case 'shutdown':
+        this.write('\n' + this.red('⚡ KILLSWITCH') + ' — Shutting down all services...\n');
         this.rl?.close();
+        if (this.dashboard?.onKillswitch) {
+          this.dashboard.onKillswitch();
+        }
         break;
       default:
         this.write(`\nUnknown command: /${cmd}. Try /help\n\n`);
@@ -393,7 +403,8 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /diag                                  Run system diagnostics\n');
     this.write('  /clear                                 Clear screen\n');
     this.write('  /help                                  Show this help\n');
-    this.write('  /quit, /exit                           Exit\n');
+    this.write('  /kill                                  ' + this.red('Kill all services and exit') + '\n');
+    this.write('  /quit /exit /close /shutdown            Aliases for /kill\n');
     this.write('\n');
   }
 
@@ -2287,15 +2298,40 @@ export class CLIChannel implements ChannelAdapter {
     this.write(db('     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝') + '\n');
     this.write('\n');
 
-    // Quick status line
+    // Status box
     const s = this.startupStatus;
     if (s) {
-      const guardianStatus = s.guardianEnabled !== false ? this.green('active') : this.red('disabled');
+      const gn = (t: string) => `\x1b[32m${t}\x1b[0m`;
+      const dc = (t: string) => `\x1b[36m${t}\x1b[0m`;
+      const dg = (t: string) => `\x1b[38;5;22m${t}\x1b[0m`;
+
+      const guardian = s.guardianEnabled !== false ? gn('ACTIVE') + ' (3-layer defense)' : this.red('DISABLED');
       const provider = s.providerName ?? 'ollama';
       const channels = s.channels?.join(', ') ?? 'cli';
-      this.write(dm(`  Guardian: ${guardianStatus}  ${dm('|')}  Provider: ${lb(provider)}  ${dm('|')}  Channels: ${lb(channels)}`) + '\n');
+      const dashUrl = s.dashboardUrl ?? 'disabled';
+
+      this.write(dg('  ┌──────────────────────────────────────────────────┐') + '\n');
+      this.write(dg('  │') + gn('           SYSTEM STATUS                       ') + dg('│') + '\n');
+      this.write(dg('  ├──────────────────────────────────────────────────┤') + '\n');
+      this.write(dg('  │') + dc('  Guardian:  ') + this.pad(guardian, 36) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Channels:  ') + this.pad(channels, 36) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  LLM:       ') + this.pad(gn(provider), 36) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Dashboard: ') + this.pad(gn(dashUrl), 36) + dg('│') + '\n');
+      if (s.authToken) {
+        this.write(dg('  │') + dc('  Token:     ') + this.pad(dm(s.authToken), 36) + dg('│') + '\n');
+      }
+      this.write(dg('  └──────────────────────────────────────────────────┘') + '\n');
+      this.write('\n');
+      if (s.dashboardUrl) {
+        this.write(dc('  Dashboard: ') + gn(s.dashboardUrl) + '\n');
+      }
+      if (s.authToken) {
+        this.write(dc('  Bearer token: ') + dm(s.authToken) + '\n');
+      }
+      if (s.dashboardUrl || s.authToken) this.write('\n');
     }
-    this.write(dm('  Type a message or /help for commands.') + '\n');
+
+    this.write(dm('  /help') + ' — list all commands  ' + dm('|') + '  ' + dm('/kill') + ' — shutdown all services\n');
     this.write('\n');
   }
 
@@ -2306,6 +2342,14 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   // ─── Formatting helpers ──────────────────────────────────────
+
+  /** Pad a string (stripping ANSI codes for visible width) to `width` characters. */
+  private pad(text: string, width: number): string {
+    // eslint-disable-next-line no-control-regex
+    const visible = text.replace(/\x1b\[[0-9;]*m/g, '').length;
+    const padding = Math.max(0, width - visible);
+    return text + ' '.repeat(padding);
+  }
 
   private trackAnalytics(event: Parameters<NonNullable<DashboardCallbacks['onAnalyticsTrack']>>[0]): void {
     try {
@@ -2457,6 +2501,136 @@ export class CLIChannel implements ChannelAdapter {
     this.write(`  Guardian:  ${status.guardianEnabled ? 'enabled' : 'disabled'}\n`);
     this.write(`  Providers: ${status.providers.length > 0 ? status.providers.join(', ') : 'none'}\n`);
     this.write('\n');
+  }
+
+  // ─── Post-start greeting / setup wizard ─────────────────────
+
+  /**
+   * Called after `runtime.start()` completes.
+   * If the LLM provider is reachable, requests an AI greeting.
+   * Otherwise, launches an interactive setup wizard.
+   */
+  postStart(options: {
+    providerReady: boolean;
+    onGreeting: () => Promise<string>;
+    onSetupApply: (input: SetupApplyInput) => Promise<{ success: boolean; message: string }>;
+  }): void {
+    if (options.providerReady) {
+      // Fire-and-forget greeting
+      options.onGreeting().then((greeting) => {
+        this.write(`\nassistant> ${greeting}\n\n`);
+        this.rl?.prompt();
+      }).catch(() => {
+        this.write(`\nassistant> Guardian Agent is online and ready.\n\n`);
+        this.rl?.prompt();
+      });
+    } else {
+      this.runSetupWizard(options.onSetupApply, options.onGreeting);
+    }
+  }
+
+  private async runSetupWizard(
+    onSetupApply: (input: SetupApplyInput) => Promise<{ success: boolean; message: string }>,
+    onGreeting: () => Promise<string>,
+  ): Promise<void> {
+    this.write('\n');
+    this.write(this.yellow('  No LLM provider is reachable. Let\'s set one up.\n'));
+    this.write('\n');
+    this.write('  Which LLM would you like to use?\n');
+    this.write(`    ${this.cyan('1)')} Ollama  ${this.dim('(local, free — requires Ollama running)')}\n`);
+    this.write(`    ${this.cyan('2)')} Anthropic  ${this.dim('(Claude API — requires API key)')}\n`);
+    this.write(`    ${this.cyan('3)')} OpenAI  ${this.dim('(GPT API — requires API key)')}\n`);
+    this.write('\n');
+
+    const choice = (await this.askQuestion('  Choice [1/2/3]: ', '1')).trim();
+
+    let input: SetupApplyInput;
+
+    if (choice === '2') {
+      // Anthropic
+      const apiKey = (await this.askQuestion('  Anthropic API key: ')).trim();
+      if (!apiKey) {
+        this.write(`\n${this.red('  Error:')} API key is required.\n\n`);
+        this.rl?.prompt();
+        return;
+      }
+      const model = (await this.askQuestion('  Model [claude-sonnet-4-20250514]: ', 'claude-sonnet-4-20250514')).trim();
+      input = {
+        llmMode: 'external',
+        providerName: 'anthropic',
+        providerType: 'anthropic',
+        model,
+        apiKey,
+        setDefaultProvider: true,
+        setupCompleted: true,
+      };
+    } else if (choice === '3') {
+      // OpenAI
+      const apiKey = (await this.askQuestion('  OpenAI API key: ')).trim();
+      if (!apiKey) {
+        this.write(`\n${this.red('  Error:')} API key is required.\n\n`);
+        this.rl?.prompt();
+        return;
+      }
+      const model = (await this.askQuestion('  Model [gpt-4o]: ', 'gpt-4o')).trim();
+      input = {
+        llmMode: 'external',
+        providerName: 'openai',
+        providerType: 'openai',
+        model,
+        apiKey,
+        setDefaultProvider: true,
+        setupCompleted: true,
+      };
+    } else {
+      // Ollama (default)
+      const baseUrl = (await this.askQuestion('  Ollama URL [http://127.0.0.1:11434]: ', 'http://127.0.0.1:11434')).trim();
+      const model = (await this.askQuestion('  Model [llama3.2]: ', 'llama3.2')).trim();
+      input = {
+        llmMode: 'ollama',
+        providerName: 'ollama',
+        providerType: 'ollama',
+        model,
+        baseUrl,
+        setDefaultProvider: true,
+        setupCompleted: true,
+      };
+    }
+
+    this.write('\n  Applying configuration...\n');
+
+    try {
+      const result = await onSetupApply(input);
+      if (result.success) {
+        this.write(`  ${this.green('✓')} ${result.message}\n\n`);
+        // Attempt greeting through newly configured provider
+        try {
+          const greeting = await onGreeting();
+          this.write(`assistant> ${greeting}\n\n`);
+        } catch {
+          this.write(`assistant> Guardian Agent is online and ready.\n\n`);
+        }
+      } else {
+        this.write(`  ${this.red('✗')} ${result.message}\n\n`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.write(`  ${this.red('✗')} Setup failed: ${msg}\n\n`);
+    }
+
+    this.rl?.prompt();
+  }
+
+  private askQuestion(prompt: string, defaultValue?: string): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.rl) {
+        resolve(defaultValue ?? '');
+        return;
+      }
+      this.rl.question(prompt, (answer) => {
+        resolve(answer || defaultValue || '');
+      });
+    });
   }
 }
 
