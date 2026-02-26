@@ -84,7 +84,7 @@
 - (+) Minimal dependencies per provider
 - (+) Streaming via AsyncGenerator is natural
 - (-) Must maintain provider-specific mapping code
-- (-) No automatic retry/fallback (must implement ourselves)
+- (-) ~~No automatic retry/fallback (must implement ourselves)~~ (resolved: ADR-013 adds failover with circuit breakers)
 
 ---
 
@@ -117,7 +117,7 @@
 - **Layer 2 (Output):** OutputGuardian scans LLM responses after agent execution but before user delivery. Also scans inter-agent event payloads in `ctx.emit()`.
 - **Layer 3 (Sentinel):** SentinelAgent runs on cron schedule, analyzes AuditLog for anomalous patterns using heuristic rules and optional LLM-enhanced analysis.
 
-Cross-cutting: AuditLog records all security events in an in-memory ring buffer (12 event types, queryable, configurable).
+Cross-cutting: AuditLog records all security events in an in-memory ring buffer (12 event types, queryable, configurable) with optional SHA-256 hash-chained JSONL persistence for tamper detection and crash recovery (see ADR-012).
 
 **Consequences:**
 - (+) Defense-in-depth at every stage: input → processing → output → retrospective
@@ -127,7 +127,7 @@ Cross-cutting: AuditLog records all security events in an in-memory ring buffer 
 - (+) Sentinel detects slow-burn attacks that individual controllers miss
 - (+) All features configurable and individually toggleable
 - (-) Additional latency for each message (~ms for regex scanning, negligible)
-- (-) In-memory audit log loses data on restart (future: persist to disk/DB)
+- (-) ~~In-memory audit log loses data on restart~~ (resolved: ADR-012 adds hash-chained persistence)
 - (-) Heuristic injection detection has false positive/negative tradeoffs
 
 ---
@@ -198,3 +198,91 @@ Cross-cutting: AuditLog records all security events in an in-memory ring buffer 
 - (+) Denied actions still recorded in AuditLog even when pre-checked
 - (+) Read-only capabilities list prevents privilege escalation
 - (-) Adds to AgentContext interface surface area
+
+---
+
+## ADR-012: Hash-Chained Audit Persistence
+
+**Status:** Accepted
+
+**Context:** The in-memory AuditLog ring buffer loses all events on process restart. For a security product, audit trail persistence and tamper detection are critical — an attacker who compromises the process shouldn't be able to silently erase evidence.
+
+**Decision:** Persist audit events to a JSONL file with SHA-256 hash chaining. Each entry stores `{ event, previousHash, hash }` where hash is computed over `JSON.stringify({ event, previousHash })`. Genesis hash is 64 zero characters. Writes are serialized via chained Promises (fire-and-forget from the hot path). A `verifyChain()` method streams the file and recomputes hashes to detect tampering.
+
+**Consequences:**
+- (+) Audit events survive restarts
+- (+) Tamper detection at line-level granularity
+- (+) Fire-and-forget write doesn't block message processing
+- (+) No external dependencies (uses `node:crypto` and `node:fs`)
+- (-) Single JSONL file will grow without bound (future: rotation/archival)
+- (-) Hash chain can only detect tampering, not prevent it (attacker with disk access could rewrite entire file)
+
+---
+
+## ADR-013: LLM Provider Failover with Circuit Breaker
+
+**Status:** Accepted
+
+**Context:** ADR-006 noted "must implement retry/fallback ourselves" as a consequence. A single LLM provider outage makes the entire system unresponsive. Repeated retries against a dead endpoint waste resources and increase latency.
+
+**Decision:** Implement a `FailoverProvider` that wraps multiple LLM providers with priority-based failover and per-provider circuit breakers. Circuit breaker follows the standard pattern: closed → open (after N failures) → half_open (after timeout) → closed (on success). Errors are classified as auth/quota/transient/permanent/timeout — only transient/quota/timeout trigger failover.
+
+**Consequences:**
+- (+) Automatic failover on transient provider failures
+- (+) Circuit breaker prevents cascading failures from hammering dead providers
+- (+) Error classification avoids futile failovers for auth issues
+- (+) Priority ordering gives operators control over preferred providers
+- (-) Adds complexity to provider initialization path
+- (-) Failover mid-stream (for `stream()`) may produce partial responses from the first provider
+
+---
+
+## ADR-014: Trust Presets for Security Posture
+
+**Status:** Accepted
+
+**Context:** Security configuration requires tuning rate limits, capabilities, resource limits, and tool policies across multiple config sections. New users don't know sensible defaults for their use case.
+
+**Decision:** Four named presets — `locked`, `safe`, `balanced`, `power` — each defining a complete security posture. Applied during config loading with priority: user explicit > preset > defaults. Presets configure guardian rate limits, agent capabilities (for agents without explicit ones), and tool approval policy.
+
+**Consequences:**
+- (+) One-line security configuration for common use cases
+- (+) Progressive trust levels make security trade-offs explicit
+- (+) Explicit user values always win, so presets are non-destructive
+- (-) Preset names are opinionated and may not match all deployment models
+- (-) Adding new config fields requires updating all four presets
+
+---
+
+## ADR-015: Shell Command Tokenization and Validation
+
+**Status:** Accepted
+
+**Context:** The DeniedPathController validates file paths but can't parse chained shell commands like `rm -rf / && cat .env`. An LLM-generated command could chain a dangerous operation after an innocuous one, bypassing simple string matching.
+
+**Decision:** Implement a POSIX shell tokenizer that handles single/double quoting, backslash escaping, chain operators (`&&`, `||`, `;`, `|`), redirects (`>`, `>>`, `<`), and subshell detection (`$(...)`, backticks). Each sub-command is validated against the `allowedCommands` allowlist and `deniedPaths` checker. Deny-by-default: if the tokenizer can't parse the input, the command is denied.
+
+**Consequences:**
+- (+) Catches chained command attacks that bypass simple path checks
+- (+) Respects shell quoting rules (won't false-positive on `echo "&&"`)
+- (+) Subshell detection flags command substitution
+- (+) Deny-by-default on parse failure is safe
+- (-) Tokenizer covers common POSIX shell — exotic syntax (heredocs, process substitution) may cause false denials
+- (-) Allowlist-based approach requires maintaining the command list
+
+---
+
+## ADR-016: Tool Dry-Run Mode
+
+**Status:** Accepted
+
+**Context:** Mutating tool operations (file writes, shell commands, HTTP requests) are irreversible. Operators need a way to preview what would happen without executing the side effect, especially when testing new tool configurations or investigating LLM behavior.
+
+**Decision:** Add `dryRun?: boolean` to `ToolExecutionRequest`. When set and the tool has a mutating risk level (`!== 'read_only'`), the executor runs all validation (Guardian checks, path allowlists, policy approval) but returns a preview result instead of executing the side effect. Read-only tools execute normally regardless of the flag.
+
+**Consequences:**
+- (+) Safe preview of destructive operations
+- (+) Validation still runs, so policy violations are caught in preview
+- (+) Read-only tools unaffected (no unnecessary overhead)
+- (-) Preview text is approximation — actual execution may differ
+- (-) Adds a branch to every mutating tool handler

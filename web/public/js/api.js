@@ -76,6 +76,7 @@ export const api = {
     return request(`/api/audit${q ? '?' + q : ''}`);
   },
   auditSummary: (windowMs = 300000) => request(`/api/audit/summary?windowMs=${windowMs}`),
+  verifyAuditChain: () => request('/api/audit/verify'),
   config:       () => request('/api/config'),
   reference:    () => request('/api/reference'),
   setupStatus:  () => request('/api/setup/status'),
@@ -163,5 +164,9 @@ export const api = {
   useConversationSession: (agentId, sessionId, userId = 'web-user', channel = 'web') => request('/api/conversations/session', {
     method: 'POST',
     body: JSON.stringify({ agentId, sessionId, userId, channel }),
+  }),
+  killswitch: () => request('/api/killswitch', {
+    method: 'POST',
+    body: JSON.stringify({}),
   }),
 };

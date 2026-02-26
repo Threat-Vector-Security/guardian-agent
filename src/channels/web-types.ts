@@ -226,6 +226,7 @@ export interface DashboardCallbacks {
   onAgentDetail?: (id: string) => DashboardAgentDetail | null;
   onAuditQuery?: (filter: AuditFilter) => AuditEvent[];
   onAuditSummary?: (windowMs: number) => AuditSummary;
+  onAuditVerifyChain?: () => Promise<{ valid: boolean; totalEntries: number; brokenAt?: number }>;
   onConfig?: () => RedactedConfig;
   onBudget?: () => DashboardBudgetInfo;
   onWatchdog?: () => WatchdogResult[];
@@ -326,6 +327,7 @@ export interface DashboardCallbacks {
     actor: string;
     reason?: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  onKillswitch?: () => void;
 }
 
 /** Fields that can be updated via POST /api/config. */

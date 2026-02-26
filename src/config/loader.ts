@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
+import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
 
 /** Default config file path. */
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yaml');
@@ -236,7 +237,26 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
   }
 
   const interpolated = interpolateDeep(parsed) as Partial<GuardianAgentConfig>;
-  const merged = deepMerge(DEFAULT_CONFIG, interpolated);
+  let merged = deepMerge(DEFAULT_CONFIG, interpolated);
+
+  // Apply trust preset if configured (preset overrides defaults, user's explicit values override preset)
+  const presetName = merged.guardian?.trustPreset;
+  if (presetName && isValidTrustPreset(presetName)) {
+    merged = applyTrustPreset(presetName, merged);
+    // Re-apply user's explicit overrides so they win over preset values
+    if (interpolated.guardian) {
+      merged.guardian = deepMerge(merged.guardian, interpolated.guardian as Partial<typeof merged.guardian>);
+    }
+    if (interpolated.assistant?.tools && 'policyMode' in interpolated.assistant.tools) {
+      merged.assistant = {
+        ...merged.assistant,
+        tools: {
+          ...merged.assistant.tools,
+          policyMode: (interpolated.assistant.tools as { policyMode: string }).policyMode as typeof merged.assistant.tools.policyMode,
+        },
+      };
+    }
+  }
 
   const errors = validateConfig(merged);
   if (errors.length > 0) {

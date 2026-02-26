@@ -14,6 +14,7 @@ import { InputSanitizer } from './input-sanitizer.js';
 import type { InputSanitizerConfig } from './input-sanitizer.js';
 import { RateLimiter } from './rate-limiter.js';
 import type { RateLimiterConfig } from './rate-limiter.js';
+import { ShellCommandController } from './shell-command-controller.js';
 import { createLogger } from '../util/logging.js';
 
 const log = createLogger('guardian');
@@ -174,6 +175,8 @@ export interface GuardianCreateOptions {
   deniedPaths?: string[];
   inputSanitization?: Partial<InputSanitizerConfig> & { enabled?: boolean };
   rateLimit?: Partial<RateLimiterConfig>;
+  /** Allowed shell commands for ShellCommandController. */
+  allowedCommands?: string[];
 }
 
 /** Guardian — composable admission controller pipeline. */
@@ -260,6 +263,15 @@ export class Guardian {
     guardian.use(new CapabilityController());
     guardian.use(new SecretScanController(options?.additionalSecretPatterns));
     guardian.use(new DeniedPathController(options?.additionalSecretPatterns, options?.deniedPaths));
+
+    // Shell command validation (if allowed commands provided)
+    if (options?.allowedCommands && options.allowedCommands.length > 0) {
+      guardian.use(new ShellCommandController({
+        allowedCommands: options.allowedCommands,
+        additionalSecretPatterns: options?.additionalSecretPatterns,
+        deniedPaths: options?.deniedPaths,
+      }));
+    }
 
     return guardian;
   }

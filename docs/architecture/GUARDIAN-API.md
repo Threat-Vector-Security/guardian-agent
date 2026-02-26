@@ -41,6 +41,7 @@ interface GuardianCreateOptions {
   additionalSecretPatterns?: string[];
   inputSanitization?: Partial<InputSanitizerConfig> & { enabled?: boolean };
   rateLimit?: Partial<RateLimiterConfig>;
+  allowedCommands?: string[];
 }
 ```
 
@@ -50,6 +51,7 @@ Default pipeline order:
 3. CapabilityController (validating)
 4. SecretScanController (validating)
 5. DeniedPathController (validating)
+6. ShellCommandController (validating) — when `allowedCommands` provided
 
 #### Instance Methods
 
@@ -211,6 +213,29 @@ const controller = new DeniedPathController();
 
 Normalizes paths via `path.normalize()` before checking. Detects `..` traversal after normalization.
 
+### `ShellCommandController`
+
+**File:** `src/guardian/shell-command-controller.ts`
+
+Validating controller that tokenizes shell commands and validates each sub-command against allowed command lists and denied paths.
+
+```typescript
+import { ShellCommandController } from './guardian/shell-command-controller.js';
+
+const controller = new ShellCommandController(['ls', 'cat', 'grep', 'git']);
+```
+
+Only fires on `action.type === 'execute_command'`. Extracts command string from `action.params.command`.
+
+Uses the shell tokenizer (`src/guardian/shell-validator.ts`) to:
+1. Parse the command into tokens (handling quoting, escaping, operators)
+2. Split into sub-commands by chain operators (`&&`, `||`, `;`, `|`)
+3. Validate each sub-command name against the allowed list
+4. Check arguments and redirect targets against denied paths
+5. Flag subshell substitutions (`$(...)`, backticks)
+
+Deny-by-default: if the tokenizer can't parse the input, the command is denied.
+
 ---
 
 ## SecretScanner
@@ -307,7 +332,7 @@ interface ScanResult {
 
 **File:** `src/guardian/audit-log.ts`
 
-In-memory ring buffer for structured security event logging.
+In-memory ring buffer for structured security event logging. Optionally backed by persistent hash-chained storage.
 
 ```typescript
 import { AuditLog } from './guardian/audit-log.js';
@@ -319,7 +344,7 @@ const log = new AuditLog(10_000);  // max 10,000 events (default)
 
 **`record(event)`**
 
-Record a new audit event. Auto-generates ID and timestamp.
+Record a new audit event. Auto-generates ID and timestamp. If persistence is wired, the event is also persisted fire-and-forget.
 
 ```typescript
 const event = log.record({
@@ -370,11 +395,95 @@ const summary = log.getSummary(300_000);  // last 5 minutes
 //   }
 ```
 
+**`setPersistence(p)`**
+
+Wire persistent storage. Called during Runtime startup.
+
+```typescript
+import { AuditPersistence } from './guardian/audit-persistence.js';
+
+const persistence = new AuditPersistence('~/.guardianagent/audit/');
+await persistence.init();
+log.setPersistence(persistence);
+```
+
+**`verifyChain()`**
+
+Verify the integrity of the persisted hash chain. Delegates to `AuditPersistence.verifyChain()`.
+
+```typescript
+const result = await log.verifyChain();
+// → { valid: true, totalEntries: 1847 }
+// → { valid: false, totalEntries: 1847, brokenAt: 423 }
+```
+
+**`rehydrate(count)`**
+
+Read the last N persisted entries back into the in-memory ring buffer.
+
+```typescript
+await log.rehydrate(1000);  // load last 1000 events from disk
+```
+
 **`clear()`** — Clear all events.
 
 **`getAll()`** — Get all events (read-only array).
 
 **`size`** — Current event count (getter).
+
+---
+
+## AuditPersistence
+
+**File:** `src/guardian/audit-persistence.ts`
+
+SHA-256 hash-chained JSONL persistence for tamper-evident audit storage.
+
+```typescript
+import { AuditPersistence } from './guardian/audit-persistence.js';
+
+const persistence = new AuditPersistence('~/.guardianagent/audit/');
+await persistence.init();
+```
+
+### Methods
+
+**`init()`**
+
+Ensures the audit directory exists and recovers `lastHash` from the existing file (if any).
+
+**`persist(event)`**
+
+Compute SHA-256 hash over `{ event, previousHash }`, append JSONL entry, update `lastHash`. Writes are serialized via chained Promises.
+
+**`verifyChain()`**
+
+Stream the JSONL file line by line, recompute each hash, and return integrity status.
+
+```typescript
+const result = await persistence.verifyChain();
+// → { valid: boolean, totalEntries: number, brokenAt?: number }
+```
+
+**`readTail(count)`**
+
+Return the last N entries from the file for rehydration.
+
+### Types
+
+```typescript
+interface ChainedAuditEntry {
+  event: AuditEvent;
+  previousHash: string;
+  hash: string;
+}
+
+interface ChainVerifyResult {
+  valid: boolean;
+  totalEntries: number;
+  brokenAt?: number;
+}
+```
 
 ### Types
 

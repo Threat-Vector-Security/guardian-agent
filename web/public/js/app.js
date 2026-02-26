@@ -2,7 +2,7 @@
  * Main application — hash-based router + SSE connection manager.
  */
 
-import { api, setToken } from './api.js';
+import { api, setToken, clearToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
@@ -28,17 +28,43 @@ async function checkAuth() {
   // Try to reach status endpoint
   try {
     await api.status();
-    return true;
+    return 'ok';
   } catch (e) {
-    if (e.message === 'AUTH_FAILED') return false;
-    // Server might not require auth
-    return true;
+    if (e.message === 'AUTH_FAILED') return 'auth_failed';
+    // Network error — server is unreachable
+    return 'unreachable';
   }
 }
 
 async function initAuth() {
-  const ok = await checkAuth();
-  if (ok) {
+  const result = await checkAuth();
+  if (result === 'ok') {
+    authModal.style.display = 'none';
+    app.style.display = '';
+    applyInputTooltips(document);
+    startApp();
+    return;
+  }
+
+  if (result === 'unreachable') {
+    // Server is down — show a connection error, not the auth form
+    authModal.style.display = '';
+    app.style.display = 'none';
+    authModal.querySelector('.modal-content').innerHTML = `
+      <h2>Guardian Agent</h2>
+      <p>Cannot reach the server. Make sure Guardian Agent is running.</p>
+      <button id="auth-retry" class="btn btn-primary">Retry</button>
+    `;
+    document.getElementById('auth-retry').onclick = () => location.reload();
+    return;
+  }
+
+  // AUTH_FAILED — clear any stale token so it doesn't keep causing 401s
+  clearToken();
+
+  // Try once more without the stale token (works for localhost_no_auth mode)
+  const retry = await checkAuth();
+  if (retry === 'ok') {
     authModal.style.display = 'none';
     app.style.display = '';
     applyInputTooltips(document);
@@ -63,19 +89,21 @@ async function initAuth() {
       return;
     }
     setToken(token);
-    const ok = await checkAuth();
-    if (ok) {
+    const check = await checkAuth();
+    if (check === 'ok') {
       authModal.style.display = 'none';
       app.style.display = '';
       applyInputTooltips(document);
       startApp();
     } else {
-      errorEl.textContent = 'Invalid token';
+      clearToken();
+      errorEl.textContent = check === 'unreachable' ? 'Server unreachable' : 'Invalid token';
       errorEl.style.display = '';
     }
   };
 
   skip.onclick = () => {
+    clearToken();
     authModal.style.display = 'none';
     app.style.display = '';
     startApp();
@@ -176,6 +204,20 @@ function startApp() {
   initChatPanel(chatPanel);
   window.addEventListener('hashchange', navigate);
   navigate();
+
+  // Killswitch button
+  const killBtn = document.getElementById('killswitch-btn');
+  if (killBtn) {
+    killBtn.onclick = async () => {
+      if (!confirm('Shut down Guardian Agent and all services?')) return;
+      killBtn.disabled = true;
+      killBtn.textContent = 'Shutting down...';
+      try {
+        await api.killswitch();
+      } catch {}
+      document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#e8e4dc;font-family:Georgia,serif;font-size:1.4rem;">Guardian Agent has been shut down.</div>';
+    };
+  }
 }
 
 // ─── Init ────────────────────────────────────────────────

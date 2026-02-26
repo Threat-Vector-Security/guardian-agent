@@ -28,6 +28,7 @@ export async function renderConfig(container) {
     container.appendChild(createProviderStatusTable(config, providers));
     container.appendChild(createAuthPanel(config, authStatus, container));
 
+    container.appendChild(createTrustPresetPanel(config));
     container.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
     container.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
     container.appendChild(createSection('Runtime (Read-Only Snapshot)', config.runtime));
@@ -78,6 +79,44 @@ function createOverview(config, providers, setupStatus) {
   }
 
   return wrap;
+}
+
+function createTrustPresetPanel(config) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const currentPreset = config.guardian?.trustPreset || '';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Trust Preset</h3>
+      <span class="cfg-header-note">Quick security posture configuration</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Security Posture</label>
+          <select id="trust-preset-select">
+            <option value="" ${!currentPreset ? 'selected' : ''}>Custom (no preset)</option>
+            <option value="locked" ${currentPreset === 'locked' ? 'selected' : ''}>Locked — read-only, strict limits</option>
+            <option value="safe" ${currentPreset === 'safe' ? 'selected' : ''}>Safe — read + email, moderate limits</option>
+            <option value="balanced" ${currentPreset === 'balanced' ? 'selected' : ''}>Balanced — read/write/exec, standard limits</option>
+            <option value="power" ${currentPreset === 'power' ? 'selected' : ''}>Power — all capabilities, high limits</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Active Preset</label>
+          <input type="text" readonly value="${esc(currentPreset || 'none')}" style="opacity:0.7;">
+        </div>
+      </div>
+      <div style="margin-top:0.75rem;font-size:0.74rem;color:var(--text-muted);">
+        Presets set baseline capabilities, rate limits, and tool policies. Explicit config values always override preset defaults.
+        Changes require a config file update and restart to take effect.
+      </div>
+    </div>
+  `;
+
+  return section;
 }
 
 function createMiniCard(title, value, subtitle, tone) {

@@ -21,6 +21,18 @@ export interface GuardianAgentConfig {
   runtime: RuntimeConfig;
   /** Personal assistant UX and persistence features. */
   assistant: AssistantConfig;
+  /** LLM provider failover configuration. */
+  failover?: FailoverConfig;
+}
+
+/** Failover configuration for LLM providers. */
+export interface FailoverConfig {
+  /** Enable provider failover (default: true). */
+  enabled: boolean;
+  /** Failures before circuit opens (default: 3). */
+  failureThreshold: number;
+  /** Time in ms before recovery attempt (default: 30000). */
+  resetTimeoutMs: number;
 }
 
 /** Configuration for a single LLM provider. */
@@ -39,6 +51,8 @@ export interface LLMConfig {
   temperature?: number;
   /** Request timeout in milliseconds. */
   timeoutMs?: number;
+  /** Priority for failover ordering (lower = higher priority, default: 10). */
+  priority?: number;
 }
 
 /** Configuration for an agent instance. */
@@ -175,7 +189,13 @@ export interface GuardianConfig {
   auditLog?: {
     /** Maximum events to keep in memory (default: 10000). */
     maxEvents: number;
+    /** Enable persistent audit log with hash chain (default: true). */
+    persistenceEnabled?: boolean;
+    /** Directory for persistent audit files (default: ~/.guardianagent/audit/). */
+    auditDir?: string;
   };
+  /** Trust preset for quick security posture configuration. */
+  trustPreset?: 'locked' | 'safe' | 'balanced' | 'power';
 }
 
 /** Runtime configuration. */
@@ -300,6 +320,8 @@ export interface AssistantToolsConfig {
   allowedCommands: string[];
   /** Allowed domains for network/browser tools. */
   allowedDomains: string[];
+  /** Default dry-run mode for mutating tools (default: false). */
+  dryRunDefault?: boolean;
 }
 
 /** Personal assistant feature configuration. */
@@ -369,12 +391,18 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     },
     auditLog: {
       maxEvents: 10_000,
+      persistenceEnabled: true,
     },
   },
   runtime: {
     maxStallDurationMs: 60_000,
     watchdogIntervalMs: 10_000,
     logLevel: 'warn',
+  },
+  failover: {
+    enabled: true,
+    failureThreshold: 3,
+    resetTimeoutMs: 30_000,
   },
   assistant: {
     setup: {
