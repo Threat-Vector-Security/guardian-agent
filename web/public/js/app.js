@@ -5,13 +5,8 @@
 import { api, setToken, clearToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
-import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
 import { renderConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
-import { renderIntel } from './pages/intel.js';
-import { renderAssistant } from './pages/assistant.js';
-import { renderTools } from './pages/tools.js';
-import { renderConnectors } from './pages/connectors.js';
 import { renderNetwork } from './pages/network.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
@@ -177,12 +172,7 @@ function connectSSE() {
 const routes = {
   '/': { render: renderDashboard, update: updateDashboard, name: 'dashboard' },
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
-  '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
-  '/intel': { render: renderIntel, name: 'intel' },
-  '/tools': { render: renderTools, name: 'tools' },
-  '/connectors': { render: renderConnectors, name: 'connectors' },
   '/network': { render: renderNetwork, name: 'network' },
-  '/assistant': { render: renderAssistant, name: 'assistant' },
   '/config': { render: renderConfig, name: 'config' },
   '/reference': { render: renderReference, name: 'reference' },
 };

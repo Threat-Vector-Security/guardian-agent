@@ -385,8 +385,8 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`)
 - **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; if no token is configured, runtime can generate an ephemeral bearer token per process start
-- **Assistant State**: web `#/assistant` and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
-- **Configuration Center**: web `#/config` + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
-- **Tools Control Plane**: web `#/tools` + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
-- **Connector Studio (Option 2)**: configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
-- **Threat Intel**: web `#/intel`, CLI `/intel`, Telegram `/intel` command surfaces
+- **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
+- **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
+- **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
+- **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
+- **Threat Intel**: web Security > Threat Intel tab, CLI `/intel`, Telegram `/intel` command surfaces

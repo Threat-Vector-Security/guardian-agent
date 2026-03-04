@@ -272,19 +272,20 @@ guardian:
 - Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
 - SQLite-persisted conversation memory with sessions
 - SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
-- Tools control plane in web (`#/tools`) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
-- Connector/playbook control plane in web (`#/connectors`) and CLI (`/connectors`, `/playbooks`) for pack governance, playbook registry, and guarded execution
+- Tools control plane in web (Configuration > Tools tab) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
+- Interactive sandbox allowlist editor in web (Configuration > Policy tab) for paths, commands, and domains
+- Connector/playbook control plane in web (Network > Connectors tab) and CLI (`/connectors`, `/playbooks`) for pack governance, playbook registry, and guarded execution
 - Campaign automation tools for contact discovery and approval-gated Gmail send workflows (`/campaign`)
 - Quick actions for `email`, `task`, and `calendar` workflows
-- Threat-intel workflow for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
+- Threat-intel workflow in web (Security > Threat Intel tab) for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
 - Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
-- Channel analytics summary in web Monitoring and CLI (`/analytics`)
+- Channel analytics and monitoring in web (Security > Monitoring tab) and CLI (`/analytics`)
 
 ### Key Commands
 
 - CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Config Center, Chat quick-actions bar, Tools tab, Connectors tab, Assistant tab, Threat Intel tab, Reference Guide tab
+- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Configuration (Providers/Tools/Policy/Settings), Reference Guide, Chat
 
 ### Connector + Playbook CLI (Web Parity)
 

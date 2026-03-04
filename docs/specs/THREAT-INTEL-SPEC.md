@@ -8,7 +8,7 @@ Add a built-in personal protection layer that helps users detect and respond to:
 
 ## Scope
 - Runtime service: `ThreatIntelService`
-- Web: dedicated `#/intel` tab
+- Web: Security > Threat Intel tab (`#/security`)
 - CLI: `/intel` command group
 - Telegram: `/intel` quick commands
 - API endpoints under `/api/threat-intel/*`

@@ -1123,6 +1123,109 @@ tr:hover td {
   margin-bottom: 0.3rem;
 }
 
+/* ─── Tabs ───────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  padding: 0.65rem 1.25rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--accent-glow);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  /* display toggled by JS */
+}
+
+/* ─── Policy Editor Chips ────────────────────────────────── */
+
+.policy-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-height: 2rem;
+  padding: 0.25rem 0;
+}
+
+.policy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-family: var(--font-mono);
+  transition: border-color 0.2s;
+}
+
+.policy-chip:hover {
+  border-color: var(--accent);
+}
+
+.policy-chip .chip-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+.policy-chip .chip-remove:hover {
+  color: var(--error);
+}
+
+.policy-add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.policy-add-row input {
+  flex: 1;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.policy-add-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ─── Responsive ─────────────────────────────────────────── */
 
 @media (max-width: 1024px) {
@@ -1272,7 +1375,7 @@ tr:hover td {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: var(--surface-secondary, #555);
+  background-color: #d32f2f;
   border-radius: 20px;
   transition: background-color 0.2s;
 }
@@ -1288,7 +1391,7 @@ tr:hover td {
   transition: transform 0.2s;
 }
 .toggle-switch input:checked + .toggle-slider {
-  background-color: var(--accent, #4caf50);
+  background-color: #4caf50;
 }
 .toggle-switch input:checked + .toggle-slider::before {
   transform: translateX(16px);

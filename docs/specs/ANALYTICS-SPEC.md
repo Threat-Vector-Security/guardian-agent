@@ -43,6 +43,6 @@ Capture assistant interaction telemetry to identify friction and prioritize UX i
 - `GET /api/analytics/summary?windowMs=<ms>`
 
 ## Consumption
-- Web monitoring page renders 60-minute analytics summary
+- Web Security > Monitoring tab renders 60-minute analytics summary
 - CLI renders summary via `/analytics [minutes]`
 - Setup/config and command flows emit analytics events

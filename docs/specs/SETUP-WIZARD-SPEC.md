@@ -9,7 +9,7 @@ Deprecated. The interactive CLI `/setup` wizard is no longer part of the primary
   - Web: `#/config`
   - CLI: `/config ...`
 - Runtime/orchestration visibility via:
-  - Web: `#/assistant`
+  - Web: Dashboard assistant state section (`#/`)
   - CLI: `/assistant`
 
 ## Legacy Endpoint Note
