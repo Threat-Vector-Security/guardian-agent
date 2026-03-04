@@ -1,39 +1,56 @@
 /**
- * Security page — audit summary, filtered log, anomaly alerts.
+ * Security page — tabbed: Audit + Monitoring + Threat Intel.
  */
 
 import { api } from '../api.js';
 import { createStatusCard } from '../components/status-card.js';
+import { createEventLog, appendEvent } from '../components/event-log.js';
+import { createTabs } from '../components/tabs.js';
 import { onSSE, offSSE } from '../app.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let auditHandler = null;
-let auditTableBody = null;
+let monAuditHandler = null;
+let monMetricsHandler = null;
+
+function cleanupSSE() {
+  if (auditHandler) { offSSE('audit', auditHandler); auditHandler = null; }
+  if (monAuditHandler) { offSSE('audit', monAuditHandler); monAuditHandler = null; }
+  if (monMetricsHandler) { offSSE('metrics', monMetricsHandler); monMetricsHandler = null; }
+}
 
 export async function renderSecurity(container) {
-  container.innerHTML = '<h2 class="page-title">Security</h2><div class="loading">Loading...</div>';
+  cleanupSSE();
+  container.innerHTML = '<h2 class="page-title">Security</h2>';
 
-  // Cleanup previous SSE handler
-  if (auditHandler) {
-    offSSE('audit', auditHandler);
-    auditHandler = null;
-  }
+  createTabs(container, [
+    { id: 'audit', label: 'Audit', render: renderAuditTab },
+    { id: 'monitoring', label: 'Monitoring', render: renderMonitoringTab },
+    { id: 'intel', label: 'Threat Intel', render: renderIntelTab },
+  ]);
+}
+
+export function updateSecurity() {
+  // SSE handlers manage live updates
+}
+
+// ─── Audit Tab ────────────────────────────────────────────
+
+async function renderAuditTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     const summary = await api.auditSummary(300000);
-
-    container.innerHTML = '<h2 class="page-title">Security</h2>';
+    panel.innerHTML = '';
 
     // Summary cards
     const grid = document.createElement('div');
     grid.className = 'cards-grid';
-
     grid.appendChild(createStatusCard('Total Events', summary.totalEvents, 'Last 5 minutes', 'info'));
     grid.appendChild(createStatusCard('Denials', summary.byType.action_denied || 0, 'Actions blocked', summary.byType.action_denied ? 'warning' : 'success'));
     grid.appendChild(createStatusCard('Secrets Detected', summary.byType.secret_detected || 0, 'Credential leaks caught', summary.byType.secret_detected ? 'error' : 'success'));
     grid.appendChild(createStatusCard('Anomalies', summary.byType.anomaly_detected || 0, 'Anomaly alerts', summary.byType.anomaly_detected ? 'error' : 'success'));
-
-    container.appendChild(grid);
+    panel.appendChild(grid);
 
     // Audit Chain Verification
     const verifySection = document.createElement('div');
@@ -47,7 +64,7 @@ export async function renderSecurity(container) {
         Click "Verify Audit Chain" to check tamper-evident hash chain integrity.
       </div>
     `;
-    container.appendChild(verifySection);
+    panel.appendChild(verifySection);
 
     verifySection.querySelector('#verify-chain')?.addEventListener('click', async () => {
       const resultEl = verifySection.querySelector('#chain-result');
@@ -102,7 +119,7 @@ export async function renderSecurity(container) {
       <input type="number" id="filter-limit" value="50" min="1" max="500" style="width:60px;">
       <button class="btn btn-primary" id="filter-apply">Apply</button>
     `;
-    container.appendChild(filters);
+    panel.appendChild(filters);
 
     // Audit table
     const tableContainer = document.createElement('div');
@@ -114,16 +131,28 @@ export async function renderSecurity(container) {
         <tbody id="audit-table-body"></tbody>
       </table>
     `;
-    container.appendChild(tableContainer);
+    panel.appendChild(tableContainer);
 
-    auditTableBody = tableContainer.querySelector('#audit-table-body');
+    const auditTableBody = tableContainer.querySelector('#audit-table-body');
 
     // Load initial data
-    await loadAuditEvents();
+    async function loadAuditEvents() {
+      const type = panel.querySelector('#filter-type')?.value;
+      const severity = panel.querySelector('#filter-severity')?.value;
+      const agentId = panel.querySelector('#filter-agent')?.value;
+      const limit = panel.querySelector('#filter-limit')?.value;
+      try {
+        const events = await api.audit({ type, severity, agentId, limit });
+        auditTableBody.innerHTML = '';
+        for (const event of events.reverse()) {
+          auditTableBody.appendChild(createAuditRow(event));
+        }
+      } catch { /* keep existing data */ }
+    }
 
-    // Filter button
-    document.getElementById('filter-apply').addEventListener('click', loadAuditEvents);
-    applyInputTooltips(container);
+    await loadAuditEvents();
+    panel.querySelector('#filter-apply')?.addEventListener('click', loadAuditEvents);
+    applyInputTooltips(panel);
 
     // Top denied agents
     if (summary.topDeniedAgents.length > 0) {
@@ -138,16 +167,13 @@ export async function renderSecurity(container) {
           `).join('')}</tbody>
         </table>
       `;
-      container.appendChild(deniedSection);
+      panel.appendChild(deniedSection);
     }
 
-    // SSE: append new audit events in real-time
+    // SSE: append new audit events
     auditHandler = (event) => {
       if (!auditTableBody) return;
-      const row = createAuditRow(event);
-      // Prepend new events
-      auditTableBody.insertBefore(row, auditTableBody.firstChild);
-      // Cap rows
+      auditTableBody.insertBefore(createAuditRow(event), auditTableBody.firstChild);
       while (auditTableBody.children.length > 100) {
         auditTableBody.removeChild(auditTableBody.lastChild);
       }
@@ -155,26 +181,7 @@ export async function renderSecurity(container) {
     onSSE('audit', auditHandler);
 
   } catch (err) {
-    container.innerHTML = `<h2 class="page-title">Security</h2><div class="loading">Error: ${esc(err.message)}</div>`;
-  }
-}
-
-async function loadAuditEvents() {
-  if (!auditTableBody) return;
-
-  const type = document.getElementById('filter-type')?.value;
-  const severity = document.getElementById('filter-severity')?.value;
-  const agentId = document.getElementById('filter-agent')?.value;
-  const limit = document.getElementById('filter-limit')?.value;
-
-  try {
-    const events = await api.audit({ type, severity, agentId, limit });
-    auditTableBody.innerHTML = '';
-    for (const event of events.reverse()) {
-      auditTableBody.appendChild(createAuditRow(event));
-    }
-  } catch {
-    // Keep existing data
+    panel.innerHTML = `<div class="loading">Error: ${esc(err.message)}</div>`;
   }
 }
 
@@ -198,12 +205,336 @@ function summarize(details) {
   return JSON.stringify(details).slice(0, 60);
 }
 
-export function updateSecurity() {
-  // SSE handler above handles live updates
+// ─── Monitoring Tab ──────────────────────────────────────
+
+async function renderMonitoringTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [agents, budget, analytics] = await Promise.all([
+      api.agents().catch(() => []),
+      api.budget().catch(() => ({ agents: [], recentOverruns: [] })),
+      api.analyticsSummary(3600000).catch(() => null),
+    ]);
+
+    panel.innerHTML = '';
+
+    // Live event stream
+    const sectionHeader1 = document.createElement('h3');
+    sectionHeader1.className = 'section-header';
+    sectionHeader1.textContent = 'Live Event Stream';
+    panel.appendChild(sectionHeader1);
+
+    const eventLogEl = createEventLog('Audit Events');
+    panel.appendChild(eventLogEl);
+
+    // Agent state grid
+    const sectionHeader2 = document.createElement('h3');
+    sectionHeader2.className = 'section-header';
+    sectionHeader2.textContent = 'Agent States';
+    panel.appendChild(sectionHeader2);
+
+    const agentGridEl = document.createElement('div');
+    agentGridEl.className = 'agent-grid';
+    renderAgentGrid(agentGridEl, agents);
+    panel.appendChild(agentGridEl);
+
+    // Resource usage
+    const sectionHeader3 = document.createElement('h3');
+    sectionHeader3.className = 'section-header';
+    sectionHeader3.textContent = 'Resource Usage';
+    panel.appendChild(sectionHeader3);
+
+    const budgetContainer = document.createElement('div');
+    budgetContainer.className = 'table-container';
+    budgetContainer.innerHTML = `
+      <div class="table-header">
+        <h3>Budget & Resources</h3>
+        <span id="mon-pending-count" style="font-size:0.75rem;color:var(--text-muted);">EventBus pending: 0</span>
+      </div>
+      <table>
+        <thead><tr><th>Agent</th><th>Tokens/min</th><th>Concurrent</th><th>Overruns</th></tr></thead>
+        <tbody id="mon-budget-table-body"></tbody>
+      </table>
+    `;
+    panel.appendChild(budgetContainer);
+
+    const budgetTableBody = budgetContainer.querySelector('#mon-budget-table-body');
+    const pendingCountEl = budgetContainer.querySelector('#mon-pending-count');
+    budgetTableBody.innerHTML = budget.agents.map(a => `
+      <tr>
+        <td>${esc(a.agentId)}</td>
+        <td>${a.tokensPerMinute}</td>
+        <td>${a.concurrentInvocations}</td>
+        <td>${a.overrunCount}</td>
+      </tr>
+    `).join('');
+
+    if (analytics) {
+      const analyticsSection = document.createElement('div');
+      analyticsSection.className = 'table-container';
+      analyticsSection.innerHTML = `
+        <div class="table-header"><h3>Interaction Analytics (60m)</h3></div>
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Total events</td><td>${analytics.totalEvents}</td></tr>
+            <tr><td>Channels</td><td>${Object.entries(analytics.byChannel).map(([name, count]) => `${esc(name)}: ${count}`).join(', ') || '-'}</td></tr>
+            <tr><td>Top agents</td><td>${analytics.topAgents.map(a => `${esc(a.agentId)} (${a.count})`).join(', ') || '-'}</td></tr>
+            <tr><td>Top commands</td><td>${analytics.commandUsage.map(c => `/${esc(c.command)} (${c.count})`).join(', ') || '-'}</td></tr>
+          </tbody>
+        </table>
+      `;
+      panel.appendChild(analyticsSection);
+    }
+
+    // Overruns
+    if (budget.recentOverruns.length > 0) {
+      const overrunContainer = document.createElement('div');
+      overrunContainer.className = 'table-container';
+      overrunContainer.innerHTML = `
+        <div class="table-header"><h3>Recent Budget Overruns</h3></div>
+        <table>
+          <thead><tr><th>Agent</th><th>Type</th><th>Budget (ms)</th><th>Used (ms)</th></tr></thead>
+          <tbody>${budget.recentOverruns.slice(-10).map(o => `
+            <tr>
+              <td>${esc(o.agentId)}</td>
+              <td>${esc(o.invocationType)}</td>
+              <td>${Math.round(o.budgetMs)}</td>
+              <td>${Math.round(o.usedMs)}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      `;
+      panel.appendChild(overrunContainer);
+    }
+
+    // SSE: live audit events
+    monAuditHandler = (event) => {
+      if (eventLogEl) appendEvent(eventLogEl, event);
+    };
+    onSSE('audit', monAuditHandler);
+
+    // SSE: metrics updates
+    monMetricsHandler = (data) => {
+      if (agentGridEl && data.agents) {
+        renderAgentGrid(agentGridEl, data.agents);
+      }
+      if (pendingCountEl) {
+        pendingCountEl.textContent = `EventBus pending: ${data.eventBusPending || 0}`;
+      }
+    };
+    onSSE('metrics', monMetricsHandler);
+
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function renderAgentGrid(gridEl, agents) {
+  gridEl.innerHTML = agents.map(a => `
+    <div class="agent-tile">
+      <div class="tile-name">${esc(a.name)}</div>
+      <div class="tile-id">${esc(a.id)}</div>
+      <span class="badge badge-${a.state}">${esc(a.state)}</span>
+    </div>
+  `).join('');
+}
+
+// ─── Threat Intel Tab ────────────────────────────────────
+
+async function renderIntelTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [summary, plan, watchlistResponse, findings, actions] = await Promise.all([
+      api.threatIntelSummary(),
+      api.threatIntelPlan(),
+      api.threatIntelWatchlist(),
+      api.threatIntelFindings({ limit: 30 }),
+      api.threatIntelActions(30),
+    ]);
+
+    const watchlist = watchlistResponse.targets ?? [];
+    const connectorText = (summary.forumConnectors || [])
+      .map(c => `${c.id}:${c.enabled ? 'on' : 'off'}:${c.mode}${c.hostile ? ':hostile' : ''}`)
+      .join(', ');
+
+    panel.innerHTML = `
+      <div class="intel-summary-grid">
+        <div class="status-card ${summary.enabled ? 'success' : 'error'}">
+          <div class="card-title">Monitoring</div>
+          <div class="card-value">${summary.enabled ? 'Enabled' : 'Disabled'}</div>
+          <div class="card-subtitle">Auto-scan active when watchlist is configured</div>
+        </div>
+        <div class="status-card info">
+          <div class="card-title">Watchlist</div>
+          <div class="card-value">${summary.watchlistCount}</div>
+          <div class="card-subtitle">Tracked people, handles, domains, keywords</div>
+        </div>
+        <div class="status-card warning">
+          <div class="card-title">New Findings</div>
+          <div class="card-value">${summary.findings.new}</div>
+          <div class="card-subtitle">${summary.findings.total} total findings</div>
+        </div>
+        <div class="status-card ${summary.findings.highOrCritical > 0 ? 'error' : 'accent'}">
+          <div class="card-title">High Risk</div>
+          <div class="card-value">${summary.findings.highOrCritical}</div>
+          <div class="card-subtitle">High/Critical severity detections</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header">
+          <h3>Operations Configuration</h3>
+          <button class="btn btn-secondary" id="intel-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
+        </div>
+        <div class="intel-controls" style="pointer-events: none; opacity: 0.8;">
+          <div class="intel-control-row">
+            <label>Response Mode</label>
+            <span class="intel-inline">${esc(summary.responseMode)}</span>
+            <span class="intel-muted">Darkweb scans: ${summary.darkwebEnabled ? 'enabled' : 'disabled'}</span>
+            <span class="intel-muted">Forum connectors: ${esc(connectorText || 'none')}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Watchlist</h3></div>
+        <div class="intel-watchlist-panel">
+          <div class="intel-watch-items">
+            ${watchlist.length === 0
+              ? '<span class="intel-muted">No watch targets configured.</span>'
+              : watchlist.map(target => `<span class="intel-chip">${esc(target)}</span>`).join('')}
+          </div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Findings</h3></div>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Target</th><th>Source</th><th>Severity</th><th>Confidence</th><th>Status</th><th>Summary</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            ${findings.length === 0 ? '<tr><td colspan="8">No findings yet. Run a scan to populate results.</td></tr>' : findings.map(finding => `
+              <tr>
+                <td title="${esc(finding.id)}">${esc(shortId(finding.id))}</td>
+                <td>${esc(finding.target)}</td>
+                <td>${esc(finding.sourceType)}</td>
+                <td><span class="badge ${severityClass(finding.severity)}">${esc(finding.severity)}</span></td>
+                <td>${Math.round((finding.confidence ?? 0) * 100)}%</td>
+                <td>
+                  <select data-finding-status="${escAttr(finding.id)}">
+                    ${['new', 'triaged', 'actioned', 'dismissed'].map(status => `
+                      <option value="${status}" ${finding.status === status ? 'selected' : ''}>${status}</option>
+                    `).join('')}
+                  </select>
+                </td>
+                <td>${esc(finding.summary)}</td>
+                <td>
+                  <div class="intel-actions">
+                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="report">Report</button>
+                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="request_takedown">Takedown</button>
+                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="draft_response">Draft Reply</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Drafted Actions</h3></div>
+        <table>
+          <thead>
+            <tr><th>Action ID</th><th>Finding</th><th>Type</th><th>Status</th><th>Approval</th><th>Rationale</th></tr>
+          </thead>
+          <tbody>
+            ${actions.length === 0 ? '<tr><td colspan="6">No drafted actions yet.</td></tr>' : actions.map(action => `
+              <tr>
+                <td title="${esc(action.id)}">${esc(shortId(action.id))}</td>
+                <td title="${esc(action.findingId)}">${esc(shortId(action.findingId))}</td>
+                <td>${esc(action.type)}</td>
+                <td>${esc(action.status)}</td>
+                <td>${action.requiresApproval ? 'required' : 'optional'}</td>
+                <td>${esc(action.rationale)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Operating Plan</h3></div>
+        <div class="intel-plan">
+          <p class="intel-muted">${esc(plan.title)}</p>
+          <div class="intel-plan-grid">
+            ${plan.phases.map(phase => `
+              <div class="intel-plan-card">
+                <h4>${esc(phase.phase)}</h4>
+                <p>${esc(phase.objective)}</p>
+                <ul>
+                  ${phase.deliverables.map(d => `<li>${esc(d)}</li>`).join('')}
+                </ul>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Event listeners
+    panel.querySelector('#intel-refresh')?.addEventListener('click', () => renderIntelTab(panel));
+
+    panel.querySelectorAll('[data-finding-status]').forEach(select => {
+      select.addEventListener('change', async () => {
+        const findingId = select.getAttribute('data-finding-status');
+        if (!findingId) return;
+        try {
+          await api.threatIntelSetFindingStatus(findingId, select.value);
+        } catch { /* ignore */ }
+      });
+    });
+
+    panel.querySelectorAll('.intel-action-btn').forEach(button => {
+      button.addEventListener('click', async () => {
+        const findingId = button.getAttribute('data-finding');
+        const type = button.getAttribute('data-action');
+        if (!findingId || !type) return;
+        try {
+          const result = await api.threatIntelDraftAction(findingId, type);
+          if (result.success) await renderIntelTab(panel);
+        } catch { /* ignore */ }
+      });
+    });
+
+    applyInputTooltips(panel);
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+// ─── Utilities ───────────────────────────────────────────
+
+function shortId(id) {
+  return id?.slice(0, 8) || '';
+}
+
+function severityClass(severity) {
+  if (severity === 'critical') return 'badge-critical';
+  if (severity === 'high') return 'badge-errored';
+  if (severity === 'medium') return 'badge-warn';
+  return 'badge-info';
 }
 
 function esc(str) {
   const d = document.createElement('div');
-  d.textContent = str;
+  d.textContent = str == null ? '' : String(str);
   return d.innerHTML;
+}
+
+function escAttr(input) {
+  return esc(input).replace(/"/g, '&quot;');
 }

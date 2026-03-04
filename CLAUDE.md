@@ -84,7 +84,13 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, bearer token auth
 
 ### Web Frontend (`web/public/`)
-Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Pages: dashboard, chat, config, monitoring, security, tools, connectors, assistant, threat intel, reference guide.
+Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Consolidated into 5 sidebar pages with tabbed navigation:
+- **Dashboard** (`#/`) — status cards, agent table, LLM status, recent alerts, assistant state (sessions, jobs, cron, policy)
+- **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
+- **Network** (`#/network`) — Connectors tab, Devices tab
+- **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Settings tab
+- **Reference Guide** (`#/reference`) — unchanged
+- **Chat** — persistent right panel
 
 ### Evaluation Framework
 - **EvalRunner** runs test cases through the real Runtime (Guardian active)

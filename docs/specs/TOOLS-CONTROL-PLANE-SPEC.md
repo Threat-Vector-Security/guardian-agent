@@ -13,7 +13,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
   - `POST /api/tools/run`
   - `POST /api/tools/policy`
   - `POST /api/tools/approvals/decision`
-- Web Tools page (`#/tools`) and CLI `/tools` command set
+- Web Configuration > Tools tab (`#/config`) and CLI `/tools` command set
 - LLM tool-calling integration through chat/orchestrator path
 
 ## Tool Catalog (Initial)

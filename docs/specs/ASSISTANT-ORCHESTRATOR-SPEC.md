@@ -11,7 +11,7 @@ Introduce a first-class assistant orchestration layer that:
 - Runtime module: `src/runtime/orchestrator.ts`
 - Runtime module: `src/runtime/assistant-jobs.ts`
 - Dashboard API: `GET /api/assistant/state`
-- Web UI: new `#/assistant` tab
+- Web UI: Dashboard assistant state section (consolidated from former `#/assistant` page)
 - CLI: new `/assistant` command
 
 ## Session Model

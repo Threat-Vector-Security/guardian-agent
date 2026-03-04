@@ -1,5 +1,6 @@
 /**
- * Dashboard page — overview with status cards, agent table, LLM status, recent events.
+ * Dashboard page — overview with status cards, agent table, LLM status, recent events,
+ * plus assistant state (sessions, throughput, latency, jobs, cron, policy decisions).
  */
 
 import { api } from '../api.js';
@@ -11,8 +12,10 @@ let cards = {};
 let agentTableEl = null;
 let llmStatusEl = null;
 let metricsHandler = null;
+let assistantPollTimer = null;
 
 export async function renderDashboard(container) {
+  stopAssistantPolling();
   container.innerHTML = '<h2 class="page-title">Dashboard</h2><div class="loading">Loading...</div>';
 
   try {
@@ -109,8 +112,158 @@ export async function renderDashboard(container) {
     };
     onSSE('metrics', metricsHandler);
 
+    // ─── Assistant State Section ──────────────────────────
+    const assistantSection = document.createElement('div');
+    assistantSection.id = 'dashboard-assistant-state';
+    container.appendChild(assistantSection);
+
+    await renderAssistantState(assistantSection);
+
+    // Poll assistant state every 4s while on dashboard
+    assistantPollTimer = setInterval(() => {
+      if (window.location.hash && window.location.hash !== '#/' && window.location.hash !== '#') {
+        stopAssistantPolling();
+        return;
+      }
+      const el = document.getElementById('dashboard-assistant-state');
+      if (el) void renderAssistantState(el);
+    }, 4000);
+
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Dashboard</h2><div class="loading">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function stopAssistantPolling() {
+  if (assistantPollTimer) {
+    clearInterval(assistantPollTimer);
+    assistantPollTimer = null;
+  }
+}
+
+async function renderAssistantState(section) {
+  try {
+    const state = await api.assistantState();
+    const { orchestrator, jobs, lastPolicyDecisions, scheduledJobs } = state;
+    const summary = orchestrator.summary;
+    const sessions = orchestrator.sessions;
+
+    section.innerHTML = '';
+
+    const header = document.createElement('h3');
+    header.className = 'section-header';
+    header.textContent = 'Assistant State';
+    section.appendChild(header);
+
+    // Assistant cards
+    const aCards = document.createElement('div');
+    aCards.className = 'cards-grid';
+    aCards.append(
+      createMiniCard('Sessions', String(summary.sessionCount), `${summary.runningCount} running / ${summary.queuedCount} queued`, 'info'),
+      createMiniCard('Throughput', `${summary.completedRequests}/${summary.totalRequests}`, `${summary.failedRequests} failed`, summary.failedRequests > 0 ? 'warning' : 'success'),
+      createMiniCard('Latency (E2E)', `${summary.avgEndToEndMs}ms`, 'Queue + execution avg', 'accent'),
+      createMiniCard('Jobs', `${jobs.summary.running} running`, `${jobs.summary.failed} failed / ${jobs.summary.total} tracked`, jobs.summary.failed > 0 ? 'warning' : 'success'),
+    );
+    section.appendChild(aCards);
+
+    // Session Queue table
+    if (sessions.length > 0) {
+      const sessionTable = document.createElement('div');
+      sessionTable.className = 'table-container';
+      sessionTable.innerHTML = `
+        <div class="table-header"><h3>Session Queue</h3></div>
+        <table>
+          <thead>
+            <tr><th>Session</th><th>Status</th><th>Queue</th><th>Requests</th><th>Wait ms</th><th>Exec ms</th></tr>
+          </thead>
+          <tbody>
+            ${sessions.slice(0, 10).map(s => `
+              <tr>
+                <td>${esc(`${s.channel}:${s.userId}:${s.agentId}`)}</td>
+                <td><span class="badge ${s.status === 'running' ? 'badge-running' : s.status === 'queued' ? 'badge-warn' : 'badge-idle'}">${esc(s.status)}</span></td>
+                <td>${s.queueDepth}</td>
+                <td>${s.totalRequests}</td>
+                <td>${s.lastQueueWaitMs ?? '-'}</td>
+                <td>${s.lastExecutionMs ?? '-'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      section.appendChild(sessionTable);
+    }
+
+    // Background Jobs table
+    if (jobs.jobs.length > 0) {
+      const jobTable = document.createElement('div');
+      jobTable.className = 'table-container';
+      jobTable.innerHTML = `
+        <div class="table-header"><h3>Background Jobs</h3></div>
+        <table>
+          <thead><tr><th>Type</th><th>Source</th><th>Status</th><th>Duration</th><th>Detail</th></tr></thead>
+          <tbody>
+            ${jobs.jobs.slice(0, 10).map(j => `
+              <tr>
+                <td>${esc(j.type)}</td>
+                <td>${esc(j.source)}</td>
+                <td><span class="badge ${j.status === 'running' ? 'badge-running' : j.status === 'failed' ? 'badge-errored' : 'badge-idle'}">${esc(j.status)}</span></td>
+                <td>${j.durationMs !== undefined ? `${j.durationMs}ms` : '-'}</td>
+                <td>${esc(j.detail ?? j.error ?? '-')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      section.appendChild(jobTable);
+    }
+
+    // Scheduled Cron
+    if (scheduledJobs && scheduledJobs.length > 0) {
+      const cronTable = document.createElement('div');
+      cronTable.className = 'table-container';
+      cronTable.innerHTML = `
+        <div class="table-header"><h3>Scheduled Cron Jobs</h3></div>
+        <table>
+          <thead><tr><th>Agent ID</th><th>Cron</th><th>Next Run</th></tr></thead>
+          <tbody>
+            ${scheduledJobs.map(j => `
+              <tr>
+                <td>${esc(j.agentId)}</td>
+                <td><code style="background:var(--bg-tertiary);padding:0.2rem 0.4rem;border-radius:4px">${esc(j.cron)}</code></td>
+                <td>${j.nextRun ? esc(new Date(j.nextRun).toLocaleString()) : '-'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      section.appendChild(cronTable);
+    }
+
+    // Recent Policy Decisions
+    if (lastPolicyDecisions.length > 0) {
+      const policyTable = document.createElement('div');
+      policyTable.className = 'table-container';
+      policyTable.innerHTML = `
+        <div class="table-header"><h3>Recent Policy Decisions</h3></div>
+        <table>
+          <thead><tr><th>Type</th><th>Severity</th><th>Agent</th><th>Controller</th><th>Reason</th></tr></thead>
+          <tbody>
+            ${lastPolicyDecisions.slice(0, 10).map(e => `
+              <tr>
+                <td>${esc(e.type)}</td>
+                <td><span class="badge ${e.severity === 'critical' ? 'badge-critical' : e.severity === 'warn' ? 'badge-warn' : 'badge-info'}">${esc(e.severity)}</span></td>
+                <td>${esc(e.agentId)}</td>
+                <td>${esc(e.controller ?? '-')}</td>
+                <td>${esc(e.reason ?? '-')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      section.appendChild(policyTable);
+    }
+  } catch {
+    // Silently fail — assistant state is optional enrichment
   }
 }
 
@@ -156,6 +309,17 @@ function renderLLMStatus(container, providers) {
       }
     } catch { /* ignore */ }
   });
+}
+
+function createMiniCard(title, value, subtitle, tone) {
+  const card = document.createElement('div');
+  card.className = `status-card ${tone}`;
+  card.innerHTML = `
+    <div class="card-title">${esc(title)}</div>
+    <div class="card-value">${esc(String(value))}</div>
+    <div class="card-subtitle">${esc(String(subtitle))}</div>
+  `;
+  return card;
 }
 
 export function updateDashboard() {

@@ -97,7 +97,7 @@ Validation guarantees:
 - CLI commands: `/connectors ...`, `/playbooks ...`.
 
 ### Phase 3 (Implemented baseline)
-- Web Connectors control plane (`#/connectors`) for settings, pack/playbook CRUD, and playbook runs.
+- Web Connectors control plane (Network > Connectors tab, `#/network`) for settings, pack/playbook CRUD, and playbook runs.
 - Privileged-ticket gating for connector/playbook mutations when `assistant.connectors.studio.requirePrivilegedTicket` is enabled.
 - Signed-definition and dry-run-first enforcement in playbook runtime.
 
