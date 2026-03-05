@@ -13,6 +13,7 @@ import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 
 const log = createLogger('channel:telegram');
+const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
 
 export interface TelegramChannelOptions {
   /** Telegram bot token. */
@@ -88,6 +89,11 @@ export class TelegramChannel implements ChannelAdapter {
   async start(onMessage: MessageCallback): Promise<void> {
     this.onMessage = onMessage;
 
+    this.bot.catch((err) => {
+      const updateId = err.ctx?.update?.update_id;
+      log.error({ err, updateId }, 'Telegram middleware error');
+    });
+
     this.bot.on('message:text', async (ctx: Context) => {
       if (!ctx.message?.text || !ctx.chat) return;
       const text = ctx.message.text.trim();
@@ -107,7 +113,7 @@ export class TelegramChannel implements ChannelAdapter {
           channelUserId,
           metadata: { reason: 'unauthorized_chat' },
         });
-        await ctx.reply('Unauthorized chat.');
+        await this.replyInChunks(ctx, 'Unauthorized chat.');
         return;
       }
 
@@ -124,12 +130,12 @@ export class TelegramChannel implements ChannelAdapter {
       }
 
       if (lower === '/start' || lower === '/help') {
-        await ctx.reply(this.buildHelpText());
+        await this.replyInChunks(ctx, this.buildHelpText());
         return;
       }
 
       if (lower === '/guide') {
-        await ctx.reply(this.guideText);
+        await this.replyInChunks(ctx, this.guideText);
         return;
       }
 
@@ -140,7 +146,7 @@ export class TelegramChannel implements ChannelAdapter {
 
       if (lower.startsWith('/reset')) {
         if (!this.onResetConversation) {
-          await ctx.reply('Conversation reset is not available.');
+          await this.replyInChunks(ctx, 'Conversation reset is not available.');
           return;
         }
 
@@ -150,13 +156,13 @@ export class TelegramChannel implements ChannelAdapter {
           userId: channelUserId,
           agentId,
         });
-        await ctx.reply(result.message);
+        await this.replyInChunks(ctx, result.message);
         return;
       }
 
       if (lower.startsWith('/quick')) {
         if (!this.onQuickAction) {
-          await ctx.reply('Quick actions are not available.');
+          await this.replyInChunks(ctx, 'Quick actions are not available.');
           return;
         }
 
@@ -164,7 +170,7 @@ export class TelegramChannel implements ChannelAdapter {
         const actionId = parts[1]?.toLowerCase();
         const details = parts.slice(2).join(' ').trim();
         if (!actionId || !details) {
-          await ctx.reply('Usage: /quick <email|task|calendar> <details>');
+          await this.replyInChunks(ctx, 'Usage: /quick <email|task|calendar> <details>');
           return;
         }
 
@@ -176,10 +182,10 @@ export class TelegramChannel implements ChannelAdapter {
             userId: channelUserId,
             channel: 'telegram',
           });
-          await ctx.reply(response.content);
+          await this.replyInChunks(ctx, response.content);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          await ctx.reply(`Quick action failed: ${message}`);
+          await this.replyInChunks(ctx, `Quick action failed: ${message}`);
         }
         return;
       }
@@ -212,7 +218,7 @@ export class TelegramChannel implements ChannelAdapter {
           channelUserId,
           agentId: this.defaultAgent,
         });
-        await ctx.reply(response.content);
+        await this.replyInChunks(ctx, response.content);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.trackAnalytics({
@@ -224,7 +230,7 @@ export class TelegramChannel implements ChannelAdapter {
           metadata: { error: msg },
         });
         log.error({ chatId: ctx.chat.id, err: msg }, 'Error handling Telegram message');
-        await ctx.reply('Sorry, an error occurred processing your message.');
+        await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
       }
     });
 
@@ -248,12 +254,14 @@ export class TelegramChannel implements ChannelAdapter {
       log.error({ userId }, 'Invalid Telegram chat ID');
       return;
     }
-    await this.bot.api.sendMessage(chatId, text);
+    for (const chunk of splitTelegramMessage(text, TELEGRAM_MAX_MESSAGE_CHARS)) {
+      await this.bot.api.sendMessage(chatId, chunk);
+    }
   }
 
   private async handleIntelCommand(ctx: Context, text: string): Promise<void> {
     if (!this.onThreatIntelSummary) {
-      await ctx.reply('Threat intel is not available.');
+      await this.replyInChunks(ctx, 'Threat intel is not available.');
       return;
     }
 
@@ -273,13 +281,13 @@ export class TelegramChannel implements ChannelAdapter {
       if (summary.lastScanAt) {
         lines.push(`Last scan: ${new Date(summary.lastScanAt).toLocaleString()}`);
       }
-      await ctx.reply(lines.join('\n'));
+      await this.replyInChunks(ctx, lines.join('\n'));
       return;
     }
 
     if (sub === 'scan') {
       if (!this.onThreatIntelScan) {
-        await ctx.reply('Threat intel scan is not available.');
+        await this.replyInChunks(ctx, 'Threat intel scan is not available.');
         return;
       }
       const includeDarkWeb = parts.includes('--darkweb');
@@ -295,7 +303,8 @@ export class TelegramChannel implements ChannelAdapter {
       const preview = result.findings.slice(0, 4)
         .map((finding) => `- ${finding.severity} ${finding.sourceType}: ${finding.target}`)
         .join('\n');
-      await ctx.reply(
+      await this.replyInChunks(
+        ctx,
         `${result.message}${preview ? `\n\n${preview}` : ''}`,
       );
       return;
@@ -303,23 +312,26 @@ export class TelegramChannel implements ChannelAdapter {
 
     if (sub === 'findings') {
       if (!this.onThreatIntelFindings) {
-        await ctx.reply('Threat intel findings are not available.');
+        await this.replyInChunks(ctx, 'Threat intel findings are not available.');
         return;
       }
       const findings = this.onThreatIntelFindings({ limit: 5, status: 'new' });
       if (findings.length === 0) {
-        await ctx.reply('No new findings.');
+        await this.replyInChunks(ctx, 'No new findings.');
         return;
       }
       const lines = ['Top findings:'];
       for (const finding of findings) {
         lines.push(`- ${finding.id.slice(0, 8)} ${finding.severity} ${finding.sourceType} ${finding.target}`);
       }
-      await ctx.reply(lines.join('\n'));
+      await this.replyInChunks(ctx, lines.join('\n'));
       return;
     }
 
-    await ctx.reply('Usage: /intel [status|scan|findings]\nExamples:\n/intel status\n/intel scan your-name --darkweb\n/intel findings');
+    await this.replyInChunks(
+      ctx,
+      'Usage: /intel [status|scan|findings]\nExamples:\n/intel status\n/intel scan your-name --darkweb\n/intel findings',
+    );
   }
 
   private buildHelpText(): string {
@@ -346,4 +358,84 @@ export class TelegramChannel implements ChannelAdapter {
       // ignore
     }
   }
+
+  private async replyInChunks(ctx: Context, text: string): Promise<void> {
+    for (const chunk of splitTelegramMessage(text, TELEGRAM_MAX_MESSAGE_CHARS)) {
+      await ctx.reply(chunk);
+    }
+  }
+}
+
+export function splitTelegramMessage(
+  text: string,
+  maxChars = TELEGRAM_MAX_MESSAGE_CHARS,
+): string[] {
+  if (maxChars <= 0) return [text];
+  const input = text ?? '';
+  if (input.length <= maxChars) return [input];
+
+  const chunks: string[] = [];
+  const lines = input.replace(/\r\n/g, '\n').split('\n');
+  let current = '';
+
+  const flushCurrent = (): void => {
+    if (!current) return;
+    chunks.push(current);
+    current = '';
+  };
+
+  const appendLine = (line: string): void => {
+    if (!current) {
+      current = line;
+      return;
+    }
+    const next = `${current}\n${line}`;
+    if (next.length <= maxChars) {
+      current = next;
+      return;
+    }
+    flushCurrent();
+    current = line;
+  };
+
+  const splitLongSegment = (segment: string): string[] => {
+    const out: string[] = [];
+    let rest = segment;
+    while (rest.length > maxChars) {
+      let breakAt = rest.lastIndexOf(' ', maxChars);
+      if (breakAt < Math.floor(maxChars * 0.5)) {
+        breakAt = maxChars;
+      }
+      const head = rest.slice(0, breakAt).trimEnd();
+      out.push(head || rest.slice(0, maxChars));
+      rest = rest.slice(breakAt).trimStart();
+    }
+    if (rest.length > 0) out.push(rest);
+    return out;
+  };
+
+  for (const rawLine of lines) {
+    if (rawLine.length <= maxChars) {
+      appendLine(rawLine);
+      continue;
+    }
+    flushCurrent();
+    for (const part of splitLongSegment(rawLine)) {
+      if (part.length <= maxChars) {
+        appendLine(part);
+      } else {
+        // Safety fallback: force hard split if required.
+        for (let i = 0; i < part.length; i += maxChars) {
+          appendLine(part.slice(i, i + maxChars));
+          flushCurrent();
+        }
+      }
+      if (current.length === maxChars) {
+        flushCurrent();
+      }
+    }
+  }
+
+  flushCurrent();
+  return chunks.length > 0 ? chunks : [''];
 }

@@ -218,6 +218,12 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 ## File Reference
 
+## Factory Reset
+
+`/factory-reset data` (or `all`) deletes the conversation SQLite database and all agent knowledge base files under `~/.guardianagent/memory/`. This permanently clears all conversation history, FTS5 search index, and persisted agent memories. A restart is recommended after data reset.
+
+## Key Files
+
 | File | Purpose |
 |------|---------|
 | `src/runtime/conversation.ts` | ConversationService with FTS5 search and memory flush |

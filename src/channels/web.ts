@@ -50,7 +50,8 @@ type PrivilegedTicketAction =
   | 'auth.revoke'
   | 'connectors.config'
   | 'connectors.pack'
-  | 'connectors.playbook';
+  | 'connectors.playbook'
+  | 'factory-reset';
 
 export interface WebAuthRuntimeConfig {
   mode: WebAuthMode;
@@ -376,7 +377,8 @@ export class WebChannel implements ChannelAdapter {
       || value === 'auth.revoke'
       || value === 'connectors.config'
       || value === 'connectors.pack'
-      || value === 'connectors.playbook';
+      || value === 'connectors.playbook'
+      || value === 'factory-reset';
   }
 
   private mintPrivilegedTicket(action: PrivilegedTicketAction): string {
@@ -2374,6 +2376,29 @@ export class WebChannel implements ChannelAdapter {
           // No body or invalid JSON — reindex all
         }
         sendJSON(res, 200, await this.dashboard.onQMDReindex(collection));
+        return;
+      }
+
+      // POST /api/factory-reset — Bulk reset data, config, or both
+      if (req.method === 'POST' && url.pathname === '/api/factory-reset') {
+        if (!this.dashboard.onFactoryReset) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body) as { scope?: string; ticket?: string };
+        if (!parsed.scope || !['data', 'config', 'all'].includes(parsed.scope)) {
+          sendJSON(res, 400, { error: 'scope must be "data", "config", or "all"' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'factory-reset', parsed.ticket)) {
+          return;
+        }
+        const result = await this.dashboard.onFactoryReset({ scope: parsed.scope as 'data' | 'config' | 'all' });
+        sendJSON(res, 200, result);
+        if (parsed.scope === 'all' && result.success && this.dashboard.onKillswitch) {
+          setTimeout(() => this.dashboard.onKillswitch!(), 100);
+        }
         return;
       }
 

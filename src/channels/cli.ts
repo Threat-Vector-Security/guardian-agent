@@ -10,6 +10,9 @@
  */
 
 import { createInterface, type Interface } from 'node:readline';
+import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks } from './web-types.js';
@@ -18,6 +21,10 @@ import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
 
 const log = createLogger('channel:cli');
+
+const HISTORY_DIR = join(homedir(), '.guardianagent');
+const HISTORY_PATH = join(HISTORY_DIR, 'cli-history');
+const MAX_HISTORY = 500;
 
 /** Info returned by the legacy /agents callback. */
 export interface AgentInfo {
@@ -102,10 +109,25 @@ export class CLIChannel implements ChannelAdapter {
   async start(onMessage: MessageCallback): Promise<void> {
     this.onMessage = onMessage;
 
+    // Load persisted command history for Up/Down arrow recall
+    let history: string[] = [];
+    try {
+      if (existsSync(HISTORY_PATH)) {
+        history = readFileSync(HISTORY_PATH, 'utf-8')
+          .split('\n')
+          .filter(Boolean)
+          .slice(-MAX_HISTORY);
+      }
+    } catch (err) {
+      log.warn({ err }, 'Failed to load CLI history');
+    }
+
     this.rl = createInterface({
       input: this.input,
       output: this.output,
       prompt: this.prompt,
+      history,
+      historySize: MAX_HISTORY,
     });
 
     if (this.useColor) {
@@ -120,6 +142,14 @@ export class CLIChannel implements ChannelAdapter {
       if (!trimmed) {
         this.rl?.prompt();
         return;
+      }
+
+      // Persist to history file
+      try {
+        mkdirSync(HISTORY_DIR, { recursive: true });
+        appendFileSync(HISTORY_PATH, trimmed + '\n');
+      } catch (err) {
+        log.warn({ err }, 'Failed to save CLI history');
       }
 
       // Handle commands
@@ -332,6 +362,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'clear':
         this.handleClear();
         break;
+      case 'factory-reset':
+        await this.handleFactoryReset(args);
+        break;
       case 'kill':
       case 'killswitch':
       case 'quit':
@@ -370,6 +403,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write(this.bold('Configuration\n'));
     this.write('  /config                                View full config (redacted)\n');
     this.write('  /config provider <name>                View specific provider\n');
+    this.write('  /config telegram ...                   Configure Telegram channel (status/on/off/token/chatids)\n');
     this.write('  /config set default <provider>         Change default provider\n');
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
@@ -412,6 +446,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write(this.bold('Models & General\n'));
     this.write('  /models [provider]                     List available models\n');
     this.write('  /reset [agentId]                       Reset conversation memory\n');
+    this.write('  /factory-reset data|config|all         ' + this.red('Factory reset (data/config/all)') + '\n');
     this.write('  /session [list|use|new] ...            Session controls\n');
     this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
     this.write('  /analytics [minutes]                   Interaction analytics summary\n');
@@ -759,7 +794,6 @@ export class CLIChannel implements ChannelAdapter {
         case 'ok': status = this.green('OK'); break;
         case 'stalled': status = this.yellow('STALLED'); break;
         case 'retry': status = this.yellow('RETRY'); break;
-        case 'killed': status = this.red('KILLED'); break;
         default: status = r.action;
       }
       const details: string[] = [];
@@ -960,6 +994,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'provider':
         this.handleConfigProvider(args.slice(1));
         break;
+      case 'telegram':
+        await this.handleConfigTelegram(args.slice(1));
+        break;
       case 'set':
         await this.handleConfigSet(args.slice(1));
         break;
@@ -971,7 +1008,7 @@ export class CLIChannel implements ChannelAdapter {
         break;
       default:
         this.write(`\nUnknown config subcommand: ${subCmd}\n`);
-        this.write('Usage: /config [provider|set|add|test]\n\n');
+        this.write('Usage: /config [provider|telegram|set|add|test]\n\n');
     }
   }
 
@@ -996,7 +1033,14 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
     this.write(this.bold('Channels\n'));
     if (config.channels.cli) this.write(`  CLI:      ${config.channels.cli.enabled ? 'enabled' : 'disabled'}\n`);
-    if (config.channels.telegram) this.write(`  Telegram: ${config.channels.telegram.enabled ? 'enabled' : 'disabled'}\n`);
+    if (config.channels.telegram) {
+      this.write(`  Telegram: ${config.channels.telegram.enabled ? 'enabled' : 'disabled'}\n`);
+      this.write(`  Telegram token: ${config.channels.telegram.botTokenConfigured ? 'configured' : 'not configured'}\n`);
+      const allowlist = config.channels.telegram.allowedChatIds?.length
+        ? config.channels.telegram.allowedChatIds.join(', ')
+        : 'not set';
+      this.write(`  Telegram chat IDs: ${allowlist}\n`);
+    }
     if (config.channels.web) {
       this.write(`  Web:      ${config.channels.web.enabled ? 'enabled' : 'disabled'}`);
       if (config.channels.web.port) this.write(` (port ${config.channels.web.port})`);
@@ -1068,6 +1112,119 @@ export class CLIChannel implements ChannelAdapter {
     this.write(`  Model:   ${provider.model}\n`);
     if (provider.baseUrl) this.write(`  Base URL: ${provider.baseUrl}\n`);
     this.write('\n');
+  }
+
+  private async handleConfigTelegram(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConfig) {
+      this.write('\nConfig not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'status').toLowerCase();
+    const telegram = this.dashboard.onConfig().channels.telegram;
+
+    if (sub === 'status' || sub === 'show') {
+      this.write('\n');
+      this.write(this.bold('Telegram Channel\n'));
+      this.write(`  Enabled:          ${telegram?.enabled ? this.green('yes') : this.yellow('no')}\n`);
+      this.write(`  Bot token:        ${telegram?.botTokenConfigured ? this.green('configured') : this.red('not configured')}\n`);
+      const allowlist = telegram?.allowedChatIds?.length
+        ? telegram.allowedChatIds.join(', ')
+        : 'not set (all chats allowed)';
+      this.write(`  Allowed chat IDs: ${allowlist}\n`);
+      if (telegram?.defaultAgent) this.write(`  Default agent:    ${telegram.defaultAgent}\n`);
+      this.write('\n');
+      this.write('Usage:\n');
+      this.write('  /config telegram on|off\n');
+      this.write('  /config telegram token <token|clear>\n');
+      this.write('  /config telegram chatids <id1,id2,...|clear>\n\n');
+      return;
+    }
+
+    if (!this.dashboard.onConfigUpdate) {
+      this.write('\nConfig updates not available.\n\n');
+      return;
+    }
+
+    if (sub === 'on' || sub === 'enable' || sub === 'off' || sub === 'disable') {
+      const enabled = sub === 'on' || sub === 'enable';
+      const result = await this.dashboard.onConfigUpdate({
+        channels: {
+          telegram: {
+            enabled,
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'token') {
+      const tokenValue = args.slice(1).join(' ').trim();
+      if (!tokenValue) {
+        this.write('\nUsage: /config telegram token <token|clear>\n\n');
+        return;
+      }
+      const botToken = tokenValue.toLowerCase() === 'clear' ? '' : tokenValue;
+      const result = await this.dashboard.onConfigUpdate({
+        channels: {
+          telegram: {
+            botToken,
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'chatids' || sub === 'chats') {
+      const listRaw = args.slice(1).join(' ').trim();
+      if (!listRaw) {
+        this.write('\nUsage: /config telegram chatids <id1,id2,...|clear>\n\n');
+        return;
+      }
+
+      let chatIds: number[];
+      if (listRaw.toLowerCase() === 'clear') {
+        chatIds = [];
+      } else {
+        chatIds = this.parseChatIdList(listRaw);
+        if (chatIds.length === 0) {
+          this.write('\nNo valid chat IDs found. Use a comma-separated numeric list.\n\n');
+          return;
+        }
+      }
+
+      const result = await this.dashboard.onConfigUpdate({
+        channels: {
+          telegram: {
+            allowedChatIds: chatIds,
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      this.write('\n');
+      return;
+    }
+
+    this.write(`\nUnknown /config telegram subcommand: ${sub}\n`);
+    this.write('Usage:\n');
+    this.write('  /config telegram status\n');
+    this.write('  /config telegram on|off\n');
+    this.write('  /config telegram token <token|clear>\n');
+    this.write('  /config telegram chatids <id1,id2,...|clear>\n\n');
+  }
+
+  private parseChatIdList(value: string): number[] {
+    return value
+      .split(',')
+      .map((part) => Number(part.trim()))
+      .filter((id) => Number.isInteger(id));
   }
 
   private async handleConfigSet(args: string[]): Promise<void> {
@@ -2399,6 +2556,116 @@ export class CLIChannel implements ChannelAdapter {
       channel: 'cli',
     });
     this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  // ─── /factory-reset ─────────────────────────────────────────
+
+  private async handleFactoryReset(args: string[]): Promise<void> {
+    const scope = args[0]?.toLowerCase() as 'data' | 'config' | 'all' | undefined;
+
+    if (!scope || !['data', 'config', 'all'].includes(scope)) {
+      this.write('\n');
+      this.write(this.bold('Factory Reset\n'));
+      this.write('  /factory-reset data              Clear all data (keep config)\n');
+      this.write('  /factory-reset config            Reset config to defaults (keep data)\n');
+      this.write('  /factory-reset all               Clear everything (data + config)\n');
+      this.write('\n');
+      return;
+    }
+
+    if (!this.dashboard?.onFactoryReset) {
+      this.write('\nFactory reset is not available.\n\n');
+      return;
+    }
+
+    // Build confirmation display
+    const lines: string[] = [];
+    if (scope === 'data' || scope === 'all') {
+      lines.push(
+        '  • Conversation history (all agents/sessions)',
+        '  • Analytics database',
+        '  • Agent knowledge base memories',
+        '  • Audit log (tamper-evident chain)',
+        '  • Device inventory',
+        '  • Scheduled tasks',
+        '  • Network baseline & traffic data',
+      );
+    }
+    if (scope === 'config' || scope === 'all') {
+      lines.push('  • Configuration (reset to defaults)');
+    }
+
+    const preserveNote = scope === 'data'
+      ? '  Configuration will be preserved.'
+      : scope === 'config'
+        ? '  All runtime data will be preserved.'
+        : '  Nothing will be preserved.';
+
+    const title = scope === 'data'
+      ? 'FACTORY RESET — Clear All Data'
+      : scope === 'config'
+        ? 'FACTORY RESET — Reset Configuration'
+        : 'FACTORY RESET — Clear Everything';
+
+    this.write('\n');
+    this.write('  ┌──────────────────────────────────────────────────┐\n');
+    this.write(`  │  ${this.red(title).padEnd(58)}│\n`);
+    this.write('  ├──────────────────────────────────────────────────┤\n');
+    this.write('  │  This will permanently delete:                   │\n');
+    this.write('  │                                                  │\n');
+    for (const l of lines) {
+      this.write(`  │  ${l.padEnd(48)}│\n`);
+    }
+    this.write('  │                                                  │\n');
+    this.write(`  │  ${preserveNote.padEnd(48)}│\n`);
+    this.write('  └──────────────────────────────────────────────────┘\n');
+    this.write('\n');
+
+    // Prompt for confirmation
+    const confirmed = await new Promise<boolean>((resolve) => {
+      if (!this.rl) { resolve(false); return; }
+      this.rl.question('  Type "RESET" to confirm, or anything else to cancel: ', (answer) => {
+        resolve(answer.trim() === 'RESET');
+      });
+    });
+
+    if (!confirmed) {
+      this.write(`\n${this.green('Cancelled')} — no changes were made.\n\n`);
+      return;
+    }
+
+    this.write('\n  Resetting...\n');
+    const result = await this.dashboard.onFactoryReset({ scope });
+
+    if (result.success) {
+      this.write(`\n${this.green('OK')}: ${result.message}\n`);
+      if (result.deletedFiles.length > 0) {
+        this.write(`  Deleted ${result.deletedFiles.length} item(s):\n`);
+        for (const f of result.deletedFiles) {
+          this.write(`    • ${f}\n`);
+        }
+      }
+      if (result.errors.length > 0) {
+        this.write(`  ${this.yellow('Warnings')} (${result.errors.length}):\n`);
+        for (const e of result.errors) {
+          this.write(`    • ${e}\n`);
+        }
+      }
+      if (scope === 'all') {
+        this.write(`\n  ${this.red('Shutting down...')}\n\n`);
+        this.rl?.close();
+        if (this.dashboard?.onKillswitch) {
+          this.dashboard.onKillswitch();
+        }
+        return;
+      }
+      if (scope === 'data') {
+        this.write(`\n  ${this.yellow('Restart recommended')} to reinitialize services.\n`);
+      }
+    } else {
+      this.write(`\n${this.red('FAIL')}: ${result.message}\n`);
+    }
+    this.write('\n');
   }
 
   // ─── /guide ──────────────────────────────────────────────────

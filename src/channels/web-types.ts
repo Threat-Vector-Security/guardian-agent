@@ -63,7 +63,12 @@ export interface RedactedConfig {
   defaultProvider: string;
   channels: {
     cli?: { enabled: boolean };
-    telegram?: { enabled: boolean };
+    telegram?: {
+      enabled: boolean;
+      botTokenConfigured?: boolean;
+      allowedChatIds?: number[];
+      defaultAgent?: string;
+    };
     web?: {
       enabled: boolean;
       port?: number;
@@ -492,6 +497,12 @@ export interface DashboardCallbacks {
     emitSSE: (event: SSEEvent) => void,
   ) => Promise<{ requestId: string; content: string }>;
   onKillswitch?: () => void;
+  onFactoryReset?: (args: { scope: 'data' | 'config' | 'all' }) => Promise<{
+    success: boolean;
+    message: string;
+    deletedFiles: string[];
+    errors: string[];
+  }>;
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
   onScheduledTasks?: () => ScheduledTaskDefinition[];
@@ -527,4 +538,13 @@ export interface ConfigUpdate {
     apiKey?: string;
     baseUrl?: string;
   }>;
+  channels?: {
+    telegram?: {
+      enabled?: boolean;
+      botToken?: string;
+      allowedChatIds?: number[];
+      polling?: boolean;
+      defaultAgent?: string;
+    };
+  };
 }

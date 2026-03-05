@@ -10,7 +10,7 @@ import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
 import type { GuardianAgentConfig } from './config/types.js';
 import yaml from 'js-yaml';
@@ -660,7 +660,12 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
     defaultProvider: config.defaultProvider,
     channels: {
       cli: config.channels.cli ? { enabled: config.channels.cli.enabled } : undefined,
-      telegram: config.channels.telegram ? { enabled: config.channels.telegram.enabled } : undefined,
+      telegram: config.channels.telegram ? {
+        enabled: config.channels.telegram.enabled,
+        botTokenConfigured: !!config.channels.telegram.botToken?.trim(),
+        allowedChatIds: config.channels.telegram.allowedChatIds,
+        defaultAgent: config.channels.telegram.defaultAgent,
+      } : undefined,
       web: config.channels.web ? {
         enabled: config.channels.web.enabled,
         port: config.channels.web.port,
@@ -2046,6 +2051,7 @@ function buildDashboardCallbacks(
           const patch = {
             defaultProvider: updates.defaultProvider,
             llm: updates.llm as unknown as GuardianAgentConfig['llm'] | undefined,
+            channels: updates.channels as unknown as GuardianAgentConfig['channels'] | undefined,
           } as Partial<GuardianAgentConfig>;
           const nextConfig = deepMerge(currentConfig, patch);
           const errors = validateConfig(nextConfig);
@@ -2082,6 +2088,36 @@ function buildDashboardCallbacks(
               if (providerUpdates.baseUrl) llmSection[name].baseUrl = providerUpdates.baseUrl;
             }
             rawConfig.llm = llmSection;
+          }
+
+          if (updates.channels?.telegram) {
+            rawConfig.channels = rawConfig.channels ?? {};
+            const rawChannels = rawConfig.channels as Record<string, unknown>;
+            const telegramUpdates = updates.channels.telegram;
+            const rawTelegram = (rawChannels.telegram as Record<string, unknown> | undefined) ?? {};
+
+            if (typeof telegramUpdates.enabled === 'boolean') {
+              rawTelegram.enabled = telegramUpdates.enabled;
+            }
+            if (typeof telegramUpdates.polling === 'boolean') {
+              rawTelegram.polling = telegramUpdates.polling;
+            }
+            if (telegramUpdates.defaultAgent !== undefined) {
+              const trimmed = telegramUpdates.defaultAgent.trim();
+              if (trimmed) rawTelegram.defaultAgent = trimmed;
+              else delete rawTelegram.defaultAgent;
+            }
+            if (telegramUpdates.botToken !== undefined) {
+              const trimmed = telegramUpdates.botToken.trim();
+              if (trimmed) rawTelegram.botToken = trimmed;
+              else delete rawTelegram.botToken;
+            }
+            if (telegramUpdates.allowedChatIds !== undefined) {
+              if (telegramUpdates.allowedChatIds.length > 0) rawTelegram.allowedChatIds = telegramUpdates.allowedChatIds;
+              else delete rawTelegram.allowedChatIds;
+            }
+
+            rawChannels.telegram = rawTelegram;
           }
 
           const result = persistAndApplyConfig(rawConfig, {
@@ -3109,6 +3145,82 @@ async function main(): Promise<void> {
   dashboardCallbacks.onKillswitch = () => {
     log.warn('Killswitch activated — shutting down all services');
     process.kill(process.pid, 'SIGTERM');
+  };
+
+  // Factory reset: bulk-clear data, config, or both
+  dashboardCallbacks.onFactoryReset = async ({ scope }) => {
+    const baseDir = join(homedir(), '.guardianagent');
+    const deletedFiles: string[] = [];
+    const errors: string[] = [];
+
+    const tryDelete = (label: string, target: string, opts?: { recursive?: boolean }) => {
+      try {
+        if (!existsSync(target)) return;
+        rmSync(target, { force: true, recursive: opts?.recursive ?? false });
+        deletedFiles.push(label);
+      } catch (err) {
+        errors.push(`${label}: ${(err as Error).message}`);
+      }
+    };
+
+    // Close DB connections before deleting SQLite files
+    if (scope === 'data' || scope === 'all') {
+      try { conversations.close(); } catch { /* already closed */ }
+      try { analytics.close(); } catch { /* already closed */ }
+
+      tryDelete('assistant-memory.sqlite', resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite'));
+      tryDelete('assistant-analytics.sqlite', resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite'));
+      // Also remove SQLite WAL/SHM files if present
+      for (const suffix of ['-wal', '-shm']) {
+        tryDelete(`assistant-memory.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite') + suffix);
+        tryDelete(`assistant-analytics.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite') + suffix);
+      }
+      tryDelete('memory/ (agent knowledge base)', join(baseDir, 'memory'), { recursive: true });
+      tryDelete('audit/ (audit log)', join(baseDir, 'audit'), { recursive: true });
+      tryDelete('device-inventory.json', join(baseDir, 'device-inventory.json'));
+      tryDelete('scheduled-tasks.json', join(baseDir, 'scheduled-tasks.json'));
+      tryDelete('network-baseline.json', join(baseDir, 'network-baseline.json'));
+      tryDelete('network-traffic.json', join(baseDir, 'network-traffic.json'));
+    }
+
+    if (scope === 'config' || scope === 'all') {
+      try {
+        const defaultYaml = [
+          '# GuardianAgent Configuration',
+          '# Reset to defaults by factory-reset',
+          '',
+          'llm:',
+          '  ollama:',
+          '    provider: ollama',
+          '    baseUrl: http://127.0.0.1:11434',
+          '    model: llama3.2',
+          '',
+          'defaultProvider: ollama',
+          '',
+          'channels:',
+          '  cli:',
+          '    enabled: true',
+          '',
+        ].join('\n');
+        mkdirSync(dirname(configPath), { recursive: true });
+        writeFileSync(configPath, defaultYaml, 'utf-8');
+        deletedFiles.push('config.yaml (reset to defaults)');
+      } catch (err) {
+        errors.push(`config.yaml: ${(err as Error).message}`);
+      }
+    }
+
+    const scopeLabel = scope === 'data' ? 'data' : scope === 'config' ? 'configuration' : 'data and configuration';
+    log.warn({ scope, deletedFiles, errors }, `Factory reset completed (${scopeLabel})`);
+
+    return {
+      success: errors.length === 0,
+      message: errors.length === 0
+        ? `Factory reset complete — cleared ${scopeLabel}.`
+        : `Factory reset finished with ${errors.length} error(s).`,
+      deletedFiles,
+      errors,
+    };
   };
 
   // Routing mode: read/write tier mode at runtime

@@ -357,9 +357,9 @@ Created → Ready → Running ⟷ Idle
                       │
                       ▼
                    Errored (with exponential backoff)
-                   │     │
-                   │     ▼ (after max retries)
-                   │   Dead
+                   │
+                   ├──▼ (on backoff expiry)
+                   │ Ready (watchdog retry)
                    │
                    ▼ (on user message)
                   Ready (auto-recovery)
@@ -370,8 +370,9 @@ Created → Ready → Running ⟷ Idle
 - **Running → Idle**: After handler completes successfully
 - **Idle → Running**: On next invocation
 - **Running → Errored**: On handler error; exponential backoff [30s, 1m, 5m, 15m, 60m]
+- **Errored → Ready**: On watchdog retry after backoff expiry (continues indefinitely at max backoff)
 - **Errored → Ready**: On user message dispatch — auto-recovery transitions the agent back to Ready so the user gets the actual error instead of a dead-end "cannot accept work" rejection
-- **Errored → Dead**: After 5 consecutive failures (via watchdog backoff, not user messages)
+- **Any → Dead**: Explicit unregister/shutdown path only
 
 ## LLM Provider Layer
 
@@ -386,9 +387,9 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 
 ## Channel Adapters
 
-- **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit`
+- **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/factory-reset`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
-- **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`)
+- **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`, `/api/factory-reset`)
 - **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; bearer token auth remains supported, and browser clients can use HttpOnly `guardianagent_sid` session cookies
 - **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
