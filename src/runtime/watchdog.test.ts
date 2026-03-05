@@ -131,7 +131,7 @@ describe('Watchdog', () => {
   });
 
   describe('max retries exceeded', () => {
-    it('should kill agent after max retries', () => {
+    it('should continue retrying agent after max retries (never kill)', () => {
       const def = createTestAgentDef('agent-1');
       registry.register(def);
       registry.initialize('agent-1');
@@ -142,11 +142,12 @@ describe('Watchdog', () => {
 
       // Set consecutive errors to max
       instance.consecutiveErrors = 5; // MAX_RETRIES = 5
+      instance.retryAfterMs = Date.now() - 1;
 
       const results = watchdog.check(Date.now() + 999_999);
-      const killed = results.find(r => r.agentId === 'agent-1');
-      expect(killed).toMatchObject({ action: 'killed' });
-      expect(instance.state).toBe(AgentState.Dead);
+      const retried = results.find(r => r.agentId === 'agent-1');
+      expect(retried).toMatchObject({ action: 'retry' });
+      expect(instance.state).toBe(AgentState.Ready);
     });
   });
 

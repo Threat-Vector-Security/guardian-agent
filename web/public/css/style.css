@@ -128,6 +128,27 @@ body {
   background: var(--border);
 }
 
+.btn-danger {
+  background: rgba(224, 85, 85, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(224, 85, 85, 0.4);
+}
+
+.btn-danger:hover {
+  background: rgba(224, 85, 85, 0.3);
+  border-color: var(--error);
+  box-shadow: 0 0 12px rgba(224, 85, 85, 0.25);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.danger-zone {
+  border-color: rgba(224, 85, 85, 0.35);
+}
+
 /* ─── Header ─────────────────────────────────────────────── */
 
 .header {

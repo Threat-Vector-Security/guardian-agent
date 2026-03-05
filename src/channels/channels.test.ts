@@ -1126,6 +1126,74 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('/config telegram status should show telegram setup info', async () => {
+    const { input, output, cli } = makeCli({
+      onConfig: () => ({
+        ...mockDashboard.onConfig!(),
+        channels: {
+          ...mockDashboard.onConfig!().channels,
+          telegram: {
+            enabled: true,
+            botTokenConfigured: true,
+            allowedChatIds: [12345, -1001234567890],
+          },
+        },
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/config telegram status');
+    const text = readOutput(output);
+
+    expect(text).toContain('Telegram Channel');
+    expect(text).toContain('configured');
+    expect(text).toContain('12345');
+
+    await cli.stop();
+  });
+
+  it('/config telegram on should update telegram channel config', async () => {
+    const updates: unknown[] = [];
+    const { input, output, cli } = makeCli({
+      onConfigUpdate: async (u) => {
+        updates.push(u);
+        return { success: true, message: 'Saved.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/config telegram on');
+    const text = readOutput(output);
+
+    expect(text).toContain('OK');
+    expect(updates.length).toBe(1);
+    const update = updates[0] as { channels: { telegram: { enabled: boolean } } };
+    expect(update.channels.telegram.enabled).toBe(true);
+
+    await cli.stop();
+  });
+
+  it('/config telegram chatids should parse and update allowlist', async () => {
+    const updates: unknown[] = [];
+    const { input, output, cli } = makeCli({
+      onConfigUpdate: async (u) => {
+        updates.push(u);
+        return { success: true, message: 'Saved.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/config telegram chatids 12345,-100999');
+    const text = readOutput(output);
+
+    expect(text).toContain('OK');
+    expect(updates.length).toBe(1);
+    const update = updates[0] as { channels: { telegram: { allowedChatIds: number[] } } };
+    expect(update.channels.telegram.allowedChatIds).toEqual([12345, -100999]);
+
+    await cli.stop();
+  });
+
   // ─── /audit ───────────────────────────────────────────
 
   it('/audit should show recent events', async () => {

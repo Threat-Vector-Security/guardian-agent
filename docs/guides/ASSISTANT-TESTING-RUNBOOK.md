@@ -523,6 +523,7 @@ If you set per-tool policy overrides via the API (Test 8), those are in-memory o
 | GET | `/api/audit/summary` | Yes | Audit summary (denials, secrets, injections) |
 | GET | `/api/providers` | Yes | LLM provider list |
 | POST | `/api/conversations/reset` | Yes | Reset conversation history |
+| POST | `/api/factory-reset` | Yes + Ticket | Factory reset data, config, or both |
 | GET | `/sse` (or `/sse?token=TOKEN`) | Bearer query or cookie session | Server-sent events stream |
 
 ---

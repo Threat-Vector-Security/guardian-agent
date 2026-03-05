@@ -383,7 +383,7 @@ Available via `GET /api/audit/verify` endpoint.
 - **Watchdog** monitors agent activity timestamps
 - Stall threshold: configurable (default 180s)
 - Error recovery: exponential backoff [30s, 1m, 5m, 15m, 60m]
-- After 5 consecutive failures → agent transitions to `Dead` state
+- After the backoff schedule saturates, retries continue at max backoff (agent remains recoverable)
 
 ### LLM Resilience
 

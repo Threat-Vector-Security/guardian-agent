@@ -49,33 +49,6 @@ function renderProvidersTab(panel) {
 
   panel.appendChild(createProviderPanel(config, providers, panel));
   panel.appendChild(createProviderStatusTable(config, providers));
-
-  // Telegram config section
-  const telegramSection = document.createElement('div');
-  telegramSection.className = 'table-container';
-  telegramSection.innerHTML = `
-    <div class="table-header"><h3>Telegram Channel</h3></div>
-    <div class="cfg-center-body">
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Enable Telegram</label>
-          <select id="cfg-telegram-enabled">
-            <option value="false" ${!config.channels?.telegram?.enabled ? 'selected' : ''}>No</option>
-            <option value="true" ${config.channels?.telegram?.enabled ? 'selected' : ''}>Yes</option>
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label>Telegram Bot Token</label>
-          <input id="cfg-telegram-token" type="password" placeholder="Leave blank to keep existing token">
-        </div>
-        <div class="cfg-field">
-          <label>Allowed Chat IDs</label>
-          <input id="cfg-telegram-chatids" type="text" placeholder="12345,67890">
-        </div>
-      </div>
-    </div>
-  `;
-  panel.appendChild(telegramSection);
   applyInputTooltips(panel);
 }
 
@@ -242,19 +215,12 @@ function createProviderPanel(config, providers, panel) {
       if (!providerName) { statusEl.textContent = 'Provider name is required.'; statusEl.style.color = 'var(--error)'; return; }
       if (!model) { statusEl.textContent = 'Model is required.'; statusEl.style.color = 'var(--error)'; return; }
 
-      const telegramEnabledEl = panel.querySelector('#cfg-telegram-enabled');
-      const telegramTokenEl = panel.querySelector('#cfg-telegram-token');
-      const telegramChatIdsEl = panel.querySelector('#cfg-telegram-chatids');
-
       const payload = {
         llmMode: isLocal ? 'ollama' : 'external',
         providerName, providerType, model,
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
         setDefaultProvider: defaultEl.value === 'true',
-        telegramEnabled: telegramEnabledEl?.value === 'true',
-        telegramBotToken: telegramTokenEl?.value.trim() || undefined,
-        telegramAllowedChatIds: parseChatIdsOrUndefined(telegramChatIdsEl?.value || ''),
         setupCompleted: true,
       };
 
@@ -839,6 +805,9 @@ function renderSettingsTab(panel) {
   // Overview/Readiness
   panel.appendChild(createOverview(config, providers, setupStatus));
 
+  // Telegram channel
+  panel.appendChild(createTelegramPanel(config, panel));
+
   // Web Search & Fallback
   panel.appendChild(createWebSearchPanel(config, panel));
 
@@ -851,6 +820,9 @@ function renderSettingsTab(panel) {
   // Auth
   panel.appendChild(createAuthPanel(config, authStatus, panel));
 
+  // Danger Zone
+  panel.appendChild(createDangerZonePanel());
+
   // Read-only config snapshots
   panel.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
   panel.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
@@ -860,6 +832,7 @@ function renderSettingsTab(panel) {
 
 function createOverview(config, providers, setupStatus) {
   const wrap = document.createElement('div');
+  wrap.className = 'cfg-settings-overview';
   const cards = document.createElement('div');
   cards.className = 'cfg-overview-grid';
   const defaultProvider = providers.find(p => p.name === config.defaultProvider);
@@ -869,7 +842,7 @@ function createOverview(config, providers, setupStatus) {
   cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Default Provider', config.defaultProvider || 'None', connectedText, connectedTone));
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
-  cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Providers tab', config.channels?.telegram?.enabled ? 'success' : 'warning'));
+  cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Settings tab', config.channels?.telegram?.enabled ? 'success' : 'warning'));
   wrap.appendChild(cards);
 
   if (setupStatus?.steps?.length) {
@@ -892,6 +865,108 @@ function createOverview(config, providers, setupStatus) {
     wrap.appendChild(stepBox);
   }
   return wrap;
+}
+
+function createTelegramPanel(config, settingsPanel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const telegram = config.channels?.telegram || {};
+  const enabled = !!telegram.enabled;
+  const tokenConfigured = !!telegram.botTokenConfigured;
+  const chatIdPreview = Array.isArray(telegram.allowedChatIds) && telegram.allowedChatIds.length > 0
+    ? telegram.allowedChatIds.join(', ')
+    : '';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Telegram Channel</h3>
+      <span class="cfg-header-note">Configure bot token and chat allowlist</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Enable Telegram</label>
+          <select id="cfg-telegram-enabled">
+            <option value="false" ${!enabled ? 'selected' : ''}>No</option>
+            <option value="true" ${enabled ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Telegram Bot Token</label>
+          <input id="cfg-telegram-token" type="password" placeholder="${tokenConfigured ? 'Configured — leave blank to keep existing token' : '123456789:AA...'}">
+        </div>
+        <div class="cfg-field">
+          <label>Allowed Chat IDs</label>
+          <input id="cfg-telegram-chatids" type="text" value="${esc(chatIdPreview)}" placeholder="12345,-1001234567890">
+        </div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Setup: create bot with @BotFather, send one message to the bot, then run <code>getUpdates</code> to find <code>message.chat.id</code>.
+        Leave token/chat IDs blank to keep current values. Restart required after Telegram channel changes.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="cfg-telegram-save" type="button">Save Telegram Settings</button>
+        <span id="cfg-telegram-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#cfg-telegram-status');
+  section.querySelector('#cfg-telegram-save')?.addEventListener('click', async () => {
+    const enabledVal = section.querySelector('#cfg-telegram-enabled')?.value === 'true';
+    const token = section.querySelector('#cfg-telegram-token')?.value.trim() || '';
+    const chatIdsRaw = section.querySelector('#cfg-telegram-chatids')?.value || '';
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+
+    try {
+      const result = await api.updateConfig({
+        channels: {
+          telegram: {
+            enabled: enabledVal,
+            botToken: token || undefined,
+            allowedChatIds: parseChatIdsOrUndefined(chatIdsRaw),
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success && token) {
+        const tokenInput = section.querySelector('#cfg-telegram-token');
+        if (tokenInput) tokenInput.value = '';
+      }
+      if (result.success) {
+        await refreshSettingsOverview(settingsPanel);
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
+async function refreshSettingsOverview(panel) {
+  try {
+    const [nextConfig, nextSetupStatus] = await Promise.all([
+      api.config().catch(() => sharedConfig),
+      api.setupStatus().catch(() => sharedSetupStatus),
+    ]);
+
+    if (nextConfig) sharedConfig = nextConfig;
+    if (nextSetupStatus) sharedSetupStatus = nextSetupStatus;
+
+    const currentOverview = panel.querySelector('.cfg-settings-overview');
+    if (!currentOverview || !sharedConfig) return;
+
+    const updatedOverview = createOverview(sharedConfig, sharedProviders || [], sharedSetupStatus);
+    panel.replaceChild(updatedOverview, currentOverview);
+  } catch {
+    // Best-effort refresh; keep existing UI if status fetch fails.
+  }
 }
 
 function createWebSearchPanel(config, panel) {
@@ -1140,6 +1215,66 @@ function createAuthPanel(config, authStatus, panel) {
   });
 
   applyInputTooltips(section);
+  return section;
+}
+
+function createDangerZonePanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container danger-zone';
+
+  const scopes = [
+    { scope: 'data', label: 'Clear Data', desc: 'Delete conversations, analytics, audit logs, memory, devices, tasks, and network data. Config is preserved.' },
+    { scope: 'config', label: 'Reset Config', desc: 'Reset config.yaml to defaults. All data is preserved.' },
+    { scope: 'all', label: 'Clear Everything', desc: 'Delete all data and config, then shut down the server.' },
+  ];
+
+  section.innerHTML = `
+    <div class="table-header"><h3 style="color: var(--error);">Danger Zone</h3><span class="cfg-header-note">Irreversible reset operations</span></div>
+    <div class="cfg-center-body" id="danger-zone-body">
+      ${scopes.map(s => `
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--border);">
+          <div style="flex: 1;">
+            <div style="font-size: 0.82rem; color: var(--text-primary); font-weight: 600;">${esc(s.label)}</div>
+            <div style="font-size: 0.74rem; color: var(--text-secondary); margin-top: 0.2rem;">${esc(s.desc)}</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; margin-left: 1rem;">
+            <button class="btn btn-danger" data-reset-scope="${esc(s.scope)}">${esc(s.label)}</button>
+            <span class="cfg-save-status" data-reset-status="${esc(s.scope)}"></span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  for (const s of scopes) {
+    const btn = section.querySelector(`[data-reset-scope="${s.scope}"]`);
+    const statusEl = section.querySelector(`[data-reset-status="${s.scope}"]`);
+    btn?.addEventListener('click', async () => {
+      const msg = s.scope === 'all'
+        ? 'This will DELETE all data AND config, then shut down the server. Are you sure?'
+        : `This will ${s.label.toLowerCase()}. Are you sure?`;
+      if (!confirm(msg)) return;
+      btn.disabled = true;
+      statusEl.textContent = 'Working...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.factoryReset(s.scope);
+        if (s.scope === 'all') {
+          const body = section.querySelector('#danger-zone-body');
+          if (body) body.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--error); font-size: 0.9rem;">Server is shutting down. Reload the page once the server restarts.</div>';
+        } else {
+          statusEl.textContent = result.message || 'Done.';
+          statusEl.style.color = 'var(--success)';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+        btn.disabled = false;
+      }
+    });
+  }
+
   return section;
 }
 

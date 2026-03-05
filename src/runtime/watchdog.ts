@@ -17,7 +17,7 @@ const log = createLogger('watchdog');
 /** Watchdog check result for a single agent. */
 export interface WatchdogResult {
   agentId: string;
-  action: 'ok' | 'stalled' | 'retry' | 'killed';
+  action: 'ok' | 'stalled' | 'retry';
   stalledMs?: number;
   consecutiveErrors?: number;
 }
@@ -98,17 +98,13 @@ export class Watchdog {
 
     // Check errored agents for retry eligibility
     if (state === AgentState.Errored) {
-      if (instance.consecutiveErrors >= MAX_RETRIES) {
-        log.error({ agentId, consecutiveErrors: instance.consecutiveErrors }, 'Agent exceeded max retries, killing');
-        try {
-          this.registry.transitionState(agentId, AgentState.Dead, 'watchdog: max retries exceeded');
-        } catch {
-          // Already dead or transitioning
-        }
-        return { agentId, action: 'killed', consecutiveErrors: instance.consecutiveErrors };
-      }
-
       if (nowMs >= instance.retryAfterMs) {
+        if (instance.consecutiveErrors >= MAX_RETRIES) {
+          log.warn(
+            { agentId, consecutiveErrors: instance.consecutiveErrors },
+            'Agent exceeded max retry schedule, continuing retries at max backoff',
+          );
+        }
         log.info({ agentId, consecutiveErrors: instance.consecutiveErrors }, 'Retrying errored agent');
         try {
           this.registry.transitionState(agentId, AgentState.Ready, 'watchdog: retry');

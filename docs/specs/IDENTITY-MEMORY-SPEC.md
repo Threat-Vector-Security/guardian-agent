@@ -42,3 +42,4 @@ Unify user identity across channels and persist conversation memory with session
 - `/session list [agentId]`
 - `/session use <sessionId> [agentId]`
 - `/session new [agentId]`
+- `/factory-reset data|config|all` — bulk clear data, config, or both (requires `RESET` confirmation)

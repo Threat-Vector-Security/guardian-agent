@@ -573,37 +573,11 @@ if (Test-Path $configFile) {
 # --- Start ---
 Write-Host ""
 Write-Host "[6/6] Starting GuardianAgent..." -ForegroundColor DarkCyan
-Write-WaitLine "Engaging Guardian protocols..."
-Write-Host ""
-Write-Host "  ┌──────────────────────────────────────────────┐" -ForegroundColor DarkGreen
-Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "         SYSTEM STATUS                    " -NoNewline -ForegroundColor Green; Write-Host "│" -ForegroundColor DarkGreen
-Write-Host "  ├──────────────────────────────────────────────┤" -ForegroundColor DarkGreen
-Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "  Guardian:  " -NoNewline -ForegroundColor DarkCyan; Write-Host "ACTIVE" -NoNewline -ForegroundColor Green; Write-Host " (3-layer defense)      " -NoNewline -ForegroundColor DarkGreen; Write-Host "│" -ForegroundColor DarkGreen
-Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "  Channels:  " -NoNewline -ForegroundColor DarkCyan; Write-Host "CLI + Web Dashboard            " -NoNewline -ForegroundColor DarkCyan; Write-Host "│" -ForegroundColor DarkGreen
-Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "  Dashboard: " -NoNewline -ForegroundColor DarkCyan; Write-Host "http://localhost:$webPort" -NoNewline -ForegroundColor Green
-$pad = " " * (32 - "http://localhost:$webPort".Length)
-Write-Host "$pad" -NoNewline; Write-Host "│" -ForegroundColor DarkGreen
-if ($ollamaRunning) {
-    Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "  LLM:       " -NoNewline -ForegroundColor DarkCyan; Write-Host "Ollama (localhost:11434)        " -NoNewline -ForegroundColor Green; Write-Host "│" -ForegroundColor DarkGreen
-} else {
-    Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "  LLM:       " -NoNewline -ForegroundColor DarkCyan; Write-Host "Not connected                  " -NoNewline -ForegroundColor DarkGray; Write-Host "│" -ForegroundColor DarkGreen
-}
-Write-Host "  └──────────────────────────────────────────────┘" -ForegroundColor DarkGreen
-Write-Host ""
-if ($webEnabled) {
-    Write-Host "  Dashboard: " -NoNewline -ForegroundColor DarkCyan; Write-Host "http://localhost:$webPort" -ForegroundColor Green
-    if ($webAuthToken) {
-        Write-Host "  Bearer token: " -NoNewline -ForegroundColor DarkCyan; Write-Host "$webAuthToken" -ForegroundColor Green
-    } else {
-        Write-Host "  Bearer token: " -NoNewline -ForegroundColor DarkCyan; Write-Host "Not available (check startup logs)." -ForegroundColor DarkCyan
-    }
-}
-Write-Host ""
-Write-Host "  Spawning GuardianAgent... please wait" -ForegroundColor DarkCyan
-Write-Host "  Press " -NoNewline -ForegroundColor DarkGreen; Write-Host "Ctrl+C" -NoNewline -ForegroundColor Green; Write-Host " to stop." -ForegroundColor DarkGreen
 Write-Host ""
 
 # Run with tsx for dev mode (TypeScript direct execution)
+# NODE_NO_WARNINGS suppresses the SQLite ExperimentalWarning in all child processes
+$env:NODE_NO_WARNINGS = "1"
 $tsxPath = Join-Path $Root "node_modules\.bin\tsx.cmd"
 if (Test-Path $tsxPath) {
     & $tsxPath (Join-Path $Root "src\index.ts")

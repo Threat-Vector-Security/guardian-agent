@@ -87,6 +87,10 @@ If tampered:
 ## Web UX
 The Security page includes an "Audit Chain Integrity" section with a "Verify Audit Chain" button. Results display entry count and integrity status with pass/fail indicator.
 
+## Factory Reset
+
+`/factory-reset data` and `/factory-reset all` delete the entire `~/.guardianagent/audit/` directory, permanently destroying the tamper-evident chain. The genesis hash resets on next startup. This action requires typing `RESET` to confirm (CLI) or a privileged ticket (web API).
+
 ## Verification
 1. Write events, restart process, verify events survive via `readTail()`
 2. Tamper a line in the JSONL file, verify `verifyChain()` detects the correct index

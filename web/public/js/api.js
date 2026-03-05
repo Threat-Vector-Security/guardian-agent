@@ -267,6 +267,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  factoryReset: (scope) => requestPrivileged('/api/factory-reset', 'factory-reset', { scope }),
   scheduledTasks: () => request('/api/scheduled-tasks'),
   scheduledTask: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}`),
   createScheduledTask: (data) => request('/api/scheduled-tasks', {

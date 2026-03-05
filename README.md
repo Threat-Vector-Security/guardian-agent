@@ -125,7 +125,7 @@ guardianagent              # if installed globally
 ```
 
 Then configure from web/CLI (no manual YAML editing required):
-- Web: open `#/config` (Configuration Center)
+- Web: open `#/config` (Configuration Center). Telegram setup is in `Settings` -> `Telegram Channel`.
 - CLI: use `/config`, `/auth`, `/tools`, `/connectors`, and `/playbooks` commands as needed
 
 This configures local/external LLM providers, optional Telegram, web auth, and tool policy.
@@ -273,6 +273,28 @@ guardian:
     maxEvents: 10000
 ```
 
+### Telegram Setup (Web + CLI)
+
+1. Create a bot with `@BotFather` in Telegram (`/newbot`) and copy the token.
+2. Web path: `#/config` -> `Settings` -> `Telegram Channel`:
+   - enable Telegram
+   - paste bot token
+   - set allowed chat IDs (recommended)
+3. CLI path (equivalent):
+   - `/config telegram on`
+   - `/config telegram token <token>`
+   - `/config telegram chatids <id1,id2,...>`
+   - `/config telegram status`
+4. To find your `chat.id`, send one message to the bot and call:
+
+```bash
+curl "https://api.telegram.org/bot<token>/getUpdates"
+```
+
+Then copy `message.chat.id` into the allowlist.
+
+Restart Guardian Agent after Telegram channel changes.
+
 ## LLM Providers
 
 - **Ollama** — local models via OpenAI-compatible API
@@ -304,7 +326,7 @@ guardian:
 
 ### Key Commands
 
-- CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
+- CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`, `/factory-reset`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
 - Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
 
