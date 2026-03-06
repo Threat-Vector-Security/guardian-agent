@@ -108,6 +108,8 @@ describe('SecretScanner', () => {
     const scanner = new SecretScanner();
     expect(scanner.isDeniedPath('.env').denied).toBe(true);
     expect(scanner.isDeniedPath('.env::$DATA').denied).toBe(true);
+    expect(scanner.isDeniedPath('.env:$DATA').denied).toBe(true);
+    expect(scanner.isDeniedPath('C:/Users/.env::$DATA').denied).toBe(true);
     expect(scanner.isDeniedPath('/home/user/.env.local').denied).toBe(true);
     expect(scanner.isDeniedPath('server.pem').denied).toBe(true);
     expect(scanner.isDeniedPath('private.key').denied).toBe(true);
