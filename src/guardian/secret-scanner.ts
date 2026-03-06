@@ -138,14 +138,10 @@ export class SecretScanner {
   }
 
   removeWindowsADS(filePath: string): string {
-    // No ADS or disk specifier.
-    if (filePath.lastIndexOf(':') == -1) { return filePath; }
-
-    // Only : is in a spot assosicated with disk specifiers
-    if (filePath.lastIndexOf(':') == 1) { return filePath; }
-
-    // Remove ADS
-    return filePath.slice(0, filePath.lastIndexOf(':') - 1)
+    // Find first colon after position 1 (to skip drive letter like C:)
+    const adsIndex = filePath.indexOf(':', 2);
+    if (adsIndex === -1) return filePath;
+    return filePath.slice(0, adsIndex);
   }
 
   /** Check if a file path is in the denied list. */
