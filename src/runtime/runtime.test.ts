@@ -252,6 +252,24 @@ describe('Runtime', () => {
       expect(agent.receivedMessages.length).toBe(0);
     });
 
+    it('should allow user messages containing plain email addresses', async () => {
+      const agent = new EchoAgent();
+      runtime.registerAgent(createAgentDefinition({ agent }));
+
+      const message: UserMessage = {
+        id: '1',
+        userId: 'user-1',
+        channel: 'cli',
+        content: 'send it to alexanderkenley@gmail.com subject is test body is hello',
+        timestamp: Date.now(),
+      };
+
+      const response = await runtime.dispatchMessage('echo', message);
+      expect(response.content).not.toContain('[Message blocked:');
+      expect(agent.receivedMessages).toHaveLength(1);
+      expect(agent.receivedMessages[0].content).toBe(message.content);
+    });
+
     it('should log denial in audit log when message blocked', async () => {
       const agent = new EchoAgent();
       runtime.registerAgent(createAgentDefinition({ agent }));

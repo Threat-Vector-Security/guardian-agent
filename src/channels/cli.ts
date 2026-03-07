@@ -202,7 +202,7 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   async send(_userId: string, text: string): Promise<void> {
-    this.write(`\nassistant> ${text}\n\n`);
+    this.write(`\nguardian-agent> ${text}\n\n`);
     this.rl?.prompt();
   }
 
@@ -233,7 +233,7 @@ export class CLIChannel implements ChannelAdapter {
           channelUserId: 'cli',
           agentId: this.activeAgentId,
         });
-        this.write(`\nassistant> ${response.content}\n\n`);
+        this.write(`\nguardian-agent> ${response.content}\n\n`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.trackAnalytics({
@@ -267,7 +267,7 @@ export class CLIChannel implements ChannelAdapter {
         channelUserId: 'cli',
         agentId: agentIdForEvent,
       });
-      this.write(`\nassistant> ${response.content}\n\n`);
+      this.write(`\nguardian-agent> ${response.content}\n\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.trackAnalytics({
@@ -2950,7 +2950,7 @@ export class CLIChannel implements ChannelAdapter {
         userId: this.defaultUserId,
         channel: 'cli',
       });
-      this.write(`\nassistant> ${response.content}\n\n`);
+      this.write(`\nguardian-agent> ${response.content}\n\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.write(`\n${this.red('[error]')} ${msg}\n\n`);

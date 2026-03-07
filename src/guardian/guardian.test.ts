@@ -328,6 +328,37 @@ describe('Guardian', () => {
       expect(result!.allowed).toBe(false);
       expect(result!.reason).toContain('params.headers.authorization');
     });
+
+    it('should allow email addresses in user message content', () => {
+      const controller = new SecretScanController();
+      const action: AgentAction = {
+        type: 'message_dispatch',
+        agentId: 'test',
+        capabilities: [],
+        params: {
+          content: 'send it to alexanderkenley@gmail.com subject is test body is hello',
+        },
+      };
+
+      expect(controller.check(action)).toBeNull();
+    });
+
+    it('should still block real secrets in user message content', () => {
+      const controller = new SecretScanController();
+      const action: AgentAction = {
+        type: 'message_dispatch',
+        agentId: 'test',
+        capabilities: [],
+        params: {
+          content: 'my api key is sk-ant-1234567890abcdefghijklmnop',
+        },
+      };
+
+      const result = controller.check(action);
+      expect(result).not.toBeNull();
+      expect(result!.allowed).toBe(false);
+      expect(result!.reason).toContain('Anthropic API Key');
+    });
   });
 
   describe('DeniedPathController', () => {
