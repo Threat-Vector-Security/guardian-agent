@@ -9,13 +9,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in GuardianAgent, please report it responsibly:
-
-1. **Do NOT** open a public GitHub issue for security vulnerabilities
-2. Email security concerns to the maintainers via the repository contact
-3. Include a description of the vulnerability, steps to reproduce, and potential impact
-4. You will receive an acknowledgment within 48 hours
-5. We aim to provide a fix or mitigation within 7 days for critical issues
+If you find a security issue, please open a GitHub issue or reach out via the repository contact. Including steps to reproduce and potential impact helps us triage faster. Even better — fix it and submit a pull request.
 
 ---
 
@@ -131,8 +125,8 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • Uses dedicated security prompt — no SOUL/skills      │
 │  • Configurable LLM: local (Ollama), external           │
 │    (OpenAI/Anthropic), or auto (local-first fallback)   │
-│  • Fail-open by default (action proceeds if LLM is      │
-│    unavailable or times out)                            │
+│  • Fail-closed by default (action blocked if LLM is     │
+│    unavailable or times out; configurable: failOpen)    │
 │  • All evaluations logged to audit trail with           │
 │    controller='GuardianAgent'                           │
 │  • Risk levels: safe, low, medium (allow), high,        │

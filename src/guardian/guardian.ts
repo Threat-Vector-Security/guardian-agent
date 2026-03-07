@@ -145,12 +145,14 @@ export class SecretScanController implements AdmissionController {
     'params.sender', 'params.recipient', 'params.recipients',
     'params.attendees', 'params.organizer',
     'params.replyTo', 'params.reply_to',
+    'params.content',
   ]);
 
   /** Action types where the EMAIL_ALLOWED_FIELDS exemption applies. */
   private static readonly EMAIL_FIELD_EXEMPT_ACTIONS = new Set([
     'send_email', 'draft_email', 'read_email',
     'read_calendar', 'write_calendar',
+    'message_dispatch',
     'mcp_tool',
   ]);
 
