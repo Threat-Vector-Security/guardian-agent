@@ -534,6 +534,7 @@ export interface DashboardCallbacks {
     message: { content: string; userId?: string; channel?: string },
     emitSSE: (event: SSEEvent) => void,
   ) => Promise<{ requestId: string; content: string }>;
+  onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
   onKillswitch?: () => void;
   onFactoryReset?: (args: { scope: 'data' | 'config' | 'all' }) => Promise<{
     success: boolean;

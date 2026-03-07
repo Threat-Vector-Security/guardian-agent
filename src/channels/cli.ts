@@ -1192,7 +1192,7 @@ export class CLIChannel implements ChannelAdapter {
         },
       });
       this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
-      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      if (result.success) this.write('Telegram channel will be reloaded with the new configuration.\n');
       this.write('\n');
       return;
     }
@@ -1212,7 +1212,7 @@ export class CLIChannel implements ChannelAdapter {
         },
       });
       this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
-      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      if (result.success) this.write('Telegram channel will be reloaded with the new configuration.\n');
       this.write('\n');
       return;
     }
@@ -1243,7 +1243,7 @@ export class CLIChannel implements ChannelAdapter {
         },
       });
       this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
-      if (result.success) this.write('Restart required for Telegram channel changes to take effect.\n');
+      if (result.success) this.write('Telegram channel will be reloaded with the new configuration.\n');
       this.write('\n');
       return;
     }

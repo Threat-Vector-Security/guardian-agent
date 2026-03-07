@@ -119,7 +119,7 @@ export function getReferenceGuide(): ReferenceGuide {
           'Step 6: Get your chat ID by opening https://api.telegram.org/bot<token>/getUpdates and copying message.chat.id',
           'Step 7: Paste chat ID(s) into Allowed Chat IDs and save (group IDs are usually negative, often -100...)',
           'CLI equivalent: /config telegram on, /config telegram token <token>, /config telegram chatids <id1,id2,...>, /config telegram status',
-          'Restart Guardian Agent after Telegram channel changes (enable/disable/token/chat IDs)',
+          'Telegram channel changes (enable/disable/token/chat IDs) are applied immediately without restart',
           'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>, /approve [approvalId], /deny [approvalId]',
         ],
       },
