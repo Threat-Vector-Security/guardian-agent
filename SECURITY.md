@@ -21,7 +21,9 @@ If you discover a security vulnerability in GuardianAgent, please report it resp
 
 # Security Architecture
 
-GuardianAgent implements a **security-by-construction** architecture where all enforcement is mandatory at the runtime level. Agents cannot bypass security controls — they are enforced structurally, not by convention or optional hooks.
+GuardianAgent implements a security-focused runtime architecture with mandatory enforcement on framework-managed agent flows. Guardian, ToolExecutor, wrapped LLM access, approvals, and subprocess sandboxing are structural parts of the runtime, not optional conventions.
+
+GuardianAgent does **not** currently treat developer-authored agent code as untrusted code running in a separate supervisor-controlled sandbox. Agents run in the main Node.js process, and the strongest OS isolation available today applies to child processes launched through managed tool surfaces.
 
 ## Threat Model
 
@@ -37,8 +39,8 @@ GuardianAgent is an AI agent orchestration system where:
 |--------|-----------|
 | Prompt injection | InputSanitizer with 15+ weighted signal patterns |
 | Credential leakage via LLM | OutputGuardian + GuardedLLMProvider (mandatory wrapping) |
-| Unauthorized file access | DeniedPathController with path normalization |
-| Capability escalation | Frozen per-agent capability grants + default-deny unknown action types |
+| Unauthorized file access | Allowed path roots + denied-path patterns + path normalization on managed file/tool actions |
+| Capability escalation | Frozen per-agent capability grants + Guardian checks on framework-managed actions |
 | DoS via message flooding | Multi-scope sliding windows: per-agent + per-user + global |
 | Secret exfiltration via events | Payload scanning on all inter-agent communication |
 | Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
@@ -88,7 +90,9 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • ctx.checkAction() = Guardian policy check            │
 │                                                         │
 │  Agent does NOT have: ctx.fs, ctx.http, ctx.exec        │
-│  The Runtime mediates ALL external interaction           │
+│  by default. Runtime mediates framework-provided        │
+│  interaction surfaces such as ctx.llm, ctx.emit(),      │
+│  ctx.dispatch(), and managed tools.                     │
 └───────────────────────┬─────────────────────────────────┘
                         │
                         ▼
@@ -96,8 +100,9 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  LAYER 1.5: OS-Level Process Sandbox                    │
 │                                                         │
 │  Current: bwrap namespace isolation on Linux             │
-│  Current: sandbox health states + strict fail-closed     │
-│  mode for risky subprocess-backed tools                  │
+│  Current: sandbox health states; strict mode disables    │
+│  risky subprocess-backed tools without a strong backend  │
+│  Current default: permissive enforcement mode            │
 │  Current fallback: ulimit + env hardening                │
 │  Next: native Windows/macOS sandbox helpers              │
 │                                                         │
@@ -124,8 +129,8 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • Block mode: return "[Response blocked]" entirely     │
 │  • Event payloads also scanned before inter-agent send  │
 │                                                         │
-│  GuardedLLMProvider ensures EVERY LLM call is scanned   │
-│  — agents cannot bypass by using ctx.llm directly       │
+│  GuardedLLMProvider ensures EVERY ctx.llm call is       │
+│  scanned before delivery                                │
 └───────────────────────┬─────────────────────────────────┘
                         │
                         ▼
@@ -146,17 +151,17 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 
 ---
 
-## Mandatory Enforcement Points
+## Framework Enforcement Points
 
-All security enforcement occurs at Runtime chokepoints. Agents cannot bypass these controls:
+The following controls are enforced at Runtime chokepoints for framework-managed flows. They are strong guarantees for `ctx.llm`, `ctx.emit()`, `ctx.dispatch()`, and managed tool execution. They are not a claim that arbitrary developer-authored agent code is confined in a separate sandboxed process.
 
 | Chokepoint | Enforcement | Bypass Prevention |
 |------------|-------------|-------------------|
 | **Message input** | Guardian pipeline runs BEFORE `agent.onMessage()` | Agent never sees blocked messages |
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
-| **LLM access** | `GuardedLLMProvider` wraps real provider | Agent receives wrapped provider via `ctx.llm` |
+| **LLM access** | `GuardedLLMProvider` wraps real provider for `ctx.llm` | Framework-managed LLM calls are scanned/redacted before delivery |
 | **Event emission** | Runtime source validation + payload scanning before dispatch | `ctx.emit()` stamps source; untrusted source IDs rejected |
-| **Process sandbox** | bwrap namespace / ulimit for all child processes | Wrapped at exec/spawn call site |
+| **Process sandbox** | bwrap namespace / Windows helper / ulimit for managed child processes | Wrapped at exec/spawn call site |
 | **Resource limits** | Budget/token/queue checks before invocation | Runtime rejects over-limit requests |
 | **Lifecycle gating** | Dead/Errored/Stalled agents cannot receive work | `assertExecutable()` guard |
 | **Context immutability** | `Object.freeze()` on agent contexts | Agents cannot modify capabilities |
@@ -174,6 +179,8 @@ GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unava
 - macOS currently reports `degraded`
 - Windows reports `strong` only when a configured native helper is enabled and detected; otherwise it reports `unavailable`
 - `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
+- Current defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: permissive`
+- In `permissive` mode, risky subprocess-backed tools remain available even when sandbox availability is not `strong`
 - In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
 - CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
 
@@ -346,7 +353,7 @@ Detection is run against both raw and normalized text. Normalization includes NF
 
 ## Per-Agent Capability Model
 
-Capabilities are granted per-agent at registration and **frozen** (`Object.freeze`). Agents structurally cannot access capabilities they weren't granted.
+Capabilities are granted per-agent at registration and **frozen** (`Object.freeze`). Framework-managed actions must pass Guardian checks using those grants. This is an application-layer least-privilege model, not a kernel-mediated dynamic capability broker.
 
 ### Available Capabilities
 
@@ -373,6 +380,8 @@ One-knob security posture configuration:
 | **balanced** | read/write/exec/git/email | 30/min, 500/hr | 60s | approve_by_policy |
 | **power** | all capabilities | 60/min, 2000/hr | 300s | autonomous |
 
+Current defaults align most closely with the `balanced` posture for tool policy behavior: mutating and external-post actions require approval, while read-only and network tools are allowed by policy unless overridden.
+
 ---
 
 ## Tool Execution Security
@@ -382,7 +391,7 @@ One-knob security posture configuration:
 | Mode | Behavior |
 |------|----------|
 | `approve_each` | Every tool call requires explicit user approval |
-| `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny` |
+| `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny`; read-only and network tools are allowed by default |
 | `autonomous` | Tools execute without approval (still sandboxed) |
 
 ### Risk Classification
@@ -404,7 +413,7 @@ One-knob security posture configuration:
 
 ### OS-Level Process Sandbox
 
-All child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, with graceful fallback to `ulimit` + environment hardening on other platforms.
+Managed child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, an optional native helper on Windows, and graceful fallback to `ulimit` + environment hardening when stronger backends are unavailable.
 
 #### Sandbox Profiles
 
@@ -443,13 +452,24 @@ assistant:
 
 #### Fallback Behavior
 
-When bwrap is not available (macOS, Windows, minimal Linux containers):
+When a strong sandbox backend is not available (macOS, Windows without helper, minimal Linux containers):
 1. `ulimit` resource limits are applied as a shell prefix (POSIX only)
 2. Dangerous environment variables are stripped from child processes
 3. Filesystem namespace isolation is not available (path/domain/command policy still applies)
 4. A warning is logged at startup
 
+In `permissive` mode this is a degraded-but-usable posture. In `strict` mode, risky subprocess-backed tool categories are disabled until a strong backend is available.
+
 Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
+
+---
+
+## Credential Handling
+
+- LLM provider API keys and web-search API keys are currently loaded into the main runtime process from config or environment-backed config interpolation
+- Approval records store redacted arguments and a deterministic hash (`argsHash`) rather than raw sensitive values
+- Output scanning and denied-path controls reduce accidental exfiltration, but GuardianAgent does not currently guarantee that credentials never enter the main process address space
+- Provider-managed secure storage is preferred for external integrations where available
 
 ---
 
