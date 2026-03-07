@@ -239,7 +239,7 @@ export interface GuardianConfig {
     llmProvider: 'local' | 'external' | 'auto';
     /** Action types that trigger inline evaluation. */
     actionTypes?: string[];
-    /** Allow actions when LLM is unavailable (default: true). */
+    /** Allow actions when LLM is unavailable (default: false — fail-closed). */
     failOpen: boolean;
     /** Timeout for inline evaluation in ms (default: 8000). */
     timeoutMs?: number;

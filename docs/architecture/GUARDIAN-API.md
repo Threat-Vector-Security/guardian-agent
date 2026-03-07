@@ -543,7 +543,7 @@ import { GuardianAgentService } from './runtime/sentinel.js';
 const guardianAgent = new GuardianAgentService({
   enabled: true,
   llmProvider: 'auto',       // 'local' | 'external' | 'auto'
-  failOpen: true,             // allow actions when LLM unavailable
+  failOpen: false,            // block actions when LLM unavailable (fail-closed)
   timeoutMs: 8000,            // inline evaluation timeout
 });
 guardianAgent.setProviders(localProvider, externalProvider);

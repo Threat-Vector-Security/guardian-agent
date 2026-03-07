@@ -851,8 +851,18 @@ export class ToolExecutor {
             message: job.error,
           };
         }
-      } catch {
-        // Guardian Agent evaluation failed — allow action (fail-open at this layer)
+      } catch (err) {
+        // Guardian Agent evaluation failed — fail-closed (block action)
+        job.status = 'denied';
+        job.completedAt = this.now();
+        job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
+        job.error = `Blocked: Guardian Agent evaluation unavailable — ${err instanceof Error ? err.message : String(err)}`;
+        return {
+          success: false,
+          status: job.status,
+          jobId: job.id,
+          message: job.error,
+        };
       }
     }
 

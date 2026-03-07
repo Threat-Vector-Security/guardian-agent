@@ -88,7 +88,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Evaluates every non-read-only tool action via LLM before execution
 - Blocks high/critical risk actions; allows safe/low/medium with audit logging
 - Configurable LLM: local (Ollama), external (OpenAI/Anthropic), or auto (local-first fallback)
-- Fail-open by default — actions proceed if LLM is unavailable
+- Fail-closed by default — actions blocked if LLM is unavailable (configurable: `failOpen: true` to override)
 - All evaluations logged to audit trail with `controller: 'GuardianAgent'`
 
 **Layer 3 — Output (after the agent responds, before output reaches anyone):**
