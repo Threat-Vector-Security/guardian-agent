@@ -3961,7 +3961,7 @@ async function main(): Promise<void> {
     enabled: guardianAgentConfig?.enabled !== false,
     llmProvider: guardianAgentConfig?.llmProvider ?? 'auto',
     actionTypes: guardianAgentConfig?.actionTypes,
-    failOpen: guardianAgentConfig?.failOpen !== false,
+    failOpen: guardianAgentConfig?.failOpen === true,
     timeoutMs: guardianAgentConfig?.timeoutMs,
   });
 
@@ -4411,7 +4411,8 @@ async function main(): Promise<void> {
       const activeProvider = mode === 'local' ? localProvider
         : mode === 'external' ? externalLlmProvider
         : (localProvider ?? externalLlmProvider);
-      console.log(`  Guardian Agent: inline evaluation ${activeProvider ? `enabled (${mode}, provider: ${activeProvider.name})` : 'enabled (no LLM available, fail-open)'}`);
+      const failMode = guardianAgentConfig?.failOpen === true ? 'fail-open' : 'fail-closed';
+      console.log(`  Guardian Agent: inline evaluation ${activeProvider ? `enabled (${mode}, provider: ${activeProvider.name})` : `enabled (no LLM available, ${failMode})`}`);
     }
   }
 

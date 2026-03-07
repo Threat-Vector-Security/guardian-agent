@@ -97,7 +97,7 @@ const DEFAULT_GUARDIAN_CONFIG: GuardianAgentServiceConfig = {
     'write_sheets',
     'mcp_tool',
   ],
-  failOpen: true,
+  failOpen: false,
   timeoutMs: 8_000,
 };
 

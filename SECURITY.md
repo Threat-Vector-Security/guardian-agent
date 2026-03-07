@@ -734,7 +734,7 @@ guardian:
   guardianAgent:
     enabled: true
     llmProvider: auto             # local | external | auto
-    failOpen: true                # allow actions when LLM unavailable
+    failOpen: false               # block actions when LLM unavailable (fail-closed)
     timeoutMs: 8000               # inline evaluation timeout
 
   sentinel:
