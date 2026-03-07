@@ -1609,6 +1609,9 @@ function buildDashboardCallbacks(
     return (yaml.load(content) as Record<string, unknown>) ?? {};
   };
 
+  /** Mutable ref set from main() to enable hot-reload of the Telegram channel. */
+  const telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null } = { current: null };
+
   const persistAndApplyConfig = (
     rawConfig: Record<string, unknown>,
     meta?: { changedBy?: string; reason?: string },
@@ -1667,7 +1670,21 @@ function buildDashboardCallbacks(
         sessionTtlMinutes: nextConfig.channels.web?.auth?.sessionTtlMinutes,
       };
       applyWebAuthRuntime(webAuthStateRef.current);
+      const prevTelegram = configRef.current.channels.telegram;
       configRef.current = nextConfig;
+
+      // Hot-reload Telegram channel when config changes
+      const nextTelegram = nextConfig.channels.telegram;
+      const telegramChanged =
+        (prevTelegram?.enabled !== nextTelegram?.enabled)
+        || (prevTelegram?.botToken !== nextTelegram?.botToken)
+        || (prevTelegram?.defaultAgent !== nextTelegram?.defaultAgent)
+        || (JSON.stringify(prevTelegram?.allowedChatIds) !== JSON.stringify(nextTelegram?.allowedChatIds));
+      if (telegramChanged && telegramReloadRef.current) {
+        telegramReloadRef.current().catch(err => {
+          log.error({ err }, 'Telegram hot-reload failed');
+        });
+      }
 
       if (oldPolicyHash !== newPolicyHash) {
         runtime.auditLog.record({
@@ -2875,7 +2892,7 @@ function buildDashboardCallbacks(
           return {
             success: true,
             message: input.telegramEnabled
-              ? 'Setup saved and applied. Restart to activate Telegram channel changes.'
+              ? 'Setup saved and applied. Telegram channel is being reloaded.'
               : 'Setup saved and applied.',
           };
         },
@@ -3317,6 +3334,10 @@ function buildDashboardCallbacks(
         timestamp: result.timestamp,
         windowMs: result.windowMs,
       };
+    },
+
+    set onTelegramReload(fn: (() => Promise<{ success: boolean; message: string }>) | undefined) {
+      telegramReloadRef.current = fn ?? null;
     },
   };
 }
@@ -4816,11 +4837,15 @@ async function main(): Promise<void> {
     channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
   }
 
-  if (config.channels.telegram?.enabled && config.channels.telegram.botToken) {
-    const telegramDefaultAgent = config.channels.telegram.defaultAgent ?? defaultAgentId;
+  let activeTelegram: TelegramChannel | null = null;
+
+  const startTelegram = async (): Promise<void> => {
+    const tgConfig = configRef.current.channels.telegram;
+    if (!tgConfig?.enabled || !tgConfig.botToken) return;
+    const telegramDefaultAgent = tgConfig.defaultAgent ?? defaultAgentId;
     const telegram = new TelegramChannel({
-      botToken: config.channels.telegram.botToken,
-      allowedChatIds: config.channels.telegram.allowedChatIds,
+      botToken: tgConfig.botToken,
+      allowedChatIds: tgConfig.allowedChatIds,
       defaultAgent: telegramDefaultAgent,
       guideText: formatGuideForTelegram(),
       resolveCanonicalUserId: (channelUserId) => identity.resolveCanonicalUserId('telegram', channelUserId),
@@ -4862,7 +4887,40 @@ async function main(): Promise<void> {
       }
       return runtime.dispatchMessage(decision.agentId, msg);
     });
-    channels.push({ name: 'telegram', stop: () => telegram.stop() });
+    activeTelegram = telegram;
+    // Update channels array for graceful shutdown
+    const idx = channels.findIndex(c => c.name === 'telegram');
+    if (idx >= 0) channels[idx] = { name: 'telegram', stop: () => telegram.stop() };
+    else channels.push({ name: 'telegram', stop: () => telegram.stop() });
+  };
+
+  dashboardCallbacks.onTelegramReload = async () => {
+    try {
+      if (activeTelegram) {
+        await activeTelegram.stop();
+        activeTelegram = null;
+        log.info('Telegram channel stopped for reload');
+      }
+      await startTelegram();
+      const tgConfig = configRef.current.channels.telegram;
+      if (tgConfig?.enabled && tgConfig.botToken) {
+        log.info('Telegram channel reloaded');
+        return { success: true, message: 'Telegram channel reloaded.' };
+      }
+      log.info('Telegram channel disabled');
+      return { success: true, message: 'Telegram channel disabled.' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err }, 'Telegram reload failed');
+      return { success: false, message: `Telegram reload failed: ${message}` };
+    }
+  };
+
+  try {
+    await startTelegram();
+  } catch (err) {
+    log.error({ err }, 'Telegram channel failed to start — continuing without it');
+    console.log('  Telegram: FAILED (check bot token) — other channels unaffected');
   }
 
   if (config.channels.web?.enabled) {

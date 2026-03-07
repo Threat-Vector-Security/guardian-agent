@@ -203,11 +203,22 @@ export class TelegramChannel implements ChannelAdapter {
       await this.dispatchAssistantMessage(ctx, text, canonicalUserId, channelUserId);
     });
 
-    // Start polling
+    // Validate token before starting polling
+    try {
+      await this.bot.api.getMe();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err }, 'Telegram bot token is invalid or revoked — skipping startup');
+      throw new Error(`Telegram bot token validation failed: ${message}`);
+    }
+
+    // Start polling (fire-and-forget with error handling)
     this.bot.start({
       onStart: () => {
         log.info('Telegram bot started (polling)');
       },
+    }).catch(err => {
+      log.error({ err }, 'Telegram polling error');
     });
   }
 
