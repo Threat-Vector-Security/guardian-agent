@@ -186,6 +186,8 @@ llm:
     model: claude-sonnet-4-20250514
 
 defaultProvider: ollama
+# qualityFallback: true          # Retry with external LLM when local model produces degraded responses (default: true)
+# fallbacks: [openai, anthropic]  # Explicit fallback order (auto-detected when omitted)
 
 channels:
   cli:

@@ -229,6 +229,8 @@ class ChatAgent extends BaseAgent {
   private resolveGwsProvider?: () => LLMProvider | undefined;
   /** Approximate token budget for tool results in context. */
   private contextBudget: number;
+  /** Whether to retry degraded local LLM responses with an external fallback. */
+  private qualityFallbackEnabled: boolean;
 
   constructor(
     id: string,
@@ -244,6 +246,7 @@ class ChatAgent extends BaseAgent {
     memoryStore?: AgentMemoryStore,
     resolveGwsProvider?: () => LLMProvider | undefined,
     contextBudget?: number,
+    qualityFallback?: boolean,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -265,6 +268,7 @@ class ChatAgent extends BaseAgent {
     this.memoryStore = memoryStore;
     this.resolveGwsProvider = resolveGwsProvider;
     this.contextBudget = contextBudget ?? 80_000;
+    this.qualityFallbackEnabled = qualityFallback ?? true;
   }
 
   /**
@@ -310,18 +314,11 @@ class ChatAgent extends BaseAgent {
       }
       return { content: approvalResult };
     }
+    // Non-blocking pending approval context (approvals no longer block new messages)
     const existingPending = this.getPendingApprovals(userKey);
-    if (existingPending) {
-      const reminder = this.formatPendingApprovalPrompt(existingPending.ids);
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          message.content,
-          reminder,
-        );
-      }
-      return { content: reminder };
-    }
+    const pendingApprovalContext = existingPending
+      ? `\nNote: ${existingPending.ids.length} tool action(s) are awaiting user approval (IDs: ${existingPending.ids.join(', ')}). Process the current request normally.`
+      : '';
 
     // Inject knowledge base into system prompt if available
     let enrichedSystemPrompt = this.systemPrompt;
@@ -347,6 +344,9 @@ class ChatAgent extends BaseAgent {
     const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
     if (toolRuntimeNotices.length > 0) {
       enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
+    }
+    if (pendingApprovalContext) {
+      enrichedSystemPrompt += pendingApprovalContext;
     }
 
     const llmMessages: ChatMessage[] = this.conversationService
@@ -482,15 +482,25 @@ class ChatAgent extends BaseAgent {
       ? 'external'
       : defaultToolResultProviderKind;
 
+    const providerLocality = this.resolveToolResultProviderKind(ctx);
+
     if (!this.tools?.isEnabled()) {
       const response = await chatFn(llmMessages);
       finalContent = response.content;
+      // Quality-based fallback for non-tool path
+      if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
+        log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
+        try {
+          const fb = await this.fallbackChain.chatWithFallback(llmMessages);
+          if (fb.response.content?.trim()) finalContent = fb.response.content;
+        } catch { /* fallback also failed, keep original */ }
+      }
     } else {
       let rounds = 0;
-      // Deferred loading: start with always-loaded tools, expand via tool_search
+      // Deferred loading: start with always-loaded tools, expand via find_tools
       const toolDefs = this.tools.listAlwaysLoadedDefinitions();
-      // Use shortDescription for LLM context when available, include examples
-      const llmToolDefs = toolDefs.map(toLLMToolDef);
+      // Local models get full descriptions for better tool selection; external models get short
+      const llmToolDefs = toolDefs.map((d) => toLLMToolDef(d, providerLocality));
       const pendingIds: string[] = [];
       const contextBudget = this.contextBudget;
       while (rounds < this.maxToolRounds) {
@@ -613,8 +623,8 @@ class ChatAgent extends BaseAgent {
               ),
             });
 
-            // Deferred tool loading: if tool_search was called, merge returned definitions
-            if (toolCall.name === 'tool_search' && toolResult.success) {
+            // Deferred tool loading: if find_tools was called, merge returned definitions
+            if (toolCall.name === 'find_tools' && toolResult.success) {
               const searchOutput = toolResult.output as { tools?: Array<{ name: string; description: string; parameters: Record<string, unknown>; risk: string; category?: string; examples?: unknown[] }> } | undefined;
               if (searchOutput?.tools) {
                 for (const discovered of searchOutput.tools) {
@@ -656,6 +666,67 @@ class ChatAgent extends BaseAgent {
           : prompt;
       }
 
+      // Quality-based fallback: if the local LLM produced an empty or degraded
+      // response and we have a fallback chain with an external provider, retry.
+      // Pass tool definitions (re-mapped for external provider) so the fallback
+      // LLM can call tools, not just produce text.
+      if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
+        log.warn({ agent: this.id, contentPreview: finalContent?.slice(0, 100) },
+          'Local LLM produced degraded response, retrying with fallback chain');
+        try {
+          const externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
+          const fbMessages = [...llmMessages];
+          const fallbackResult = await this.fallbackChain.chatWithFallback(fbMessages, { tools: externalToolDefs });
+          const fbProvider = fallbackResult.providerName;
+
+          // If the fallback LLM returned tool calls, execute them (single round)
+          if (fallbackResult.response.toolCalls?.length && this.tools) {
+            log.info({ agent: this.id, provider: fbProvider, toolCount: fallbackResult.response.toolCalls.length },
+              'Fallback provider requested tool calls, executing');
+            fbMessages.push({ role: 'assistant' as const, content: fallbackResult.response.content ?? '', toolCalls: fallbackResult.response.toolCalls });
+            const fbToolOrigin = {
+              origin: 'assistant' as const,
+              agentId: this.id,
+              userId: message.userId,
+              channel: message.channel,
+              requestId: message.id,
+              agentContext: { checkAction: ctx.checkAction },
+            };
+            const toolResults = await Promise.allSettled(
+              fallbackResult.response.toolCalls.map(async (tc) => {
+                let parsedArgs: Record<string, unknown> = {};
+                if (tc.arguments?.trim()) {
+                  try { parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
+                }
+                const result = await this.tools!.executeModelTool(tc.name, parsedArgs, fbToolOrigin);
+                const output = result.status === 'succeeded'
+                  ? String(result.output ?? result.message)
+                  : `Error: ${result.message}`;
+                return { callId: tc.id, name: tc.name, output };
+              })
+            );
+            for (const r of toolResults) {
+              if (r.status === 'fulfilled') {
+                fbMessages.push({ role: 'tool' as const, content: r.value.output, toolCallId: r.value.callId });
+              }
+            }
+            // One more chat call to get the final text response from fallback
+            const finalFb = await this.fallbackChain.chatWithFallback(fbMessages, { tools: externalToolDefs });
+            if (finalFb.response.content?.trim()) {
+              finalContent = finalFb.response.content;
+              log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
+            }
+          } else if (fallbackResult.response.content?.trim()) {
+            finalContent = fallbackResult.response.content;
+            log.info({ agent: this.id, provider: fbProvider },
+              'Fallback provider produced successful response');
+          }
+        } catch (fallbackErr) {
+          log.warn({ agent: this.id, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
+            'Fallback chain also failed');
+        }
+      }
+
       if (!finalContent) {
         finalContent = 'I could not generate a final response for that request.';
       }
@@ -673,6 +744,23 @@ class ChatAgent extends BaseAgent {
       content: finalContent,
       metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
     };
+  }
+
+  /** Detect degraded LLM responses that warrant a fallback retry. */
+  private isResponseDegraded(content: string | undefined): boolean {
+    if (!content?.trim()) return true;
+    const lower = content.trim().toLowerCase();
+    const degradedPatterns = [
+      'i could not generate',
+      'i cannot generate',
+      'i can\'t assist with that',
+      'i\'m unable to help',
+      'i am unable to',
+      'i don\'t have the ability',
+      'i cannot help with',
+      'as an ai, i cannot',
+    ];
+    return degradedPatterns.some(p => lower.includes(p));
   }
 
   private resolveToolResultProviderKind(
@@ -1335,11 +1423,13 @@ function parseRequestedEmailCount(text: string): number {
   return 3;
 }
 
-/** Convert a ToolDefinition to LLM-ready format (use shortDescription, include examples). */
-function toLLMToolDef(def: import('./tools/types.js').ToolDefinition): import('./tools/types.js').ToolDefinition {
+/** Convert a ToolDefinition to LLM-ready format.
+ * Local models get full descriptions for better tool selection;
+ * external models get shortDescription to save tokens. */
+function toLLMToolDef(def: import('./tools/types.js').ToolDefinition, locality: 'local' | 'external' = 'external'): import('./tools/types.js').ToolDefinition {
   return {
     name: def.name,
-    description: def.shortDescription ?? def.description,
+    description: locality === 'local' ? def.description : (def.shortDescription ?? def.description),
     risk: def.risk,
     parameters: def.parameters,
     examples: def.examples,
@@ -4429,6 +4519,17 @@ async function main(): Promise<void> {
     const order = [config.defaultProvider, ...config.fallbacks.filter(f => f !== config.defaultProvider)];
     fallbackChain = new ModelFallbackChain(allProviders, order);
     log.info({ order: fallbackChain.getProviderOrder() }, 'Model fallback chain configured');
+  } else {
+    // Auto-build fallback chain when multiple providers exist but no explicit fallbacks configured.
+    // This enables quality-based fallback: if the local LLM produces a degraded response,
+    // the system can retry with an external provider automatically.
+    const providerNames = Object.keys(resolvedRuntimeCredentials.resolvedLLM);
+    if (providerNames.length > 1) {
+      const allProviders = createProviders(resolvedRuntimeCredentials.resolvedLLM);
+      const order = [config.defaultProvider, ...providerNames.filter(n => n !== config.defaultProvider)];
+      fallbackChain = new ModelFallbackChain(allProviders, order);
+      log.info({ order: fallbackChain.getProviderOrder(), auto: true }, 'Auto-configured model fallback chain');
+    }
   }
 
   // Register agents from config, auto-create dual agents, or single default
@@ -4531,6 +4632,7 @@ async function main(): Promise<void> {
         agentMemoryStore,
         resolveGwsProvider,
         config.assistant.tools.contextBudget,
+        config.qualityFallback,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -4565,6 +4667,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
+      config.qualityFallback,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
@@ -4586,6 +4689,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
+      config.qualityFallback,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
@@ -4632,6 +4736,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
+      config.qualityFallback,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,

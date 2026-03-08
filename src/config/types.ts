@@ -28,6 +28,8 @@ export interface GuardianAgentConfig {
   assistant: AssistantConfig;
   /** LLM provider failover configuration. */
   failover?: FailoverConfig;
+  /** Quality-based fallback: retry with external LLM when local model produces degraded responses (default: true). */
+  qualityFallback?: boolean;
   /** Message routing configuration for multi-agent dispatch. */
   routing?: RoutingConfig;
 }
@@ -809,7 +811,7 @@ export interface AssistantToolsConfig {
   sandbox?: import('../sandbox/types.js').SandboxConfig;
   /** Controls which policy areas the assistant can modify via chat (always requires user approval). */
   agentPolicyUpdates?: AgentPolicyUpdatesConfig;
-  /** Deferred tool loading: only send always-loaded tools to LLM, rest discoverable via tool_search. */
+  /** Deferred tool loading: only send always-loaded tools to LLM, rest discoverable via find_tools. */
   deferredLoading?: {
     /** Enable deferred tool loading (default: true). */
     enabled: boolean;
@@ -1073,6 +1075,14 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'ls',
         'dir',
         'pwd',
+        'echo',
+        'cat',
+        'head',
+        'tail',
+        'whoami',
+        'hostname',
+        'uname',
+        'date',
       ],
       allowedDomains: [
         'localhost',
@@ -1100,7 +1110,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       },
       deferredLoading: {
         enabled: true,
-        alwaysLoaded: ['tool_search', 'web_search', 'fs_read', 'shell_safe', 'memory_search'],
+        alwaysLoaded: ['find_tools', 'web_search', 'fs_read', 'shell_safe', 'memory_search', 'memory_save'],
       },
       contextBudget: 80_000,
       disabledCategories: [],

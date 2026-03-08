@@ -17,7 +17,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - LLM tool-calling integration through chat/orchestrator path
 
 ## Tool Catalog
-- **System**: `tool_search` (meta-tool for discovering deferred tools)
+- **System**: `find_tools` (meta-tool for discovering deferred tools)
 - Filesystem/document: `fs_list`, `fs_search`, `fs_read`, `fs_write`, `fs_mkdir`, `fs_delete`, `fs_move`, `fs_copy`, `doc_create`
 - Shell/browser: `shell_safe`, `chrome_job`, `browser_open`, `browser_action`, `browser_snapshot`, `browser_close`, `browser_task`
 - Web: `web_search`, `web_fetch`
@@ -34,12 +34,16 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 
 ## Deferred Tool Loading
 
-By default, only 5 tools are sent to the LLM on every request (**always-loaded**):
-`tool_search`, `web_search`, `fs_read`, `shell_safe`, `memory_search`
+By default, 10 tools are sent to the LLM on every request (**always-loaded**):
+`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`
 
-All other tools have `deferLoading: true` and are only discovered via `tool_search`. When the LLM calls `tool_search`, matching tool definitions (including full parameter schemas) are merged into the active tool set for subsequent rounds.
+All other tools have `deferLoading: true` and are only discovered via `find_tools`. When the LLM calls `find_tools`, matching tool definitions (including full parameter schemas) are merged into the active tool set for subsequent rounds.
 
-This reduces tool definition tokens from ~15-25K to ~3K per request.
+This reduces tool definition tokens from ~15-25K to ~5K per request.
+
+**Local model adaptation:** When the active LLM provider is local (Ollama), always-loaded tools are sent with full `description` instead of `shortDescription` to improve tool selection accuracy. External providers (OpenAI, Anthropic) continue using short descriptions to save tokens.
+
+**Quality-based fallback:** When the local LLM produces a degraded response (empty, refusal, or "I could not generate"), the system automatically retries the request through the fallback chain (typically an external provider like OpenAI). A fallback chain is auto-configured when multiple LLM providers are available, or can be explicitly set via `config.fallbacks`.
 
 **Configuration:**
 ```yaml
@@ -47,7 +51,7 @@ assistant:
   tools:
     deferredLoading:
       enabled: true
-      alwaysLoaded: [tool_search, web_search, fs_read, shell_safe, memory_search]
+      alwaysLoaded: [find_tools, web_search, fs_read, fs_list, fs_search, shell_safe, memory_search, sys_info, sys_resources]
 ```
 
 ## Tool Definition Fields
@@ -55,12 +59,12 @@ assistant:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Unique tool identifier |
-| `description` | string | Full description (used in tool_search results) |
+| `description` | string | Full description (used in find_tools results) |
 | `shortDescription` | string? | Compact description for LLM context (~60% fewer tokens) |
 | `risk` | ToolRisk | `read_only`, `mutating`, `network`, `external_post` |
 | `parameters` | object | JSON Schema for tool arguments |
 | `category` | ToolCategory? | Category for enable/disable gating |
-| `deferLoading` | boolean? | When true, tool is only loaded via tool_search |
+| `deferLoading` | boolean? | When true, tool is only loaded via find_tools |
 | `examples` | Array? | Usage examples: `{ input: Record, description: string }` |
 
 ## Parallel Tool Execution
@@ -90,8 +94,11 @@ assistant:
   - `succeeded`
   - `failed`
   - `pending_approval` with `approvalId`
-- Pending approvals are listed in web/CLI and require explicit approve/deny decisions.
+- **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally. Users can still approve/deny pending actions via `/tools approve <id>` or approval-like replies.
 - Decision history is attached to job records for auditability.
+
+### Read-Only Shell Bypass
+Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip approval automatically. Recognized read-only commands: `ls`, `dir`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `echo`, `cat`, `head`, `tail`, `wc`, `file`, `which`, `type`, plus prefixed commands like `git status`, `git diff`, `git log`, `git branch`, `node --version`, `npm --version`, `npm ls`.
 
 ## Sandbox Boundaries
 - Policy-managed allowlists:

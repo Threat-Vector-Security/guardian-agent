@@ -78,7 +78,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'net_threat_check',
   ],
   system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services'],
-  memory: ['memory_search', 'memory_get', 'memory_save'],
+  memory: ['memory_search', 'memory_recall', 'memory_save'],
   search: ['qmd_search', 'qmd_status', 'qmd_reindex'],
 };
 
