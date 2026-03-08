@@ -375,7 +375,7 @@ When both a local (Ollama) and external (Anthropic/OpenAI) provider are configur
 
 | Routes to **Local** model | Routes to **External** model |
 |---|---|
-| Filesystem, Shell, Network, System, Memory, Automation | Web, Browser, Workspace, Email, Contacts, Forum, Threat Intel, Search |
+| Filesystem, Shell, Network, System, Memory | Web, Browser, Workspace, Email, Contacts, Forum, Threat Intel, Search, Automation |
 
 Local operations (file reads, shell commands, network scans) are fast and don't need a powerful model for result synthesis. External operations (Google Workspace, web search, email campaigns) benefit from the higher-quality reasoning of cloud models.
 

@@ -6,7 +6,7 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian).
 
-Eleven scripts are provided:
+Fourteen scripts are provided:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -18,9 +18,12 @@ Eleven scripts are provided:
 | **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
 | **`scripts/test-qmd.ps1`** | QMD document search + approval tests (PowerShell) | ~12 |
 | **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |
+| **`scripts/test-automations-llm.ps1`** | Automation LLM-path: discovery, creation, composition, scheduling (PowerShell) | ~50+ |
 | **`scripts/test-intel.ps1`** | Threat intel watchlist + scan + approval tests (PowerShell) | ~20 |
 | **`scripts/test-contacts.ps1`** | Contacts, campaign, gmail_send + approval tests (PowerShell) | ~24 |
 | **`scripts/test-browser.ps1`** | Browser automation + network risk verification (PowerShell) | ~15 |
+| **`scripts/test-security-api.ps1`** | Focused security API suite: auth, privileged tickets, approvals, audit, direct tool enforcement (PowerShell) | ~20 |
+| **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
 
@@ -44,6 +47,15 @@ Unlike unit tests (vitest), these exercise the full stack: config loading, Guard
 .\scripts\test-tools.ps1
 ```
 
+### Focused Security Suites
+
+```powershell
+.\scripts\test-security-api.ps1
+.\scripts\test-security-content.ps1
+```
+
+These focused suites cover framework-level security controls only. They do not validate the strong OS sandbox backends (`bwrap`, Windows AppContainer helper).
+
 **Important:** Stop any running GuardianAgent instance first — the harness uses port 3000.
 
 ### Option A: Standalone (harness starts the app)
@@ -51,7 +63,7 @@ Unlike unit tests (vitest), these exercise the full stack: config loading, Guard
 This will:
 1. Start the app in background with `npx tsx src/index.ts`
 2. Wait for `/health` to return OK
-3. Extract the auth token from the app's log output
+3. Inject a known auth token into a temporary harness config
 4. Run all test cases via HTTP
 5. Print a pass/fail summary
 6. Stop the app
@@ -327,6 +339,79 @@ Tests workflow CRUD (`workflow_upsert`, `workflow_delete`, `workflow_run`) and s
 | `task_update` | approve_by_policy | pending_approval → deny | Task update gated |
 | `task_delete` | approve_by_policy | pending_approval → deny | Task delete gated |
 | `task_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+
+### Automation LLM-Path Suite (`test-automations-llm.ps1`, ~50+ assertions)
+
+Tests whether the LLM can **discover, create, compose, schedule, run, and delete automations** from natural language prompts. Unlike `test-automation.ps1` (direct API), this sends all requests through `POST /api/message` and validates tool selection via job history — the same path a real user takes.
+
+**Policy setup:** All tests run in `autonomous` mode so the LLM can freely create and run automations.
+
+#### Tool Discovery
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "what automation tools do you have?" | `find_tools` | LLM discovers automation tools via meta-tool |
+| "list the specific automation tools" | (context) | LLM names workflow_upsert, task_create, etc. |
+
+#### Single-Tool Automation Creation
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "create automation 'sys-health-check' with sys_info" | `workflow_upsert` | Single-step automation creation |
+| "list all automations" | `workflow_list` | Verification via listing |
+
+#### Pipeline Automation Creation
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "call workflow_upsert now with exact args: sequential, two steps" | `workflow_upsert` | Multi-step sequential pipeline |
+| "call workflow_upsert now with exact args: parallel, three steps" | `workflow_upsert` | Multi-step parallel pipeline |
+
+#### Scheduling
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "schedule sys-health-check every 30 minutes" | `task_create` | Cron schedule creation for automation |
+| "list all scheduled tasks" | `task_list` | Schedule verification |
+
+#### Tool Composition for Monitoring
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "call workflow_upsert now with exact args: sequential port check + health fetch" | `workflow_upsert` | Composes net_port_check + web_fetch into pipeline |
+| "call workflow_upsert now with exact args: parallel ping + interfaces + connections" | `workflow_upsert` | Composes 3 network tools into parallel pipeline |
+
+#### Running Automations
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "dry run sys-health-check" | `workflow_run` | Dry run execution |
+| "run sys-health-check for real" | `workflow_run` | Real execution |
+| "run full-system-check" | `workflow_run` | Pipeline execution |
+
+#### Schedule Management
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "list tasks with IDs and schedules" | `task_list` | Task inspection |
+| "change schedule to every 5 minutes" | `task_update` | Schedule modification |
+
+#### Natural Language Requests
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "set up monitoring for my network" | (conversational) | LLM suggests relevant tools |
+| "create daily-resource-check at 9 AM" | `workflow_upsert` + `task_create` | End-to-end: automation + schedule |
+| "create weekday-net-check at 8 AM Mon-Fri" | `workflow_upsert` + `task_create` | Complex cron schedule |
+
+#### Deletion
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "delete sys-health-check" | `workflow_delete` | Single automation deletion |
+| "delete full-system-check" | `workflow_delete` | Pipeline deletion |
+| "delete all remaining test automations" | `workflow_delete` | Batch cleanup |
+| "clean up remaining scheduled tasks" | `task_list` + `task_delete` | Task cleanup |
+
+#### Edge Cases
+| Prompt | Expected | What It Validates |
+|--------|----------|-------------------|
+| "run this-does-not-exist-xyz" | Error message | Non-existent automation handling |
+| "create automation every 30 seconds" | Limitation explanation | Cron minimum interval (1 min) |
+
+#### Job History
+Verifies all expected automation tools (`workflow_upsert`, `workflow_list`, `workflow_run`, `workflow_delete`, `task_create`, `task_list`) were called during the session.
 
 ### Threat Intelligence Suite (`test-intel.ps1`, ~20 assertions)
 
