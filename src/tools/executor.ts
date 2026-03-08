@@ -248,7 +248,7 @@ export class ToolExecutor {
           : [options.workspaceRoot],
         allowedCommands: options.allowedCommands?.length
           ? [...options.allowedCommands]
-          : ['node', 'npm', 'npx', 'git', 'ollama', 'ls', 'dir', 'pwd'],
+          : ['node', 'npm', 'npx', 'git', 'ollama', 'ls', 'dir', 'pwd', 'echo', 'cat', 'head', 'tail', 'whoami', 'hostname', 'uname', 'date'],
         allowedDomains: options.allowedDomains?.length
           ? [...options.allowedDomains]
           : ['localhost', '127.0.0.1', 'moltbook.com'],
@@ -704,6 +704,20 @@ export class ToolExecutor {
       return gwsDecision;
     }
 
+    // Read-only shell commands skip approval even under approve_by_policy
+    if (definition.name === 'shell_safe' && this.policy.mode !== 'approve_each') {
+      const fullCmd = ((args as Record<string, unknown>).command as string ?? '').trim();
+      const firstWord = fullCmd.split(/\s+/)[0];
+      const readOnlyCommands = ['ls', 'dir', 'pwd', 'whoami', 'hostname', 'uname', 'date', 'echo',
+        'cat', 'head', 'tail', 'wc', 'file', 'which', 'type'];
+      const readOnlyPrefixed = ['git status', 'git diff', 'git log', 'git branch', 'git remote',
+        'git tag', 'node --version', 'npm --version', 'npm ls'];
+      if (readOnlyCommands.includes(firstWord) ||
+          readOnlyPrefixed.some(rc => fullCmd === rc || fullCmd.startsWith(rc + ' '))) {
+        return 'allow';
+      }
+    }
+
     if (definition.risk === 'external_post') {
       return 'require_approval';
     }
@@ -979,12 +993,12 @@ export class ToolExecutor {
   }
 
   private registerBuiltinTools(): void {
-    // ── tool_search meta-tool (always loaded) ──
+    // ── find_tools meta-tool (always loaded) ──
     this.registry.register(
       {
-        name: 'tool_search',
-        description: 'Search available tools by keyword. Returns matching tool names and schemas so you can use them in subsequent requests. Use this to discover tools for specific tasks.',
-        shortDescription: 'Search available tools by keyword. Returns matching tool names and schemas.',
+        name: 'find_tools',
+        description: 'Search available tools by keyword. Returns matching tool names and schemas so you can call them. IMPORTANT: Most tools are not visible until you search for them. If a user asks you to use a specific tool by name, or you need a tool that is not in your current list, you MUST call find_tools first to load it.',
+        shortDescription: 'Search and load tools by keyword. IMPORTANT: call this first to discover tools not in your current list.',
         risk: 'read_only',
         category: 'system',
         parameters: {
@@ -1031,7 +1045,6 @@ export class ToolExecutor {
         shortDescription: 'List files and directories. Returns entries with name and type.',
         risk: 'read_only',
         category: 'filesystem',
-        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1064,7 +1077,6 @@ export class ToolExecutor {
         shortDescription: 'Search files by name or content. Modes: name, content, auto.',
         risk: 'read_only',
         category: 'filesystem',
-        deferLoading: true,
         examples: [
           { input: { query: 'config', mode: 'name' }, description: 'Find files with "config" in the name' },
           { input: { query: 'TODO', mode: 'content', maxResults: 10 }, description: 'Search file contents for TODO comments' },
@@ -3463,7 +3475,6 @@ export class ToolExecutor {
         shortDescription: 'Get OS info, hostname, uptime, and CPU details.',
         risk: 'read_only',
         category: 'system',
-        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3492,7 +3503,6 @@ export class ToolExecutor {
         shortDescription: 'Get current CPU load, memory usage, and disk space.',
         risk: 'read_only',
         category: 'system',
-        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3920,7 +3930,7 @@ export class ToolExecutor {
 
     this.registry.register(
       {
-        name: 'memory_get',
+        name: 'memory_recall',
         description: 'Retrieve the persistent knowledge base for the current agent. Returns the curated long-term memory file containing facts, preferences, and summaries that persist across conversations.',
         shortDescription: 'Retrieve the persistent knowledge base for the current agent.',
         risk: 'read_only',
@@ -3964,7 +3974,6 @@ export class ToolExecutor {
         shortDescription: 'Save a fact or summary to the persistent knowledge base.',
         risk: 'mutating',
         category: 'memory',
-        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {

@@ -222,14 +222,14 @@ describe('Runtime', () => {
         type: 'execute_command',
         agentId: 'test',
         capabilities: ['execute_commands'],
-        params: { command: 'whoami /groups' },
+        params: { command: 'curl http://example.com' },
       };
 
       const before = runtime.guardian.check(action);
       expect(before.allowed).toBe(false);
-      expect(before.reason).toContain("Command 'whoami' is not in allowed list");
+      expect(before.reason).toContain("Command 'curl' is not in allowed list");
 
-      runtime.applyShellAllowedCommands(['node', 'npm', 'whoami']);
+      runtime.applyShellAllowedCommands(['node', 'npm', 'curl']);
 
       const after = runtime.guardian.check(action);
       expect(after.allowed).toBe(true);

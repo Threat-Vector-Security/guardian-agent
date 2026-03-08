@@ -56,7 +56,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **Prompt Caching**: Anthropic provider sends system prompt with `cache_control: { type: 'ephemeral' }` for automatic prompt caching
 
 ### Tool Performance
-- **Deferred Loading**: Only 5 always-loaded tools sent to LLM (`tool_search`, `web_search`, `fs_read`, `shell_safe`, `memory_search`). All other 70+ tools discovered via `tool_search` meta-tool.
+- **Deferred Loading**: 10 always-loaded tools sent to LLM (`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`). All other 60+ tools discovered via `find_tools` meta-tool.
 - **Parallel Execution**: Multiple tool calls per LLM response executed concurrently via `Promise.allSettled()`
 - **Short Descriptions**: `ToolDefinition.shortDescription` field used for LLM context to reduce token usage
 - **Tool Examples**: `ToolDefinition.examples` field provides usage patterns for complex tools

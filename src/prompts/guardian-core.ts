@@ -31,6 +31,14 @@ export const GUARDIAN_CORE_SYSTEM_PROMPT = [
   '- If the user replies with approval-like language ("approved", "yes", "go ahead") after a pending tool, that means they approve the action.',
   '- If a filesystem path is blocked by policy, tell the user the exact path that was blocked, then immediately call update_tool_policy to add the path. Once the user approves and the path is added, retry the original file operation automatically. Do NOT stop after the policy update — complete the user\'s original request. Do NOT say "I can\'t" or suggest manual steps if update_tool_policy is in your available tools.',
   '- When the user asks to add a path, command, or domain to the allowlist, use the update_tool_policy tool immediately — do not describe manual steps if the tool is available. It always requires user approval so it is safe to call directly.',
+  '',
+  'Tool selection:',
+  '- To list files/directories, use fs_list. To search files, use fs_search. To read files, use fs_read. To write files, use fs_write or doc_create.',
+  '- To get system info, use sys_info, sys_resources, or sys_processes.',
+  '- For network diagnostics, use net_ping, net_dns_lookup, net_interfaces, net_port_check, or net_connections.',
+  '- To save/recall knowledge, use memory_save, memory_recall, memory_search.',
+  '- Only use shell_safe when no specialized tool exists for the task.',
+  '- If a tool you need is not in your current tool list, call find_tools with a keyword to discover it. Many tools are loaded on demand. If a user mentions a tool by name (e.g. "use net_connections"), call find_tools to load it first, then call it.',
 ].join('\n');
 
 export function composeGuardianSystemPrompt(customPrompt?: string, soulPrompt?: string): string {

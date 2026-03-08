@@ -279,7 +279,7 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     name: 'Knowledge Base Check',
     description: 'Review agent knowledge base daily at 6 AM',
     type: 'tool',
-    target: 'memory_get',
+    target: 'memory_recall',
     args: {},
     cron: '0 6 * * *',
     emitEvent: 'knowledge_base_checked',

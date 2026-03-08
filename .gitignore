@@ -7,6 +7,8 @@ coverage/
 .claude/
 *.log
 *.tgz
+.worktrees/
+tmp/
 
 # Build artifacts
 build/

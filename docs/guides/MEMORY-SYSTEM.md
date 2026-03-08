@@ -95,12 +95,12 @@ Supports FTS5 match expressions. Falls back to substring search if FTS5 is unava
 - `TypeScript AND testing` — boolean search
 - `"error 404"` — exact phrase match
 
-### memory_get
+### memory_recall
 
 Retrieve the persistent knowledge base for the current agent.
 
 ```
-Tool: memory_get
+Tool: memory_recall
 Risk: read_only
 Category: memory
 Parameters:
@@ -200,7 +200,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 **GuardianAgent advantages:**
 - All memory tools pass through Guardian security (capability checks, secret scanning, rate limiting)
-- `memory_search` / `memory_get` results are scanned again before they re-enter LLM context, reducing prompt-injection and accidental PII replay risk
+- `memory_search` / `memory_recall` results are scanned again before they re-enter LLM context, reducing prompt-injection and accidental PII replay risk
 - Cross-channel identity unification
 - Explicit session management with rotate/restore
 - SQLite security hardening (permissions, integrity checks)
@@ -231,7 +231,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 |------|---------|
 | `src/runtime/conversation.ts` | ConversationService with FTS5 search and memory flush |
 | `src/runtime/agent-memory-store.ts` | AgentMemoryStore — per-agent knowledge base files |
-| `src/tools/executor.ts` | memory_search, memory_get, memory_save + qmd_search, qmd_status, qmd_reindex tool registration |
+| `src/tools/executor.ts` | memory_search, memory_recall, memory_save + qmd_search, qmd_status, qmd_reindex tool registration |
 | `src/tools/types.ts` | 'memory' and 'search' tool category definitions |
 | `src/config/types.ts` | AssistantKnowledgeBaseConfig, QMDConfig, QMDSourceConfig types |
 | `src/runtime/qmd-search.ts` | QMDSearchService — hybrid search via QMD CLI subprocess |
