@@ -1499,7 +1499,7 @@ const CATEGORY_NATURAL_LOCALITY: Record<string, 'local' | 'external'> = {
   network: 'local',
   system: 'local',
   memory: 'local',
-  automation: 'local',
+  automation: 'external',
   web: 'external',
   browser: 'external',
   workspace: 'external',

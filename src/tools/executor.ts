@@ -4300,8 +4300,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_list',
-        description: 'List saved workflows available for manual runs or scheduling. Read-only local control-plane data.',
-        shortDescription: 'List saved automation workflows.',
+        description: 'List saved automations (playbooks) available for manual runs or scheduling. Returns id, name, mode, step count, and enabled status for each.',
+        shortDescription: 'List saved automations.',
         risk: 'read_only',
         category: 'automation',
         deferLoading: true,
@@ -4328,32 +4328,51 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_upsert',
-        description: 'Create or update a workflow definition. Mutating - requires approval. Use mode sequential or parallel and provide workflow steps.',
-        shortDescription: 'Create or update a workflow definition.',
+        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step must have id, toolName, and optionally args. For a single-tool automation, provide one step with mode "sequential". To schedule it, also create a task with task_create after this call. Mutating - requires approval.',
+        shortDescription: 'Create or update an automation (playbook).',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
+        examples: [
+          {
+            description: 'Single-tool automation: ARP network scan',
+            input: { id: 'net-scan', name: 'Network Scan', mode: 'sequential', enabled: true, description: 'Quick ARP scan of the local network', steps: [{ id: 'net-scan-step-1', toolName: 'net_arp_scan', args: {} }] },
+          },
+          {
+            description: 'Multi-step sequential pipeline: network discovery',
+            input: { id: 'net-discovery', name: 'Network Discovery', mode: 'sequential', enabled: true, description: 'Full network discovery', steps: [{ id: 'step-1', toolName: 'net_interfaces', args: {} }, { id: 'step-2', toolName: 'net_arp_scan', args: {} }, { id: 'step-3', toolName: 'net_dns_lookup', args: { hostname: 'gateway' } }] },
+          },
+          {
+            description: 'Parallel pipeline: system health checks',
+            input: { id: 'sys-health', name: 'System Health', mode: 'parallel', enabled: true, steps: [{ id: 'step-1', toolName: 'sys_resources', args: {} }, { id: 'step-2', toolName: 'sys_processes', args: {} }, { id: 'step-3', toolName: 'sys_services', args: {} }] },
+          },
+          {
+            description: 'HTTP monitoring: check port then fetch URL',
+            input: { id: 'http-monitor', name: 'HTTP Monitor', mode: 'sequential', enabled: true, description: 'Check HTTP service availability', steps: [{ id: 'step-1', toolName: 'net_port_check', args: { host: '192.168.1.1', port: 80 } }, { id: 'step-2', toolName: 'web_fetch', args: { url: 'http://192.168.1.1/' }, continueOnError: true }] },
+          },
+        ],
         parameters: {
           type: 'object',
           properties: {
-            id: { type: 'string' },
-            name: { type: 'string' },
-            enabled: { type: 'boolean' },
-            mode: { type: 'string' },
-            description: { type: 'string' },
-            schedule: { type: 'string' },
+            id: { type: 'string', description: 'Unique automation ID (kebab-case, e.g. "daily-net-scan")' },
+            name: { type: 'string', description: 'Human-readable name' },
+            enabled: { type: 'boolean', description: 'Whether this automation can be run (default: true)' },
+            mode: { type: 'string', description: '"sequential" (steps run in order) or "parallel" (steps run concurrently)' },
+            description: { type: 'string', description: 'What this automation does' },
+            schedule: { type: 'string', description: 'Optional cron expression (prefer using task_create for scheduling instead)' },
             steps: {
               type: 'array',
+              description: 'Ordered list of steps to execute',
               items: {
                 type: 'object',
                 properties: {
-                  id: { type: 'string' },
-                  name: { type: 'string' },
-                  packId: { type: 'string' },
-                  toolName: { type: 'string' },
-                  args: { type: 'object' },
-                  continueOnError: { type: 'boolean' },
-                  timeoutMs: { type: 'number' },
+                  id: { type: 'string', description: 'Unique step ID within this automation' },
+                  name: { type: 'string', description: 'Optional human label' },
+                  packId: { type: 'string', description: 'Permission policy ID (optional)' },
+                  toolName: { type: 'string', description: 'Name of the tool to execute' },
+                  args: { type: 'object', description: 'Tool arguments as key-value pairs' },
+                  continueOnError: { type: 'boolean', description: 'Continue pipeline if this step fails' },
+                  timeoutMs: { type: 'number', description: 'Per-step timeout override in milliseconds' },
                 },
               },
             },
@@ -4373,8 +4392,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_delete',
-        description: 'Delete a saved workflow by id. Mutating - requires approval.',
-        shortDescription: 'Delete a saved workflow by id.',
+        description: 'Delete a saved automation (playbook) by id. Also delete any linked scheduled task separately with task_delete. Mutating - requires approval.',
+        shortDescription: 'Delete a saved automation by id.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
@@ -4399,8 +4418,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_run',
-        description: 'Run a saved workflow immediately. Supports dryRun to preview it through the normal workflow engine.',
-        shortDescription: 'Run a saved workflow immediately.',
+        description: 'Run a saved automation (playbook) immediately. Set dryRun:true to preview without side effects. Returns step-by-step results with status, duration, and output.',
+        shortDescription: 'Run a saved automation immediately.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
@@ -4434,8 +4453,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_list',
-        description: 'List saved recurring tasks used by Operations. Read-only local control-plane data.',
-        shortDescription: 'List saved recurring tasks.',
+        description: 'List all scheduled recurring tasks. Returns name, type (tool or playbook), target, cron schedule, enabled status, last run info, and run count.',
+        shortDescription: 'List scheduled recurring tasks.',
         risk: 'read_only',
         category: 'automation',
         deferLoading: true,
@@ -4462,21 +4481,35 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_create',
-        description: 'Create a recurring task that runs either one tool or one workflow on a schedule. Mutating - requires approval.',
-        shortDescription: 'Create a recurring task for a tool or playbook.',
+        description: 'Schedule a recurring task. Use type "tool" to run a single tool on cron, or type "workflow" to run an automation playbook on cron. The target is the tool name or playbook id. Mutating - requires approval.',
+        shortDescription: 'Schedule a recurring tool or automation on cron.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
+        examples: [
+          {
+            description: 'Schedule a network scan every 30 minutes',
+            input: { name: 'Network Watch', type: 'tool', target: 'net_arp_scan', cron: '*/30 * * * *', enabled: true },
+          },
+          {
+            description: 'Schedule a playbook daily at 9 AM',
+            input: { name: 'Morning Discovery', type: 'workflow', target: 'net-discovery', cron: '0 9 * * *', enabled: true },
+          },
+          {
+            description: 'Schedule system health check on weekdays at 8 AM',
+            input: { name: 'Weekday Health', type: 'tool', target: 'sys_resources', cron: '0 8 * * 1-5', enabled: true },
+          },
+        ],
         parameters: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
-            type: { type: 'string', description: "Use 'tool' or 'workflow'." },
-            target: { type: 'string' },
-            cron: { type: 'string' },
-            enabled: { type: 'boolean' },
-            args: { type: 'object' },
-            emitEvent: { type: 'string' },
+            name: { type: 'string', description: 'Human-readable task name' },
+            type: { type: 'string', description: '"tool" (run a single tool) or "workflow" (run a playbook)' },
+            target: { type: 'string', description: 'Tool name (e.g. "net_arp_scan") or playbook ID (e.g. "net-discovery")' },
+            cron: { type: 'string', description: 'Cron expression: "minute hour day month weekday" (e.g. "*/30 * * * *")' },
+            enabled: { type: 'boolean', description: 'Start enabled (default: true)' },
+            args: { type: 'object', description: 'Optional tool arguments as key-value pairs' },
+            emitEvent: { type: 'string', description: 'Optional event name to emit on completion' },
           },
           required: ['name', 'type', 'target', 'cron'],
         },
@@ -4493,8 +4526,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_update',
-        description: 'Update an existing recurring task by id. Mutating - requires approval.',
-        shortDescription: 'Update an existing recurring task by id.',
+        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, or args. Mutating - requires approval.',
+        shortDescription: 'Update a scheduled task (cron, enabled, args).',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
@@ -4528,8 +4561,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_delete',
-        description: 'Delete an existing recurring task by id. Mutating - requires approval.',
-        shortDescription: 'Delete a recurring task by id.',
+        description: 'Delete a scheduled task by id, removing its cron schedule. Mutating - requires approval.',
+        shortDescription: 'Delete a scheduled task by id.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,

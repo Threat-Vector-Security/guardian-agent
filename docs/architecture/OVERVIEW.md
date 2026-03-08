@@ -484,5 +484,5 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
 - **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
-- **Operations**: web `#/operations` page — unified scheduled tasks for any tool or playbook with CRUD, presets, run history, and EventBus integration (`ScheduledTaskService`)
+- **Automations**: web `#/automations` page — unified automation catalog merging playbooks + scheduled tasks, with single-tool and pipeline creation, optional cron scheduling, examples, clone, run history, and engine settings. The assistant can also create automations conversationally via `workflow_upsert` and `task_create` tools
 - **Threat Intel**: web Security > Threat Intel tab, CLI `/intel`, Telegram `/intel` command surfaces

@@ -29,7 +29,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
 - Memory: `memory_search`, `memory_get`, `memory_save`
 - Search: `qmd_search`, `qmd_status`, `qmd_reindex`
-- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete`
+- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat (the assistant can create automations conversationally via these tools)
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
@@ -57,8 +57,8 @@ Resolution order: tool-name match > category match > smart category default > de
 If the routed provider is unavailable (e.g., no external provider configured), the routing is silently skipped and the default provider is used. The routed provider also falls back to the default chain on error.
 
 **Smart category defaults:** When both local and external providers are configured and `providerRoutingEnabled` is `true` (the default), tools are automatically routed based on their category's natural locality:
-- **Local categories** (filesystem, shell, network, system, memory, automation) route to the local model — these are fast, low-complexity operations where local LLMs perform well.
-- **External categories** (web, browser, workspace, email, contacts, forum, intel, search) route to the external model — these involve richer content that benefits from stronger synthesis.
+- **Local categories** (filesystem, shell, network, system, memory) route to the local model — these are fast, low-complexity operations where local LLMs perform well.
+- **External categories** (web, browser, workspace, email, contacts, forum, intel, search, automation) route to the external model — these involve richer content or structured multi-step arguments that benefit from stronger reasoning.
 - When only one provider type exists (e.g., only Ollama or only Anthropic), smart routing is a no-op and everything uses that provider.
 - Explicit `providerRouting` entries always override smart defaults.
 
@@ -99,6 +99,22 @@ assistant:
 | `category` | ToolCategory? | Category for enable/disable gating |
 | `deferLoading` | boolean? | When true, tool is only loaded via find_tools |
 | `examples` | Array? | Usage examples: `{ input: Record, description: string }` |
+
+## Conversational Automation Creation
+
+The assistant can create automations (playbooks + scheduled tasks) conversationally via the automation tools. The system prompt guides the assistant to:
+
+1. **Detect intent**: When the user asks to "create an automation", "schedule a scan", "set up a recurring task", etc., the assistant calls `find_tools` with keyword "automation" to load the 8 automation tools.
+2. **Gather requirements**: The assistant asks for (a) what to automate (which tool or sequence), (b) tool arguments, (c) whether to schedule and how often. It asks for missing critical details but uses sensible defaults for the rest.
+3. **Create the playbook**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
+4. **Optionally schedule**: If the user wants recurring execution, calls `task_create` with type "workflow", target set to the playbook id, and a cron expression.
+5. **Verify**: Calls `workflow_list` / `task_list` to confirm creation, and can `workflow_run` with `dryRun: true` to preview.
+
+The automation tools include `examples` arrays with concrete parameter patterns (single-tool, sequential pipeline, parallel pipeline, various cron expressions) so the LLM can construct valid payloads.
+
+### Web UI Parity
+
+The web Automations page (`#/automations`) provides the same create/run/clone/delete/schedule capabilities. Old `#/workflows` and `#/operations` routes redirect to `#/automations`.
 
 ## Parallel Tool Execution
 

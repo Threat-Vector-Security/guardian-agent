@@ -415,7 +415,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) Requires building native runtime modules for connector registry/playbook execution.
 - (-) Limited ecosystem compared with mature workflow products until connector catalog grows.
 
-**Spec:** `docs/specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md`
+**Spec:** `docs/specs/AUTOMATION-FRAMEWORK-SPEC.md`
 
 ---
 
@@ -569,7 +569,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 
 **Context:** When using a local LLM (Ollama) as the default provider, tool result synthesis is often poor — the model returns uninformative responses like "Tool 'fs_write' completed" instead of describing what actually happened. Quality-based fallback (`isResponseDegraded()`) only catches empty/refusal patterns, not low-quality-but-non-empty responses. Users with both local and external providers configured needed a way to selectively route specific tools through higher-quality models without switching their entire default provider.
 
-Manual per-tool routing configuration was too granular for most users. A natural locality pattern emerged: local operations (filesystem, shell, network, system, memory, automation) are well-handled by local models, while external-facing operations (web, browser, workspace, email, contacts, forum, intel, search) benefit from stronger external models. This led to smart category defaults.
+Manual per-tool routing configuration was too granular for most users. A natural locality pattern emerged: local operations (filesystem, shell, network, system, memory) are well-handled by local models, while operations requiring structured reasoning or external APIs (web, browser, workspace, email, contacts, forum, intel, search, automation) benefit from stronger external models. Automation was initially categorized as local but moved to external after testing showed local models consistently failed to invoke tools with complex multi-step structured arguments. This led to smart category defaults.
 
 **Decision:** Add `assistant.tools.providerRouting` — a map from tool names or category names to `'local'` or `'external'`. The routing decision happens per-round in the ChatAgent tool loop: after tools execute, `resolveToolProviderRouting()` checks executed tool names and categories against the routing map. If a preference is found, the `chatFn` is swapped to the preferred provider for the *next* LLM call — meaning the model that processes the tool result and generates the user-facing response is the routed one, not the one that initiated the tool call.
 
