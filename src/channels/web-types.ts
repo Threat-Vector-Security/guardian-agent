@@ -486,7 +486,17 @@ export interface DashboardCallbacks {
     decision: 'approved' | 'denied';
     actor: string;
     reason?: string;
-  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    continueConversation?: boolean;
+    displayMessage?: string;
+  }> | {
+    success: boolean;
+    message: string;
+    continueConversation?: boolean;
+    displayMessage?: string;
+  };
   onConnectorsState?: (args?: { limitRuns?: number }) => ConnectorFrameworkState;
   onConnectorsTemplates?: () => Array<{ id: string; name: string; description: string; category: string; installed: boolean; playbookCount: number }>;
   onConnectorsTemplateInstall?: (templateId: string) => { success: boolean; message: string };

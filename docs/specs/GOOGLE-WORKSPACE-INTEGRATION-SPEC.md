@@ -215,6 +215,28 @@ The Settings > Google Workspace panel has three states:
 
 The Enable button saves `gws.enabled: true` and selected services directly to config via the API — no manual YAML editing required.
 
+### Gmail Web UI Approval Invariants
+
+A March 9, 2026 regression in the Gmail Web UI flow exposed three requirements for direct Gmail compose/send handling:
+
+1. Direct Gmail send/draft responses must include structured `metadata.pendingApprovals` when approval is required. Plain text such as "it needs approval first" is not sufficient for the Web UI approval buttons.
+2. The Web UI must only send an LLM continuation message after approval when the backend confirms there is suspended chat/tool-call context to resume. Direct Gmail shortcuts do not always create suspended LLM state.
+3. Natural-language compose parsing must stop subject extraction at connector phrases such as `and in the body ...`, otherwise prompts like `subject test and in the body put ...` will corrupt the subject/body split.
+
+Observed symptom:
+
+- The chat showed a prepared Gmail approval prompt, the user approved it, and the next assistant turn failed with `I could not generate a final response for that request.`
+
+Root cause:
+
+- This was not just output redaction. Email-address redaction made the prompt text look suspicious, but the actual failures were missing structured approval metadata on the direct Gmail path, unconditional Web UI continuation, and overly-greedy Gmail subject parsing.
+
+Required behavior:
+
+- If approval is needed for a direct Gmail action, return both human-readable copy and structured pending approval metadata.
+- If approval succeeds for a direct Gmail action without suspended LLM state, return an immediate confirmation message from the approval API instead of asking the Web UI to re-enter the chat loop.
+- Preserve Telegram and CLI approval continuation behavior for true suspended tool-call flows.
+
 ### CLI Integration
 
 - `/google status` — Shows installed/version, authenticated, provider enabled, services
@@ -408,6 +430,10 @@ The assistant should prefer workflows like:
 - Dynamic `resolveGwsProvider` with hot-reload support
 - GWS provider error handling with graceful fallback to `chatWithFallback`
 - Ollama exclusion from GWS provider resolution (prevents silent tool-call failures)
+- Gmail Web UI regression fix:
+  direct Gmail approval responses now emit structured `pendingApprovals`, Web UI continuation is gated on resumable suspended context, and direct Gmail approvals return immediate confirmation when no continuation is needed
+- Gmail natural-language compose parsing fix:
+  subject/body extraction now handles phrasing like `with subject test and in the body put hello`
 
 ### Removed
 

@@ -39,6 +39,19 @@ describe('gmail-compose helpers', () => {
     });
   });
 
+  it('parses natural subject and body phrasing without swallowing connector text', () => {
+    const intent = parseDirectGmailWriteIntent(
+      'Can you send a new email to alexanderkenley@gmail.com with subject test and in the body put testicles123',
+    );
+
+    expect(intent).toEqual({
+      mode: 'send',
+      to: 'alexanderkenley@gmail.com',
+      subject: 'test',
+      body: 'testicles123',
+    });
+  });
+
   it('does not treat mailbox read requests as compose requests', () => {
     expect(parseDirectGmailWriteIntent('Who sent the latest Gmail email?')).toBeNull();
   });

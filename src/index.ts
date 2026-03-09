@@ -229,6 +229,11 @@ interface SuspendedSession {
   ctx: AgentContext;
 }
 
+interface ApprovalFollowUpCopy {
+  approved?: string;
+  denied?: string;
+}
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
@@ -241,6 +246,8 @@ class ChatAgent extends BaseAgent {
   private pendingApprovals: Map<string, PendingApprovalState> = new Map();
   /** Suspended tool loops waiting for approval, keyed by user+channel. */
   private suspendedSessions = new Map<string, SuspendedSession>();
+  /** Direct-tool approval follow-ups that should not go back through the LLM. */
+  private approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
@@ -434,7 +441,7 @@ class ChatAgent extends BaseAgent {
         }
         return {
           content: finalContent,
-          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
         };
       }
 
@@ -450,7 +457,7 @@ class ChatAgent extends BaseAgent {
         }
         return {
           content: finalContent,
-          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
         };
       }
 
@@ -466,7 +473,7 @@ class ChatAgent extends BaseAgent {
         }
         return {
           content: finalContent,
-          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
         };
       }
 
@@ -890,6 +897,34 @@ class ChatAgent extends BaseAgent {
     };
   }
 
+  private buildImmediateResponseMetadata(
+    activeSkills: ResolvedSkill[],
+    userKey: string,
+  ): Record<string, unknown> | undefined {
+    const metadata: Record<string, unknown> = {};
+    if (activeSkills.length > 0) {
+      metadata.activeSkills = activeSkills.map((skill) => skill.id);
+    }
+
+    const pending = this.getPendingApprovals(userKey);
+    if (pending?.ids.length) {
+      const summaries = this.tools?.getApprovalSummaries(pending.ids);
+      const pendingApprovalMeta = pending.ids.map((id) => {
+        const summary = summaries?.get(id);
+        return {
+          id,
+          toolName: summary?.toolName ?? 'unknown',
+          argsPreview: summary?.argsPreview ?? '',
+        };
+      });
+      if (pendingApprovalMeta.length > 0) {
+        metadata.pendingApprovals = pendingApprovalMeta;
+      }
+    }
+
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
+  }
+
   /** Detect degraded LLM responses that warrant a fallback retry. */
   private isResponseDegraded(content: string | undefined): boolean {
     if (!content?.trim()) return true;
@@ -973,8 +1008,10 @@ class ChatAgent extends BaseAgent {
       try {
         const result = await this.tools.decideApproval(approvalId, decision, message.userId);
         if (result.success) {
-          results.push(result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
+          const followUp = this.takeApprovalFollowUp(approvalId, decision);
+          results.push(followUp ?? result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
         } else {
+          this.clearApprovalFollowUp(approvalId);
           const failure = result.message ?? `${decision === 'approved' ? 'Approval' : 'Denial'} failed (${approvalId}).`;
           results.push(
             decision === 'approved'
@@ -983,6 +1020,7 @@ class ChatAgent extends BaseAgent {
           );
         }
       } catch (err) {
+        this.clearApprovalFollowUp(approvalId);
         results.push(`Error processing ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -1016,6 +1054,38 @@ class ChatAgent extends BaseAgent {
       createdAt: existing?.createdAt ?? nowMs,
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     });
+  }
+
+  private setApprovalFollowUp(approvalId: string, copy: ApprovalFollowUpCopy): void {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return;
+    this.approvalFollowUps.set(normalizedId, copy);
+  }
+
+  private clearApprovalFollowUp(approvalId: string): void {
+    this.approvalFollowUps.delete(approvalId.trim());
+  }
+
+  takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return null;
+    const copy = this.approvalFollowUps.get(normalizedId);
+    if (!copy) return null;
+    this.approvalFollowUps.delete(normalizedId);
+    return decision === 'approved'
+      ? (copy.approved ?? null)
+      : (copy.denied ?? null);
+  }
+
+  hasSuspendedApproval(approvalId: string): boolean {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return false;
+    for (const session of this.suspendedSessions.values()) {
+      if (session.pendingTools.some((tool) => tool.approvalId === normalizedId)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private syncPendingApprovalsFromExecutor(userKey: string, userId: string, channel: string): void {
@@ -1214,6 +1284,14 @@ class ChatAgent extends BaseAgent {
             ...existingIds,
             approvalId,
           ]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: intent.mode === 'send'
+              ? 'I sent the Gmail message.'
+              : 'I drafted the Gmail message.',
+            denied: intent.mode === 'send'
+              ? 'I did not send the Gmail message.'
+              : 'I did not draft the Gmail message.',
+          });
         }
         const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
         return [
@@ -2189,6 +2267,7 @@ function buildDashboardCallbacks(
   threatIntel: ThreatIntelService,
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
+  chatAgents: Map<string, ChatAgent>,
   skillRegistry: SkillRegistry | undefined,
   enabledManagedProviders: Set<string>,
   webAuthStateRef: { current: WebAuthRuntimeConfig },
@@ -2826,6 +2905,20 @@ function buildDashboardCallbacks(
         input.actor,
         input.reason,
       );
+      const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId));
+      let displayMessage: string | undefined;
+      if (!continueConversation) {
+        for (const agent of chatAgents.values()) {
+          const followUp = agent.takeApprovalFollowUp(input.approvalId, input.decision);
+          if (followUp) {
+            displayMessage = followUp;
+            break;
+          }
+        }
+      }
+      if (!displayMessage && !continueConversation) {
+        displayMessage = result.message;
+      }
       analytics.track({
         type: result.success ? 'tool_approval_decided' : 'tool_approval_failed',
         channel: 'system',
@@ -2840,6 +2933,8 @@ function buildDashboardCallbacks(
       return {
         success: result.success,
         message: result.message,
+        continueConversation,
+        displayMessage,
       };
     },
 
@@ -4985,6 +5080,7 @@ async function main(): Promise<void> {
   const agentCapabilities: Capability[] = presetName && TRUST_PRESETS[presetName]
     ? [...TRUST_PRESETS[presetName].capabilities]
     : DEFAULT_AGENT_CAPABILITIES;
+  const chatAgents = new Map<string, ChatAgent>();
 
   if (config.agents.length > 0) {
     // Config-driven agents: register all and build router from config rules
@@ -5011,6 +5107,7 @@ async function main(): Promise<void> {
         config.qualityFallback,
         resolveRoutedProviderForTools,
       );
+      chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
         agent,
         providerName: agentConfig.provider,
@@ -5047,6 +5144,7 @@ async function main(): Promise<void> {
       config.qualityFallback,
       resolveRoutedProviderForTools,
     );
+    chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
       providerName: config.defaultProvider,
@@ -5070,6 +5168,7 @@ async function main(): Promise<void> {
       config.qualityFallback,
       resolveRoutedProviderForTools,
     );
+    chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
       providerName: externalProviderName,
@@ -5118,6 +5217,7 @@ async function main(): Promise<void> {
       config.qualityFallback,
       resolveRoutedProviderForTools,
     );
+    chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
       grantedCapabilities: agentCapabilities,
@@ -5347,6 +5447,7 @@ async function main(): Promise<void> {
     threatIntel,
     connectors,
     toolExecutor,
+    chatAgents,
     skillRegistry,
     enabledManagedProviders,
     webAuthStateRef,

@@ -31,7 +31,8 @@ export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIn
 
   const to = extractRecipient(text);
   const subject = extractLabeledValue(text, 'subject', ['body', 'message']);
-  const body = extractLabeledValue(text, 'body', []) || extractLabeledValue(text, 'message', []);
+  const body = extractLabeledValue(text, 'body', [], { stripLeadIn: true })
+    || extractLabeledValue(text, 'message', [], { stripLeadIn: true });
 
   return {
     mode,
@@ -68,20 +69,29 @@ function extractRecipient(text: string): string {
   return firstEmail?.[0]?.trim() ?? '';
 }
 
-function extractLabeledValue(text: string, label: string, stopLabels: string[]): string {
+function extractLabeledValue(
+  text: string,
+  label: string,
+  stopLabels: string[],
+  options?: { stripLeadIn?: boolean },
+): string {
   const stopPattern = stopLabels.length > 0
-    ? `(?=(?:,?\\s*)\\b(?:${stopLabels.join('|')})\\b(?:\\s+is|\\s*:|\\s*=)?\\s*|$)`
+    ? `(?=(?:,?\\s*(?:and\\s+)?(?:in\\s+the\\s+)?)?\\b(?:${stopLabels.join('|')})\\b(?:\\s+is|\\s*:|\\s*=)?\\s*|$)`
     : '$';
   const pattern = new RegExp(
     `\\b${label}\\b(?:\\s+is|\\s*:|\\s*=)?\\s*([\\s\\S]+?)${stopPattern}`,
     'i',
   );
   const match = text.match(pattern);
-  return normalizeExtractedValue(match?.[1] ?? '');
+  return normalizeExtractedValue(match?.[1] ?? '', options);
 }
 
-function normalizeExtractedValue(value: string): string {
-  const trimmed = value.trim().replace(/^,\s*/, '').trim();
+function normalizeExtractedValue(value: string, options?: { stripLeadIn?: boolean }): string {
+  let trimmed = value.trim().replace(/^,\s*/, '').trim();
+  trimmed = stripWrappingQuotes(trimmed);
+  if (options?.stripLeadIn) {
+    trimmed = trimmed.replace(/^(?:put|say|write|as)\b[:\s-]*/i, '').trim();
+  }
   return stripWrappingQuotes(trimmed);
 }
 
