@@ -187,17 +187,24 @@ export async function initChatPanel(container) {
     const chatHistory = getHistory(hasInternalOnly ? '__guardian__' : (select?.value || ''));
 
     const results = [];
+    const approvalResponses = [];
     for (const id of approvalIds) {
       try {
         const result = await api.decideToolApproval({ approvalId: id, decision, actor: 'web-user' });
+        approvalResponses.push(result);
         results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
       } catch (err) {
+        approvalResponses.push({ success: false, message: err.message || 'unknown error', continueConversation: false });
         results.push(`Error: ${err.message || 'unknown'}`);
       }
     }
 
-    // If approved, send a continuation so the LLM can complete the original task.
-    if (decision === 'approved') {
+    const immediateMessages = approvalResponses
+      .map((result) => result.displayMessage)
+      .filter((value) => typeof value === 'string' && value.trim().length > 0);
+
+    // Only continue when the backend confirms there is suspended chat context to resume.
+    if (decision === 'approved' && approvalResponses.some((result) => result.continueConversation !== false)) {
       const thinkingEl = createThinkingEl();
       history.appendChild(thinkingEl);
       history.scrollTop = history.scrollHeight;
@@ -213,6 +220,18 @@ export async function initChatPanel(container) {
         thinkingEl.remove();
         history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
       }
+      history.scrollTop = history.scrollHeight;
+      return;
+    }
+
+    if (immediateMessages.length > 0) {
+      addAgentMessage(immediateMessages.join('\n'));
+      history.scrollTop = history.scrollHeight;
+      return;
+    }
+
+    if (results.length > 0) {
+      addAgentMessage(results.join('\n'));
       history.scrollTop = history.scrollHeight;
     }
   };
