@@ -98,6 +98,26 @@ Set the port to your web channel port and the token to the auth token shown in t
 
 The app stays running after tests finish. Useful for manual follow-up testing.
 
+### Debugging Web UI Approval Loops
+
+When debugging state loop issues specifically tied to the Web UI (e.g. LLM endlessly retrying an approved action), use the isolated Node.js test harness. The web UI secretly prepends context strings like `[Context: User is currently viewing the chat panel]` to continuation messages, which the standard PowerShell harness does not simulate.
+
+To accurately simulate the Web UI's exact REST API flow, use the Node-based test:
+
+```bash
+node scripts/test-web-approvals.mjs
+```
+
+**What this script does:**
+1. Spins up an isolated instance of GuardianAgent using a dummy mock provider (to remove external LLM latency).
+2. Sets the policy mode to `approve_by_policy` with a restricted sandbox.
+3. Issues a direct `POST /api/tools/run` command to write a file outside the sandbox, generating a real `pending_approval` state.
+4. Simulates the Web UI calling `POST /api/tools/approvals/decision` to approve the action.
+5. Simulates the Web UI's exact continuation message (including the `[Context: ...]` prefix) via `POST /api/message`.
+6. Asserts that the response is processed properly and the LLM does not get stuck in an approval loop.
+
+This is the **preferred method** for coding assistants (like Gemini/Claude) to verify loop fixes, as it can be easily run automatically in WSL/Ubuntu environments and accurately reproduces the frontend's exact HTTP signature.
+
 ## Environment Variables
 
 | Variable | Default | Description |
