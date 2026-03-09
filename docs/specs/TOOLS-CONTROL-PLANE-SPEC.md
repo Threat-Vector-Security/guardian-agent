@@ -143,8 +143,28 @@ assistant:
   - `succeeded`
   - `failed`
   - `pending_approval` with `approvalId`
-- **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally. Users can still approve/deny pending actions via `/tools approve <id>` or approval-like replies.
+- **Suspended Execution (Continuation Interception)**:
+  - When an LLM tool call requires approval, `ChatAgent` suspends the internal tool loop by caching the entire message context (`suspendedSessions`) and returning a `pending_approval` state to the client.
+  - The UI prompts the user and hits the `/api/tools/approvals/decision` REST endpoint.
+  - The UI then sends a "continuation message" back to the agent.
+  - `ChatAgent` detects the continuation message, restores the suspended `llmMessages` context, fetches the actual tool execution result from `ToolExecutor`, and injects it as the `tool` role response. This prevents the LLM from losing context and retrying identical calls.
+- **Immediate Execution on Approval**:
+  - When a user approves an action via the REST API or UI, `ToolExecutor.decideApproval` executes the tool handler immediately in the backend, rather than waiting for the LLM to reissue the command.
+- **Retry Caching (Loop Prevention)**:
+  - If the LLM generates a duplicate tool call for an action that was approved and executed within the last 5 minutes (matching `toolName` and `argsHash`), `ToolExecutor` bypasses the policy check and instantly returns the cached execution result (success or error) instead of requesting a new approval.
+- **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally.
+- **Dedup**: identical pending approvals (same `toolName` + `argsHash`) are deduplicated in `ToolApprovalStore.create()`.
 - Decision history is attached to job records for auditability.
+
+### Structured Approval UX (all channels)
+
+When a tool returns `pending_approval`, the response includes structured metadata (`response.metadata.pendingApprovals`) with an array of `{ id, toolName, argsPreview }` objects. Each channel renders approval UI natively:
+
+- **Web UI**: Styled Approve / Deny buttons rendered in the chat panel via `buildApprovalButtons()`. Buttons call `api.decideToolApproval()` directly, then send a continuation message so the LLM completes the original task.
+- **CLI**: Interactive `Approve (y) / Deny (n):` readline prompt displayed inline after the agent response. On approval, the CLI auto-dispatches a continuation message and handles chained approvals (e.g., add path → write file).
+- **Telegram**: Inline keyboard buttons (✅ Approve / ❌ Deny) sent as a separate message after the agent response. Callback queries trigger the approval decision and auto-continue via `onDispatch`.
+
+The text-based `/approve <id>` and `/deny <id>` commands remain available as a fallback on CLI and Telegram, but the structured button/prompt UX is the primary path.
 
 ### Read-Only Shell Bypass
 Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip approval automatically. Recognized read-only commands: `ls`, `dir`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `echo`, `cat`, `head`, `tail`, `wc`, `file`, `which`, `type`, plus prefixed commands like `git status`, `git diff`, `git log`, `git branch`, `node --version`, `npm --version`, `npm ls`.

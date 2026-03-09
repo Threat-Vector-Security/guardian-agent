@@ -213,6 +213,21 @@ async function probeGwsCli(config: GuardianAgentConfig): Promise<{
   }
 }
 
+interface SuspendedToolCall {
+  approvalId: string;
+  toolCallId: string;
+  jobId: string;
+  name: string;
+}
+
+interface SuspendedSession {
+  userKey: string;
+  llmMessages: import('./llm/types.js').ChatMessage[];
+  pendingTools: SuspendedToolCall[];
+  originalMessage: UserMessage;
+  ctx: AgentContext;
+}
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
@@ -223,6 +238,8 @@ class ChatAgent extends BaseAgent {
   private maxToolRounds: number;
   /** Pending approval IDs from the last tool round, keyed by user+channel. */
   private pendingApprovals: Map<string, PendingApprovalState> = new Map();
+  /** Suspended tool loops waiting for approval, keyed by user+channel. */
+  private suspendedSessions = new Map<string, SuspendedSession>();
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
@@ -308,7 +325,7 @@ class ChatAgent extends BaseAgent {
     const userKey = `${message.userId}:${message.channel}`;
     this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
 
-    // Check if user is approving a pending tool action
+    // Check if user is approving a pending tool action (text-based: CLI / Telegram)
     const approvalResult = await this.tryHandleApproval(message, userKey);
     if (approvalResult) {
       if (this.conversationService) {
@@ -320,149 +337,186 @@ class ChatAgent extends BaseAgent {
       }
       return { content: approvalResult };
     }
-    // Non-blocking pending approval context (approvals no longer block new messages)
-    const existingPending = this.getPendingApprovals(userKey);
-    const pendingApprovalContext = existingPending
-      ? `\nNote: ${existingPending.ids.length} tool action(s) are awaiting user approval (IDs: ${existingPending.ids.join(', ')}). Process the current request normally.`
-      : '';
 
-    // Inject knowledge base into system prompt if available
+    const isContinuation = message.content.includes('[User approved the pending tool action(s)') || 
+                           message.content.includes('Tool actions have been decided');
+    const suspended = this.suspendedSessions.get(userKey);
+
+    let llmMessages: import('./llm/types.js').ChatMessage[];
+    let skipDirectTools = false;
     let enrichedSystemPrompt = this.systemPrompt;
-    const activeSkills = this.skillResolver?.resolve({
-      agentId: this.id,
-      channel: message.channel,
-      requestType: 'chat',
-      content: message.content,
-      enabledManagedProviders: this.enabledManagedProviders,
-    }) ?? [];
-    if (this.memoryStore) {
-      const kb = this.memoryStore.loadForContext(this.id);
-      if (kb) {
-        enrichedSystemPrompt += `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${kb}\n</knowledge-base>`;
-      }
-    }
-    if (activeSkills.length > 0) {
-      enrichedSystemPrompt += `\n\n<active-skills>\n${formatResolvedSkills(activeSkills)}\n</active-skills>`;
-    }
-    if (this.tools) {
-      enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext()}\n</tool-context>`;
-    }
-    const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
-    if (toolRuntimeNotices.length > 0) {
-      enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
-    }
-    if (pendingApprovalContext) {
-      enrichedSystemPrompt += pendingApprovalContext;
-    }
+    let activeSkills: ResolvedSkill[] = [];
 
-    const llmMessages: ChatMessage[] = this.conversationService
-      ? this.conversationService.buildMessages(
-        { agentId: this.id, userId: message.userId, channel: message.channel },
-        enrichedSystemPrompt,
-        message.content,
-      )
-      : [
-        { role: 'system', content: enrichedSystemPrompt },
-        { role: 'user', content: message.content },
-      ];
+    if (isContinuation && suspended) {
+      llmMessages = [...suspended.llmMessages];
+      const allJobs = this.tools?.listJobs(100) ?? [];
+      for (const pending of suspended.pendingTools) {
+        const job = allJobs.find(j => j.id === pending.jobId);
+        let resultObj: Record<string, unknown> = { success: false, message: 'Job not found' };
+        if (job) {
+          if (job.status === 'succeeded') resultObj = { success: true, message: job.resultPreview || 'Executed successfully.' };
+          else resultObj = { success: false, error: job.error || 'Failed or denied.' };
+        }
+        llmMessages.push({
+          role: 'tool',
+          toolCallId: pending.toolCallId,
+          content: JSON.stringify(resultObj),
+        });
+      }
+      llmMessages.push({
+        role: 'user',
+        content: message.content,
+      });
+      this.suspendedSessions.delete(userKey);
+      skipDirectTools = true;
+    } else {
+      // Non-blocking pending approval context (approvals no longer block new messages)
+      const existingPending = this.getPendingApprovals(userKey);
+      const pendingApprovalContext = existingPending
+        ? `\nNote: ${existingPending.ids.length} tool action(s) are awaiting user approval. The approval UI is presented to the user automatically — do NOT mention approval IDs or ask the user to approve manually. Process the current request normally and call tools as needed.`
+        : '';
+
+      // Inject knowledge base into system prompt if available
+      activeSkills = this.skillResolver?.resolve({
+        agentId: this.id,
+        channel: message.channel,
+        requestType: 'chat',
+        content: message.content,
+        enabledManagedProviders: this.enabledManagedProviders,
+      }) ?? [];
+      if (this.memoryStore) {
+        const kb = this.memoryStore.loadForContext(this.id);
+        if (kb) {
+          enrichedSystemPrompt += `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${kb}\n</knowledge-base>`;
+        }
+      }
+      if (activeSkills.length > 0) {
+        enrichedSystemPrompt += `\n\n<active-skills>\n${formatResolvedSkills(activeSkills)}\n</active-skills>`;
+      }
+      if (this.tools) {
+        enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext()}\n</tool-context>`;
+      }
+      const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
+      if (toolRuntimeNotices.length > 0) {
+        enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
+      }
+      if (pendingApprovalContext) {
+        enrichedSystemPrompt += pendingApprovalContext;
+      }
+
+      llmMessages = this.conversationService
+        ? this.conversationService.buildMessages(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          enrichedSystemPrompt,
+          message.content,
+        )
+        : [
+          { role: 'system', content: enrichedSystemPrompt },
+          { role: 'user', content: message.content },
+        ];
+    }
 
     let finalContent = '';
+    let pendingApprovalMeta: Array<{ id: string; toolName: string; argsPreview: string }> | undefined;
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
-    const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
-    if (directSearch) {
-      finalContent = directSearch;
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          message.content,
-          finalContent,
-        );
+    
+    if (!skipDirectTools) {
+      const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
+      if (directSearch) {
+        finalContent = directSearch;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: this.id, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+        };
       }
-      return {
-        content: finalContent,
-        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
-      };
-    }
 
-    const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(message, ctx, userKey);
-    if (directWorkspaceWrite) {
-      finalContent = directWorkspaceWrite;
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          message.content,
-          finalContent,
-        );
+      const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(message, ctx, userKey);
+      if (directWorkspaceWrite) {
+        finalContent = directWorkspaceWrite;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: this.id, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+        };
       }
-      return {
-        content: finalContent,
-        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
-      };
-    }
 
-    const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(message, ctx);
-    if (directWorkspaceRead) {
-      finalContent = directWorkspaceRead;
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          message.content,
-          finalContent,
-        );
+      const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(message, ctx);
+      if (directWorkspaceRead) {
+        finalContent = directWorkspaceRead;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: this.id, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+        };
       }
-      return {
-        content: finalContent,
-        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
-      };
-    }
 
-    // Direct web search: if the user clearly wants web results, call web_search
-    // directly so the tool executes even when the LLM doesn't invoke it.
-    let webSearchResult: string | null = null;
-    try {
-      webSearchResult = await this.tryDirectWebSearch(message, ctx);
-    } catch {
-      // Search failed — fall through to LLM with tool calling
-    }
-    if (webSearchResult) {
-      // Scan web search results through OutputGuardian before LLM reinjection
-      const sanitizedWebSearch = this.sanitizeToolResultForLlm(
-        'web_search',
-        webSearchResult,
-        defaultToolResultProviderKind,
-      );
-      const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
-        ? sanitizedWebSearch.sanitized
-        : String(sanitizedWebSearch.sanitized ?? '');
-      const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
-      const llmSearchPayload = warningPrefix
-        ? `${warningPrefix}\n${safeWebSearchResult}`
-        : safeWebSearchResult;
+      // Direct web search: if the user clearly wants web results, call web_search
+      // directly so the tool executes even when the LLM doesn't invoke it.
+      let webSearchResult: string | null = null;
+      try {
+        webSearchResult = await this.tryDirectWebSearch(message, ctx);
+      } catch {
+        // Search failed — fall through to LLM with tool calling
+      }
+      if (webSearchResult) {
+        // Scan web search results through OutputGuardian before LLM reinjection
+        const sanitizedWebSearch = this.sanitizeToolResultForLlm(
+          'web_search',
+          webSearchResult,
+          defaultToolResultProviderKind,
+        );
+        const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
+          ? sanitizedWebSearch.sanitized
+          : String(sanitizedWebSearch.sanitized ?? '');
+        const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
+        const llmSearchPayload = warningPrefix
+          ? `${warningPrefix}\n${safeWebSearchResult}`
+          : safeWebSearchResult;
 
-      // Feed the sanitized search results through the LLM for a natural response
-      if (ctx.llm) {
-        try {
-          const llmFormat: ChatMessage[] = [
-            ...llmMessages,
-            { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
-          ];
-          const formatted = await this.chatWithFallback(ctx, llmFormat);
-          finalContent = formatted.content || llmSearchPayload;
-        } catch {
-          // LLM formatting failed — return raw search results
+        // Feed the sanitized search results through the LLM for a natural response
+        if (ctx.llm) {
+          try {
+            const llmFormat: ChatMessage[] = [
+              ...llmMessages,
+              { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
+            ];
+            const formatted = await this.chatWithFallback(ctx, llmFormat);
+            finalContent = formatted.content || llmSearchPayload;
+          } catch {
+            // LLM formatting failed — return raw search results
+            finalContent = llmSearchPayload;
+          }
+        } else {
           finalContent = llmSearchPayload;
         }
-      } else {
-        finalContent = llmSearchPayload;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: this.id, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return { content: finalContent };
       }
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          message.content,
-          finalContent,
-        );
-      }
-      return { content: finalContent };
     }
 
     // If GWS provider is configured and the message looks like a workspace request,
@@ -613,9 +667,17 @@ class ChatAgent extends BaseAgent {
               hasPending = true;
             }
 
+            // Strip approval IDs from pending_approval results so the LLM
+            // doesn't echo them.  The structured metadata handles approval rendering.
+            let resultForLlm = toolResult;
+            if (toolResult.status === 'pending_approval') {
+              const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
+              resultForLlm = { ...rest, message: 'This action needs your approval. The approval UI is shown to the user automatically.' };
+            }
+
             const scannedToolResult = this.sanitizeToolResultForLlm(
               toolCall.name,
-              toolResult,
+              resultForLlm,
               toolResultProviderKind,
             );
 
@@ -659,8 +721,43 @@ class ChatAgent extends BaseAgent {
           }
         }
 
-        // If all tools in this round are pending, stop looping — user needs to approve
-        if (hasPending) break;
+        // Non-blocking approvals: only break if EVERY tool in this round is
+        // pending approval.  When some tools succeeded, the LLM already sees their
+        // results alongside the pending status, so it can compose a natural response
+        // that acknowledges what's waiting and what it plans to do next.
+        if (hasPending) {
+          const allPending = toolResults.every(
+            (s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval',
+          );
+          if (allPending) {
+            // Remove the 'pending' tool result messages we just pushed, so we don't send duplicate toolCallIds when resuming
+            llmMessages.splice(-toolResults.length, toolResults.length);
+
+            // Suspended Execution: cache the loop state so we can resume directly
+            // when the user approves via out-of-band UI.
+            const pendingTools: SuspendedToolCall[] = toolResults
+              .filter((s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval')
+              .map((s) => {
+                 const result = (s as any).value.result as Record<string, unknown>;
+                 const toolCall = (s as any).value.toolCall;
+                 return {
+                   approvalId: String(result.approvalId),
+                   toolCallId: toolCall.id,
+                   jobId: String(result.jobId),
+                   name: toolCall.name,
+                 };
+              });
+              
+            this.suspendedSessions.set(userKey, {
+              userKey,
+              llmMessages: [...llmMessages],
+              pendingTools,
+              originalMessage: message,
+              ctx,
+            });
+            break;
+          }
+        }
 
         // Per-tool provider routing: if any executed tool has a routing preference,
         // swap the provider for the next round so a better model synthesizes the result.
@@ -696,10 +793,16 @@ class ChatAgent extends BaseAgent {
         const merged = [...new Set([...existing, ...pendingIds])];
         this.setPendingApprovals(userKey, merged);
         const summaries = this.tools?.getApprovalSummaries(merged);
-        const prompt = this.formatPendingApprovalPrompt(merged, summaries);
-        finalContent = finalContent?.trim()
-          ? `${finalContent.trim()}\n\n${prompt}`
-          : prompt;
+        // Build structured approval metadata — all channels render native approval UI
+        // (web: buttons, CLI: readline prompt, Telegram: inline keyboard).
+        // No text prompt is appended to finalContent; the metadata is the canonical source.
+        pendingApprovalMeta = merged.map((id) => {
+          const s = summaries?.get(id);
+          return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
+        });
+        if (!finalContent?.trim()) {
+          finalContent = 'I need your approval before proceeding.';
+        }
       }
 
       // Quality-based fallback: if the local LLM produced an empty or degraded
@@ -776,9 +879,13 @@ class ChatAgent extends BaseAgent {
       );
     }
 
+    const metadata: Record<string, unknown> = {};
+    if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
+    if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
+
     return {
       content: finalContent,
-      metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
   }
 
@@ -5590,6 +5697,12 @@ async function main(): Promise<void> {
         ? (args) => dashboardCallbacks.onThreatIntelFindings!(args)
         : undefined,
       onAnalyticsTrack: (event) => dashboardCallbacks.onAnalyticsTrack?.(event),
+      onToolsApprovalDecision: dashboardCallbacks.onToolsApprovalDecision
+        ? (input) => dashboardCallbacks.onToolsApprovalDecision!(input)
+        : undefined,
+      onDispatch: dashboardCallbacks.onDispatch
+        ? (agentId, msg) => dashboardCallbacks.onDispatch!(agentId, msg)
+        : undefined,
       onResetConversation: async ({ userId, agentId }) => {
         if (!dashboardCallbacks.onConversationReset) {
           return { success: false, message: 'Conversation reset is not available.' };
