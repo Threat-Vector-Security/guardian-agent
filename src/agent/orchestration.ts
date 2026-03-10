@@ -18,8 +18,21 @@ import type {
   UserMessage,
 } from './types.js';
 import { SharedState } from '../runtime/shared-state.js';
+import Ajv from 'ajv';
+import { createLogger } from '../util/logging.js';
+
+const log = createLogger('orchestration');
 
 // ─── Orchestration Types ──────────────────────────────────────
+
+export interface OrchestrationStepContract {
+  key: string;
+  schema: Record<string, unknown>;
+  maxBytes?: number;
+  sanitize?: 'none' | 'llm_text' | 'json_text';
+}
+
+export type ValidationMode = 'warn' | 'enforce' | 'none';
 
 /** A single step in an orchestration pipeline. */
 export interface OrchestrationStep {
@@ -35,6 +48,9 @@ export interface OrchestrationStep {
    * If not set, defaults to the agent ID.
    */
   outputKey?: string;
+  
+  inputContract?: OrchestrationStepContract;
+  outputContract?: OrchestrationStepContract;
 }
 
 /** Options for SequentialAgent construction. */
@@ -46,6 +62,7 @@ export interface SequentialAgentOptions {
    * Default: true.
    */
   stopOnError?: boolean;
+  validationMode?: ValidationMode;
 }
 
 /** Options for ParallelAgent construction. */
@@ -57,6 +74,7 @@ export interface ParallelAgentOptions {
    * Default: 0.
    */
   maxConcurrency?: number;
+  validationMode?: ValidationMode;
 }
 
 /** Condition function for LoopAgent — return true to continue looping. */
@@ -74,6 +92,8 @@ export interface LoopAgentOptions {
   inputKey?: string;
   /** Key in shared state to write each iteration's output. */
   outputKey?: string;
+  inputContract?: OrchestrationStepContract;
+  outputContract?: OrchestrationStepContract;
   /**
    * Continue looping while this returns true.
    * Default: loops while the last response content is non-empty, up to maxIterations.
@@ -81,6 +101,64 @@ export interface LoopAgentOptions {
   condition?: LoopCondition;
   /** Maximum iterations to prevent infinite loops. Default: 10. */
   maxIterations?: number;
+  validationMode?: ValidationMode;
+}
+
+// ─── Contract Validation ──────────────────────────────────────
+
+function validateContract(
+  contract: OrchestrationStepContract | undefined,
+  value: unknown,
+  mode: ValidationMode,
+  agentId: string,
+): { valid: boolean; error?: string; parsedValue?: unknown; status: 'none' | 'warned' | 'enforced' } {
+  if (!contract || mode === 'none') return { valid: true, parsedValue: value, status: 'none' };
+
+  let parsed = value;
+  if (typeof value === 'string' && contract.sanitize === 'json_text') {
+    try {
+      const match = value.match(/```(?:json)?\n([\s\S]*?)\n```/) || value.match(/\{[\s\S]*\}/);
+      if (match) {
+        parsed = JSON.parse(match[1] ?? match[0]);
+      } else {
+        parsed = JSON.parse(value);
+      }
+    } catch (e) {
+      const err = `Failed to parse json_text for contract '${contract.key}': ${e instanceof Error ? e.message : String(e)}`;
+      if (mode === 'enforce') return { valid: false, error: err, status: 'none' };
+      log.warn({ agentId, key: contract.key, err }, 'Contract JSON parse warning');
+    }
+  }
+
+  const AjvClass = (Ajv as any).default || Ajv;
+  const ajv = new AjvClass({ strict: false, allErrors: true });
+  try {
+    const validate = ajv.compile(contract.schema);
+    const valid = validate(parsed);
+    if (!valid) {
+      const err = `Contract validation failed for '${contract.key}': ${ajv.errorsText(validate.errors)}`;
+      if (mode === 'enforce') return { valid: false, error: err, status: 'none' };
+      log.warn({ agentId, key: contract.key, errors: validate.errors }, 'Contract validation warning');
+      return { valid: true, parsedValue: parsed, status: 'warned' };
+    }
+  } catch (e) {
+    const err = `Schema compile failed for '${contract.key}': ${e instanceof Error ? e.message : String(e)}`;
+    if (mode === 'enforce') return { valid: false, error: err, status: 'none' };
+    log.warn({ agentId, key: contract.key, err }, 'Contract schema warning');
+    return { valid: true, parsedValue: parsed, status: 'warned' };
+  }
+
+  if (contract.maxBytes) {
+    const size = typeof parsed === 'string' ? parsed.length : JSON.stringify(parsed)?.length || 0;
+    if (size > contract.maxBytes) {
+      const err = `Contract size exceeded for '${contract.key}': ${size} > ${contract.maxBytes}`;
+      if (mode === 'enforce') return { valid: false, error: err, status: 'none' };
+      log.warn({ agentId, key: contract.key, size, maxBytes: contract.maxBytes }, 'Contract size warning');
+      return { valid: true, parsedValue: parsed, status: 'warned' };
+    }
+  }
+
+  return { valid: true, parsedValue: parsed, status: mode === 'enforce' ? 'enforced' : 'none' };
 }
 
 // ─── Sequential Agent ─────────────────────────────────────────
@@ -98,11 +176,13 @@ export interface LoopAgentOptions {
 export class SequentialAgent extends BaseAgent {
   private steps: OrchestrationStep[];
   private stopOnError: boolean;
+  private validationMode: ValidationMode;
 
   constructor(id: string, name: string, options: SequentialAgentOptions) {
     super(id, name, { handleMessages: true, handleEvents: false, handleSchedule: false });
     this.steps = options.steps;
     this.stopOnError = options.stopOnError ?? true;
+    this.validationMode = options.validationMode ?? 'warn';
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
@@ -126,6 +206,13 @@ export class SequentialAgent extends BaseAgent {
         }
       }
 
+      if (step.inputContract) {
+        const check = validateContract(step.inputContract, inputContent, this.validationMode, step.agentId);
+        if (!check.valid) throw new Error(check.error);
+        if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
+        else inputContent = JSON.stringify(check.parsedValue);
+      }
+
       const stepMessage: UserMessage = {
         ...message,
         content: inputContent,
@@ -134,12 +221,28 @@ export class SequentialAgent extends BaseAgent {
       try {
         const response = await ctx.dispatch(step.agentId, stepMessage);
         const outputKey = step.outputKey ?? step.agentId;
-        state.set(outputKey, response.content);
-        stepResults.push({ agentId: step.agentId, response });
+        
+        let outputContent = response.content;
+        let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
+        
+        if (step.outputContract) {
+          const check = validateContract(step.outputContract, response.content, this.validationMode, step.agentId);
+          if (!check.valid) throw new Error(check.error);
+          validationStatus = check.status;
+          if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
+          else outputContent = JSON.stringify(check.parsedValue);
+        }
+
+        state.set(outputKey, outputContent, {
+          producerAgent: step.agentId,
+          schemaId: step.outputContract?.key,
+          validationStatus,
+        });
+        stepResults.push({ agentId: step.agentId, response: { ...response, content: outputContent } });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const outputKey = step.outputKey ?? step.agentId;
-        state.set(outputKey, `[Error: ${errorMsg}]`);
+        state.set(outputKey, `[Error: ${errorMsg}]`, { validationStatus: 'failed' });
 
         if (this.stopOnError) {
           state.clearTemp();
@@ -188,11 +291,13 @@ export class SequentialAgent extends BaseAgent {
 export class ParallelAgent extends BaseAgent {
   private steps: OrchestrationStep[];
   private maxConcurrency: number;
+  private validationMode: ValidationMode;
 
   constructor(id: string, name: string, options: ParallelAgentOptions) {
     super(id, name, { handleMessages: true, handleEvents: false, handleSchedule: false });
     this.steps = options.steps;
     this.maxConcurrency = options.maxConcurrency ?? 0;
+    this.validationMode = options.validationMode ?? 'warn';
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
@@ -216,17 +321,40 @@ export class ParallelAgent extends BaseAgent {
         }
       }
 
+      if (step.inputContract) {
+        const check = validateContract(step.inputContract, inputContent, this.validationMode, step.agentId);
+        if (!check.valid) return { agentId: step.agentId, error: check.error };
+        if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
+        else inputContent = JSON.stringify(check.parsedValue);
+      }
+
       const stepMessage: UserMessage = { ...message, content: inputContent };
 
       try {
         const response = await ctx.dispatch!(step.agentId, stepMessage);
         const outputKey = step.outputKey ?? step.agentId;
-        state.set(outputKey, response.content);
-        return { agentId: step.agentId, response };
+        
+        let outputContent = response.content;
+        let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
+
+        if (step.outputContract) {
+          const check = validateContract(step.outputContract, response.content, this.validationMode, step.agentId);
+          if (!check.valid) throw new Error(check.error);
+          validationStatus = check.status;
+          if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
+          else outputContent = JSON.stringify(check.parsedValue);
+        }
+
+        state.set(outputKey, outputContent, {
+          producerAgent: step.agentId,
+          schemaId: step.outputContract?.key,
+          validationStatus,
+        });
+        return { agentId: step.agentId, response: { ...response, content: outputContent } };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const outputKey = step.outputKey ?? step.agentId;
-        state.set(outputKey, `[Error: ${errorMsg}]`);
+        state.set(outputKey, `[Error: ${errorMsg}]`, { validationStatus: 'failed' });
         return { agentId: step.agentId, error: errorMsg };
       }
     };
@@ -301,15 +429,21 @@ export class LoopAgent extends BaseAgent {
   private targetAgentId: string;
   private inputKey?: string;
   private outputKey?: string;
+  private inputContract?: OrchestrationStepContract;
+  private outputContract?: OrchestrationStepContract;
   private condition: LoopCondition;
   private maxIterations: number;
+  private validationMode: ValidationMode;
 
   constructor(id: string, name: string, options: LoopAgentOptions) {
     super(id, name, { handleMessages: true, handleEvents: false, handleSchedule: false });
     this.targetAgentId = options.agentId;
     this.inputKey = options.inputKey;
     this.outputKey = options.outputKey;
+    this.inputContract = options.inputContract;
+    this.outputContract = options.outputContract;
     this.maxIterations = options.maxIterations ?? 10;
+    this.validationMode = options.validationMode ?? 'warn';
     this.condition = options.condition ?? ((iteration, lastResponse) => {
       if (iteration >= this.maxIterations) return false;
       if (!lastResponse) return true;
@@ -341,12 +475,38 @@ export class LoopAgent extends BaseAgent {
         inputContent = lastResponse.content;
       }
 
+      if (this.inputContract) {
+        const check = validateContract(this.inputContract, inputContent, this.validationMode, this.targetAgentId);
+        if (!check.valid) {
+          return { content: `[Loop stopped at iteration ${iteration}: ${check.error}]`, metadata: { orchestration: 'loop', iterations: iteration, stoppedByError: true } };
+        }
+        if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
+        else inputContent = JSON.stringify(check.parsedValue);
+      }
+
       const stepMessage: UserMessage = { ...message, content: inputContent };
 
       try {
         lastResponse = await ctx.dispatch(this.targetAgentId, stepMessage);
         const outputKey = this.outputKey ?? this.targetAgentId;
-        state.set(outputKey, lastResponse.content);
+        
+        let outputContent = lastResponse.content;
+        let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
+
+        if (this.outputContract) {
+          const check = validateContract(this.outputContract, lastResponse.content, this.validationMode, this.targetAgentId);
+          if (!check.valid) throw new Error(check.error);
+          validationStatus = check.status;
+          if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
+          else outputContent = JSON.stringify(check.parsedValue);
+          lastResponse = { ...lastResponse, content: outputContent };
+        }
+
+        state.set(outputKey, outputContent, {
+          producerAgent: this.targetAgentId,
+          schemaId: this.outputContract?.key,
+          validationStatus,
+        });
         state.set('temp:iteration', iteration);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);

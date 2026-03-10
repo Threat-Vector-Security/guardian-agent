@@ -52,7 +52,7 @@ import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { GWSService } from './runtime/gws-service.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
-import type { ToolPolicySnapshot } from './tools/types.js';
+import type { ToolPolicySnapshot, ToolExecutionRequest } from './tools/types.js';
 import { MCPClientManager } from './tools/mcp-client.js';
 import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
@@ -260,6 +260,49 @@ class ChatAgent extends BaseAgent {
   private qualityFallbackEnabled: boolean;
   /** Resolve a routed LLM provider based on tools just executed. Returns undefined if no routing override. */
   private resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined;
+
+  private executeToolsConflictAware(
+    toolCalls: Array<{ id: string; name: string; arguments?: string }>,
+    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>
+  ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
+    const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
+    const locks = new Map<string, Promise<void>>();
+
+    for (const tc of toolCalls) {
+      let parsedArgs: Record<string, unknown> = {};
+      if (tc.arguments?.trim()) {
+        try { parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
+      }
+
+      const def = this.tools?.getToolDefinition(tc.name);
+      const isMutating = def ? def.risk !== 'read_only' : true;
+      let conflictKey: string | null = null;
+
+      if (isMutating) {
+        if (tc.name === 'fs_write' || tc.name === 'fs_delete' || tc.name === 'fs_move' || tc.name === 'fs_copy' || tc.name === 'doc_create') {
+          conflictKey = `fs:${parsedArgs.path || parsedArgs.filename || parsedArgs.source}`;
+        } else if (tc.name.startsWith('browser_')) {
+          conflictKey = `browser:${parsedArgs.ref || parsedArgs.url}`;
+        } else {
+          conflictKey = `global:${tc.name}`;
+        }
+      }
+
+      const executeFn = () => this.tools!.executeModelTool(tc.name, parsedArgs, toolExecOrigin)
+        .then((result) => ({ toolCall: tc, result }));
+
+      if (conflictKey) {
+        const prev = locks.get(conflictKey) ?? Promise.resolve();
+        const current = prev.then(executeFn);
+        locks.set(conflictKey, current.then(() => {}).catch(() => {}));
+        promises.push(current);
+      } else {
+        promises.push(executeFn());
+      }
+    }
+
+    return promises;
+  }
 
   constructor(
     id: string,
@@ -559,7 +602,7 @@ class ChatAgent extends BaseAgent {
       if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
-          const fb = await this.fallbackChain.chatWithFallback(llmMessages);
+          const fb = await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
           if (fb.response.content?.trim()) finalContent = fb.response.content;
         } catch { /* fallback also failed, keep original */ }
       }
@@ -650,18 +693,7 @@ class ChatAgent extends BaseAgent {
         };
 
         const toolResults = await Promise.allSettled(
-          response.toolCalls.map((tc) => {
-            let parsedArgs: Record<string, unknown> = {};
-            if (tc.arguments?.trim()) {
-              try {
-                parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>;
-              } catch {
-                parsedArgs = {};
-              }
-            }
-            return this.tools!.executeModelTool(tc.name, parsedArgs, toolExecOrigin)
-              .then((result) => ({ toolCall: tc, result }));
-          }),
+          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin)
         );
 
         let hasPending = false;
@@ -795,24 +827,6 @@ class ChatAgent extends BaseAgent {
         rounds += 1;
       }
 
-      // Store pending approvals for this user so they can be approved/denied explicitly
-      if (pendingIds.length > 0) {
-        const existing = this.getPendingApprovals(userKey)?.ids ?? [];
-        const merged = [...new Set([...existing, ...pendingIds])];
-        this.setPendingApprovals(userKey, merged);
-        const summaries = this.tools?.getApprovalSummaries(merged);
-        // Build structured approval metadata — all channels render native approval UI
-        // (web: buttons, CLI: readline prompt, Telegram: inline keyboard).
-        // No text prompt is appended to finalContent; the metadata is the canonical source.
-        pendingApprovalMeta = merged.map((id) => {
-          const s = summaries?.get(id);
-          return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
-        });
-        if (shouldUseStructuredPendingApprovalMessage(finalContent)) {
-          finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
-        }
-      }
-
       // Quality-based fallback: if the local LLM produced an empty or degraded
       // response and we have a fallback chain with an external provider, retry.
       // Pass tool definitions (re-mapped for external provider) so the fallback
@@ -821,9 +835,9 @@ class ChatAgent extends BaseAgent {
         log.warn({ agent: this.id, contentPreview: finalContent?.slice(0, 100) },
           'Local LLM produced degraded response, retrying with fallback chain');
         try {
-          const externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
+          let externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
           const fbMessages = [...llmMessages];
-          const fallbackResult = await this.fallbackChain.chatWithFallback(fbMessages, { tools: externalToolDefs });
+          const fallbackResult = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
           const fbProvider = fallbackResult.providerName;
 
           // If the fallback LLM returned tool calls, execute them (single round)
@@ -839,29 +853,116 @@ class ChatAgent extends BaseAgent {
               requestId: message.id,
               agentContext: { checkAction: ctx.checkAction },
             };
-            const toolResults = await Promise.allSettled(
-              fallbackResult.response.toolCalls.map(async (tc) => {
-                let parsedArgs: Record<string, unknown> = {};
-                if (tc.arguments?.trim()) {
-                  try { parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
-                }
-                const result = await this.tools!.executeModelTool(tc.name, parsedArgs, fbToolOrigin);
-                const output = result.status === 'succeeded'
-                  ? String(result.output ?? result.message)
-                  : `Error: ${result.message}`;
-                return { callId: tc.id, name: tc.name, output };
-              })
+            const fbToolResults = await Promise.allSettled(
+              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin)
             );
-            for (const r of toolResults) {
-              if (r.status === 'fulfilled') {
-                fbMessages.push({ role: 'tool' as const, content: r.value.output, toolCallId: r.value.callId });
+            let fallbackHasPending = false;
+            for (const settled of fbToolResults) {
+              if (settled.status === 'fulfilled') {
+                const { toolCall, result: toolResult } = settled.value;
+
+                if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
+                  pendingIds.push(String(toolResult.approvalId));
+                  fallbackHasPending = true;
+                }
+
+                let resultForLlm = toolResult;
+                if (toolResult.status === 'pending_approval') {
+                  const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
+                  resultForLlm = {
+                    ...rest,
+                    message: 'This action needs your approval. The approval UI is shown to the user automatically.',
+                  };
+                }
+
+                const scannedToolResult = this.sanitizeToolResultForLlm(
+                  toolCall.name,
+                  resultForLlm,
+                  'external',
+                );
+                fbMessages.push({
+                  role: 'tool' as const,
+                  toolCallId: toolCall.id,
+                  content: formatToolResultForLLM(
+                    toolCall.name,
+                    scannedToolResult.sanitized,
+                    scannedToolResult.threats,
+                  ),
+                });
+
+                if (toolCall.name === 'find_tools' && toolResult.success) {
+                  const searchOutput = toolResult.output as {
+                    tools?: Array<{
+                      name: string;
+                      description: string;
+                      parameters: Record<string, unknown>;
+                      risk: string;
+                      category?: string;
+                    }>;
+                  } | undefined;
+                  if (searchOutput?.tools) {
+                    for (const discovered of searchOutput.tools) {
+                      if (!llmToolDefs.some((d) => d.name === discovered.name)) {
+                        const disc = {
+                          name: discovered.name,
+                          description: discovered.description,
+                          risk: discovered.risk as import('./tools/types.js').ToolRisk,
+                          parameters: discovered.parameters,
+                          category: discovered.category as import('./tools/types.js').ToolCategory | undefined,
+                        };
+                        allToolDefs.push(disc);
+                        llmToolDefs.push(toLLMToolDef(disc, toolResultProviderKind));
+                      }
+                    }
+                    externalToolDefs = allToolDefs.map((d) => toLLMToolDef(d, 'external'));
+                  }
+                }
+              } else {
+                const failedTc = fallbackResult.response.toolCalls[fbToolResults.indexOf(settled)];
+                fbMessages.push({
+                  role: 'tool' as const,
+                  toolCallId: failedTc?.id ?? '',
+                  content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
+                });
               }
             }
-            // One more chat call to get the final text response from fallback
-            const finalFb = await this.fallbackChain.chatWithFallback(fbMessages, { tools: externalToolDefs });
-            if (finalFb.response.content?.trim()) {
-              finalContent = finalFb.response.content;
-              log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
+
+            if (fallbackHasPending) {
+              const allPending = fbToolResults.every(
+                (s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval',
+              );
+              if (allPending) {
+                fbMessages.splice(-fbToolResults.length, fbToolResults.length);
+                const pendingTools: SuspendedToolCall[] = fbToolResults
+                  .filter((s): s is PromiseFulfilledResult<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }> =>
+                    s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval')
+                  .map((s) => ({
+                    approvalId: String(s.value.result.approvalId),
+                    toolCallId: s.value.toolCall.id,
+                    jobId: String(s.value.result.jobId),
+                    name: s.value.toolCall.name,
+                  }));
+                this.suspendedSessions.set(userKey, {
+                  userKey,
+                  llmMessages: [...fbMessages],
+                  pendingTools,
+                  originalMessage: message,
+                  ctx,
+                });
+              } else {
+                const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+                if (finalFb.response.content?.trim()) {
+                  finalContent = finalFb.response.content;
+                  log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
+                }
+              }
+            } else {
+              // One more chat call to get the final text response from fallback
+              const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+              if (finalFb.response.content?.trim()) {
+                finalContent = finalFb.response.content;
+                log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
+              }
             }
           } else if (fallbackResult.response.content?.trim()) {
             finalContent = fallbackResult.response.content;
@@ -871,6 +972,24 @@ class ChatAgent extends BaseAgent {
         } catch (fallbackErr) {
           log.warn({ agent: this.id, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
             'Fallback chain also failed');
+        }
+      }
+
+      // Store pending approvals for this user so they can be approved/denied explicitly
+      if (pendingIds.length > 0) {
+        const existing = this.getPendingApprovals(userKey)?.ids ?? [];
+        const merged = [...new Set([...existing, ...pendingIds])];
+        this.setPendingApprovals(userKey, merged);
+        const summaries = this.tools?.getApprovalSummaries(merged);
+        // Build structured approval metadata — all channels render native approval UI
+        // (web: buttons, CLI: readline prompt, Telegram: inline keyboard).
+        // No text prompt is appended to finalContent; the metadata is the canonical source.
+        pendingApprovalMeta = merged.map((id) => {
+          const s = summaries?.get(id);
+          return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
+        });
+        if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent)) {
+          finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
         }
       }
 
@@ -4752,6 +4871,26 @@ async function main(): Promise<void> {
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
     agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
+    onToolExecuted: (toolName, args, result, request) => {
+      runtime.eventBus.emit({
+        type: 'tool.executed',
+        sourceAgentId: request.agentId ?? 'system',
+        targetAgentId: '*',
+        timestamp: Date.now(),
+        payload: { toolName, args, result, requestId: request.requestId },
+      });
+
+      if (request.requestId) {
+        orchestrator.addTraceNode(request.requestId, {
+          kind: 'tool_call',
+          name: toolName,
+          startedAt: Date.now() - result.durationMs,
+          completedAt: Date.now(),
+          status: result.success ? 'succeeded' : (result.status === 'denied' ? 'blocked' : 'failed'),
+          metadata: { args, result },
+        });
+      }
+    },
     onPolicyUpdate: (policy) => {
       // Persist policy changes to config.yaml so they survive reloads and restarts
       try {

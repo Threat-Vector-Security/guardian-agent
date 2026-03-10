@@ -2,6 +2,7 @@
  * Tool execution runtime with policy, sandboxing, and approvals.
  */
 
+import Ajv from 'ajv';
 import { randomUUID } from 'node:crypto';
 import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
@@ -116,6 +117,13 @@ export interface ToolExecutorOptions {
     params: Record<string, unknown>;
     agentId: string;
   }) => Promise<{ allowed: boolean; reason?: string }>;
+  /** Executed tool trajectories for eval/tracing. */
+  onToolExecuted?: (
+    toolName: string,
+    args: Record<string, unknown>,
+    result: { success: boolean; status: string; message?: string; durationMs: number; error?: string; approvalId?: string },
+    request: ToolExecutionRequest
+  ) => void;
 }
 
 export interface ToolPolicyUpdate {
@@ -821,75 +829,20 @@ export class ToolExecutor {
 
   private validateToolArgs(definition: ToolDefinition, args: Record<string, unknown>): string | null {
     const schema = definition.parameters;
-    if (!isRecord(schema)) return null;
-    if (schema.type !== 'object') return null;
+    if (!isRecord(schema) || schema.type !== 'object') return null;
 
-    const properties = isRecord(schema.properties) ? schema.properties : {};
-    const required = Array.isArray(schema.required)
-      ? schema.required.filter((key): key is string => typeof key === 'string')
-      : [];
-
-    for (const key of required) {
-      if (!(key in args) || args[key] === undefined || args[key] === null) {
-        return `'${key}' is required.`;
+    try {
+      const AjvClass = (Ajv as any).default || Ajv;
+      const ajv = new AjvClass({ strict: false, allErrors: true, coerceTypes: false });
+      const validate = ajv.compile(schema);
+      const valid = validate(args);
+      if (!valid && validate.errors) {
+        return `Schema validation failed: ${ajv.errorsText(validate.errors)}`;
       }
-      const propertySchema = isRecord(properties[key]) ? properties[key] : null;
-      const expectedType = propertySchema && typeof propertySchema.type === 'string'
-        ? propertySchema.type
-        : null;
-      const typeError = this.validateArgType(key, args[key], expectedType, true);
-      if (typeError) return typeError;
+    } catch (err) {
+      return `Schema compilation failed: ${err instanceof Error ? err.message : String(err)}`;
     }
 
-    for (const [key, value] of Object.entries(args)) {
-      const propertySchema = isRecord(properties[key]) ? properties[key] : null;
-      if (!propertySchema) continue;
-      const expectedType = typeof propertySchema.type === 'string' ? propertySchema.type : null;
-      const typeError = this.validateArgType(key, value, expectedType, false);
-      if (typeError) return typeError;
-    }
-
-    return null;
-  }
-
-  private validateArgType(
-    key: string,
-    value: unknown,
-    expectedType: string | null,
-    required: boolean,
-  ): string | null {
-    if (!expectedType) return null;
-
-    if (expectedType === 'string') {
-      if (typeof value !== 'string') return `'${key}' must be a string.`;
-      if (required && value.trim().length === 0) return `'${key}' must be a non-empty string.`;
-      return null;
-    }
-    if (expectedType === 'number') {
-      return typeof value === 'number' && Number.isFinite(value)
-        ? null
-        : `'${key}' must be a number.`;
-    }
-    if (expectedType === 'integer') {
-      return typeof value === 'number' && Number.isInteger(value)
-        ? null
-        : `'${key}' must be an integer.`;
-    }
-    if (expectedType === 'boolean') {
-      return typeof value === 'boolean'
-        ? null
-        : `'${key}' must be a boolean.`;
-    }
-    if (expectedType === 'array') {
-      return Array.isArray(value)
-        ? null
-        : `'${key}' must be an array.`;
-    }
-    if (expectedType === 'object') {
-      return isRecord(value)
-        ? null
-        : `'${key}' must be an object.`;
-    }
     return null;
   }
 
@@ -1038,25 +991,58 @@ export class ToolExecutor {
       job.completedAt = this.now();
       job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
       job.resultPreview = sanitizePreview(JSON.stringify(result.output ?? {}));
-      return {
+      
+      const successResponse: ToolRunResponse = {
         success: true,
         status: job.status,
         jobId: job.id,
         message: `Tool '${job.toolName}' completed.`,
         output: result.output,
       };
+      
+      this.options.onToolExecuted?.(
+        request.toolName,
+        args,
+        {
+          success: successResponse.success,
+          status: successResponse.status,
+          message: successResponse.message,
+          durationMs: job.durationMs,
+          approvalId: job.approvalId,
+        },
+        request
+      );
+      
+      return successResponse;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       job.status = 'failed';
       job.error = sanitizePreview(message);
       job.completedAt = this.now();
       job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
-      return {
+      
+      const failedResponse: ToolRunResponse = {
         success: false,
         status: job.status,
         jobId: job.id,
         message,
       };
+      
+      this.options.onToolExecuted?.(
+        request.toolName,
+        args,
+        {
+          success: failedResponse.success,
+          status: failedResponse.status,
+          message: failedResponse.message,
+          error: job.error,
+          durationMs: job.durationMs,
+          approvalId: job.approvalId,
+        },
+        request
+      );
+      
+      return failedResponse;
     }
   }
 

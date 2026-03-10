@@ -659,14 +659,14 @@ describe('ToolExecutor', () => {
 
     const run = await executor.runTool({
       toolName: 'fs_write',
-      args: { path: 'note.txt', content: '' },
+      args: { path: 'note.txt' },
       origin: 'cli',
     });
 
     expect(run.success).toBe(false);
     expect(run.status).toBe('failed');
     expect(run.approvalId).toBeUndefined();
-    expect(run.message).toContain("'content' must be a non-empty string");
+    expect(run.message).toContain("must have required property 'content'");
   });
 
   it('rejects non-allowlisted shell_safe commands before creating approval requests', async () => {

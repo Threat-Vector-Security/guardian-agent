@@ -75,11 +75,36 @@ export class ModelFallbackChain {
     messages: ChatMessage[],
     options?: ChatOptions,
   ): Promise<FallbackResult> {
+    return this.chatWithOrder(this.order, messages, options);
+  }
+
+  /**
+   * Try chat with fallback providers after the primary provider.
+   *
+   * Used for degraded-response retries where the primary provider already
+   * returned a weak answer and should not be retried immediately.
+   */
+  async chatWithFallbackAfterPrimary(
+    messages: ChatMessage[],
+    options?: ChatOptions,
+  ): Promise<FallbackResult> {
+    const alternates = this.order.slice(1);
+    if (alternates.length === 0) {
+      throw new Error('No alternate providers available in fallback chain');
+    }
+    return this.chatWithOrder(alternates, messages, options);
+  }
+
+  private async chatWithOrder(
+    order: string[],
+    messages: ChatMessage[],
+    options?: ChatOptions,
+  ): Promise<FallbackResult> {
     const errors: Array<{ name: string; error: unknown; errorClass: ErrorClass }> = [];
     const skipped: string[] = [];
     const now = this.now();
 
-    for (const name of this.order) {
+    for (const name of order) {
       const provider = this.providers.get(name);
       if (!provider) continue;
 
@@ -98,7 +123,7 @@ export class ModelFallbackChain {
         return {
           response,
           providerName: name,
-          usedFallback: name !== this.order[0],
+          usedFallback: name !== order[0],
           skipped,
         };
       } catch (error) {

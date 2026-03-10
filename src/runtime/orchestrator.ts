@@ -59,6 +59,17 @@ export interface AssistantTraceStep {
   error?: string;
 }
 
+export interface WorkflowTraceNode {
+  id: string;
+  parentId?: string;
+  kind: 'agent_dispatch' | 'tool_call' | 'approval' | 'provider_call';
+  name: string;
+  startedAt: number;
+  completedAt?: number;
+  status: 'running' | 'succeeded' | 'failed' | 'blocked';
+  metadata?: Record<string, unknown>;
+}
+
 export interface AssistantDispatchTrace {
   requestId: string;
   sessionId: string;
@@ -78,6 +89,7 @@ export interface AssistantDispatchTrace {
   responsePreview?: string;
   error?: string;
   steps: AssistantTraceStep[];
+  nodes: WorkflowTraceNode[];
 }
 
 export interface AssistantOrchestratorSummary {
@@ -111,6 +123,7 @@ export interface AssistantDispatchContext {
   requestType: string;
   runStep<T>(name: string, run: () => Promise<T> | T, detail?: string): Promise<T>;
   markStep(name: string, detail?: string): void;
+  addNode(node: Omit<WorkflowTraceNode, 'id'> & { id?: string }): void;
 }
 
 export interface AssistantOrchestratorOptions {
@@ -225,6 +238,7 @@ export class AssistantOrchestrator {
       queuedAt: now,
       messagePreview,
       steps: [],
+      nodes: [],
     };
     this.traces.unshift(trace);
     this.enforceTraceLimit();
@@ -302,6 +316,16 @@ export class AssistantOrchestrator {
       sessions,
       traces: this.traces.slice(0, 100),
     };
+  }
+
+  addTraceNode(requestId: string, node: Omit<WorkflowTraceNode, 'id'> & { id?: string }): void {
+    const trace = this.traces.find(t => t.requestId === requestId);
+    if (trace) {
+      trace.nodes.push({
+        ...node,
+        id: node.id ?? `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      });
+    }
   }
 
   private getOrCreateSession(input: AssistantDispatchInput): SessionRecord {
@@ -515,6 +539,12 @@ export class AssistantOrchestrator {
           completedAt: ts,
           durationMs: 0,
           detail,
+        });
+      },
+      addNode: (node) => {
+        trace.nodes.push({
+          ...node,
+          id: node.id ?? `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         });
       },
     };

@@ -12,10 +12,20 @@ import type { SharedStateView } from '../runtime/shared-state.js';
 
 // ─── Event-Driven Agent Types ─────────────────────────────────
 
+export interface DispatchLineage {
+  rootRequestId: string;
+  parentInvocationId?: string;
+  invocationId: string;
+  depth: number;
+  path: string[];
+}
+
 /** Context provided to agents on message/event handling. */
 export interface AgentContext {
   /** The agent's ID. */
   agentId: string;
+  /** Dispatch lineage tracking to prevent infinite recursion. */
+  lineage?: DispatchLineage;
   /** Emit an event to the event bus. */
   emit(event: Omit<AgentEvent, 'sourceAgentId' | 'timestamp'>): Promise<void>;
   /** The agent's LLM provider (if configured). */
