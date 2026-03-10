@@ -84,19 +84,38 @@ export class EvalRunner {
         timestamp: Date.now(),
       };
 
+      const collectedToolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+      const toolListenerId = `eval-listener-${message.id}`;
+      this.runtime.eventBus.subscribe(toolListenerId, async (event) => {
+        if (event.type === 'tool.executed' && event.payload && typeof event.payload === 'object') {
+          const payload = event.payload as Record<string, unknown>;
+          if (payload.requestId === message.id) {
+            collectedToolCalls.push({
+              toolName: String(payload.toolName),
+              args: (payload.args as Record<string, unknown>) ?? {},
+            });
+          }
+        }
+      });
+
       // Dispatch with timeout
-      const response = await withTimeout(
-        this.runtime.dispatchMessage(test.agentId, message),
-        timeoutMs,
-        `Test '${test.name}' timed out after ${timeoutMs}ms`,
-      );
+      let response;
+      try {
+        response = await withTimeout(
+          this.runtime.dispatchMessage(test.agentId, message),
+          timeoutMs,
+          `Test '${test.name}' timed out after ${timeoutMs}ms`,
+        );
+      } finally {
+        this.runtime.eventBus.removeHandlersForAgent(toolListenerId);
+      }
 
       const durationMs = performance.now() - testStart;
 
       const actual: EvalActualResponse = {
         content: response.content,
         metadata: response.metadata,
-        toolCalls: [],
+        toolCalls: collectedToolCalls,
         durationMs,
       };
 

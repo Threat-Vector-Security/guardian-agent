@@ -17,7 +17,7 @@ import type { FailoverProvider, ProviderCircuitState } from '../llm/failover-pro
 import { AuditPersistence } from '../guardian/audit-persistence.js';
 import { AgentRegistry } from '../agent/registry.js';
 import { LifecycleManager } from '../agent/lifecycle.js';
-import type { AgentDefinition, AgentContext, ScheduleContext, UserMessage, AgentResponse } from '../agent/types.js';
+import type { AgentDefinition, AgentContext, ScheduleContext, UserMessage, AgentResponse, DispatchLineage } from '../agent/types.js';
 import { AgentState } from '../agent/types.js';
 import { EventBus } from '../queue/event-bus.js';
 import type { AgentEvent } from '../queue/event-bus.js';
@@ -160,7 +160,45 @@ export class Runtime {
   }
 
   /** Dispatch a user message to an agent and get a response. */
-  async dispatchMessage(agentId: string, message: UserMessage): Promise<AgentResponse> {
+  async dispatchMessage(agentId: string, message: UserMessage, lineage?: DispatchLineage): Promise<AgentResponse> {
+    const currentLineage = lineage ?? {
+      rootRequestId: message.id,
+      invocationId: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      depth: 0,
+      path: [agentId],
+    };
+
+    // Dispatch Lineage Limits
+    const MAX_DISPATCH_DEPTH = 5;
+    const MAX_REPEATED_AGENT = 2;
+
+    if (currentLineage.depth > MAX_DISPATCH_DEPTH) {
+      this.auditLog.record({
+        type: 'action_denied',
+        severity: 'critical',
+        agentId,
+        userId: message.userId,
+        channel: message.channel,
+        controller: 'RuntimeDispatch',
+        details: { reason: 'max_dispatch_depth_exceeded', depth: currentLineage.depth, path: currentLineage.path }
+      });
+      return { content: `[Dispatch blocked: Maximum dispatch depth exceeded (${MAX_DISPATCH_DEPTH})]` };
+    }
+
+    const repeatedCount = currentLineage.path.filter(id => id === agentId).length;
+    if (repeatedCount > MAX_REPEATED_AGENT) {
+      this.auditLog.record({
+        type: 'action_denied',
+        severity: 'critical',
+        agentId,
+        userId: message.userId,
+        channel: message.channel,
+        controller: 'RuntimeDispatch',
+        details: { reason: 'max_repeated_agent_in_path_exceeded', path: currentLineage.path }
+      });
+      return { content: `[Dispatch blocked: Cycle detected, agent '${agentId}' repeated more than ${MAX_REPEATED_AGENT} times]` };
+    }
+
     const instance = this.registry.get(agentId);
     if (!instance) {
       throw new Error(`Agent '${agentId}' not found`);
@@ -233,7 +271,7 @@ export class Runtime {
       }
     }
 
-    const ctx = this.createAgentContext(agentId);
+    const ctx = this.createAgentContext(agentId, { lineage: currentLineage });
     const limits = instance.definition.resourceLimits;
     const budgetMs = limits.maxInvocationBudgetMs;
 
@@ -577,17 +615,27 @@ export class Runtime {
 
   // ─── Internals ──────────────────────────────────────────────
 
-  private createAgentContext(agentId: string, options?: { enableDispatch?: boolean }): AgentContext {
+  private createAgentContext(agentId: string, options?: { enableDispatch?: boolean; lineage?: DispatchLineage }): AgentContext {
     const instance = this.registry.get(agentId);
     const capabilities = Object.freeze([...(instance?.definition.grantedCapabilities ?? [])]);
 
     const ctx: AgentContext = {
       agentId,
       capabilities,
+      lineage: options?.lineage,
       // Dispatch: allows orchestration agents to invoke sub-agents
       // All sub-agent calls pass through the full Guardian admission pipeline
       dispatch: options?.enableDispatch !== false
-        ? (targetAgentId: string, message: UserMessage) => this.dispatchMessage(targetAgentId, message)
+        ? (targetAgentId: string, message: UserMessage) => {
+            const nextLineage: DispatchLineage | undefined = options?.lineage ? {
+              rootRequestId: options.lineage.rootRequestId,
+              parentInvocationId: options.lineage.invocationId,
+              invocationId: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              depth: options.lineage.depth + 1,
+              path: [...options.lineage.path, targetAgentId],
+            } : undefined;
+            return this.dispatchMessage(targetAgentId, message, nextLineage);
+          }
         : undefined,
       emit: async (partial) => {
         const event: AgentEvent = {
