@@ -3374,7 +3374,7 @@ describe('ToolExecutor', () => {
       const names = executor.listToolDefinitions().map((t) => t.name);
       expect(names).not.toContain('shell_safe');
       expect(names).not.toContain('net_ping');
-      expect(names).not.toContain('qmd_search');
+      expect(names).not.toContain('doc_search');
 
       const shell = executor.getCategoryInfo().find((entry) => entry.category === 'shell');
       expect(shell?.enabled).toBe(false);
@@ -3419,95 +3419,8 @@ describe('ToolExecutor', () => {
     });
   });
 
-  describe('QMD search tools', () => {
-    const mockQMDSearch = {
-      search: async (opts: Record<string, unknown>) => ({
-        results: [{ score: 0.9, filepath: '/notes/a.md', title: 'A', context: 'snippet', hash: 'h', docid: 'd', collectionName: 'notes' }],
-        query: opts.query as string,
-        mode: 'query' as const,
-        totalResults: 1,
-        durationMs: 42,
-      }),
-      status: async () => ({
-        installed: true,
-        version: '0.5.0',
-        collections: [{ name: 'notes', documentCount: 10 }],
-        configuredSources: [{ id: 'notes', name: 'Notes', type: 'directory', path: '/notes', enabled: true }],
-      }),
-      reindex: async (collection?: string) => ({
-        success: true,
-        message: collection ? `Reindexed '${collection}'.` : 'Reindexed all.',
-      }),
-    };
-
-    it('qmd_search returns results when service is injected', async () => {
-      const root = createExecutorRoot();
-      const executor = new ToolExecutor({
-        enabled: true,
-        workspaceRoot: root,
-        policyMode: 'autonomous',
-        qmdSearch: mockQMDSearch as never,
-      });
-      const result = await executor.runTool({
-        toolName: 'qmd_search',
-        args: { query: 'test query' },
-        origin: 'cli',
-      });
-      expect(result.success).toBe(true);
-      expect(result.output).toBeDefined();
-      expect((result.output as Record<string, unknown>).totalResults).toBe(1);
-    });
-
-    it('qmd_search returns error when service not injected', async () => {
-      const root = createExecutorRoot();
-      const executor = new ToolExecutor({
-        enabled: true,
-        workspaceRoot: root,
-        policyMode: 'autonomous',
-      });
-      const result = await executor.runTool({
-        toolName: 'qmd_search',
-        args: { query: 'test' },
-        origin: 'cli',
-      });
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('not enabled');
-    });
-
-    it('qmd_status returns status when service injected', async () => {
-      const root = createExecutorRoot();
-      const executor = new ToolExecutor({
-        enabled: true,
-        workspaceRoot: root,
-        policyMode: 'autonomous',
-        qmdSearch: mockQMDSearch as never,
-      });
-      const result = await executor.runTool({
-        toolName: 'qmd_status',
-        args: {},
-        origin: 'cli',
-      });
-      expect(result.success).toBe(true);
-      expect((result.output as Record<string, unknown>).installed).toBe(true);
-    });
-
-    it('qmd_reindex works when service injected', async () => {
-      const root = createExecutorRoot();
-      const executor = new ToolExecutor({
-        enabled: true,
-        workspaceRoot: root,
-        policyMode: 'autonomous',
-        qmdSearch: mockQMDSearch as never,
-      });
-      const result = await executor.runTool({
-        toolName: 'qmd_reindex',
-        args: { collection: 'notes' },
-        origin: 'cli',
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it('qmd tools appear in search category', () => {
+  describe('document search tools', () => {
+    it('doc_search tools appear in search category', () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         enabled: true,
@@ -3518,6 +3431,22 @@ describe('ToolExecutor', () => {
       const search = info.find((c) => c.category === 'search');
       expect(search).toBeDefined();
       expect(search!.toolCount).toBe(3);
+    });
+
+    it('doc_search returns error when service not injected', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+      });
+      const result = await executor.runTool({
+        toolName: 'doc_search',
+        args: { query: 'test' },
+        origin: 'cli',
+      });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not configured');
     });
   });
 });

@@ -109,6 +109,8 @@ Validation guarantees:
 - Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
 - Conversational automation creation: the assistant can create playbooks and schedule tasks via `workflow_upsert` and `task_create` tools, guided by system prompt instructions and tool examples.
 - Clone, example catalog (templates + presets), and merged run history in the unified page.
+- The main web edit path is now intentionally simple for common changes; raw definition editing remains available in an advanced section for power users.
+- Pipeline rows use a centered disclosure control so multi-step workflows are easier to spot and expand from the catalog view.
 - Web labels use `Tool Access` / `Built-in tools` language for default steps. Access-profile names only appear when an operator deliberately assigns one.
 
 ## Out of Scope (Current Phase)

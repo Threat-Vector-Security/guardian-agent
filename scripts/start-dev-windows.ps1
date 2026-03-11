@@ -372,7 +372,6 @@ if ($needsInstall) {
 
 # Ensure bundled CLI tools are available
 Write-Host "  Checking bundled tools..." -ForegroundColor DarkCyan
-try { node scripts/ensure-qmd.mjs 2>&1 | Out-Null; Write-Host "  QMD: OK" -ForegroundColor Green } catch { Write-Host "  QMD: not available (optional)" -ForegroundColor DarkGray }
 
 if (-not $StartOnly) {
     # --- Step 3: Build ---
@@ -595,15 +594,28 @@ Write-Host ""
 Write-Host "[6/6] Starting GuardianAgent..." -ForegroundColor DarkCyan
 Write-Host ""
 
-# Run with tsx for dev mode (TypeScript direct execution)
-# NODE_NO_WARNINGS suppresses the SQLite ExperimentalWarning in all child processes
+# Launch the built output directly.
+# This script already completed a TypeScript build, so using dist avoids
+# tsx-specific Windows process quirks and makes startup failures easier to spot.
 $env:NODE_NO_WARNINGS = "1"
-$tsxPath = Join-Path $Root "node_modules\.bin\tsx.cmd"
-if (Test-Path $tsxPath) {
-    & $tsxPath (Join-Path $Root "src\index.ts")
-} else {
-    node (Join-Path $Root "dist\index.js")
+$entryPoint = Join-Path $Root "dist\index.js"
+if (-not (Test-Path $entryPoint)) {
+    throw "Built entry point not found: $entryPoint"
 }
+
+& node $entryPoint
+$agentExitCode = $LASTEXITCODE
+
+if ($agentExitCode -ne 0) {
+    Write-Host ""
+    Write-Host "  GuardianAgent exited with code $agentExitCode." -ForegroundColor Red
+    exit $agentExitCode
+}
+
+Write-Host ""
+Write-Host "  GuardianAgent exited immediately with code 0." -ForegroundColor Yellow
+Write-Host "  That usually means startup completed and then nothing kept the process alive." -ForegroundColor Yellow
+Write-Host "  Check the console output above for a fatal startup error or a disabled web channel." -ForegroundColor Yellow
 
 } finally {
     Set-Location $OriginalDir

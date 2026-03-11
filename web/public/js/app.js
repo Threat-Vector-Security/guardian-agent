@@ -23,6 +23,7 @@ let currentPage = '';
 let invalidationTimer = null;
 let invalidationInFlight = false;
 let invalidationQueued = false;
+let securityAlertTray = null;
 
 // ─── Auth ────────────────────────────────────────────────
 
@@ -80,9 +81,11 @@ async function initAuth() {
 
   const input = document.getElementById('auth-token-input');
   const submit = document.getElementById('auth-submit');
+  const form = document.getElementById('auth-form');
   const errorEl = document.getElementById('auth-error');
 
-  submit.onclick = async () => {
+  const handleSubmit = async (event) => {
+    event?.preventDefault?.();
     const token = input.value.trim();
     if (!token) {
       errorEl.textContent = 'Token is required';
@@ -110,9 +113,10 @@ async function initAuth() {
       errorEl.style.display = '';
     }
   };
+  form?.addEventListener('submit', handleSubmit);
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submit.click();
+    if (e.key === 'Enter') form?.requestSubmit ? form.requestSubmit() : submit.click();
   });
 
   applyInputTooltips(authModal);
@@ -168,6 +172,46 @@ function connectSSE() {
       for (const fn of sseListeners[eventType]) fn(data);
     });
   }
+}
+
+function ensureSecurityAlertTray() {
+  if (securityAlertTray) return securityAlertTray;
+  securityAlertTray = document.createElement('div');
+  securityAlertTray.id = 'security-alert-tray';
+  securityAlertTray.className = 'security-alert-tray';
+  document.body.appendChild(securityAlertTray);
+  return securityAlertTray;
+}
+
+function pushSecurityAlert(notification) {
+  const tray = ensureSecurityAlertTray();
+  const item = document.createElement('div');
+  item.className = `security-alert-item severity-${notification.severity || 'warn'}`;
+
+  const description = notification.description || 'No additional detail provided.';
+  item.innerHTML = `
+    <button class="security-alert-dismiss" type="button" aria-label="Dismiss alert">&times;</button>
+    <div class="security-alert-title">${esc(notification.title || 'Security alert')}</div>
+    <div class="security-alert-meta">${esc(String(notification.sourceEventType || 'unknown'))} · ${esc(String(notification.agentId || 'system'))}</div>
+    <div class="security-alert-description">${esc(description)}</div>
+  `;
+
+  const dismiss = () => item.remove();
+  item.querySelector('.security-alert-dismiss')?.addEventListener('click', dismiss);
+  tray.prepend(item);
+
+  while (tray.children.length > 5) {
+    tray.removeChild(tray.lastChild);
+  }
+
+  window.setTimeout(() => {
+    item.remove();
+    if (tray.children.length === 0) {
+      tray.classList.remove('has-items');
+    }
+  }, 15000);
+
+  tray.classList.add('has-items');
 }
 
 // ─── Router ──────────────────────────────────────────────
@@ -295,6 +339,9 @@ function startApp() {
     if (!routeMatchesInvalidation(route, payload)) return;
     scheduleCurrentRouteRefresh();
   });
+  onSSE('security.alert', (payload) => {
+    pushSecurityAlert(payload);
+  });
   startClock();
   initChatPanel(chatPanel);
   window.addEventListener('hashchange', navigate);
@@ -319,3 +366,11 @@ function startApp() {
 
 initTheme();
 initAuth();
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

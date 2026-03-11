@@ -1,7 +1,7 @@
 /**
  * Automations page — unified view merging workflows + scheduled operations.
  *
- * Every item is an "automation": a playbook (1-step for single tools, N-step
+ * Every item is an "automation": a workflow (1-step for single tools, N-step
  * for pipelines) with an optional linked scheduled task for cron execution.
  */
 
@@ -9,6 +9,9 @@ import { api } from '../api.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let currentContainer = null;
+const automationUiState = {
+  clonePlacement: null,
+};
 
 // ─── Public API ───────────────────────────────────────────
 
@@ -34,7 +37,9 @@ export async function renderAutomations(container) {
     const studio = connState.studio || {};
     const tools = Array.isArray(toolsState?.tools) ? toolsState.tools : [];
 
-    const automations = buildAutomationList(playbooks, tasks, tools);
+    const automations = reorderAutomationsForUi(
+      buildAutomationList(playbooks, tasks, tools, templates, presets),
+    );
     const allCategories = [...new Set(automations.map((a) => a.category))].sort();
     const totalScheduled = automations.filter((a) => a.cron).length;
     const totalRuns = runs.length + tasks.reduce((sum, t) => sum + (t.runCount || 0), 0);
@@ -69,7 +74,6 @@ export async function renderAutomations(container) {
           <h3>Automation Catalog</h3>
           <div style="display:flex;gap:0.5rem;align-items:center;">
             <button class="btn btn-primary" id="auto-create-toggle">Create Automation</button>
-            <button class="btn btn-secondary" id="auto-examples-toggle">Examples</button>
             <button class="btn btn-secondary" id="auto-refresh">Refresh</button>
           </div>
         </div>
@@ -84,17 +88,6 @@ export async function renderAutomations(container) {
         </div>
         ` : ''}
 
-        <!-- Examples panel -->
-        <div class="auto-example-panel" id="auto-examples-panel" style="display:none">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-            <h4 style="margin:0;">Example Automations</h4>
-            <button class="btn btn-secondary btn-sm" id="auto-examples-close">Close</button>
-          </div>
-          <div class="auto-example-grid">
-            ${renderExampleCards(templates, presets)}
-          </div>
-        </div>
-
         <!-- Create form -->
         <div class="cfg-center-body" id="auto-create-form" style="display:none">
           ${renderCreateForm(tools, packs)}
@@ -104,7 +97,7 @@ export async function renderAutomations(container) {
           <thead><tr><th>Name</th><th>Type</th><th>Tools</th><th>Schedule</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             ${automations.length === 0
-              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No automations configured. Create one or install an example.</td></tr>'
+              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No automations configured.</td></tr>'
               : automations.map((auto) => renderAutomationRow(auto, tools, packs)).join('')
             }
           </tbody>
@@ -144,13 +137,43 @@ export async function updateAutomations() {
   if (currentContainer) await renderAutomations(currentContainer);
 }
 
-// ─── Data Model — merge playbooks + scheduled tasks ──────
+function reorderAutomationsForUi(automations) {
+  const placement = automationUiState.clonePlacement;
+  if (!placement) return automations;
 
-function buildAutomationList(playbooks, tasks, tools) {
+  const cloneIndex = automations.findIndex((auto) => auto.id === placement.cloneId);
+  const anchorIndex = automations.findIndex((auto) => auto.id === placement.anchorId);
+  if (cloneIndex === -1 || anchorIndex === -1) return automations;
+
+  const reordered = automations.slice();
+  const [cloned] = reordered.splice(cloneIndex, 1);
+  const nextAnchorIndex = reordered.findIndex((auto) => auto.id === placement.anchorId);
+  reordered.splice(nextAnchorIndex + 1, 0, cloned);
+  return reordered;
+}
+
+// ─── Data Model — merge workflows + scheduled tasks ──────
+
+function buildAutomationList(playbooks, tasks, tools, templates = [], presets = []) {
   const automations = [];
   const matchedTaskIds = new Set();
+  const playbookIds = new Set((playbooks || []).map((pb) => pb.id));
+  const installedPresetIds = new Set(
+    (tasks || [])
+      .map((task) => task.presetId)
+      .filter(Boolean),
+  );
+  const templatePlaybooks = (templates || []).flatMap((tpl) => (tpl.playbooks || []).map((playbook) => ({
+    ...playbook,
+    _templateCategory: tpl.category,
+    _templateId: tpl.id,
+  })));
+  const findCatalogPlaybook = (playbookId) => (
+    (playbooks || []).find((pb) => pb.id === playbookId)
+    || templatePlaybooks.find((pb) => pb.id === playbookId)
+  );
 
-  // 1. For each playbook, create an automation and find linked scheduled task
+  // 1. For each workflow, create an automation and find linked scheduled task
   for (const pb of playbooks) {
     const linkedTask = tasks.find(
       (t) => (t.type === 'playbook' && t.target === pb.id) || (t.target === pb.id),
@@ -179,10 +202,10 @@ function buildAutomationList(playbooks, tasks, tools) {
     });
   }
 
-  // 2. Orphaned scheduled tasks (type 'tool', no matching playbook)
+  // 2. Orphaned scheduled tasks (type 'tool', no matching workflow)
   for (const task of tasks) {
     if (matchedTaskIds.has(task.id)) continue;
-    // Check if already linked by playbook target
+    // Check if already linked by workflow target
     if (automations.some((a) => a.taskId === task.id)) continue;
 
     const tool = tools.find((t) => t.name === task.target);
@@ -208,6 +231,79 @@ function buildAutomationList(playbooks, tasks, tools) {
     });
   }
 
+  // 3. Built-in connector templates move directly into the catalog as disabled starter entries.
+  for (const tpl of (templates || [])) {
+    for (const pb of (tpl.playbooks || [])) {
+      if (playbookIds.has(pb.id)) continue;
+      automations.push({
+        id: pb.id,
+        name: pb.name,
+        description: pb.description || tpl.description || '',
+        category: tpl.category || deriveCategory(pb.steps || [], tools),
+        kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
+        mode: pb.mode || 'sequential',
+        steps: pb.steps || [],
+        packId: (pb.steps || [])[0]?.packId || null,
+        enabled: false,
+        cron: null,
+        scheduleEnabled: false,
+        taskId: null,
+        lastRunAt: null,
+        lastRunStatus: null,
+        runCount: 0,
+        _source: 'template',
+        _builtin: true,
+        _playbook: pb,
+        _task: null,
+      });
+    }
+  }
+
+  // 4. Built-in scheduled presets also appear in the catalog as disabled starter entries.
+  for (const preset of (presets || [])) {
+    const presetAlreadyInstalled = installedPresetIds.has(preset.id)
+      || (tasks || []).some((task) =>
+        task.name === preset.name && task.target === preset.target && task.type === preset.type,
+      );
+    if (presetAlreadyInstalled) continue;
+
+    const catalogPlaybook = preset.type === 'playbook'
+      ? findCatalogPlaybook(preset.target)
+      : null;
+    const steps = preset.type === 'playbook'
+      ? (catalogPlaybook?.steps || [])
+      : [{ id: `${preset.id}-step-1`, name: preset.target, toolName: preset.target, packId: null, args: preset.args || {} }];
+    const mode = preset.type === 'playbook' ? (catalogPlaybook?.mode || 'sequential') : 'sequential';
+    const kind = steps.length <= 1 ? 'single' : 'pipeline';
+
+    automations.push({
+      id: preset.id,
+      name: preset.name,
+      description: preset.description || '',
+      category: resolveCatalogCategory({
+        explicitCategory: catalogPlaybook?._templateCategory,
+        steps,
+        tools,
+        fallbackText: [preset.name, preset.description, preset.target].join(' '),
+      }),
+      kind,
+      mode,
+      steps,
+      packId: steps[0]?.packId || null,
+      enabled: false,
+      cron: preset.cron || null,
+      scheduleEnabled: false,
+      taskId: null,
+      lastRunAt: null,
+      lastRunStatus: null,
+      runCount: 0,
+      _source: 'preset',
+      _builtin: true,
+      _playbook: preset.type === 'playbook' ? catalogPlaybook || null : null,
+      _task: null,
+    });
+  }
+
   return automations;
 }
 
@@ -222,13 +318,33 @@ function deriveCategory(steps, tools) {
   return sorted.length > 0 ? sorted[0][0] : 'uncategorized';
 }
 
+function resolveCatalogCategory({ explicitCategory, steps, tools, fallbackText }) {
+  if (explicitCategory) return explicitCategory;
+  const derived = deriveCategory(steps || [], tools || []);
+  if (derived !== 'uncategorized') return derived;
+
+  const text = String(fallbackText || '').toLowerCase();
+  if (/(gateway|firewall|threat|security|host monitor|anomaly|baseline)/.test(text)) return 'security';
+  if (/(network|arp|dns|port scan|gateway ping|connection)/.test(text)) return 'network';
+  if (/(system|resource|process|service|uptime|localhost)/.test(text)) return 'system';
+  return 'security';
+}
+
 // ─── Rendering helpers ──────────────────────────────────
 
 function renderAutomationRow(auto, tools, packs) {
+  const isBuiltin = auto._builtin === true;
   const steps = auto.steps || [];
   const kindLabel = auto.kind === 'pipeline' ? 'Pipeline' : 'Single';
   const modeLabel = auto.kind === 'pipeline' ? auto.mode : '';
   const scheduleLabel = auto.cron ? cronToHuman(auto.cron) : 'Manual';
+  const statusLabel = isBuiltin ? 'Catalog' : (auto.enabled ? 'Enabled' : 'Disabled');
+  const toggleDisabled = isBuiltin ? 'disabled' : '';
+  const runDisabled = (!auto.enabled || isBuiltin) ? 'disabled' : '';
+  const runTitle = isBuiltin
+    ? 'Clone or edit this catalog entry to create a runnable automation.'
+    : (!auto.enabled ? 'Enable first' : '');
+  const deleteDisabled = isBuiltin ? 'disabled title="Built-in catalog item"' : '';
 
   return `
     <tr class="auto-catalog-row" data-category="${escAttr(auto.category)}" data-auto-id="${escAttr(auto.id)}">
@@ -236,6 +352,7 @@ function renderAutomationRow(auto, tools, packs) {
         <div class="ops-task-title">${esc(auto.name)}</div>
         <div class="ops-task-sub">${esc(auto.description || auto.id)}</div>
         <span class="wf-category-tag">${esc(auto.category)}</span>
+        ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Catalog</span>' : ''}
       </td>
       <td>
         <span class="auto-kind-badge ${auto.kind}">${esc(kindLabel)}</span>
@@ -253,7 +370,14 @@ function renderAutomationRow(auto, tools, packs) {
               }).join('')
           }
         </div>
-        ${steps.length > 0 && auto.kind === 'pipeline' ? `<button class="wf-expand-btn auto-pipeline-toggle" data-auto-id="${escAttr(auto.id)}" style="margin-top:0.35rem"><span class="wf-expand-icon">&#9654;</span> Pipeline</button>` : ''}
+        ${steps.length > 0 && auto.kind === 'pipeline' ? `
+          <div class="auto-pipeline-toggle-wrap">
+            <button class="wf-expand-btn auto-pipeline-toggle" data-auto-id="${escAttr(auto.id)}">
+              <span class="wf-expand-icon">&#9654;</span>
+              <span>Show Pipeline Details</span>
+            </button>
+          </div>
+        ` : ''}
       </td>
       <td class="auto-schedule-cell">
         <div class="ops-task-title">${esc(scheduleLabel)}</div>
@@ -261,19 +385,20 @@ function renderAutomationRow(auto, tools, packs) {
       </td>
       <td>
         <div class="ops-state-cell">
-          <span class="badge ${auto.enabled ? 'badge-ready' : 'badge-dead'}">${auto.enabled ? 'Enabled' : 'Disabled'}</span>
+          <span class="badge ${isBuiltin ? 'badge-info' : (auto.enabled ? 'badge-ready' : 'badge-dead')}">${statusLabel}</span>
           <label class="toggle-switch" style="margin:0;">
-            <input type="checkbox" class="auto-toggle" data-auto-id="${escAttr(auto.id)}" ${auto.enabled ? 'checked' : ''}>
+            <input type="checkbox" class="auto-toggle" data-auto-id="${escAttr(auto.id)}" ${auto.enabled ? 'checked' : ''} ${toggleDisabled}>
             <span class="toggle-slider"></span>
           </label>
         </div>
       </td>
       <td>
         <div class="ops-action-buttons">
-          <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${!auto.enabled ? 'disabled title="Enable first"' : ''}>Run</button>
-          <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}">Dry Run</button>
+          <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${runDisabled} ${runTitle ? `title="${escAttr(runTitle)}"` : ''}>Run</button>
+          <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${isBuiltin ? 'disabled title="Clone or edit this catalog entry first"' : ''}>Dry Run</button>
+          <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}">Edit</button>
           <button class="btn btn-secondary btn-sm auto-clone" data-auto-id="${escAttr(auto.id)}">Clone</button>
-          <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}">Delete</button>
+          <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}" ${deleteDisabled}>Delete</button>
         </div>
       </td>
     </tr>
@@ -401,7 +526,7 @@ function renderPipelineView(auto, toolLookup, packs) {
     <details class="wf-config-details">
       <summary class="wf-config-summary">
         <span class="wf-expand-icon" style="font-size:0.6rem">&#9654;</span>
-        Automation Configuration
+        Advanced Configuration (Power Users)
       </summary>
       <div class="wf-config-body">
         <div class="wf-config-section">
@@ -413,7 +538,8 @@ function renderPipelineView(auto, toolLookup, packs) {
           ${packInfo}
         </div>
         <div class="wf-config-section">
-          <div class="wf-config-section-title">Definition JSON</div>
+          <div class="wf-config-section-title">Raw Definition JSON</div>
+          <div class="wf-config-section-note">Use the simple Edit flow for normal changes. This editor is for advanced troubleshooting and direct definition changes.</div>
           <textarea class="wf-config-json-editor" data-auto-id="${escAttr(auto.id)}" rows="8">${esc(JSON.stringify(playbookData, null, 2))}</textarea>
           <div class="cfg-actions" style="margin-top:0.5rem">
             <button class="btn btn-primary btn-sm auto-config-save" data-auto-id="${escAttr(auto.id)}">Save Changes</button>
@@ -435,6 +561,12 @@ function renderCreateForm(tools, packs) {
     .join('');
 
   return `
+    <div class="auto-form-header">
+      <div>
+        <h4 id="auto-form-title" style="margin:0 0 0.2rem;">Create Automation</h4>
+        <div id="auto-form-subtitle" style="font-size:0.74rem;color:var(--text-muted);">Build a one-off tool automation or a multi-step pipeline.</div>
+      </div>
+    </div>
     <div class="cfg-form-grid">
       <div class="cfg-field">
         <label>Name</label>
@@ -545,7 +677,7 @@ function renderCreateForm(tools, packs) {
     </div>
 
     <details class="ops-advanced" style="margin-top:0.75rem;">
-      <summary>Advanced Options</summary>
+      <summary>Advanced Options (Power Users)</summary>
       <div class="cfg-form-grid" style="margin-top:0.85rem;">
         <div class="cfg-field">
           <label>Tool Inputs (JSON, optional)</label>
@@ -572,45 +704,9 @@ function renderCreateForm(tools, packs) {
     </div>
 
     <input type="hidden" id="auto-edit-id" value="">
+    <input type="hidden" id="auto-edit-source" value="">
+    <input type="hidden" id="auto-edit-task-id" value="">
   `;
-}
-
-function renderExampleCards(templates, presets) {
-  const cards = [];
-
-  for (const tpl of (templates || [])) {
-    cards.push(`
-      <div class="auto-example-card">
-        <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:0.3rem;">
-          <strong style="font-size:0.82rem;">${esc(tpl.name || tpl.id)}</strong>
-          <span class="auto-kind-badge pipeline">Pipeline</span>
-        </div>
-        <div style="font-size:0.72rem;color:var(--text-secondary);margin-bottom:0.5rem;">${esc(tpl.description || '')}</div>
-        <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:0.5rem;">${(tpl.steps || tpl.playbooks || []).length} steps</div>
-        <button class="btn btn-primary btn-sm auto-install-template" data-template-id="${escAttr(tpl.id)}">Install</button>
-      </div>
-    `);
-  }
-
-  for (const preset of (presets || [])) {
-    cards.push(`
-      <div class="auto-example-card">
-        <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:0.3rem;">
-          <strong style="font-size:0.82rem;">${esc(preset.name || preset.id)}</strong>
-          <span class="auto-kind-badge single">Single</span>
-        </div>
-        <div style="font-size:0.72rem;color:var(--text-secondary);margin-bottom:0.5rem;">${esc(preset.description || '')}</div>
-        <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:0.5rem;">Tool: ${esc(preset.target || '')}</div>
-        <button class="btn btn-primary btn-sm auto-install-preset" data-preset-id="${escAttr(preset.id)}">Install</button>
-      </div>
-    `);
-  }
-
-  if (cards.length === 0) {
-    return '<div style="color:var(--text-muted);padding:1rem;">No examples available.</div>';
-  }
-
-  return cards.join('');
 }
 
 function renderRunHistory(playbookRuns, taskHistory) {
@@ -620,7 +716,7 @@ function renderRunHistory(playbookRuns, taskHistory) {
     merged.push({
       time: run.startedAt || run.timestamp || 0,
       name: run.playbookName || run.playbookId || '',
-      source: 'playbook',
+      source: 'workflow',
       status: run.status || '',
       duration: run.durationMs || 0,
       steps: run.steps || [],
@@ -632,7 +728,7 @@ function renderRunHistory(playbookRuns, taskHistory) {
     merged.push({
       time: item.timestamp || 0,
       name: item.taskName || '',
-      source: item.taskType === 'playbook' ? 'scheduled playbook' : 'scheduled',
+      source: item.taskType === 'playbook' ? 'scheduled workflow' : 'scheduled',
       status: item.status || '',
       duration: item.durationMs || 0,
       message: item.message || '',
@@ -651,7 +747,7 @@ function renderRunHistory(playbookRuns, taskHistory) {
     <tr>
       <td>${formatTime(entry.time)}</td>
       <td>${esc(entry.name)}</td>
-      <td><span class="badge ${entry.source === 'playbook' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
+      <td><span class="badge ${entry.source === 'workflow' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
       <td><span style="color:${statusColor(entry.status)}">${esc(entry.status)}</span></td>
       <td>${entry.duration}ms</td>
       <td>
@@ -779,7 +875,7 @@ function renderEngineSettings(summary, workflowConfig, studio, packs) {
 // ─── Event binding ──────────────────────────────────────
 
 function bindEvents(container, ctx) {
-  const { automations, playbooks, tasks, presets, tools, packs, templates } = ctx;
+  const { automations, playbooks, tasks, tools, packs } = ctx;
 
   // Refresh
   container.querySelector('#auto-refresh')?.addEventListener('click', () => renderAutomations(container));
@@ -801,43 +897,21 @@ function bindEvents(container, ctx) {
     });
   });
 
-  // Examples panel
-  container.querySelector('#auto-examples-toggle')?.addEventListener('click', () => {
-    const panel = container.querySelector('#auto-examples-panel');
-    panel.style.display = panel.style.display === 'none' ? '' : 'none';
-  });
-  container.querySelector('#auto-examples-close')?.addEventListener('click', () => {
-    container.querySelector('#auto-examples-panel').style.display = 'none';
-  });
+  // Create/edit form
+  const formController = bindCreateForm(container, { tools, packs });
 
-  // Install template
-  container.querySelectorAll('.auto-install-template').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = btn.getAttribute('data-template-id');
-      btn.disabled = true;
-      btn.textContent = 'Installing...';
-      try {
-        await api.installTemplate(id);
-        await renderAutomations(container);
-      } catch { btn.disabled = false; btn.textContent = 'Install'; }
+  container.querySelectorAll('.auto-edit').forEach((button) => {
+    button.addEventListener('click', () => {
+      const autoId = button.getAttribute('data-auto-id');
+      const auto = automations.find((item) => item.id === autoId);
+      if (!auto) return;
+      if (formController.isEditingInline(autoId)) {
+        formController.closeEditor();
+        return;
+      }
+      formController.editAutomation(auto);
     });
   });
-
-  // Install preset
-  container.querySelectorAll('.auto-install-preset').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = btn.getAttribute('data-preset-id');
-      btn.disabled = true;
-      btn.textContent = 'Installing...';
-      try {
-        await api.installScheduledTaskPreset(id);
-        await renderAutomations(container);
-      } catch { btn.disabled = false; btn.textContent = 'Install'; }
-    });
-  });
-
-  // Create form toggle
-  bindCreateForm(container, { tools, packs });
 
   // Pipeline expand/collapse
   container.querySelectorAll('.auto-pipeline-toggle').forEach((btn) => {
@@ -935,6 +1009,7 @@ function bindEvents(container, ctx) {
       try {
         const newId = generateCloneId(autoId, automations);
         const newName = `${auto.name} (copy)`;
+        automationUiState.clonePlacement = { anchorId: auto.id, cloneId: newId };
 
         if (auto._playbook) {
           const clonedPb = { ...auto._playbook, id: newId, name: newName, enabled: false };
@@ -952,7 +1027,7 @@ function bindEvents(container, ctx) {
         }
 
         // Clone linked schedule if present
-        if (auto._task && auto.cron) {
+        if (auto.cron && (auto._task || auto._source === 'preset')) {
           await api.createScheduledTask({
             name: newName,
             type: 'playbook',
@@ -969,10 +1044,12 @@ function bindEvents(container, ctx) {
           const newRow = container.querySelector(`tr[data-auto-id="${newId}"]`);
           if (newRow) {
             newRow.classList.add('auto-clone-highlight');
-            newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
+          automationUiState.clonePlacement = null;
         }, 100);
       } catch {
+        automationUiState.clonePlacement = null;
         button.disabled = false;
         button.textContent = 'Clone';
       }
@@ -1035,29 +1112,156 @@ function bindEvents(container, ctx) {
 function bindCreateForm(container, { tools, packs }) {
   const createToggle = container.querySelector('#auto-create-toggle');
   const createForm = container.querySelector('#auto-create-form');
+  const titleEl = container.querySelector('#auto-form-title');
+  const subtitleEl = container.querySelector('#auto-form-subtitle');
+  const saveButton = container.querySelector('#auto-create-save');
+  const statusEl = container.querySelector('#auto-create-status');
+  const idInput = container.querySelector('#auto-create-id');
+  const nameInput = container.querySelector('#auto-create-name');
+  const descriptionInput = container.querySelector('#auto-create-description');
+  const modeSelect = container.querySelector('#auto-create-mode');
+  const packSelect = container.querySelector('#auto-create-pack');
+  const enabledSelect = container.querySelector('#auto-create-enabled');
+  const singleToolSelect = container.querySelector('#auto-single-tool-select');
+  const scheduleCheck = container.querySelector('#auto-schedule-enabled');
+  const scheduleSection = container.querySelector('#auto-schedule-section');
+  const argsInput = container.querySelector('#auto-create-args');
+  const eventInput = container.querySelector('#auto-create-event');
+  const editIdInput = container.querySelector('#auto-edit-id');
+  const editSourceInput = container.querySelector('#auto-edit-source');
+  const editTaskIdInput = container.querySelector('#auto-edit-task-id');
+  const defaultFormMarker = document.createElement('div');
+  let activeInlineAutoId = null;
+  createForm.insertAdjacentElement('afterend', defaultFormMarker);
+
+  function setFormMode(mode, subtitle) {
+    titleEl.textContent = mode;
+    subtitleEl.textContent = subtitle;
+    saveButton.textContent = mode === 'Edit Automation' ? 'Save Changes' : 'Create Automation';
+  }
+
+  function setIdReadOnly(readOnly) {
+    idInput.readOnly = readOnly;
+    idInput.style.opacity = readOnly ? '0.7' : '1';
+    idInput.style.cursor = readOnly ? 'not-allowed' : '';
+  }
+
+  function clearStatus() {
+    statusEl.textContent = '';
+    statusEl.style.color = 'var(--text-muted)';
+  }
+
+  function removeInlineEditorRow() {
+    const row = container.querySelector('.auto-inline-editor-row');
+    if (row) row.remove();
+  }
+
+  function restoreFormHome() {
+    if (createForm.parentElement !== defaultFormMarker.parentElement || createForm.nextElementSibling !== defaultFormMarker) {
+      defaultFormMarker.parentElement.insertBefore(createForm, defaultFormMarker);
+    }
+    createForm.classList.remove('auto-create-form-inline');
+    activeInlineAutoId = null;
+  }
+
+  function closeEditor() {
+    restoreFormHome();
+    removeInlineEditorRow();
+    createForm.style.display = 'none';
+    createToggle.textContent = 'Create Automation';
+    resetFormState();
+  }
+
+  function attachFormInline(auto) {
+    restoreFormHome();
+    removeInlineEditorRow();
+
+    const baseRow = container.querySelector(`tr[data-auto-id="${auto.id}"]`);
+    const pipelineRow = container.querySelector(`#auto-pipeline-${auto.id}`);
+    const anchorRow = pipelineRow || baseRow;
+    if (!anchorRow) return false;
+
+    const inlineRow = document.createElement('tr');
+    inlineRow.className = 'auto-inline-editor-row auto-catalog-row';
+    inlineRow.setAttribute('data-category', auto.category || 'uncategorized');
+    inlineRow.innerHTML = `
+      <td colspan="6" class="auto-inline-editor-cell">
+        <div class="auto-inline-editor-host"></div>
+      </td>
+    `;
+    anchorRow.insertAdjacentElement('afterend', inlineRow);
+    inlineRow.querySelector('.auto-inline-editor-host')?.appendChild(createForm);
+    createForm.classList.add('auto-create-form-inline');
+    createForm.style.display = '';
+    activeInlineAutoId = auto.id;
+    return true;
+  }
+
+  function resetFormState() {
+    editIdInput.value = '';
+    editSourceInput.value = '';
+    editTaskIdInput.value = '';
+    setFormMode('Create Automation', 'Build a one-off tool automation or a multi-step pipeline.');
+    setIdReadOnly(false);
+    modeSelect.disabled = false;
+    packSelect.disabled = false;
+    scheduleCheck.disabled = false;
+    nameInput.value = '';
+    idInput.value = '';
+    descriptionInput.value = '';
+    enabledSelect.value = 'false';
+    packSelect.value = '';
+    singleToolSelect.value = '';
+    argsInput.value = '';
+    eventInput.value = '';
+    modeSelect.value = 'single';
+    scheduleCheck.checked = false;
+    scheduleSection.style.display = 'none';
+    applyScheduleToForm(container, parseCronToSchedule(''));
+    wfSteps.splice(0, wfSteps.length);
+    renderStepList();
+    updateModeVisibility();
+    updateScheduleFields(container);
+    updateSchedulePreview(container);
+    clearStatus();
+  }
+
+  function openCreateMode() {
+    resetFormState();
+    restoreFormHome();
+    removeInlineEditorRow();
+    createForm.style.display = '';
+    createToggle.textContent = 'Close';
+  }
 
   createToggle?.addEventListener('click', () => {
+    if (activeInlineAutoId) {
+      openCreateMode();
+      return;
+    }
     const isOpen = createForm.style.display !== 'none';
-    createForm.style.display = isOpen ? 'none' : '';
-    createToggle.textContent = isOpen ? 'Create Automation' : 'Close';
+    if (isOpen) {
+      closeEditor();
+      return;
+    }
+    openCreateMode();
   });
 
   container.querySelector('#auto-create-cancel')?.addEventListener('click', () => {
-    createForm.style.display = 'none';
-    createToggle.textContent = 'Create Automation';
+    closeEditor();
   });
 
   // Auto-generate ID from name
-  container.querySelector('#auto-create-name')?.addEventListener('input', () => {
-    const name = container.querySelector('#auto-create-name').value;
-    container.querySelector('#auto-create-id').value = name
+  nameInput?.addEventListener('input', () => {
+    if (idInput.readOnly) return;
+    const name = nameInput.value;
+    idInput.value = name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
   });
 
   // Mode switch — show/hide single vs pipeline sections
-  const modeSelect = container.querySelector('#auto-create-mode');
   const singleSection = container.querySelector('#auto-single-tool-section');
   const pipelineSection = container.querySelector('#auto-pipeline-section');
 
@@ -1070,8 +1274,6 @@ function bindCreateForm(container, { tools, packs }) {
   updateModeVisibility();
 
   // Schedule toggle
-  const scheduleCheck = container.querySelector('#auto-schedule-enabled');
-  const scheduleSection = container.querySelector('#auto-schedule-section');
   scheduleCheck?.addEventListener('change', () => {
     scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
   });
@@ -1147,7 +1349,7 @@ function bindCreateForm(container, { tools, packs }) {
   container.querySelector('#auto-step-add')?.addEventListener('click', () => {
     const toolName = stepToolSelect.value;
     if (!toolName) return;
-    const packId = container.querySelector('#auto-create-pack')?.value || '';
+    const packId = packSelect?.value || '';
     wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId, toolName, args: {} });
     stepToolSelect.value = '';
     renderStepList();
@@ -1155,15 +1357,16 @@ function bindCreateForm(container, { tools, packs }) {
 
   // Save
   container.querySelector('#auto-create-save')?.addEventListener('click', async () => {
-    const statusEl = container.querySelector('#auto-create-status');
-    const editId = container.querySelector('#auto-edit-id').value.trim();
-    const id = container.querySelector('#auto-create-id').value.trim();
-    const name = container.querySelector('#auto-create-name').value.trim();
-    const mode = container.querySelector('#auto-create-mode').value;
-    const enabled = container.querySelector('#auto-create-enabled').value === 'true';
-    const description = container.querySelector('#auto-create-description').value.trim();
-    const packId = container.querySelector('#auto-create-pack')?.value || '';
-    const scheduleEnabled = container.querySelector('#auto-schedule-enabled').checked;
+    const editId = editIdInput.value.trim();
+    const editSource = editSourceInput.value.trim();
+    const editTaskId = editTaskIdInput.value.trim();
+    const id = idInput.value.trim();
+    const name = nameInput.value.trim();
+    const mode = modeSelect.value;
+    const enabled = enabledSelect.value === 'true';
+    const description = descriptionInput.value.trim();
+    const packId = packSelect?.value || '';
+    const scheduleEnabled = scheduleCheck.checked;
 
     if (!id || !name) {
       statusEl.textContent = 'Name and ID are required.';
@@ -1174,14 +1377,14 @@ function bindCreateForm(container, { tools, packs }) {
     // Build steps
     let steps;
     if (mode === 'single') {
-      const toolName = container.querySelector('#auto-single-tool-select').value;
+      const toolName = singleToolSelect.value;
       if (!toolName) {
         statusEl.textContent = 'Select a tool.';
         statusEl.style.color = 'var(--error)';
         return;
       }
       let args;
-      const argsRaw = container.querySelector('#auto-create-args').value.trim();
+      const argsRaw = argsInput.value.trim();
       if (argsRaw) {
         try { args = JSON.parse(argsRaw); } catch {
           statusEl.textContent = 'Tool inputs must be valid JSON.';
@@ -1203,35 +1406,68 @@ function bindCreateForm(container, { tools, packs }) {
     statusEl.style.color = 'var(--text-muted)';
 
     try {
-      const playbookMode = mode === 'single' ? 'sequential' : mode;
-      const result = await api.upsertPlaybook({ id: editId || id, name, mode: playbookMode, enabled, description, steps });
+      const emitEvent = eventInput.value.trim() || undefined;
+      const cron = scheduleEnabled ? buildCronFromForm(container) : '';
 
-      if (!result.success) {
-        statusEl.textContent = result.message || 'Failed.';
+      if (scheduleEnabled && !cron) {
+        statusEl.textContent = 'Choose a valid schedule.';
         statusEl.style.color = 'var(--error)';
         return;
       }
 
-      // Create/update linked scheduled task if schedule enabled
-      if (scheduleEnabled) {
-        const cron = buildCronFromForm(container);
-        if (!cron) {
-          statusEl.textContent = 'Automation saved, but choose a valid schedule.';
-          statusEl.style.color = 'var(--warning)';
-          return;
-        }
-        const emitEvent = container.querySelector('#auto-create-event').value.trim() || undefined;
-        await api.createScheduledTask({
+      if (editSource === 'task' && editTaskId) {
+        const toolName = singleToolSelect.value;
+        const args = steps[0]?.args || {};
+        const result = await api.updateScheduledTask(editTaskId, {
           name,
-          type: 'playbook',
-          target: editId || id,
+          type: 'tool',
+          target: toolName,
+          args,
           cron,
-          enabled: true,
+          enabled,
           emitEvent,
         });
+        if (!result.success) {
+          statusEl.textContent = result.message || 'Failed.';
+          statusEl.style.color = 'var(--error)';
+          return;
+        }
+      } else {
+        const playbookMode = mode === 'single' ? 'sequential' : mode;
+        const result = await api.upsertPlaybook({ id: editId || id, name, mode: playbookMode, enabled, description, steps });
+
+        if (!result.success) {
+          statusEl.textContent = result.message || 'Failed.';
+          statusEl.style.color = 'var(--error)';
+          return;
+        }
+
+        if (scheduleEnabled) {
+          if (editTaskId) {
+            await api.updateScheduledTask(editTaskId, {
+              name,
+              type: 'playbook',
+              target: editId || id,
+              cron,
+              enabled: true,
+              emitEvent,
+            });
+          } else {
+            await api.createScheduledTask({
+              name,
+              type: 'playbook',
+              target: editId || id,
+              cron,
+              enabled: true,
+              emitEvent,
+            });
+          }
+        } else if (editTaskId) {
+          await api.deleteScheduledTask(editTaskId);
+        }
       }
 
-      statusEl.textContent = 'Created.';
+      statusEl.textContent = editId ? 'Saved.' : 'Created.';
       statusEl.style.color = 'var(--success)';
       setTimeout(() => renderAutomations(container), 350);
     } catch (err) {
@@ -1239,6 +1475,74 @@ function bindCreateForm(container, { tools, packs }) {
       statusEl.style.color = 'var(--error)';
     }
   });
+
+  function editAutomation(auto) {
+    const isStandaloneTask = auto._source === 'task' && !auto._playbook && auto._task;
+    const firstStep = auto.steps?.[0] || null;
+    const uniformPackId = auto.steps?.every((step) => step.packId === auto.steps?.[0]?.packId) ? (auto.steps?.[0]?.packId || '') : '';
+
+    if (!attachFormInline(auto)) return;
+
+    createToggle.textContent = 'Create Automation';
+    setFormMode('Edit Automation', isStandaloneTask
+      ? 'Editing a scheduled tool automation. Schedule and tool inputs update in place.'
+      : 'Editing an existing automation. Existing step arguments and advanced settings are preserved.');
+    clearStatus();
+
+    editIdInput.value = auto.id || '';
+    editSourceInput.value = auto._source || '';
+    editTaskIdInput.value = auto._task?.id || '';
+
+    nameInput.value = auto.name || '';
+    idInput.value = auto.id || '';
+    descriptionInput.value = auto.description || '';
+    enabledSelect.value = String(auto.enabled !== false);
+    eventInput.value = auto._task?.emitEvent || '';
+    packSelect.value = uniformPackId;
+
+    wfSteps.splice(0, wfSteps.length, ...(auto.steps || []).map((step) => ({
+      ...step,
+      args: step.args ? JSON.parse(JSON.stringify(step.args)) : {},
+    })));
+
+    if (isStandaloneTask) {
+      modeSelect.value = 'single';
+      modeSelect.disabled = true;
+      packSelect.value = '';
+      packSelect.disabled = true;
+      singleToolSelect.value = auto._task.target || '';
+      argsInput.value = auto._task.args ? JSON.stringify(auto._task.args, null, 2) : '';
+      scheduleCheck.checked = true;
+      scheduleCheck.disabled = true;
+      scheduleSection.style.display = '';
+      enabledSelect.value = String(auto._task.enabled !== false);
+      setIdReadOnly(true);
+    } else {
+      modeSelect.disabled = false;
+      packSelect.disabled = false;
+      modeSelect.value = auto.kind === 'pipeline' ? auto.mode : 'single';
+      singleToolSelect.value = firstStep?.toolName || '';
+      argsInput.value = auto.kind === 'single' && firstStep?.args ? JSON.stringify(firstStep.args, null, 2) : '';
+      scheduleCheck.checked = !!auto.cron;
+      scheduleCheck.disabled = false;
+      scheduleSection.style.display = auto.cron ? '' : 'none';
+      setIdReadOnly(true);
+    }
+
+    renderStepList();
+    updateModeVisibility();
+    applyScheduleToForm(container, parseCronToSchedule(auto.cron || ''));
+    updateScheduleFields(container);
+    updateSchedulePreview(container);
+    createForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  resetFormState();
+  return {
+    closeEditor,
+    editAutomation,
+    isEditingInline: (autoId) => activeInlineAutoId === autoId,
+  };
 }
 
 function bindEngineSettings(container, ctx) {
@@ -1380,6 +1684,100 @@ function buildCronFromForm(container) {
   return '';
 }
 
+function applyScheduleToForm(container, schedule) {
+  container.querySelector('#auto-schedule-kind').value = schedule.mode;
+  container.querySelector('#auto-interval').value = String(schedule.interval || 1);
+  container.querySelector('#auto-minute').value = String(schedule.minute || 0);
+  container.querySelector('#auto-time').value = schedule.time || '09:00';
+  container.querySelector('#auto-weekday').value = schedule.weekday || '1';
+  container.querySelector('#auto-cron-custom').value = schedule.customCron || '';
+}
+
+function parseCronToSchedule(cron) {
+  if (!cron) {
+    return { mode: 'every_minutes', interval: 30, minute: 0, time: '09:00', weekday: '1', customCron: '' };
+  }
+
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return { mode: 'custom', interval: 1, minute: 0, time: '09:00', weekday: '1', customCron: cron };
+  }
+
+  const [min, hour, dom, mon, dow] = parts;
+
+  if (min === '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return { mode: 'every_minutes', interval: 1, minute: 0, time: '09:00', weekday: '1', customCron: '' };
+  }
+
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return {
+      mode: 'every_minutes',
+      interval: Number.parseInt(min.slice(2), 10) || 30,
+      minute: 0,
+      time: '09:00',
+      weekday: '1',
+      customCron: '',
+    };
+  }
+
+  if (/^\d+$/.test(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return {
+      mode: 'every_hours',
+      interval: 1,
+      minute: Number.parseInt(min, 10) || 0,
+      time: '09:00',
+      weekday: '1',
+      customCron: '',
+    };
+  }
+
+  if (/^\d+$/.test(min) && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
+    return {
+      mode: 'every_hours',
+      interval: Number.parseInt(hour.slice(2), 10) || 1,
+      minute: Number.parseInt(min, 10) || 0,
+      time: '09:00',
+      weekday: '1',
+      customCron: '',
+    };
+  }
+
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '*') {
+    return {
+      mode: 'daily',
+      interval: 1,
+      minute: Number.parseInt(min, 10) || 0,
+      time: `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`,
+      weekday: '1',
+      customCron: '',
+    };
+  }
+
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '1-5') {
+    return {
+      mode: 'weekdays',
+      interval: 1,
+      minute: Number.parseInt(min, 10) || 0,
+      time: `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`,
+      weekday: '1',
+      customCron: '',
+    };
+  }
+
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && /^[0-6]$/.test(dow)) {
+    return {
+      mode: 'weekly',
+      interval: 1,
+      minute: Number.parseInt(min, 10) || 0,
+      time: `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`,
+      weekday: dow,
+      customCron: '',
+    };
+  }
+
+  return { mode: 'custom', interval: 1, minute: 0, time: '09:00', weekday: '1', customCron: cron };
+}
+
 // ─── Cron display helpers ───────────────────────────────
 
 function cronToHuman(cron) {
@@ -1465,14 +1863,18 @@ function formatStepAccess(packId, packs) {
 }
 
 // Global click handler for step output toggles
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('.auto-step-output-toggle');
-  if (!button) return;
-  const outputId = button.getAttribute('data-output-id');
-  if (!outputId) return;
-  const output = document.getElementById(outputId);
-  if (!output) return;
-  const visible = output.style.display !== 'none';
-  output.style.display = visible ? 'none' : '';
-  button.textContent = visible ? 'Output' : 'Hide';
-});
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest('.auto-step-output-toggle');
+    if (!button) return;
+    const outputId = button.getAttribute('data-output-id');
+    if (!outputId) return;
+    const output = document.getElementById(outputId);
+    if (!output) return;
+    const visible = output.style.display !== 'none';
+    output.style.display = visible ? 'none' : '';
+    button.textContent = visible ? 'Output' : 'Hide';
+  });
+}

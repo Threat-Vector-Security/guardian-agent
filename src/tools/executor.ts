@@ -33,11 +33,11 @@ import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import {
   BrowserSessionManager,
-  isPrivateHost as isBrowserPrivateHost,
   validateBrowserAction,
   validateBrowserUrl,
   validateElementRef,
 } from './browser-session.js';
+import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
 import { realpath } from 'node:fs/promises';
@@ -123,8 +123,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
-  /** QMD hybrid search service for document collection search. */
-  qmdSearch?: import('../runtime/qmd-search.js').QMDSearchService;
+  /** Document search service for indexed document collections (hybrid BM25 + vector). */
+  docSearch?: import('../search/search-service.js').SearchService;
   /** Google Workspace CLI service for Gmail, Calendar, Drive, Docs, Sheets. */
   gwsService?: import('../runtime/gws-service.js').GWSService;
   /** Device inventory for network intelligence/baseline tools. */
@@ -397,6 +397,10 @@ export class ToolExecutor {
 
   setCloudConfig(cloudConfig: AssistantCloudConfig | undefined): void {
     this.cloudConfig = cloudConfig ?? emptyCloudConfig();
+  }
+
+  setDocSearch(docSearch: import('../search/search-service.js').SearchService | undefined): void {
+    this.options.docSearch = docSearch;
   }
 
   /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
@@ -2918,7 +2922,7 @@ export class ToolExecutor {
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
           return { success: false, error: 'Only HTTP/HTTPS URLs are supported.' };
         }
-        if (isPrivateHost(parsed.hostname)) {
+        if (isPrivateAddress(parsed.hostname)) {
           return { success: false, error: `Blocked: ${parsed.hostname} is a private/internal address (SSRF protection).` };
         }
         const maxChars = Math.max(100, Math.min(100_000, asNumber(args.maxChars, MAX_WEB_FETCH_CHARS)));
@@ -9075,7 +9079,7 @@ export class ToolExecutor {
           const urlText = requireString(args.url, 'url').trim();
           const parsed = validateBrowserUrl(urlText);
           const host = parsed.hostname.toLowerCase();
-          if (isBrowserPrivateHost(host)) {
+          if (isPrivateAddress(host)) {
             return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
           }
           if (!isBrowserDomainAllowed(host)) {
@@ -9250,7 +9254,7 @@ export class ToolExecutor {
           const urlText = requireString(args.url, 'url').trim();
           const parsed = validateBrowserUrl(urlText);
           const host = parsed.hostname.toLowerCase();
-          if (isBrowserPrivateHost(host)) {
+          if (isPrivateAddress(host)) {
             return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
           }
           if (!isBrowserDomainAllowed(host)) {
@@ -9428,47 +9432,39 @@ export class ToolExecutor {
       },
     );
 
-    // ─── QMD Search Tools ────────────────────────────────
+    // ─── Document Search Tools ──────────────────────────────
 
     this.registry.register(
       {
-        name: 'qmd_search',
-        description: 'Search indexed document collections using QMD hybrid search (BM25 keyword + vector embeddings + optional LLM re-ranking). Supports multiple search modes and collection filtering. Use to find information across notes, codebases, wikis, and other configured document sources.',
+        name: 'doc_search',
+        description: 'Search indexed document collections using hybrid search (BM25 keyword + vector similarity). Returns ranked results with file path, title, matched snippet, and surrounding context.',
         shortDescription: 'Search indexed document collections using hybrid search.',
         risk: 'read_only',
         category: 'search',
         deferLoading: true,
         examples: [
-          { input: { query: 'deployment guide', mode: 'query' }, description: 'Hybrid search with LLM re-ranking' },
-          { input: { query: 'API authentication', collection: 'docs', limit: 5 }, description: 'Search specific collection' },
+          { input: { query: 'deployment guide', mode: 'hybrid' }, description: 'Hybrid search for deployment documentation' },
+          { input: { query: 'API authentication', collection: 'docs', limit: 5 }, description: 'Search within a specific collection' },
         ],
         parameters: {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Search query text.' },
-            mode: { type: 'string', enum: ['search', 'vsearch', 'query'], description: "Search mode: 'search' (BM25 keyword), 'vsearch' (vector similarity), 'query' (hybrid + LLM re-rank). Default: configured default." },
-            collection: { type: 'string', description: 'Restrict search to a specific collection (source id). Omit to search all.' },
-            limit: { type: 'number', description: 'Maximum results to return (default: 20, max: 100).' },
-            includeBody: { type: 'boolean', description: 'Include full document body in results (default: false).' },
+            mode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'], description: "Search mode: 'keyword' (BM25), 'semantic' (vector), 'hybrid' (both, merged via RRF). Default: hybrid." },
+            collection: { type: 'string', description: 'Source collection ID to search within. Omit to search all.' },
+            limit: { type: 'number', description: 'Maximum results (1-100, default 20).' },
+            includeBody: { type: 'boolean', description: 'Include full document body in results.' },
           },
           required: ['query'],
         },
       },
-      async (args, request) => {
-        const query = asString(args.query).trim();
-        if (!query) return { success: false, error: 'Query is required.' };
-
-        this.guardAction(request, 'read_file', { path: 'qmd:search', query });
-
-        const qmd = this.options.qmdSearch;
-        if (!qmd) {
-          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
-        }
-
+      async (args) => {
+        const docSearch = this.options.docSearch;
+        if (!docSearch) return { success: false, error: 'Document search not configured.' };
         try {
-          const result = await qmd.search({
-            query,
-            mode: args.mode as 'search' | 'vsearch' | 'query' | undefined,
+          const result = await docSearch.search({
+            query: asString(args.query).trim(),
+            mode: args.mode ? asString(args.mode) as import('../search/types.js').SearchMode : undefined,
             collection: args.collection ? asString(args.collection) : undefined,
             limit: args.limit ? asNumber(args.limit, 20) : undefined,
             includeBody: args.includeBody === true,
@@ -9482,9 +9478,9 @@ export class ToolExecutor {
 
     this.registry.register(
       {
-        name: 'qmd_status',
-        description: 'Get QMD search engine status: install state, version, indexed collections, and configured document sources.',
-        shortDescription: 'Get QMD search engine status and source info.',
+        name: 'doc_search_status',
+        description: 'Get document search engine status: availability, configured sources, collection statistics, and vector search availability.',
+        shortDescription: 'Get document search engine status and source info.',
         risk: 'read_only',
         category: 'search',
         deferLoading: true,
@@ -9493,16 +9489,11 @@ export class ToolExecutor {
           properties: {},
         },
       },
-      async (_args, request) => {
-        this.guardAction(request, 'read_file', { path: 'qmd:status' });
-
-        const qmd = this.options.qmdSearch;
-        if (!qmd) {
-          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
-        }
-
+      async () => {
+        const docSearch = this.options.docSearch;
+        if (!docSearch) return { success: false, output: { available: false } };
         try {
-          const status = await qmd.status();
+          const status = docSearch.status();
           return { success: true, output: status };
         } catch (err) {
           return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -9512,30 +9503,25 @@ export class ToolExecutor {
 
     this.registry.register(
       {
-        name: 'qmd_reindex',
-        description: 'Trigger vector embedding reindex for QMD document collections. Can target a specific collection or reindex all.',
-        shortDescription: 'Trigger vector reindex for document collections.',
+        name: 'doc_search_reindex',
+        description: 'Trigger document indexing and embedding generation. Scans source files, parses content, chunks text, and generates vector embeddings for search.',
+        shortDescription: 'Reindex document collections.',
         risk: 'mutating',
         category: 'search',
         deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
-            collection: { type: 'string', description: 'Collection id to reindex. Omit to reindex all collections.' },
+            collection: { type: 'string', description: 'Source collection ID to reindex. Omit to reindex all enabled sources.' },
           },
         },
       },
-      async (args, request) => {
-        this.guardAction(request, 'execute_command', { command: 'qmd embed', collection: args.collection });
-
-        const qmd = this.options.qmdSearch;
-        if (!qmd) {
-          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
-        }
-
+      async (args) => {
+        const docSearch = this.options.docSearch;
+        if (!docSearch) return { success: false, error: 'Document search not configured.' };
         try {
-          const result = await qmd.reindex(args.collection ? asString(args.collection) : undefined);
-          return { success: result.success, output: result.message, error: result.success ? undefined : result.message };
+          const result = await docSearch.reindex(args.collection ? asString(args.collection) : undefined);
+          return { success: true, output: result };
         } catch (err) {
           return { success: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -10931,22 +10917,6 @@ function sanitizePreview(value: string): string {
   if (!value) return '';
   const cleaned = value.replace(/\s+/g, ' ').trim();
   return cleaned.length > 240 ? `${cleaned.slice(0, 240)}...` : cleaned;
-}
-
-/** SSRF protection: block private/internal IP ranges. */
-function isPrivateHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === 'localhost' || h === '[::1]') return true;
-  // IPv4 private ranges
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true; // link-local
-  if (/^0\./.test(h)) return true;
-  // IPv6 loopback and private
-  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')) return true;
-  return false;
 }
 
 /**

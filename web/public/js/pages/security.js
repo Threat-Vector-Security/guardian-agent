@@ -30,6 +30,7 @@ export async function renderSecurity(container, options = {}) {
   createTabs(container, [
     { id: 'audit', label: 'Audit', render: renderAuditTab },
     { id: 'monitoring', label: 'Monitoring', render: renderMonitoringTab },
+    { id: 'cloud', label: 'Cloud', render: renderCloudTab },
     { id: 'intel', label: 'Threat Intel', render: renderIntelTab },
   ], options?.tab);
 }
@@ -195,13 +196,20 @@ async function renderAuditTab(panel) {
 
 function createAuditRow(event) {
   const tr = document.createElement('tr');
+  const preview = summarize(event.details);
+  const fullDetails = formatAuditDetails(event.details);
   tr.innerHTML = `
     <td>${new Date(event.timestamp).toLocaleTimeString()}</td>
     <td>${esc(event.type)}</td>
     <td><span class="badge badge-${event.severity}">${esc(event.severity)}</span></td>
     <td>${esc(event.agentId)}</td>
     <td>${esc(event.controller || '-')}</td>
-    <td>${esc(summarize(event.details))}</td>
+    <td>
+      <details class="audit-details">
+        <summary>${esc(preview)}</summary>
+        <pre>${esc(fullDetails)}</pre>
+      </details>
+    </td>
   `;
   return tr;
 }
@@ -210,7 +218,18 @@ function summarize(details) {
   if (!details) return '-';
   if (details.reason) return String(details.reason);
   if (details.error) return String(details.error);
-  return JSON.stringify(details).slice(0, 60);
+  if (details.description) return String(details.description);
+  const json = JSON.stringify(details);
+  return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+}
+
+function formatAuditDetails(details) {
+  if (!details) return '-';
+  try {
+    return JSON.stringify(details, null, 2);
+  } catch {
+    return String(details);
+  }
 }
 
 // ─── Monitoring Tab ──────────────────────────────────────
@@ -831,6 +850,172 @@ function renderAgentGrid(gridEl, agents) {
   `).join('');
 }
 
+// ─── Cloud Tab ──────────────────────────────────────────
+
+async function renderCloudTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [config, auditEvents] = await Promise.all([
+      api.config(),
+      api.audit({ limit: 200 }).catch(() => []),
+    ]);
+    const cloud = config.assistant?.tools?.cloud || {
+      enabled: false,
+      cpanelProfiles: [],
+      vercelProfiles: [],
+      cloudflareProfiles: [],
+      awsProfiles: [],
+      gcpProfiles: [],
+      azureProfiles: [],
+      profileCounts: { cpanel: 0, vercel: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
+      security: {
+        inlineSecretProfileCount: 0,
+        credentialRefCount: 0,
+        selfSignedProfileCount: 0,
+        customEndpointProfileCount: 0,
+      },
+    };
+
+    const providerRows = [
+      {
+        provider: 'cPanel / WHM',
+        count: cloud.cpanelProfiles.length,
+        inline: cloud.cpanelProfiles.filter((profile) => profile.apiTokenConfigured).length,
+        refs: cloud.cpanelProfiles.filter((profile) => !!profile.credentialRef).length,
+        customEndpoints: 0,
+        notes: cloud.cpanelProfiles.filter((profile) => profile.allowSelfSigned).length
+          ? `${cloud.cpanelProfiles.filter((profile) => profile.allowSelfSigned).length} self-signed`
+          : '-',
+      },
+      {
+        provider: 'Vercel',
+        count: cloud.vercelProfiles.length,
+        inline: cloud.vercelProfiles.filter((profile) => profile.apiTokenConfigured).length,
+        refs: cloud.vercelProfiles.filter((profile) => !!profile.credentialRef).length,
+        customEndpoints: cloud.vercelProfiles.filter((profile) => !!profile.apiBaseUrl).length,
+        notes: '-',
+      },
+      {
+        provider: 'Cloudflare',
+        count: cloud.cloudflareProfiles.length,
+        inline: cloud.cloudflareProfiles.filter((profile) => profile.apiTokenConfigured).length,
+        refs: cloud.cloudflareProfiles.filter((profile) => !!profile.credentialRef).length,
+        customEndpoints: cloud.cloudflareProfiles.filter((profile) => !!profile.apiBaseUrl).length,
+        notes: '-',
+      },
+      {
+        provider: 'AWS',
+        count: cloud.awsProfiles.length,
+        inline: cloud.awsProfiles.filter((profile) => profile.accessKeyIdConfigured || profile.secretAccessKeyConfigured || profile.sessionTokenConfigured).length,
+        refs: cloud.awsProfiles.filter((profile) => !!profile.accessKeyIdCredentialRef || !!profile.secretAccessKeyCredentialRef || !!profile.sessionTokenCredentialRef).length,
+        customEndpoints: cloud.awsProfiles.filter((profile) => profile.endpoints && Object.keys(profile.endpoints).length > 0).length,
+        notes: '-',
+      },
+      {
+        provider: 'GCP',
+        count: cloud.gcpProfiles.length,
+        inline: cloud.gcpProfiles.filter((profile) => profile.accessTokenConfigured || profile.serviceAccountConfigured).length,
+        refs: cloud.gcpProfiles.filter((profile) => !!profile.accessTokenCredentialRef || !!profile.serviceAccountCredentialRef).length,
+        customEndpoints: cloud.gcpProfiles.filter((profile) => profile.endpoints && Object.keys(profile.endpoints).length > 0).length,
+        notes: '-',
+      },
+      {
+        provider: 'Azure',
+        count: cloud.azureProfiles.length,
+        inline: cloud.azureProfiles.filter((profile) => profile.accessTokenConfigured || profile.clientIdConfigured || profile.clientSecretConfigured).length,
+        refs: cloud.azureProfiles.filter((profile) => !!profile.accessTokenCredentialRef || !!profile.clientIdCredentialRef || !!profile.clientSecretCredentialRef).length,
+        customEndpoints: cloud.azureProfiles.filter((profile) => (profile.endpoints && Object.keys(profile.endpoints).length > 0) || !!profile.blobBaseUrl).length,
+        notes: '-',
+      },
+    ];
+    const activeProviders = providerRows.filter((row) => row.count > 0).length;
+    const cloudEvents = (auditEvents || []).filter(isCloudAuditEvent).slice(0, 40);
+    const deniedCount = cloudEvents.filter((event) => event.type === 'action_denied').length;
+
+    panel.innerHTML = `
+      <div class="intel-summary-grid">
+        <div class="status-card ${cloud.enabled ? 'success' : 'error'}">
+          <div class="card-title">Cloud Controls</div>
+          <div class="card-value">${cloud.enabled ? 'Enabled' : 'Disabled'}</div>
+          <div class="card-subtitle">${activeProviders} provider families configured</div>
+        </div>
+        <div class="status-card info">
+          <div class="card-title">Profiles</div>
+          <div class="card-value">${cloud.profileCounts?.total || 0}</div>
+          <div class="card-subtitle">Across cPanel, Vercel, Cloudflare, AWS, GCP, and Azure</div>
+        </div>
+        <div class="status-card ${cloud.security?.inlineSecretProfileCount ? 'warning' : 'success'}">
+          <div class="card-title">Inline Secret Usage</div>
+          <div class="card-value">${cloud.security?.inlineSecretProfileCount || 0}</div>
+          <div class="card-subtitle">${cloud.security?.credentialRefCount || 0} credential refs configured</div>
+        </div>
+        <div class="status-card ${cloud.security?.selfSignedProfileCount ? 'warning' : 'accent'}">
+          <div class="card-title">TLS Exceptions</div>
+          <div class="card-value">${cloud.security?.selfSignedProfileCount || 0}</div>
+          <div class="card-subtitle">Profiles accepting self-signed certs</div>
+        </div>
+        <div class="status-card ${deniedCount > 0 ? 'warning' : 'info'}">
+          <div class="card-title">Recent Cloud Denials</div>
+          <div class="card-value">${deniedCount}</div>
+          <div class="card-subtitle">${cloudEvents.length} recent cloud-related audit events</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Provider Posture</h3></div>
+        <table>
+          <thead><tr><th>Provider</th><th>Profiles</th><th>Inline Secrets</th><th>Credential Refs</th><th>Custom Endpoints</th><th>Notes</th></tr></thead>
+          <tbody>
+            ${providerRows.map((row) => `
+              <tr>
+                <td>${esc(row.provider)}</td>
+                <td>${row.count}</td>
+                <td>${row.inline}</td>
+                <td>${row.refs}</td>
+                <td>${row.customEndpoints}</td>
+                <td>${esc(row.notes)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Cloud Security Guidance</h3></div>
+        <div style="padding:0.95rem 1rem;font-size:0.8rem;color:var(--text-secondary);line-height:1.55;">
+          Prefer <code>credentialRef</code>-backed auth over inline secrets, especially for AWS/GCP/Azure credentials.<br>
+          Review any cPanel/WHM profile with <code>allowSelfSigned: true</code> and remove custom endpoint overrides unless you intentionally target emulators, proxies, or sovereign clouds.<br>
+          Cloud tool approval behavior still follows the existing Guardian/tool policy stack; this page summarizes posture and recent decisions, not just static config.
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Recent Cloud Audit Activity</h3></div>
+        <table>
+          <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Tool</th><th>Controller</th><th>Reason</th></tr></thead>
+          <tbody>
+            ${cloudEvents.length === 0
+              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent cloud-related audit events.</td></tr>'
+              : cloudEvents.map((event) => `
+                <tr>
+                  <td>${new Date(event.timestamp).toLocaleTimeString()}</td>
+                  <td>${esc(event.type)}</td>
+                  <td><span class="badge ${auditSeverityClass(event.severity)}">${esc(event.severity)}</span></td>
+                  <td>${esc(event.details?.toolName || '-')}</td>
+                  <td>${esc(event.controller || '-')}</td>
+                  <td title="${escAttr(event.details?.reason || '')}">${esc(event.details?.reason || event.details?.source || '-')}</td>
+                </tr>
+              `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err.message)}</div>`;
+  }
+}
+
 // ─── Threat Intel Tab ────────────────────────────────────
 
 async function renderIntelTab(panel) {
@@ -1023,6 +1208,29 @@ function mapNetworkSeverityToAudit(severity) {
   if (severity === 'critical') return 'critical';
   if (severity === 'high' || severity === 'medium' || severity === 'warn') return 'warn';
   return 'info';
+}
+
+function auditSeverityClass(severity) {
+  if (severity === 'critical') return 'badge-critical';
+  if (severity === 'warn') return 'badge-warn';
+  return 'badge-info';
+}
+
+function isCloudToolName(toolName) {
+  return /^(cpanel_|whm_|vercel_|cf_|aws_|gcp_|azure_)/.test(String(toolName || ''));
+}
+
+function isCloudAuditEvent(event) {
+  const toolName = event?.details?.toolName;
+  if (isCloudToolName(toolName)) return true;
+  const source = String(event?.details?.source || '');
+  return source.includes('tool:cf_')
+    || source.includes('tool:aws_')
+    || source.includes('tool:gcp_')
+    || source.includes('tool:azure_')
+    || source.includes('tool:vercel_')
+    || source.includes('tool:cpanel_')
+    || source.includes('tool:whm_');
 }
 
 function esc(str) {

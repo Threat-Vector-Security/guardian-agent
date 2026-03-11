@@ -1,8 +1,8 @@
 # Orchestration Agents Specification
 
 **Status:** Implemented
-**File:** `src/agent/orchestration.ts`
-**Tests:** `src/agent/orchestration.test.ts`
+**Files:** `src/agent/orchestration.ts`, `src/agent/conditional.ts`
+**Tests:** `src/agent/orchestration.test.ts`, `src/agent/conditional.test.ts`
 **Depends on:** SharedState (`src/runtime/shared-state.ts`), Runtime dispatch
 
 ---
@@ -20,6 +20,16 @@ These are not lightweight wrappers — each sub-agent call goes through input sa
 | `SequentialAgent` | A → B → C (pipeline) | Multi-step workflows: analyze → transform → validate |
 | `ParallelAgent` | A ∥ B ∥ C (fan-out) | Independent tasks: multi-source research, parallel analysis |
 | `LoopAgent` | A → A → A (iteration) | Refinement loops: draft → review → revise until satisfied |
+| `ConditionalAgent` | if/else branching | Route to different sub-agents based on state or input conditions |
+
+### Cross-Cutting Features
+
+| Feature | Scope | Description |
+|---------|-------|-------------|
+| Per-step retry | Sequential, Parallel | `StepRetryPolicy` with exponential backoff, retryable error filter |
+| Fail-branch | Sequential, Parallel | `StepFailBranch` — alternative agent when step fails all retries |
+| Array iteration | LoopAgent | `LoopArrayConfig` — map over array items with configurable concurrency |
+| Shared utilities | All | Extracted module-level functions: `executeWithRetry()`, `runStepsSequentially()`, `runWithConcurrencyLimit()`, `prepareStepInput()`, `recordStepOutput()` |
 
 ---
 
@@ -510,8 +520,9 @@ GuardianAgent's `ChatAgent.onMessage` implements this loop with additions:
 
 ## Future Enhancements
 
-1. **ConditionalAgent** — Route to different sub-agents based on LLM classification or content analysis
-2. **MapReduceAgent** — Split input into chunks, process in parallel, merge results
+1. ~~**ConditionalAgent**~~ — **Implemented** in `src/agent/conditional.ts`. Routes to different sub-agents based on ordered branch conditions evaluated against SharedState and input. Supports `inheritStateKeys`, retry/fail-branch within branches, and default steps.
+2. **LLM-based routing** — Extend ConditionalAgent with optional `llmDescription` on branches for LLM-classified routing (Question Classifier pattern)
+3. **MapReduceAgent** — Split input into chunks, process in parallel, merge results
 3. **maxDispatchDepth** — Hard cap on recursion depth across nested orchestration
 4. **maxStepsPerOrchestration** — Configuration-time limit on step count
 5. **State sanitization** — Optional content cleaning when writing to shared state

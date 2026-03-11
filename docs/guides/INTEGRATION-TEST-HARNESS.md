@@ -16,7 +16,7 @@ Fifteen scripts are provided:
 | **`scripts/test-approvals.ps1`** | Approval UX: contextual prompts, multi-approval, policy modes (PowerShell) | ~45+ |
 | **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
 | **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
-| **`scripts/test-qmd.ps1`** | QMD document search + approval tests (PowerShell) | ~12 |
+| **`scripts/test-search.ps1`** | Document search + approval tests (PowerShell) | ~12 |
 | **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |
 | **`scripts/test-automations-llm.ps1`** | Automation LLM-path: discovery, creation, composition, scheduling (PowerShell) | ~50+ |
 | **`scripts/test-intel.ps1`** | Threat intel watchlist + scan + approval tests (PowerShell) | ~20 |
@@ -342,17 +342,17 @@ Tests network tools via direct API in autonomous mode. All network tools are `re
 | `net_wifi_clients` | `{ force: true }` | WiFi client list (skips if no adapter) |
 | `net_connection_profiles` | `{}` | Network connection profiles |
 
-### QMD Document Search Suite (`test-qmd.ps1`, ~12 assertions)
+### Document Search Suite (`test-search.ps1`, ~12 assertions)
 
-Tests QMD search tools: status, search, reindex. Includes approval tests for the mutating `qmd_reindex` operation. Requires QMD CLI to be installed — all tests SKIP gracefully if unavailable.
+Tests document search tools: status, search, reindex. Includes approval tests for the mutating `doc_search_reindex` operation.
 
 | Operation | Policy Mode | Expected | What It Validates |
 |-----------|-------------|----------|-------------------|
-| `qmd_status` | autonomous | succeeded/failed | Status check (read_only) |
-| `qmd_search` | autonomous | succeeded/failed | Search query (read_only) |
-| `qmd_reindex` | autonomous | succeeded/failed | Reindex (mutating, allowed in autonomous) |
-| `qmd_search` | approve_by_policy | NOT pending_approval | Read-only passes through |
-| `qmd_reindex` | approve_by_policy | pending_approval → deny | Mutating gated by approval |
+| `doc_search_status` | autonomous | succeeded/failed | Status check (read_only) |
+| `doc_search` | autonomous | succeeded/failed | Search query (read_only) |
+| `doc_search_reindex` | autonomous | succeeded/failed | Reindex (mutating, allowed in autonomous) |
+| `doc_search` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `doc_search_reindex` | approve_by_policy | pending_approval → deny | Mutating gated by approval |
 
 ### Automation Tools Suite (`test-automation.ps1`, ~20 assertions)
 

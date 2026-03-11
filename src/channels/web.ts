@@ -53,6 +53,7 @@ type PrivilegedTicketAction =
   | 'connectors.config'
   | 'connectors.pack'
   | 'connectors.playbook'
+  | 'search.pick-path'
   | 'factory-reset';
 
 export interface WebAuthRuntimeConfig {
@@ -488,6 +489,7 @@ export class WebChannel implements ChannelAdapter {
       || value === 'connectors.config'
       || value === 'connectors.pack'
       || value === 'connectors.playbook'
+      || value === 'search.pick-path'
       || value === 'factory-reset';
   }
 
@@ -2628,31 +2630,31 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // ─── QMD Search Routes ─────────────────────────────
+      // ─── Document Search Routes ──────────────────────────────
 
-      // GET /api/qmd/status — QMD install status and collections
-      if (req.method === 'GET' && url.pathname === '/api/qmd/status') {
-        if (!this.dashboard.onQMDStatus) {
+      // GET /api/search/status — Search engine status and indexed sources
+      if (req.method === 'GET' && url.pathname === '/api/search/status') {
+        if (!this.dashboard.onSearchStatus) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onQMDStatus());
+        sendJSON(res, 200, await this.dashboard.onSearchStatus());
         return;
       }
 
-      // GET /api/qmd/sources — List configured document sources
-      if (req.method === 'GET' && url.pathname === '/api/qmd/sources') {
-        if (!this.dashboard.onQMDSources) {
+      // GET /api/search/sources — List configured document sources
+      if (req.method === 'GET' && url.pathname === '/api/search/sources') {
+        if (!this.dashboard.onSearchSources) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onQMDSources());
+        sendJSON(res, 200, this.dashboard.onSearchSources());
         return;
       }
 
-      // POST /api/qmd/sources — Add a new document source
-      if (req.method === 'POST' && url.pathname === '/api/qmd/sources') {
-        if (!this.dashboard.onQMDSourceAdd) {
+      // POST /api/search/sources — Add a new document source
+      if (req.method === 'POST' && url.pathname === '/api/search/sources') {
+        if (!this.dashboard.onSearchSourceAdd) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
@@ -2675,38 +2677,76 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'id, name, path, and type are required' });
           return;
         }
-        const result = this.dashboard.onQMDSourceAdd(
-          parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onQMDSourceAdd>>[0],
+        const result = this.dashboard.onSearchSourceAdd(
+          parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onSearchSourceAdd>>[0],
         );
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.added', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['config'], 'search.source.added', url.pathname);
         return;
       }
 
-      // DELETE /api/qmd/sources/:id — Remove a document source
-      if (req.method === 'DELETE' && url.pathname.startsWith('/api/qmd/sources/')) {
-        if (!this.dashboard.onQMDSourceRemove) {
+      // POST /api/search/pick-path — open local native picker for search source paths
+      if (req.method === 'POST' && url.pathname === '/api/search/pick-path') {
+        if (!this.dashboard.onSearchPickPath) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        const id = decodeURIComponent(url.pathname.slice('/api/qmd/sources/'.length));
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { kind?: 'directory' | 'file'; ticket?: string };
+        try {
+          parsed = JSON.parse(body) as { kind?: 'directory' | 'file'; ticket?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'search.pick-path', parsed.ticket)) {
+          return;
+        }
+        if (parsed.kind !== 'directory' && parsed.kind !== 'file') {
+          sendJSON(res, 400, { error: "kind must be 'directory' or 'file'" });
+          return;
+        }
+        try {
+          const result = await this.dashboard.onSearchPickPath({ kind: parsed.kind });
+          sendJSON(res, 200, result);
+        } catch (err) {
+          logInternalError('Search path picker failed', err);
+          sendJSON(res, 500, { error: 'Path picker failed' });
+        }
+        return;
+      }
+
+      // DELETE /api/search/sources/:id — Remove a document source
+      if (req.method === 'DELETE' && url.pathname.startsWith('/api/search/sources/')) {
+        if (!this.dashboard.onSearchSourceRemove) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/search/sources/'.length));
         if (!id) {
           sendJSON(res, 400, { error: 'Source ID required' });
           return;
         }
-        const result = this.dashboard.onQMDSourceRemove(id);
+        const result = this.dashboard.onSearchSourceRemove(id);
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.removed', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['config'], 'search.source.removed', url.pathname);
         return;
       }
 
-      // PATCH /api/qmd/sources/:id — Toggle source enabled/disabled
-      if (req.method === 'PATCH' && url.pathname.startsWith('/api/qmd/sources/')) {
-        if (!this.dashboard.onQMDSourceToggle) {
+      // PATCH /api/search/sources/:id — Toggle source enabled/disabled
+      if (req.method === 'PATCH' && url.pathname.startsWith('/api/search/sources/')) {
+        if (!this.dashboard.onSearchSourceToggle) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        const id = decodeURIComponent(url.pathname.slice('/api/qmd/sources/'.length));
+        const id = decodeURIComponent(url.pathname.slice('/api/search/sources/'.length));
         if (!id) {
           sendJSON(res, 400, { error: 'Source ID required' });
           return;
@@ -2730,15 +2770,15 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'enabled (boolean) is required' });
           return;
         }
-        const result = this.dashboard.onQMDSourceToggle(id, parsed.enabled);
+        const result = this.dashboard.onSearchSourceToggle(id, parsed.enabled);
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.toggled', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['config'], 'search.source.toggled', url.pathname);
         return;
       }
 
-      // POST /api/qmd/reindex — Trigger vector reindex
-      if (req.method === 'POST' && url.pathname === '/api/qmd/reindex') {
-        if (!this.dashboard.onQMDReindex) {
+      // POST /api/search/reindex — Trigger reindex of document sources
+      if (req.method === 'POST' && url.pathname === '/api/search/reindex') {
+        if (!this.dashboard.onSearchReindex) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
@@ -2752,9 +2792,9 @@ export class WebChannel implements ChannelAdapter {
         } catch {
           // No body or invalid JSON — reindex all
         }
-        const result = await this.dashboard.onQMDReindex(collection);
+        const result = await this.dashboard.onSearchReindex(collection);
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.reindex.started', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['config'], 'search.reindex.started', url.pathname);
         return;
       }
 

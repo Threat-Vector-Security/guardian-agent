@@ -23,18 +23,19 @@
 ## Features
 
 - **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
-- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
+- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), OpenAI (GPT), plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini via curated ProviderRegistry — with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, integrated chat panel, and SSE-driven live refresh when config, automation, or network state changes
-- **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
-- **Guardian security pipeline** — per-agent capabilities, secret scanning (30+ credential and PII patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, and output redaction
+- **Multi-agent orchestration** — Sequential, Parallel, Loop, and Conditional agents with per-step retry, fail-branch error handling, array iteration, and inter-step state passing through SharedState
+- **Guardian security pipeline** — per-agent capabilities, secret scanning (30+ credential and PII patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, SSRF protection, and output redaction
 - **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
 - **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools, inferred trust levels, optional per-server rate limits, and full Guardian admission on every call
 - **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
 - **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, and automatic memory flush
-- **QMD hybrid document search** — BM25 + vector + LLM re-ranking over directories, git repos, URLs, and files
+- **Native document search** — hybrid BM25 keyword + vector similarity search over directories, git repos, URLs, and files
 - **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, inspectable step output, and EventBus integration
-- **Security monitoring** — network threat posture, active alerts, network run history, audit log with hash-chain integrity, and SQLite DB hardening
+- **Security monitoring** — network threat posture plus host monitoring, host firewall drift, gateway firewall drift, active alerts, audit log integrity, and SQLite DB hardening
+- **Security alert routing** — configurable CLI, web, and Telegram notification delivery with severity filters, event-type filters, and alert-family suppression
 - **Threat intelligence** — watchlist scanning, findings triage, response drafts with human approval gates
 - **Campaign automation** — contact discovery and approval-gated Gmail send workflows
 - **Quick actions** — templated workflows for email, task, and calendar operations
@@ -51,7 +52,7 @@
 
 ### Security Monitoring
 ![Security Monitoring](docs/images/security-monitoring.png)
-*Network threat posture cards, active network alerts table, and security event tracking.*
+*Network, host, and gateway security posture with active alerts, self-policing signals, and security event tracking.*
 
 ### Network Connectors
 ![Network Connectors](docs/images/network-connectors.png)
@@ -59,7 +60,7 @@
 
 ### Automations
 ![Automations](docs/images/operations.png)
-*Unified automation catalog — single-tool and multi-step pipelines with optional cron scheduling, examples, clone, live-updating run history, and per-step output inspection.*
+*Unified automation catalog — simple edit flow for common changes, advanced configuration for power users, centered pipeline disclosure, examples, clone, live-updating run history, and per-step output inspection.*
 
 ## What This Is
 
@@ -69,11 +70,14 @@ All security enforcement is **mandatory at the Runtime level**. Agents cannot by
 
 ## Multi-Agent Orchestration
 
-Three orchestration primitives compose sub-agents into structured workflows:
+Four orchestration primitives compose sub-agents into structured workflows:
 
 - **SequentialAgent** — pipeline of steps with inter-step state passing via `inputKey`/`outputKey`
 - **ParallelAgent** — concurrent fan-out with optional `maxConcurrency` limit
-- **LoopAgent** — iterative refinement with configurable condition and mandatory `maxIterations` safety cap
+- **LoopAgent** — iterative refinement with configurable condition, mandatory `maxIterations` safety cap, and array iteration mode with configurable concurrency
+- **ConditionalAgent** — ordered branch evaluation where the first matching condition wins, with optional default steps
+
+All orchestration steps support **per-step retry** (`StepRetryPolicy` with exponential backoff) and **fail-branch** error handling (`StepFailBranch` — alternative agent invoked when a step fails all retries). Shared orchestration utilities (`executeWithRetry`, `runStepsSequentially`, `runWithConcurrencyLimit`, `prepareStepInput`, `recordStepOutput`) are extracted as reusable module-level functions.
 
 Every sub-agent dispatch passes through the full Guardian pipeline. Orchestration does not create a security bypass path. Inter-step data flows through `SharedState` — a per-invocation, orchestrator-owned key-value store that sub-agents cannot access.
 
@@ -100,6 +104,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Secret scanning (30+ credential and PII patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
 - High-signal PII scanning on tool arguments (addresses, DOB, MRN, passport, driver's license)
 - Sensitive path blocking with traversal normalization
+- SSRF protection — centralized blocking of private IPs (RFC1918), loopback, link-local, cloud metadata endpoints (169.254.169.254, metadata.google.internal), IPv4-mapped IPv6, and decimal/hex/octal IP obfuscation
 - **Policy-as-Code engine** — declarative JSON rules with deterministic evaluation, shadow mode for safe migration, and hot-reload
 
 **Layer 2 — Guardian Agent (inline LLM evaluation before tool execution):**
@@ -306,11 +311,9 @@ assistant:
       # fs_write: external             # or route specific tools
     toolPolicies:
       forum_post: deny
-    qmd:
+    search:
       enabled: true
-      # binaryPath: qmd          # Path override (default: bundled @tobilu/qmd, fallback: PATH `qmd`)
-      defaultMode: query          # search | vsearch | query
-      queryTimeoutMs: 30000
+      defaultMode: keyword          # keyword | semantic | hybrid
       maxResults: 20
       sources:
         - id: my-notes
@@ -393,8 +396,6 @@ guardian:
 
 By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
 
-If bundled QMD is missing in your local install, run `npm run ensure:qmd` to install it automatically.
-
 ### Telegram Setup (Web + CLI)
 
 1. Open Telegram, search for `@BotFather`, press **Start**, then run `/newbot`.
@@ -463,12 +464,14 @@ Local operations (file reads, shell commands, network scans) are fast and don't 
 - Tools control plane in web (Configuration > Tools tab) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
 - Interactive sandbox allowlist editor in web (Configuration > Policy tab) for paths, commands, and domains
 - Connector/playbook control plane in web (Network > Connectors tab) and CLI (`/connectors`, `/playbooks`) for pack governance, playbook registry, and guarded execution
+- Security alert routing controls in web (Configuration > Settings > Security > Security Alerts) for CLI/web/Telegram delivery, severity thresholds, event families, and noisy-alert suppression
+- Host and gateway monitoring in web (Security > Monitoring) with posture cards, active alerts, manual checks, and expanded raw audit details
 - Campaign automation tools for contact discovery and approval-gated Gmail send workflows (`/campaign`)
 - Quick actions for `email`, `task`, and `calendar` workflows
 - Threat-intel workflow in web (Security > Threat Intel tab) for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
 - Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
 - Channel analytics and monitoring in web (Security > Monitoring tab) and CLI (`/analytics`)
-- QMD hybrid document search (BM25 + vector + LLM re-ranking) over user-defined collections — configure sources (directories, git repos, URLs, files) in web Config Center (`#/config` > Search Sources tab)
+- Native document search (BM25 keyword + vector similarity) over user-defined collections — configure sources (directories, git repos, URLs, files) in web Config Center (`#/config` > Search Sources tab)
 
 ### Key Commands
 
@@ -482,6 +485,19 @@ Local operations (file reads, shell commands, network scans) are fast and don't 
 - Connector settings: `/connectors settings ...` with `enable|disable`, `mode`, `limit`, `playbooks` controls, `studio` controls, and `json` bulk updates
 - Playbook controls: `/playbooks list`, `/playbooks runs`, `/playbooks run <playbookId> [--dry-run]`, `/playbooks upsert <json>`, `/playbooks delete <playbookId>`
 - Pack controls: `/connectors pack upsert <json>`, `/connectors pack delete <packId>`
+
+### Built-In Security Automation Starters
+
+- Templates:
+  - `agent-host-guard` — workstation baseline and anomaly triage playbooks
+  - `firewall-sentry` — host/gateway firewall posture and firewall-drift triage playbooks
+- Presets:
+  - `host-security-baseline`
+  - `anomaly-response-triage`
+  - `host-monitor-watch`
+  - `firewall-posture-watch`
+  - `gateway-firewall-watch`
+  - `gateway-firewall-posture`
 
 For Gmail campaign sends, provide OAuth token via `GOOGLE_OAUTH_ACCESS_TOKEN` (scope: `gmail.send`) or `accessToken` tool arg.
 
@@ -591,6 +607,7 @@ Implementation specs in `docs/specs/`:
 Proposals in `docs/proposals/`:
 - [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md) — deployment options for Windows local enforcement and native helper packaging
 - [Windows Portable Isolation Option](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md) — optional portable zip distribution for Windows users who want the extra native isolation layer without a traditional installer
+- [Pipelock Comparison Roadmap](docs/proposals/PIPELOCK-COMPARISON-ROADMAP.md) — proposed MCP, egress, audit, and SIEM uplifts inspired by Pipelock's public architecture
 
 ## Disclaimer
 

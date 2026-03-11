@@ -41,14 +41,14 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 ### Event-Driven Runtime
 - **Runtime** (`src/runtime/runtime.ts`) — central orchestrator, every message/event/response passes through it
 - **Agents** extend `BaseAgent` with handlers: `onStart`, `onStop`, `onMessage`, `onEvent`, `onSchedule`
-- **Orchestration Agents** — `SequentialAgent`, `ParallelAgent`, `LoopAgent` compose sub-agents; all dispatches go through full Guardian pipeline via `ctx.dispatch()`
+- **Orchestration Agents** — `SequentialAgent`, `ParallelAgent`, `LoopAgent`, `ConditionalAgent` compose sub-agents; all dispatches go through full Guardian pipeline via `ctx.dispatch()`. Per-step retry with exponential backoff (`StepRetryPolicy`), fail-branch error handling (`StepFailBranch`), array iteration mode for LoopAgent (`LoopArrayConfig`), and conditional branching (`ConditionalAgent`). Shared orchestration utilities extracted as module-level functions.
 - **SharedState** — per-invocation key-value store for inter-agent data. `temp:` prefix for invocation-scoped data
 - **EventBus** — immediate async dispatch (not batch-drain)
 - **CronScheduler** — uses `croner` for periodic agent invocations
 - **ScheduledTaskService** — unified CRUD scheduling for tools and playbooks with persistence, presets, and EventBus integration
 
 ### LLM Provider Layer
-- Unified `LLMProvider` interface with `chat()` and `stream()` (AsyncGenerator) for **Ollama**, **Anthropic**, **OpenAI**
+- Unified `LLMProvider` interface with `chat()` and `stream()` (AsyncGenerator) for **Ollama**, **Anthropic**, **OpenAI**, plus 6 OpenAI-compatible providers (**Groq**, **Mistral**, **DeepSeek**, **Together**, **xAI**, **Google Gemini**) via `ProviderRegistry`
 - No LangChain — direct SDK calls
 - `GuardedLLMProvider` wraps raw providers to scan all LLM responses for secrets
 - `CircuitBreaker` + `ModelFallbackChain` + `FailoverProvider` for resilience
@@ -56,6 +56,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **Prompt Caching**: Anthropic provider sends system prompt with `cache_control: { type: 'ephemeral' }` for automatic prompt caching
 - **Per-Tool Provider Routing**: `assistant.tools.providerRouting` maps tool names or categories to `'local'` or `'external'`. After a tool executes, the routing table is checked and the *next* LLM call in the tool loop uses the preferred provider — so the model that synthesizes the tool result can differ from the one that initiated the call. Resolution order: tool-name override > category override > smart category default > default provider. Configured via web UI (Configuration > Tools) or YAML. See `resolveToolProviderRouting()` and `resolveRoutedProviderForTools()` in `src/index.ts`.
 - **Smart Category Defaults**: When `providerRoutingEnabled` is `true` (default) and both local and external providers exist, tools auto-route by category: local categories (filesystem, shell, network, system, memory) use the local model; external categories (web, browser, workspace, email, contacts, forum, intel, search, automation) use the external model. When only one provider type exists, smart routing is a no-op. Toggle via `assistant.tools.providerRoutingEnabled` or the "Smart LLM Routing" checkbox in Configuration > Tools tab.
+- **Provider Registry**: `ProviderRegistry` (`src/llm/provider-registry.ts`) manages all built-in provider factories. OpenAI-compatible providers reuse `OpenAIProvider` with provider-specific default base URLs. All providers are curated and ship with the codebase — no external plugin loading or dynamic imports (supply chain security).
 
 ### Tool Performance
 - **Deferred Loading**: 10 always-loaded tools sent to LLM (`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`). All other 60+ tools discovered via `find_tools` meta-tool.
@@ -71,6 +72,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **SecretScanController**: Regex detection for 30+ credential and PII patterns (AWS, GCP, GitHub, OpenAI, Stripe, etc.)
 - **PiiScanController**: High-signal PII detection for tool arguments (address, DOB, MRN, passport, driver's license)
 - **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
+- **SsrfController**: Centralized SSRF protection blocking private IPs (RFC1918), loopback, link-local, cloud metadata endpoints, IPv4-mapped IPv6, and decimal/hex/octal IP obfuscation. Config: `guardian.ssrf`
 - **InputSanitizer**: Prompt injection detection with invisible Unicode stripping
 - **RateLimiter**: Per-agent burst/per-minute/per-hour sliding windows
 - **GuardianAgentService**: Inline LLM-powered evaluation of tool actions before execution (Layer 2)
@@ -81,7 +83,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 ### Runtime Services (`src/runtime/`)
 - **ConversationService** — SQLite-backed session memory with FTS5 full-text search and memory flush
 - **AgentMemoryStore** — per-agent persistent knowledge base files (`~/.guardianagent/memory/{agentId}.md`)
-- **QMDSearchService** — hybrid search (BM25 + vector + LLM re-rank) over user-defined document collections via QMD CLI subprocess
+- **SearchService** (`src/search/`) — native hybrid search (BM25 + vector) over user-defined document collections
 - **IdentityService** — cross-channel user mapping (`single_user` / `channel_user`)
 - **AnalyticsService** — SQLite-backed usage analytics
 - **ThreatIntelService** — watchlist scanning, findings triage
@@ -109,7 +111,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
 - **Network** (`#/network`) — Connectors tab, Devices tab
 - **Automations** (`#/automations`) — unified automation catalog (single-tool and multi-step pipelines), optional cron scheduling, examples, clone, run history, engine settings
-- **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab (QMD), Settings tab
+- **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab, Settings tab
 - **Reference Guide** (`#/reference`) — wiki-style operator guide backed by `src/reference-guide.ts`; update it whenever user-facing capabilities, workflows, controls, output handling, or export behavior changes anywhere in the app
 - **Chat** — persistent right panel
 
@@ -121,12 +123,14 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Config**: `assistant.memory.knowledgeBase` — enable/disable, maxContextChars, autoFlush
 - See `docs/guides/MEMORY-SYSTEM.md` for full documentation
 
-### QMD Document Search
-- **QMDSearchService** (`src/runtime/qmd-search.ts`) — wraps [QMD CLI](https://github.com/tobi/qmd) for hybrid search
-- **Search modes**: `search` (BM25 keyword), `vsearch` (vector similarity), `query` (hybrid + LLM re-rank)
+### Document Search
+- **SearchService** (`src/search/search-service.ts`) — native TypeScript hybrid search pipeline
+- **Search modes**: `keyword` (BM25 via FTS5), `semantic` (vector similarity), `hybrid` (RRF fusion of both)
 - **Multi-protocol sources**: `directory` (local path + globs), `git` (repo URL + branch), `url` (web content), `file` (single file)
-- **Search Tools**: `qmd_search`, `qmd_status`, `qmd_reindex` — category: `search`, all Guardian-gated
-- **Config**: `assistant.tools.qmd` — enable/disable, binaryPath, defaultMode, maxResults, sources array
+- **Parent-child chunking**: Parents (~768 tokens) provide context, children (~192 tokens) provide search precision
+- **Embedding providers**: Ollama (`/api/embed`) and OpenAI, with batch support; vector search optional (graceful fallback to keyword-only)
+- **Search Tools**: `doc_search`, `doc_search_status`, `doc_search_reindex` — category: `search`, all Guardian-gated
+- **Config**: `assistant.tools.search` — enable/disable, sqlitePath, defaultMode, maxResults, sources array, embedding, chunking, reranker
 - **Web UI**: Configuration > Search Sources tab — source CRUD, toggle, reindex, status
 
 ### Evaluation Framework
@@ -152,12 +156,14 @@ src/index.ts        — Entry point / bootstrap (large file, wires everything)
 src/agent/          — BaseAgent, Registry, Lifecycle state machine, orchestration agents
 src/agents/         — Built-in agent implementations (SentinelAgent)
 src/config/         — Config types, YAML loader with ${ENV_VAR} interpolation
-src/llm/            — LLMProvider interface, Ollama/Anthropic/OpenAI, circuit breaker, failover
+src/llm/            — LLMProvider interface, Ollama/Anthropic/OpenAI, ProviderRegistry, circuit breaker, failover
 src/runtime/        — Runtime, services (Conversation, Identity, Analytics, ThreatIntel,
-                      Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore,
-                      QMDSearchService), BudgetTracker, Watchdog, Scheduler
+                      Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore),
+                      BudgetTracker, Watchdog, Scheduler
+src/search/         — Native search pipeline (SearchService, DocumentStore, FTSStore, VectorStore,
+                      HybridSearch, chunker, document parser, embedding providers, reranker)
 src/queue/          — EventBus for inter-agent communication
-src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer, OutputGuardian,
+src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer, OutputGuardian, SsrfProtection,
                       RateLimiter, audit log/persistence, Guardian admission pipeline
 src/channels/       — CLI, Telegram, Web channel adapters
 src/policy/         — Policy-as-Code engine (types, matcher, compiler, engine, rules, shadow mode)

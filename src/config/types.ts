@@ -62,8 +62,8 @@ export interface AssistantCredentialsConfig {
 
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
-  /** Provider type: 'ollama' | 'anthropic' | 'openai'. */
-  provider: 'ollama' | 'anthropic' | 'openai';
+  /** Provider type. Built-in: 'ollama' | 'anthropic' | 'openai'. Plugins can register additional types. */
+  provider: string;
   /** API key (supports ${ENV_VAR} interpolation). */
   apiKey?: string;
   /** Reference into assistant.credentials.refs (preferred over inline apiKey). */
@@ -285,6 +285,19 @@ export interface GuardianConfig {
   };
   /** Trust preset for quick security posture configuration. */
   trustPreset?: 'locked' | 'safe' | 'balanced' | 'power';
+  /** SSRF protection for outbound HTTP tool calls. */
+  ssrf?: {
+    /** Enable SSRF protection (default: true). */
+    enabled: boolean;
+    /** Allow requests to private/internal networks (default: false). */
+    allowPrivateNetworks?: boolean;
+    /** Block cloud metadata endpoints (default: true). */
+    blockCloudMetadata?: boolean;
+    /** Hostnames/IPs always allowed regardless of checks. */
+    allowlist?: string[];
+    /** Pre-resolve DNS before checking IP (default: false). */
+    resolveBeforeFetch?: boolean;
+  };
   /** Policy-as-Code engine configuration. */
   policy?: {
     /** Enable the policy engine (default: true). */
@@ -400,8 +413,12 @@ export interface AssistantNotificationsConfig {
   minSeverity: 'info' | 'warn' | 'critical';
   /** Audit event types that should generate notifications. */
   auditEventTypes: import('../guardian/audit-log.js').AuditEventType[];
+  /** Suppress specific alert detail types such as host/gateway anomaly families. */
+  suppressedDetailTypes: string[];
   /** Suppress duplicate notifications for this many milliseconds. */
   cooldownMs: number;
+  /** Send to all currently active channels, or only the selected destinations below. */
+  deliveryMode: 'all' | 'selected';
   /** Delivery destinations. */
   destinations: {
     /** Emit web/dashboard notifications over SSE/event bus. */
@@ -762,44 +779,8 @@ export interface AssistantSkillsConfig {
   disabledSkills: string[];
 }
 
-/** QMD source protocol type. */
-export type QMDSourceType = 'directory' | 'git' | 'url' | 'file';
-
-/** Configuration for a single QMD document source. */
-export interface QMDSourceConfig {
-  /** Unique identifier — becomes the QMD collection name. */
-  id: string;
-  /** Human-readable display name. */
-  name: string;
-  /** Source type / protocol. */
-  type: QMDSourceType;
-  /** Source location: directory path, git repo URL, HTTP URL, or single file path. */
-  path: string;
-  /** File glob patterns to index (default: md and txt files). Only applies to directory/git sources. */
-  globs?: string[];
-  /** Whether this source is active. */
-  enabled: boolean;
-  /** Optional branch for git sources. */
-  branch?: string;
-  /** Optional description. */
-  description?: string;
-}
-
-/** QMD hybrid search engine configuration. */
-export interface QMDConfig {
-  /** Enable QMD search integration (default: true). */
-  enabled: boolean;
-  /** Path to the qmd binary (default: bundled @tobilu/qmd, fallback: PATH `qmd`). */
-  binaryPath?: string;
-  /** Timeout for QMD queries in milliseconds (default: 30000). */
-  queryTimeoutMs?: number;
-  /** Default search mode: 'search' (BM25), 'vsearch' (vector), 'query' (hybrid + LLM re-rank). */
-  defaultMode?: 'search' | 'vsearch' | 'query';
-  /** Maximum results returned per query (default: 20). */
-  maxResults?: number;
-  /** Document sources to index and search. Supports directories, git repos, URLs, and individual files. */
-  sources: QMDSourceConfig[];
-}
+/** Search source protocol type. */
+export type SearchSourceType = 'directory' | 'git' | 'url' | 'file';
 
 /** Browser automation configuration (agent-browser). */
 export interface BrowserConfig {
@@ -1056,8 +1037,8 @@ export interface AssistantToolsConfig {
   browser?: BrowserConfig;
   /** Cloud and hosting provider integrations. */
   cloud?: AssistantCloudConfig;
-  /** QMD hybrid search engine. Indexes local document collections for BM25 + vector + LLM re-ranked search. */
-  qmd?: QMDConfig;
+  /** Native document search engine. Indexes local document collections for BM25 + vector hybrid search. */
+  search?: import('../search/types.js').SearchConfig;
   /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
   disabledCategories?: ToolCategory[];
   /** OS-level process sandbox configuration. Uses bubblewrap (bwrap) on Linux, ulimit fallback elsewhere. */
@@ -1252,11 +1233,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'agent_error',
         'agent_stalled',
       ],
+      suppressedDetailTypes: ['new_external_destination'],
       cooldownMs: 60_000,
+      deliveryMode: 'selected',
       destinations: {
-        web: true,
+        web: false,
         cli: true,
-        telegram: true,
+        telegram: false,
       },
     },
     quickActions: {
@@ -1445,13 +1428,6 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         awsProfiles: [],
         gcpProfiles: [],
         azureProfiles: [],
-      },
-      qmd: {
-        enabled: true,
-        defaultMode: 'query',
-        queryTimeoutMs: 30_000,
-        maxResults: 20,
-        sources: [],
       },
       agentPolicyUpdates: {
         allowedPaths: true,

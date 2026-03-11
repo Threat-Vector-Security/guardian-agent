@@ -877,14 +877,18 @@ function formatStepAccess(packId, packs) {
   return pack ? `${pack.name} (${pack.id})` : normalized;
 }
 
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('.workflow-step-output-toggle');
-  if (!button) return;
-  const outputId = button.getAttribute('data-output-id');
-  if (!outputId) return;
-  const output = document.getElementById(outputId);
-  if (!output) return;
-  const visible = output.style.display !== 'none';
-  output.style.display = visible ? 'none' : '';
-  button.textContent = visible ? 'Output' : 'Hide';
-});
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest('.workflow-step-output-toggle');
+    if (!button) return;
+    const outputId = button.getAttribute('data-output-id');
+    if (!outputId) return;
+    const output = document.getElementById(outputId);
+    if (!output) return;
+    const visible = output.style.display !== 'none';
+    output.style.display = visible ? 'none' : '';
+    button.textContent = visible ? 'Output' : 'Hide';
+  });
+}

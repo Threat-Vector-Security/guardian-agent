@@ -27,7 +27,7 @@ Future scope:
 
 - email, Slack, Discord, webhook, and SIEM destinations
 - policy-driven auto-response actions
-- richer alert routing rules per severity/type/channel
+- richer alert routing rules per severity/type/channel beyond the current global channel toggle model
 
 ## Design Principles
 
@@ -79,7 +79,7 @@ Initial delivery paths:
 
 - **Web**
   - via `security:alert` SSE events
-  - rendered in the Security monitoring view
+  - rendered in the Security monitoring view and a global web alert tray
 - **CLI**
   - uses the existing channel `send()` surface to show alerts directly to the local operator
 - **Telegram**
@@ -109,12 +109,22 @@ assistant:
       - policy_shadow_mismatch
       - agent_error
       - agent_stalled
+    suppressedDetailTypes:
+      - new_external_destination
     cooldownMs: 60000
+    deliveryMode: selected
     destinations:
-      web: true
+      web: false
       cli: true
-      telegram: true
+      telegram: false
 ```
+
+Notes:
+
+- defaults are intentionally CLI-only to avoid surprising multi-channel fanout
+- `deliveryMode: all` sends alerts to every active destination; `selected` respects the per-channel booleans
+- Telegram delivery still depends on the Telegram channel being enabled and `allowedChatIds` being configured
+- these settings are exposed in `Configuration > Settings > Security > Security Alerts`
 
 ## Event Model
 
@@ -150,6 +160,7 @@ The Security page should:
 - preserve normal network threat posture refresh behavior
 - avoid assuming every security alert came from network monitoring
 - show host-monitor posture, active host alerts, acknowledgement, and manual check controls
+- allow full raw audit details to be expanded instead of truncating them to a short preview
 
 ### CLI
 
@@ -190,6 +201,7 @@ This keeps notifications consistent whether the anomaly came from:
 New built-in template:
 
 - `agent-host-guard`
+- `firewall-sentry`
 
 Included playbooks:
 
@@ -207,11 +219,25 @@ Included playbooks:
   - active connections
   - top processes
   - localhost port scan
+- `firewall-posture-watch`
+  - host firewall posture
+  - host firewall drift check
+  - gateway firewall posture
+  - gateway firewall drift check
+- `firewall-drift-triage`
+  - host monitor check
+  - gateway firewall check
+  - active connections
+  - threat summary
 
 New scheduled-task presets:
 
 - `host-security-baseline`
 - `anomaly-response-triage`
+- `host-monitor-watch`
+- `firewall-posture-watch`
+- `gateway-firewall-watch`
+- `gateway-firewall-posture`
 
 These are intended as starting points for:
 

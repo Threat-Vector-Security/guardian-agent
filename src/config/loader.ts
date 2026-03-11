@@ -228,6 +228,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (!['info', 'warn', 'critical'].includes(assistant.notifications.minSeverity)) {
     errors.push("assistant.notifications.minSeverity must be 'info', 'warn', or 'critical'");
   }
+  if (!['all', 'selected'].includes(assistant.notifications.deliveryMode)) {
+    errors.push("assistant.notifications.deliveryMode must be 'all' or 'selected'");
+  }
   if (assistant.notifications.cooldownMs < 0) {
     errors.push('assistant.notifications.cooldownMs must be >= 0');
   }
@@ -255,6 +258,12 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   for (const eventType of assistant.notifications.auditEventTypes ?? []) {
     if (!validNotificationAuditTypes.has(eventType)) {
       errors.push(`assistant.notifications.auditEventTypes contains unknown event '${eventType}'`);
+    }
+  }
+  for (const detailType of assistant.notifications.suppressedDetailTypes ?? []) {
+    if (typeof detailType !== 'string' || !detailType.trim()) {
+      errors.push('assistant.notifications.suppressedDetailTypes must contain only non-empty strings');
+      break;
     }
   }
   if (assistant.hostMonitoring.scanIntervalSec < 10) {
@@ -889,6 +898,13 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
   // Backward compatibility: legacy auth modes were removed; enforce strict bearer auth.
   if (merged.channels.web?.auth?.mode && merged.channels.web.auth.mode !== 'bearer_required') {
     merged.channels.web.auth.mode = 'bearer_required';
+  }
+
+  // Backward compatibility: earlier config updates could create a partial
+  // assistant.tools.search object without sources. Normalize that to the
+  // empty collection so dashboard reads and hot-reload remain safe.
+  if (merged.assistant.tools.search && !Array.isArray(merged.assistant.tools.search.sources)) {
+    merged.assistant.tools.search.sources = [];
   }
 
   const errors = validateConfig(merged);

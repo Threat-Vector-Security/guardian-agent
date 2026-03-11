@@ -333,22 +333,26 @@ export const api = {
   }),
   scheduledTaskHistory: () => request('/api/scheduled-tasks/history'),
 
-  // QMD Search
-  qmdStatus: () => request('/api/qmd/status'),
-  qmdSources: () => request('/api/qmd/sources'),
-  qmdSourceAdd: (source) => request('/api/qmd/sources', {
+  // Document Search
+  searchStatus: () => request('/api/search/status'),
+  searchSources: () => request('/api/search/sources'),
+  searchSourceAdd: (source) => request('/api/search/sources', {
     method: 'POST',
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(source),
   }),
-  qmdSourceRemove: (id) => request(`/api/qmd/sources/${encodeURIComponent(id)}`, {
+  searchSourceRemove: (id) => request(`/api/search/sources/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   }),
-  qmdSourceToggle: (id, enabled) => request(`/api/qmd/sources/${encodeURIComponent(id)}`, {
+  searchSourceToggle: (id, enabled) => request(`/api/search/sources/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ enabled }),
   }),
-  qmdReindex: (collection) => request('/api/qmd/reindex', {
+  pickSearchPath: (kind = 'directory') => requestPrivileged('/api/search/pick-path', 'search.pick-path', { kind }),
+  searchReindex: (collection) => request('/api/search/reindex', {
     method: 'POST',
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(collection ? { collection } : {}),
   }),
 

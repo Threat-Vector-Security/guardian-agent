@@ -29,7 +29,6 @@ Run these from the repo root with `npm run <script>`.
 | `test` | `vitest run` | Run all tests |
 | `test:verbose` | `vitest run --reporter=verbose` | Verbose test output |
 | `test:coverage` | `vitest run --coverage` | Run with v8 coverage |
-| `ensure:qmd` | `node scripts/ensure-qmd.mjs` | Ensure QMD CLI is installed |
 | `portable:windows` | PowerShell `make-windows-portable.ps1` | Build Windows portable zip |
 | `package:windows` | PowerShell `build-windows-package.ps1` | Stage Windows app (no zip) |
 | `helper:windows` | PowerShell `build-windows-helper.ps1` | Build Windows sandbox helper (Rust) |
@@ -53,7 +52,7 @@ npm run dev
 bash scripts/start-dev-unix.sh
 ```
 
-Does: Node check → `npm install` → ensure QMD → TypeScript build → tests → Ollama check → create default config if missing → start with tsx.
+Does: Node check → `npm install` → TypeScript build → tests → Ollama check → create default config if missing → start with tsx.
 
 **Flags:**
 - `--skip-tests` — skip test step
@@ -78,14 +77,6 @@ Same pipeline as Unix, plus: detects cross-platform node_modules (WSL vs Windows
 ## Bundled CLI Tools
 
 External CLI tools used by the system:
-
-### QMD (`@tobilu/qmd`)
-
-Document search CLI for hybrid BM25 + vector + LLM re-rank search. Used by `QMDSearchService` for the `qmd_search`, `qmd_status`, `qmd_reindex` tools.
-
-- **Ensure script:** `scripts/ensure-qmd.mjs`
-- **Binary:** `node_modules/.bin/qmd` (or `qmd.cmd` on Windows)
-- **Config:** `assistant.tools.qmd` in config.yaml
 
 ### Google Workspace CLI (`@googleworkspace/cli`)
 
@@ -163,7 +154,7 @@ The zip contains a self-contained app with:
 - `dist/` — compiled JavaScript
 - `web/public/` — dashboard static assets
 - `skills/` — bundled skill packs
-- `node_modules/` — production dependencies (including QMD binary)
+- `node_modules/` — production dependencies
 - `bin/guardian-sandbox-win.exe` — AppContainer sandbox helper (if built)
 - `config/portable-config.yaml` — default config with sandbox enabled
 - `guardianagent.cmd` — launcher script

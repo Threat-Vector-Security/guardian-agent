@@ -28,8 +28,6 @@ import type {
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
 import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse, ToolRuntimeNotice } from '../tools/types.js';
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
-import type { QMDStatusResponse } from '../runtime/qmd-search.js';
-import type { QMDSourceConfig } from '../config/types.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
@@ -58,6 +56,129 @@ export interface DashboardAgentDetail extends DashboardAgentInfo {
     maxTokensPerMinute: number;
     maxConcurrentTools: number;
     maxQueueDepth: number;
+  };
+}
+
+export interface RedactedCloudCpanelProfile {
+  id: string;
+  name: string;
+  type: 'cpanel' | 'whm';
+  host: string;
+  port?: number;
+  username: string;
+  credentialRef?: string;
+  apiTokenConfigured: boolean;
+  ssl: boolean;
+  allowSelfSigned: boolean;
+  defaultCpanelUser?: string;
+}
+
+export interface RedactedCloudVercelProfile {
+  id: string;
+  name: string;
+  apiBaseUrl?: string;
+  credentialRef?: string;
+  apiTokenConfigured: boolean;
+  teamId?: string;
+  slug?: string;
+}
+
+export interface RedactedCloudCloudflareProfile {
+  id: string;
+  name: string;
+  apiBaseUrl?: string;
+  credentialRef?: string;
+  apiTokenConfigured: boolean;
+  accountId?: string;
+  defaultZoneId?: string;
+}
+
+export interface RedactedCloudAwsProfile {
+  id: string;
+  name: string;
+  region: string;
+  accessKeyIdCredentialRef?: string;
+  secretAccessKeyCredentialRef?: string;
+  sessionTokenCredentialRef?: string;
+  accessKeyIdConfigured: boolean;
+  secretAccessKeyConfigured: boolean;
+  sessionTokenConfigured: boolean;
+  endpoints?: {
+    sts?: string;
+    ec2?: string;
+    s3?: string;
+    route53?: string;
+    lambda?: string;
+    cloudwatch?: string;
+    cloudwatchLogs?: string;
+    rds?: string;
+    iam?: string;
+    costExplorer?: string;
+  };
+}
+
+export interface RedactedCloudGcpProfile {
+  id: string;
+  name: string;
+  projectId: string;
+  location?: string;
+  accessTokenCredentialRef?: string;
+  serviceAccountCredentialRef?: string;
+  accessTokenConfigured: boolean;
+  serviceAccountConfigured: boolean;
+  endpoints?: {
+    oauth2Token?: string;
+    cloudResourceManager?: string;
+    serviceUsage?: string;
+    compute?: string;
+    run?: string;
+    storage?: string;
+    dns?: string;
+    logging?: string;
+  };
+}
+
+export interface RedactedCloudAzureProfile {
+  id: string;
+  name: string;
+  subscriptionId: string;
+  tenantId?: string;
+  accessTokenCredentialRef?: string;
+  accessTokenConfigured: boolean;
+  clientIdCredentialRef?: string;
+  clientIdConfigured: boolean;
+  clientSecretCredentialRef?: string;
+  clientSecretConfigured: boolean;
+  defaultResourceGroup?: string;
+  blobBaseUrl?: string;
+  endpoints?: {
+    oauth2Token?: string;
+    management?: string;
+  };
+}
+
+export interface RedactedCloudConfig {
+  enabled: boolean;
+  cpanelProfiles: RedactedCloudCpanelProfile[];
+  vercelProfiles: RedactedCloudVercelProfile[];
+  cloudflareProfiles: RedactedCloudCloudflareProfile[];
+  awsProfiles: RedactedCloudAwsProfile[];
+  gcpProfiles: RedactedCloudGcpProfile[];
+  azureProfiles: RedactedCloudAzureProfile[];
+  profileCounts: {
+    cpanel: number;
+    vercel: number;
+    cloudflare: number;
+    aws: number;
+    gcp: number;
+    azure: number;
+    total: number;
+  };
+  security: {
+    inlineSecretProfileCount: number;
+    credentialRefCount: number;
+    selfSignedProfileCount: number;
+    customEndpointProfileCount: number;
   };
 }
 
@@ -126,7 +247,9 @@ export interface RedactedConfig {
       enabled: boolean;
       minSeverity: AuditSeverity;
       auditEventTypes: AuditEventType[];
+      suppressedDetailTypes: string[];
       cooldownMs: number;
+      deliveryMode: 'all' | 'selected';
       destinations: {
         web: boolean;
         cli: boolean;
@@ -230,11 +353,12 @@ export interface RedactedConfig {
         openRouterConfigured: boolean;
         braveConfigured: boolean;
       };
-      qmd?: {
+      search?: {
         enabled: boolean;
         sourceCount: number;
         defaultMode: string;
       };
+      cloud?: RedactedCloudConfig;
       agentPolicyUpdates?: {
         allowedPaths: boolean;
         allowedCommands: boolean;
@@ -660,12 +784,18 @@ export interface DashboardCallbacks {
     output?: unknown;
     steps?: ScheduledTaskHistoryStep[];
   }>;
-  onQMDStatus?: () => Promise<QMDStatusResponse> | QMDStatusResponse;
-  onQMDSources?: () => QMDSourceConfig[];
-  onQMDSourceAdd?: (source: QMDSourceConfig) => { success: boolean; message: string };
-  onQMDSourceRemove?: (id: string) => { success: boolean; message: string };
-  onQMDSourceToggle?: (id: string, enabled: boolean) => { success: boolean; message: string };
-  onQMDReindex?: (collection?: string) => Promise<{ success: boolean; message: string }>;
+  onSearchStatus?: () => any;
+  onSearchSources?: () => any;
+  onSearchSourceAdd?: (source: any) => any;
+  onSearchSourceRemove?: (id: string) => any;
+  onSearchSourceToggle?: (id: string, enabled: boolean) => any;
+  onSearchReindex?: (collection?: string) => Promise<any>;
+  onSearchPickPath?: (input: { kind: 'directory' | 'file' }) => Promise<{
+    success: boolean;
+    path?: string;
+    canceled?: boolean;
+    message: string;
+  }>;
   onGwsStatus?: () => Promise<GwsConnectionStatus>;
   /** Guardian Agent inline evaluation config and status. */
   onGuardianAgentStatus?: () => {
@@ -744,9 +874,127 @@ export interface ConfigUpdate {
     };
   };
   assistant?: {
+    notifications?: {
+      enabled?: boolean;
+      minSeverity?: AuditSeverity;
+      auditEventTypes?: AuditEventType[];
+      suppressedDetailTypes?: string[];
+      cooldownMs?: number;
+      deliveryMode?: 'all' | 'selected';
+      destinations?: {
+        web?: boolean;
+        cli?: boolean;
+        telegram?: boolean;
+      };
+    };
     tools?: {
-      qmd?: {
+      cloud?: {
         enabled?: boolean;
+        cpanelProfiles?: Array<{
+          id: string;
+          name: string;
+          type: 'cpanel' | 'whm';
+          host: string;
+          port?: number;
+          username: string;
+          apiToken?: string;
+          credentialRef?: string;
+          ssl?: boolean;
+          allowSelfSigned?: boolean;
+          defaultCpanelUser?: string;
+        }>;
+        vercelProfiles?: Array<{
+          id: string;
+          name: string;
+          apiBaseUrl?: string;
+          apiToken?: string;
+          credentialRef?: string;
+          teamId?: string;
+          slug?: string;
+        }>;
+        cloudflareProfiles?: Array<{
+          id: string;
+          name: string;
+          apiBaseUrl?: string;
+          apiToken?: string;
+          credentialRef?: string;
+          accountId?: string;
+          defaultZoneId?: string;
+        }>;
+        awsProfiles?: Array<{
+          id: string;
+          name: string;
+          region: string;
+          accessKeyId?: string;
+          accessKeyIdCredentialRef?: string;
+          secretAccessKey?: string;
+          secretAccessKeyCredentialRef?: string;
+          sessionToken?: string;
+          sessionTokenCredentialRef?: string;
+          endpoints?: {
+            sts?: string;
+            ec2?: string;
+            s3?: string;
+            route53?: string;
+            lambda?: string;
+            cloudwatch?: string;
+            cloudwatchLogs?: string;
+            rds?: string;
+            iam?: string;
+            costExplorer?: string;
+          };
+        }>;
+        gcpProfiles?: Array<{
+          id: string;
+          name: string;
+          projectId: string;
+          location?: string;
+          accessToken?: string;
+          accessTokenCredentialRef?: string;
+          serviceAccountJson?: string;
+          serviceAccountCredentialRef?: string;
+          endpoints?: {
+            oauth2Token?: string;
+            cloudResourceManager?: string;
+            serviceUsage?: string;
+            compute?: string;
+            run?: string;
+            storage?: string;
+            dns?: string;
+            logging?: string;
+          };
+        }>;
+        azureProfiles?: Array<{
+          id: string;
+          name: string;
+          subscriptionId: string;
+          tenantId?: string;
+          accessToken?: string;
+          accessTokenCredentialRef?: string;
+          clientId?: string;
+          clientIdCredentialRef?: string;
+          clientSecret?: string;
+          clientSecretCredentialRef?: string;
+          defaultResourceGroup?: string;
+          blobBaseUrl?: string;
+          endpoints?: {
+            oauth2Token?: string;
+            management?: string;
+          };
+        }>;
+      };
+      search?: {
+        enabled?: boolean;
+        sources?: Array<{
+          id: string;
+          name: string;
+          type: 'directory' | 'git' | 'url' | 'file';
+          path: string;
+          globs?: string[];
+          branch?: string;
+          enabled?: boolean;
+          description?: string;
+        }>;
       };
       mcp?: {
         enabled?: boolean;

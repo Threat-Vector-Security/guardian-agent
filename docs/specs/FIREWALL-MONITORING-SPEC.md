@@ -166,6 +166,26 @@ Gateway firewall monitoring should be implemented as a separate service that cor
 - Firewalla
 - MikroTik
 
+## Built-In Automation Coverage
+
+Firewall monitoring now has starter automation coverage in the unified Automations page:
+
+- template:
+  - `firewall-sentry`
+- included playbooks:
+  - `firewall-posture-watch`
+  - `firewall-drift-triage`
+- scheduled-task presets:
+  - `firewall-posture-watch`
+  - `gateway-firewall-watch`
+  - `gateway-firewall-posture`
+
+These are intended to give operators a fast starting point for:
+
+- recurring host firewall posture reviews
+- recurring gateway drift checks
+- quick firewall-focused triage after an alert
+
 ## Correlation Rules
 
 The long-term value is not just collecting firewall state. It is correlating firewall changes with local agent behavior.

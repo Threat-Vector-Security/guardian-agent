@@ -39,6 +39,7 @@ GuardianAgent is an AI agent orchestration system where:
 | Secret exfiltration via events | Payload scanning on all inter-agent communication |
 | Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
 | Shell command injection | POSIX tokenizer with whitelist validation |
+| SSRF via tool HTTP requests | SsrfController blocks private IPs, loopback, cloud metadata, IPv4-mapped IPv6, and obfuscated IPs in outbound tool URLs |
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
 | Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory for effects |
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
@@ -71,6 +72,12 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  │ SecretScan   │→│ DeniedPath  │→│ ShellCommand  │  │
 │  │ Controller   │  │ Controller  │  │ Controller    │  │
 │  └──────────────┘  └─────────────┘  └───────────────┘  │
+│         │                                               │
+│         ▼                                               │
+│  ┌──────────────┐                                       │
+│  │ Ssrf         │                                       │
+│  │ Controller   │                                       │
+│  └──────────────┘                                       │
 │                                                         │
 │  Runs BEFORE agent.onMessage() — agent never sees       │
 │  blocked input. Sync, rule-based, zero LLM calls.       │
@@ -315,15 +322,24 @@ This means GuardianAgent can police itself when the local machine starts showing
 ### Operator Surfaces
 
 - audit event type: `host_alert`
-- notification fanout: web, CLI, Telegram via the notification service
+- notification fanout: configurable via `assistant.notifications`
+  - default delivery is CLI-only
+  - `new_external_destination` is suppressed by default at the notification layer to reduce noise
+  - channel routing can be set to `all` or selected destinations
 - Security page:
   - host monitor posture cards
   - active host alerts table
   - manual check trigger
   - acknowledgement flow
+  - expandable raw audit/event details
+- Configuration page:
+  - `Settings > Security > Security Alerts` manages notification severity, event types, suppressed detail types, cooldown, and channel routing
 - tools:
   - `host_monitor_status`
   - `host_monitor_check`
+- built-in automation starters:
+  - template: `agent-host-guard`
+  - presets: `host-security-baseline`, `anomaly-response-triage`, `host-monitor-watch`, `firewall-posture-watch`
 
 ### Current Limitations
 
@@ -368,6 +384,16 @@ Gateway monitoring is intentionally separate from local host monitoring:
 - gateway monitoring observes remote perimeter devices through operator-supplied collectors
 
 This separation avoids conflating local OS telemetry with remote appliance state while still letting Guardian correlate both.
+
+### Automation Starters
+
+- template: `firewall-sentry`
+- playbooks:
+  - `firewall-posture-watch`
+  - `firewall-drift-triage`
+- presets:
+  - `gateway-firewall-watch`
+  - `gateway-firewall-posture`
 
 ---
 
@@ -599,7 +625,7 @@ Managed child processes spawned by tool execution are wrapped in OS-level isolat
 
 | Profile | Filesystem | Network | Use Case |
 |---------|-----------|---------|----------|
-| `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, QMD search, network probes |
+| `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, document search, network probes |
 | `workspace-write` | Workspace writable, `.git`/`.env*` forced read-only | Isolated by default | `execute_command`, MCP servers, browser |
 | `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
 
@@ -803,7 +829,7 @@ The ShellCommandController goes beyond simple string matching:
 
 ## Orchestration Security
 
-Multi-agent orchestration (Sequential, Parallel, Loop agents) maintains security invariants:
+Multi-agent orchestration (Sequential, Parallel, Loop, Conditional agents) maintains security invariants:
 
 - All sub-agent invocations go through `Runtime.dispatchMessage()`
 - Each sub-agent call passes through the full Guardian admission pipeline

@@ -34,6 +34,24 @@ export interface OrchestrationStepContract {
 
 export type ValidationMode = 'warn' | 'enforce' | 'none';
 
+/** Per-step retry configuration with exponential backoff. */
+export interface StepRetryPolicy {
+  maxRetries: number;
+  initialDelayMs?: number;
+  backoffMultiplier?: number;
+  maxDelayMs?: number;
+  retryableError?: (error: Error) => boolean;
+}
+
+/** Fail-branch: agent invoked when a step fails all retries. */
+export interface StepFailBranch {
+  agentId: string;
+  inputKey?: string;
+  outputKey?: string;
+  inputContract?: OrchestrationStepContract;
+  outputContract?: OrchestrationStepContract;
+}
+
 /** A single step in an orchestration pipeline. */
 export interface OrchestrationStep {
   /** Target agent ID to invoke. */
@@ -48,9 +66,14 @@ export interface OrchestrationStep {
    * If not set, defaults to the agent ID.
    */
   outputKey?: string;
-  
+
   inputContract?: OrchestrationStepContract;
   outputContract?: OrchestrationStepContract;
+
+  /** Retry policy for this step. If not set, no retries. */
+  retry?: StepRetryPolicy;
+  /** Fail-branch: agent invoked when step fails all retries. */
+  onError?: StepFailBranch;
 }
 
 /** Options for SequentialAgent construction. */
@@ -84,6 +107,20 @@ export type LoopCondition = (
   state: SharedState,
 ) => boolean;
 
+/** Array iteration configuration for LoopAgent. */
+export interface LoopArrayConfig {
+  /** SharedState key containing the JSON array to iterate. */
+  key: string;
+  /** Max concurrent iterations. Default: 1 (sequential). */
+  concurrency?: number;
+  /** SharedState key to write results array. Default: 'results'. */
+  collectKey?: string;
+  /** SharedState key for current item within each iteration. Default: 'item'. */
+  itemKey?: string;
+  /** SharedState key for current index within each iteration. Default: 'index'. */
+  indexKey?: string;
+}
+
 /** Options for LoopAgent construction. */
 export interface LoopAgentOptions {
   /** Agent to invoke on each iteration. */
@@ -102,6 +139,15 @@ export interface LoopAgentOptions {
   /** Maximum iterations to prevent infinite loops. Default: 10. */
   maxIterations?: number;
   validationMode?: ValidationMode;
+  /** Array iteration mode. When set, iterates over an array in SharedState. */
+  items?: LoopArrayConfig;
+}
+
+/** Retry tracking info for observability. */
+export interface RetryRecord {
+  agentId: string;
+  attempts: number;
+  usedFailBranch: boolean;
 }
 
 // ─── Contract Validation ──────────────────────────────────────
@@ -161,6 +207,194 @@ function validateContract(
   return { valid: true, parsedValue: parsed, status: mode === 'enforce' ? 'enforced' : 'none' };
 }
 
+// ─── Shared Utilities ─────────────────────────────────────────
+
+/** Resolve input content for a step from SharedState and validate input contract. */
+export function prepareStepInput(
+  step: { inputKey?: string; inputContract?: OrchestrationStepContract; agentId: string },
+  state: SharedState,
+  message: UserMessage,
+  validationMode: ValidationMode,
+): UserMessage {
+  let inputContent = message.content;
+  if (step.inputKey && state.has(step.inputKey)) {
+    const stateValue = state.get<string>(step.inputKey);
+    if (typeof stateValue === 'string') {
+      inputContent = stateValue;
+    }
+  }
+
+  if (step.inputContract) {
+    const check = validateContract(step.inputContract, inputContent, validationMode, step.agentId);
+    if (!check.valid) throw new Error(check.error);
+    if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
+    else inputContent = JSON.stringify(check.parsedValue);
+  }
+
+  return { ...message, content: inputContent };
+}
+
+/** Validate output contract and write step result to SharedState. */
+export function recordStepOutput(
+  step: { outputKey?: string; outputContract?: OrchestrationStepContract; agentId: string },
+  state: SharedState,
+  response: AgentResponse,
+  validationMode: ValidationMode,
+): { content: string; response: AgentResponse } {
+  const outputKey = step.outputKey ?? step.agentId;
+  let outputContent = response.content;
+  let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
+
+  if (step.outputContract) {
+    const check = validateContract(step.outputContract, response.content, validationMode, step.agentId);
+    if (!check.valid) throw new Error(check.error);
+    validationStatus = check.status;
+    if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
+    else outputContent = JSON.stringify(check.parsedValue);
+  }
+
+  state.set(outputKey, outputContent, {
+    producerAgent: step.agentId,
+    schemaId: step.outputContract?.key,
+    validationStatus,
+  });
+
+  return { content: outputContent, response: { ...response, content: outputContent } };
+}
+
+/** Execute a dispatch call with optional retry and exponential backoff. */
+export async function executeWithRetry(
+  dispatch: (agentId: string, message: UserMessage) => Promise<AgentResponse>,
+  agentId: string,
+  message: UserMessage,
+  policy: StepRetryPolicy | undefined,
+): Promise<{ response: AgentResponse; attempts: number }> {
+  const maxRetries = policy?.maxRetries ?? 0;
+  const initialDelay = policy?.initialDelayMs ?? 1000;
+  const multiplier = policy?.backoffMultiplier ?? 2;
+  const maxDelay = policy?.maxDelayMs ?? 30_000;
+  const isRetryable = policy?.retryableError ?? (() => true);
+
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await dispatch(agentId, message);
+      return { response, attempts: attempt + 1 };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries && isRetryable(lastError)) {
+        const delay = Math.min(initialDelay * Math.pow(multiplier, attempt), maxDelay);
+        log.warn({ agentId, attempt: attempt + 1, maxRetries, delay, error: lastError.message }, 'Step failed, retrying');
+        await new Promise(r => setTimeout(r, delay));
+      } else {
+        break;
+      }
+    }
+  }
+  throw lastError!;
+}
+
+/** Execute tasks with a concurrency limit using a simple worker pool. */
+export async function runWithConcurrencyLimit<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  limit: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await fn(items[index]);
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+/** Result from running steps sequentially. */
+export interface SequentialRunResult {
+  stepResults: Array<{ agentId: string; response: AgentResponse }>;
+  retriedSteps: RetryRecord[];
+  lastContent: string | undefined;
+  stoppedAt?: string;
+  error?: string;
+}
+
+/** Run an array of steps sequentially with retry/fail-branch support. */
+export async function runStepsSequentially(
+  steps: OrchestrationStep[],
+  message: UserMessage,
+  state: SharedState,
+  dispatch: (agentId: string, message: UserMessage) => Promise<AgentResponse>,
+  validationMode: ValidationMode,
+  stopOnError: boolean,
+): Promise<SequentialRunResult> {
+  const stepResults: Array<{ agentId: string; response: AgentResponse }> = [];
+  const retriedSteps: RetryRecord[] = [];
+
+  for (const step of steps) {
+    const stepMessage = prepareStepInput(step, state, message, validationMode);
+
+    try {
+      const { response, attempts } = await executeWithRetry(dispatch, step.agentId, stepMessage, step.retry);
+      const recorded = recordStepOutput(step, state, response, validationMode);
+      stepResults.push({ agentId: step.agentId, response: recorded.response });
+      if (attempts > 1) {
+        retriedSteps.push({ agentId: step.agentId, attempts, usedFailBranch: false });
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const retryAttempts = (step.retry?.maxRetries ?? 0) + 1;
+
+      if (step.onError) {
+        // Store error context for fail-branch agent
+        const errorKey = `${step.outputKey ?? step.agentId}:error`;
+        state.set(errorKey, errorMsg);
+        try {
+          const fbMessage = prepareStepInput(step.onError, state, message, validationMode);
+          const fbResponse = await dispatch(step.onError.agentId, fbMessage);
+          const fbOutputKey = step.onError.outputKey ?? step.outputKey;
+          const fbStep = { ...step.onError, outputKey: fbOutputKey };
+          const recorded = recordStepOutput(fbStep, state, fbResponse, validationMode);
+          stepResults.push({ agentId: step.onError.agentId, response: recorded.response });
+          retriedSteps.push({ agentId: step.agentId, attempts: retryAttempts, usedFailBranch: true });
+          continue; // fail-branch succeeded, pipeline continues
+        } catch {
+          // fail-branch also failed, fall through to stopOnError
+        }
+      }
+
+      const outputKey = step.outputKey ?? step.agentId;
+      state.set(outputKey, `[Error: ${errorMsg}]`, { validationStatus: 'failed' });
+
+      if (retryAttempts > 1) {
+        retriedSteps.push({ agentId: step.agentId, attempts: retryAttempts, usedFailBranch: false });
+      }
+
+      if (stopOnError) {
+        return {
+          stepResults,
+          retriedSteps,
+          lastContent: undefined,
+          stoppedAt: step.agentId,
+          error: errorMsg,
+        };
+      }
+    }
+  }
+
+  const lastResult = stepResults[stepResults.length - 1];
+  return {
+    stepResults,
+    retriedSteps,
+    lastContent: lastResult?.response.content,
+  };
+}
+
 // ─── Sequential Agent ─────────────────────────────────────────
 
 /**
@@ -191,85 +425,35 @@ export class SequentialAgent extends BaseAgent {
     }
 
     const state = new SharedState();
-    // Seed the initial message content
     state.set('input', message.content);
 
-    const stepResults: Array<{ agentId: string; response: AgentResponse }> = [];
-
-    for (const step of this.steps) {
-      // Determine input content for this step
-      let inputContent = message.content;
-      if (step.inputKey && state.has(step.inputKey)) {
-        const stateValue = state.get<string>(step.inputKey);
-        if (typeof stateValue === 'string') {
-          inputContent = stateValue;
-        }
-      }
-
-      if (step.inputContract) {
-        const check = validateContract(step.inputContract, inputContent, this.validationMode, step.agentId);
-        if (!check.valid) throw new Error(check.error);
-        if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
-        else inputContent = JSON.stringify(check.parsedValue);
-      }
-
-      const stepMessage: UserMessage = {
-        ...message,
-        content: inputContent,
-      };
-
-      try {
-        const response = await ctx.dispatch(step.agentId, stepMessage);
-        const outputKey = step.outputKey ?? step.agentId;
-        
-        let outputContent = response.content;
-        let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
-        
-        if (step.outputContract) {
-          const check = validateContract(step.outputContract, response.content, this.validationMode, step.agentId);
-          if (!check.valid) throw new Error(check.error);
-          validationStatus = check.status;
-          if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
-          else outputContent = JSON.stringify(check.parsedValue);
-        }
-
-        state.set(outputKey, outputContent, {
-          producerAgent: step.agentId,
-          schemaId: step.outputContract?.key,
-          validationStatus,
-        });
-        stepResults.push({ agentId: step.agentId, response: { ...response, content: outputContent } });
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const outputKey = step.outputKey ?? step.agentId;
-        state.set(outputKey, `[Error: ${errorMsg}]`, { validationStatus: 'failed' });
-
-        if (this.stopOnError) {
-          state.clearTemp();
-          return {
-            content: `[Pipeline stopped at step '${step.agentId}': ${errorMsg}]`,
-            metadata: {
-              orchestration: 'sequential',
-              stoppedAt: step.agentId,
-              completedSteps: stepResults.length,
-              totalSteps: this.steps.length,
-              state: state.snapshot(),
-            },
-          };
-        }
-      }
-    }
+    const result = await runStepsSequentially(
+      this.steps, message, state, ctx.dispatch, this.validationMode, this.stopOnError,
+    );
 
     state.clearTemp();
 
-    // Return the last successful step's response
-    const lastResult = stepResults[stepResults.length - 1];
+    if (result.stoppedAt) {
+      return {
+        content: `[Pipeline stopped at step '${result.stoppedAt}': ${result.error}]`,
+        metadata: {
+          orchestration: 'sequential',
+          stoppedAt: result.stoppedAt,
+          completedSteps: result.stepResults.length,
+          totalSteps: this.steps.length,
+          retriedSteps: result.retriedSteps.length > 0 ? result.retriedSteps : undefined,
+          state: state.snapshot(),
+        },
+      };
+    }
+
     return {
-      content: lastResult?.response.content ?? '[No steps completed]',
+      content: result.lastContent ?? '[No steps completed]',
       metadata: {
         orchestration: 'sequential',
-        completedSteps: stepResults.length,
+        completedSteps: result.stepResults.length,
         totalSteps: this.steps.length,
+        retriedSteps: result.retriedSteps.length > 0 ? result.retriedSteps : undefined,
         state: state.snapshot(),
       },
     };
@@ -307,54 +491,53 @@ export class ParallelAgent extends BaseAgent {
 
     const state = new SharedState();
     state.set('input', message.content);
+    const retriedSteps: RetryRecord[] = [];
 
     const executeStep = async (step: OrchestrationStep): Promise<{
       agentId: string;
       response?: AgentResponse;
       error?: string;
     }> => {
-      let inputContent = message.content;
-      if (step.inputKey && state.has(step.inputKey)) {
-        const stateValue = state.get<string>(step.inputKey);
-        if (typeof stateValue === 'string') {
-          inputContent = stateValue;
-        }
+      let stepMessage: UserMessage;
+      try {
+        stepMessage = prepareStepInput(step, state, message, this.validationMode);
+      } catch (err) {
+        return { agentId: step.agentId, error: err instanceof Error ? err.message : String(err) };
       }
-
-      if (step.inputContract) {
-        const check = validateContract(step.inputContract, inputContent, this.validationMode, step.agentId);
-        if (!check.valid) return { agentId: step.agentId, error: check.error };
-        if (typeof check.parsedValue === 'string') inputContent = check.parsedValue;
-        else inputContent = JSON.stringify(check.parsedValue);
-      }
-
-      const stepMessage: UserMessage = { ...message, content: inputContent };
 
       try {
-        const response = await ctx.dispatch!(step.agentId, stepMessage);
-        const outputKey = step.outputKey ?? step.agentId;
-        
-        let outputContent = response.content;
-        let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
-
-        if (step.outputContract) {
-          const check = validateContract(step.outputContract, response.content, this.validationMode, step.agentId);
-          if (!check.valid) throw new Error(check.error);
-          validationStatus = check.status;
-          if (typeof check.parsedValue === 'string') outputContent = check.parsedValue;
-          else outputContent = JSON.stringify(check.parsedValue);
+        const { response, attempts } = await executeWithRetry(ctx.dispatch!, step.agentId, stepMessage, step.retry);
+        const recorded = recordStepOutput(step, state, response, this.validationMode);
+        if (attempts > 1) {
+          retriedSteps.push({ agentId: step.agentId, attempts, usedFailBranch: false });
         }
-
-        state.set(outputKey, outputContent, {
-          producerAgent: step.agentId,
-          schemaId: step.outputContract?.key,
-          validationStatus,
-        });
-        return { agentId: step.agentId, response: { ...response, content: outputContent } };
+        return { agentId: step.agentId, response: recorded.response };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        const retryAttempts = (step.retry?.maxRetries ?? 0) + 1;
+
+        // Try fail-branch
+        if (step.onError) {
+          const errorKey = `${step.outputKey ?? step.agentId}:error`;
+          state.set(errorKey, errorMsg);
+          try {
+            const fbMessage = prepareStepInput(step.onError, state, message, this.validationMode);
+            const fbResponse = await ctx.dispatch!(step.onError.agentId, fbMessage);
+            const fbOutputKey = step.onError.outputKey ?? step.outputKey;
+            const fbStep = { ...step.onError, outputKey: fbOutputKey };
+            const recorded = recordStepOutput(fbStep, state, fbResponse, this.validationMode);
+            retriedSteps.push({ agentId: step.agentId, attempts: retryAttempts, usedFailBranch: true });
+            return { agentId: step.agentId, response: recorded.response };
+          } catch {
+            // fail-branch also failed
+          }
+        }
+
         const outputKey = step.outputKey ?? step.agentId;
         state.set(outputKey, `[Error: ${errorMsg}]`, { validationStatus: 'failed' });
+        if (retryAttempts > 1) {
+          retriedSteps.push({ agentId: step.agentId, attempts: retryAttempts, usedFailBranch: false });
+        }
         return { agentId: step.agentId, error: errorMsg };
       }
     };
@@ -362,7 +545,7 @@ export class ParallelAgent extends BaseAgent {
     let results: Awaited<ReturnType<typeof executeStep>>[];
 
     if (this.maxConcurrency > 0) {
-      results = await this.runWithConcurrencyLimit(this.steps, executeStep, this.maxConcurrency);
+      results = await runWithConcurrencyLimit(this.steps, executeStep, this.maxConcurrency);
     } else {
       results = await Promise.all(this.steps.map(executeStep));
     }
@@ -387,37 +570,18 @@ export class ParallelAgent extends BaseAgent {
         totalSteps: this.steps.length,
         succeeded: succeeded.length,
         failed: failed.length,
+        retriedSteps: retriedSteps.length > 0 ? retriedSteps : undefined,
         state: state.snapshot(),
       },
     };
-  }
-
-  /** Execute tasks with a concurrency limit using a simple pool. */
-  private async runWithConcurrencyLimit<T, R>(
-    items: T[],
-    fn: (item: T) => Promise<R>,
-    limit: number,
-  ): Promise<R[]> {
-    const results: R[] = new Array(items.length);
-    let nextIndex = 0;
-
-    const worker = async (): Promise<void> => {
-      while (nextIndex < items.length) {
-        const index = nextIndex++;
-        results[index] = await fn(items[index]);
-      }
-    };
-
-    const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
-    await Promise.all(workers);
-    return results;
   }
 }
 
 // ─── Loop Agent ───────────────────────────────────────────────
 
 /**
- * Runs a single sub-agent repeatedly until a condition is met.
+ * Runs a single sub-agent repeatedly until a condition is met,
+ * or iterates over an array of items.
  *
  * Each iteration can feed the previous iteration's output as input.
  * Includes a mandatory maxIterations cap to prevent infinite loops.
@@ -434,6 +598,7 @@ export class LoopAgent extends BaseAgent {
   private condition: LoopCondition;
   private maxIterations: number;
   private validationMode: ValidationMode;
+  private itemsConfig?: LoopArrayConfig;
 
   constructor(id: string, name: string, options: LoopAgentOptions) {
     super(id, name, { handleMessages: true, handleEvents: false, handleSchedule: false });
@@ -444,11 +609,16 @@ export class LoopAgent extends BaseAgent {
     this.outputContract = options.outputContract;
     this.maxIterations = options.maxIterations ?? 10;
     this.validationMode = options.validationMode ?? 'warn';
+    this.itemsConfig = options.items;
     this.condition = options.condition ?? ((iteration, lastResponse) => {
       if (iteration >= this.maxIterations) return false;
       if (!lastResponse) return true;
       return lastResponse.content.length > 0 && !lastResponse.content.startsWith('[Error');
     });
+
+    if (this.itemsConfig && options.condition) {
+      log.warn({ agentId: id }, 'LoopAgent: both items and condition set; items mode takes precedence');
+    }
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
@@ -459,6 +629,19 @@ export class LoopAgent extends BaseAgent {
     const state = new SharedState();
     state.set('input', message.content);
 
+    if (this.itemsConfig) {
+      return this.iterateArray(message, ctx, state);
+    }
+
+    return this.iterateCondition(message, ctx, state);
+  }
+
+  /** Condition-based loop (original behavior). */
+  private async iterateCondition(
+    message: UserMessage,
+    ctx: AgentContext,
+    state: SharedState,
+  ): Promise<AgentResponse> {
     let lastResponse: AgentResponse | undefined;
     let iteration = 0;
 
@@ -471,7 +654,6 @@ export class LoopAgent extends BaseAgent {
           inputContent = stateValue;
         }
       } else if (lastResponse) {
-        // Default: feed previous iteration's output as input
         inputContent = lastResponse.content;
       }
 
@@ -487,9 +669,9 @@ export class LoopAgent extends BaseAgent {
       const stepMessage: UserMessage = { ...message, content: inputContent };
 
       try {
-        lastResponse = await ctx.dispatch(this.targetAgentId, stepMessage);
+        lastResponse = await ctx.dispatch!(this.targetAgentId, stepMessage);
         const outputKey = this.outputKey ?? this.targetAgentId;
-        
+
         let outputContent = lastResponse.content;
         let validationStatus: 'none' | 'warned' | 'enforced' | 'failed' = 'none';
 
@@ -533,6 +715,90 @@ export class LoopAgent extends BaseAgent {
         orchestration: 'loop',
         iterations: iteration,
         maxIterations: this.maxIterations,
+        state: state.snapshot(),
+      },
+    };
+  }
+
+  /** Array iteration mode: map over items with configurable concurrency. */
+  private async iterateArray(
+    message: UserMessage,
+    ctx: AgentContext,
+    state: SharedState,
+  ): Promise<AgentResponse> {
+    const {
+      key,
+      concurrency = 1,
+      collectKey = 'results',
+      itemKey = 'item',
+      indexKey = 'index',
+    } = this.itemsConfig!;
+
+    const rawValue = state.get<string>(key);
+    let items: unknown[];
+    try {
+      items = JSON.parse(rawValue ?? '[]');
+    } catch {
+      return {
+        content: `[LoopAgent array error: SharedState key '${key}' is not valid JSON]`,
+        metadata: { orchestration: 'loop', mode: 'array_iteration', stoppedByError: true },
+      };
+    }
+    if (!Array.isArray(items)) {
+      return {
+        content: `[LoopAgent array error: SharedState key '${key}' is not an array]`,
+        metadata: { orchestration: 'loop', mode: 'array_iteration', stoppedByError: true },
+      };
+    }
+
+    // Cap at maxIterations
+    const effectiveItems = items.slice(0, this.maxIterations);
+    const results: Array<{ content: string; error?: string }> = [];
+
+    const processItem = async (item: unknown, idx: number): Promise<{ content: string; error?: string }> => {
+      state.set(`temp:${itemKey}`, JSON.stringify(item));
+      state.set(`temp:${indexKey}`, String(idx));
+
+      const inputContent = JSON.stringify(item);
+      const stepMessage: UserMessage = { ...message, content: inputContent };
+
+      try {
+        const response = await ctx.dispatch!(this.targetAgentId, stepMessage);
+        return { content: response.content };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: `[Error: ${errorMsg}]`, error: errorMsg };
+      }
+    };
+
+    if (concurrency <= 1) {
+      for (let i = 0; i < effectiveItems.length; i++) {
+        results.push(await processItem(effectiveItems[i], i));
+      }
+    } else {
+      const limit = Math.min(concurrency, 10);
+      const settled = await runWithConcurrencyLimit(
+        effectiveItems.map((item, i) => ({ item, idx: i })),
+        async ({ item, idx }) => processItem(item, idx),
+        limit,
+      );
+      results.push(...settled);
+    }
+
+    const resultContents = results.map(r => r.content);
+    state.set(collectKey, JSON.stringify(resultContents));
+    state.clearTemp();
+
+    const errorCount = results.filter(r => r.error).length;
+
+    return {
+      content: `Processed ${effectiveItems.length} items (${errorCount} errors)`,
+      metadata: {
+        orchestration: 'loop',
+        mode: 'array_iteration',
+        itemCount: effectiveItems.length,
+        totalItems: items.length,
+        errors: errorCount,
         state: state.snapshot(),
       },
     };

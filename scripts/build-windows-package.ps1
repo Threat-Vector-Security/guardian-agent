@@ -128,7 +128,7 @@ try {
   Write-Host "Ensuring bundled CLI tools..." -ForegroundColor Cyan
   Push-Location $StageRoot
   try {
-    node (Join-Path $RepoRoot "scripts/ensure-qmd.mjs")
+    # No external CLI tools to ensure currently
   } finally {
     Pop-Location
   }

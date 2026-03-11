@@ -13,6 +13,7 @@ let sharedConfig = null;
 let sharedProviders = null;
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
+const COMMON_PROVIDER_TYPES = ['ollama', 'openai', 'anthropic', 'openrouter', 'lmstudio', 'llamacpp', 'generic_json'];
 
 export async function renderConfig(container, options = {}) {
   currentContainer = container;
@@ -33,6 +34,7 @@ export async function renderConfig(container, options = {}) {
       { id: 'tools', label: 'Tools', render: renderToolsTab },
       { id: 'policy', label: 'Policy', render: renderPolicyTab },
       { id: 'search-sources', label: 'Search Sources', render: renderSearchSourcesTab },
+      { id: 'cloud', label: 'Cloud', render: renderCloudTab },
       { id: 'settings', label: 'Settings', render: renderSettingsTab },
       { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
     ], options?.tab);
@@ -75,22 +77,25 @@ function createProviderPanel(config, providers, panel) {
     return acc;
   }, {});
 
-  const localNames = Object.keys(providerMap).filter(name => providerMap[name].provider === 'ollama');
-  const externalNames = Object.keys(providerMap).filter(name => providerMap[name].provider !== 'ollama');
+  const localNames = Object.keys(providerMap).filter(name => providerMap[name].locality === 'local');
+  const externalNames = Object.keys(providerMap).filter(name => providerMap[name].locality !== 'local');
+  const providerTypeOptions = COMMON_PROVIDER_TYPES.map((type) => `<option value="${escAttr(type)}"></option>`).join('');
 
   section.innerHTML = `
     <div class="table-header">
       <h3>AI Provider Configuration</h3>
-      <span class="cfg-header-note">Configure local and external providers side by side</span>
+      <span class="cfg-header-note">Configured providers are grouped by detected locality, not just provider type</span>
     </div>
     <div class="cfg-center-body">
+      <datalist id="cfg-provider-type-options">${providerTypeOptions}</datalist>
       <div class="cfg-provider-panels">
         <div class="table-container" id="cfg-local-panel">
-          <div class="table-header"><h3>Local Providers (Ollama)</h3></div>
+          <div class="table-header"><h3>Local Providers</h3></div>
           <div class="cfg-center-body">
             <div class="cfg-form-grid">
               <div class="cfg-field"><label>Profile</label><select id="cfg-local-profile"></select></div>
               <div class="cfg-field"><label>Provider Name</label><input id="cfg-local-name" type="text" placeholder="ollama"></div>
+              <div class="cfg-field"><label>Provider Type</label><input id="cfg-local-type" type="text" list="cfg-provider-type-options" placeholder="ollama"></div>
               <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
               <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
             </div>
@@ -103,12 +108,12 @@ function createProviderPanel(config, providers, panel) {
         </div>
 
         <div class="table-container" id="cfg-ext-panel">
-          <div class="table-header"><h3>External Providers (APIs)</h3></div>
+          <div class="table-header"><h3>External Providers</h3></div>
           <div class="cfg-center-body">
             <div class="cfg-form-grid">
               <div class="cfg-field"><label>Profile</label><select id="cfg-ext-profile"></select></div>
               <div class="cfg-field"><label>Provider Name</label><input id="cfg-ext-name" type="text" placeholder="claude"></div>
-              <div class="cfg-field"><label>Provider Type</label><select id="cfg-ext-type"><option value="openai">openai</option><option value="anthropic">anthropic</option></select></div>
+              <div class="cfg-field"><label>Provider Type</label><input id="cfg-ext-type" type="text" list="cfg-provider-type-options" placeholder="openai"></div>
               <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
               <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="Leave blank to keep existing"></div>
               <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
@@ -125,7 +130,11 @@ function createProviderPanel(config, providers, panel) {
   `;
 
   function getSuggestedName(side, type) {
-    const base = side === 'local' ? 'ollama' : (type === 'anthropic' ? 'claude' : 'openai');
+    const normalizedType = String(type || '').trim().toLowerCase();
+    let base = side === 'local' ? 'ollama' : 'openai';
+    if (normalizedType === 'anthropic') base = 'claude';
+    else if (normalizedType === 'openrouter') base = 'openrouter';
+    else if (normalizedType && normalizedType !== 'openai' && normalizedType !== 'ollama') base = normalizedType.replace(/[^a-z0-9]+/g, '-') || base;
     if (!providerMap[base]) return base;
     let i = 2;
     while (providerMap[`${base}${i}`]) i += 1;
@@ -133,8 +142,11 @@ function createProviderPanel(config, providers, panel) {
   }
 
   function getDefaultModel(side, type) {
-    if (side === 'local') return 'llama3.2';
-    return type === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o';
+    const normalizedType = String(type || '').trim().toLowerCase();
+    if (normalizedType === 'ollama') return 'llama3.2';
+    if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
+    if (normalizedType === 'openai' || normalizedType === 'openrouter') return 'gpt-4o';
+    return side === 'local' ? 'local-model' : 'provider-model';
   }
 
   function wirePanel(side) {
@@ -148,7 +160,7 @@ function createProviderPanel(config, providers, panel) {
     const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
     const urlEl = section.querySelector(`#${prefix}-url`);
     const statusEl = section.querySelector(`#${prefix}-status`);
-    const typeEl = isLocal ? null : section.querySelector('#cfg-ext-type');
+    const typeEl = section.querySelector(`#${prefix}-type`);
     const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
 
     // Model accessor — reads from whichever element is visible
@@ -190,34 +202,33 @@ function createProviderPanel(config, providers, panel) {
 
     function applyProfile(name) {
       if (name === '__new__') {
-        const pt = isLocal ? 'ollama' : (typeEl?.value || 'openai');
+        const pt = typeEl?.value?.trim() || (isLocal ? 'ollama' : 'openai');
+        if (typeEl && !typeEl.value.trim()) typeEl.value = pt;
         nameEl.value = getSuggestedName(side, pt);
         const defaultModel = getDefaultModel(side, pt);
         updateModelSelector([], null);
         modelInputEl.value = defaultModel;
-        urlEl.value = isLocal ? 'http://127.0.0.1:11434' : '';
+        urlEl.value = isLocal && pt === 'ollama' ? 'http://127.0.0.1:11434' : '';
         if (keyEl) keyEl.value = '';
         return;
       }
       const entry = providerMap[name];
       if (!entry) return;
       nameEl.value = name;
+      if (typeEl) typeEl.value = entry.provider || '';
       updateModelSelector(entry.availableModels, entry.model || '');
       if (!entry.availableModels?.length) modelInputEl.value = entry.model || '';
       urlEl.value = entry.baseUrl || '';
-      if (typeEl) typeEl.value = entry.provider === 'ollama' ? 'openai' : entry.provider;
       if (keyEl) keyEl.value = '';
     }
 
     profileEl.addEventListener('change', () => applyProfile(profileEl.value));
 
-    if (typeEl) {
-      typeEl.addEventListener('change', () => {
-        if (profileEl.value === '__new__' && !modelEl.value.trim()) {
-          modelEl.value = getDefaultModel('external', typeEl.value);
-        }
-      });
-    }
+    typeEl?.addEventListener('change', () => {
+      if (profileEl.value === '__new__' && !modelEl.value.trim()) {
+        modelEl.value = getDefaultModel(side, typeEl.value);
+      }
+    });
 
     section.querySelector(`#${prefix}-test`).addEventListener('click', async () => {
       const providerName = nameEl.value.trim();
@@ -247,9 +258,10 @@ function createProviderPanel(config, providers, panel) {
       const providerName = nameEl.value.trim();
       const model = modelEl.value.trim();
       const baseUrl = urlEl.value.trim();
-      const providerType = isLocal ? 'ollama' : (typeEl?.value || 'openai');
+      const providerType = typeEl?.value.trim() || (isLocal ? 'ollama' : 'openai');
 
       if (!providerName) { statusEl.textContent = 'Provider name is required.'; statusEl.style.color = 'var(--error)'; return; }
+      if (!providerType) { statusEl.textContent = 'Provider type is required.'; statusEl.style.color = 'var(--error)'; return; }
       if (!model) { statusEl.textContent = 'Model is required.'; statusEl.style.color = 'var(--error)'; return; }
 
       const payload = {
@@ -788,51 +800,51 @@ async function renderPolicyTab(panel) {
   }
 }
 
-// ─── Search Sources Tab (QMD) ────────────────────────────
+// ─── Search Sources Tab ──────────────────────────────────
 
 function renderSearchSourcesTab(panel) {
-  const qmdCfg = sharedConfig?.assistant?.tools?.qmd || {};
+  const searchCfg = sharedConfig?.assistant?.tools?.search || {};
   const state = {
-    enabled: qmdCfg.enabled !== false,
-    runtimeAvailable: qmdCfg.enabled !== false,
+    enabled: searchCfg.enabled !== false,
+    runtimeAvailable: searchCfg.enabled !== false,
     status: null,
-    sources: Array.isArray(qmdCfg.sources) ? [...qmdCfg.sources] : [],
+    sources: Array.isArray(searchCfg.sources) ? [...searchCfg.sources] : [],
     filter: '',
   };
 
   panel.innerHTML = `
-    <div class="intel-summary-grid qmd-summary-grid" id="qmd-summary-grid"></div>
-    <div class="qmd-feedback qmd-feedback-muted" id="qmd-feedback"></div>
+    <div class="intel-summary-grid search-summary-grid" id="search-summary-grid"></div>
+    <div class="search-feedback search-feedback-muted" id="search-feedback"></div>
 
     <div class="table-container">
       <div class="table-header">
         <h3>Document Sources</h3>
-        <div class="qmd-toolbar-actions">
-          <button class="btn btn-secondary btn-sm" id="qmd-config-toggle" type="button">${state.enabled ? 'Disable QMD' : 'Enable QMD'}</button>
-          <button class="btn btn-secondary btn-sm" id="qmd-refresh" type="button">Refresh</button>
-          <button class="btn btn-secondary btn-sm" id="qmd-reindex-all" type="button" ${state.enabled ? '' : 'disabled'}>Reindex All</button>
-          <button class="btn btn-primary btn-sm" id="qmd-add-source" type="button" aria-expanded="false">+ Add Source</button>
+        <div class="search-toolbar-actions">
+          <button class="btn btn-secondary btn-sm" id="search-config-toggle" type="button">${state.enabled ? 'Disable Search' : 'Enable Search'}</button>
+          <button class="btn btn-secondary btn-sm" id="search-refresh" type="button">Refresh</button>
+          <button class="btn btn-secondary btn-sm" id="search-reindex-all" type="button" ${state.enabled ? '' : 'disabled'}>Reindex All</button>
+          <button class="btn btn-primary btn-sm" id="search-add-source" type="button" aria-expanded="false">+ Add Source</button>
         </div>
       </div>
       <div class="cfg-center-body">
-        <div class="qmd-filter-row">
-          <div class="qmd-filter-field">
-            <label for="qmd-source-filter">Filter Sources</label>
-            <input id="qmd-source-filter" type="text" placeholder="Filter by id, name, path, or type">
+        <div class="search-filter-row">
+          <div class="search-filter-field">
+            <label for="search-source-filter">Filter Sources</label>
+            <input id="search-source-filter" type="text" placeholder="Filter by id, name, path, or type">
           </div>
-          <div class="qmd-hint">
+          <div class="search-hint">
             ${state.enabled
     ? 'Add, enable, disable, reindex, and remove document sources from one place.'
-    : 'QMD is disabled in config. Enable it here, then restart to activate runtime source management.'}
+    : 'Document Search is disabled in config. Enable it here, then restart to activate runtime source management.'}
           </div>
         </div>
       </div>
     </div>
 
-    <div class="table-container qmd-add-form-wrap" id="qmd-add-form-wrap" hidden>
+    <div class="table-container search-add-form-wrap" id="search-add-form-wrap" hidden>
       <div class="table-header"><h3>Add Source</h3></div>
       <div class="cfg-center-body">
-        <form id="qmd-add-form" class="qmd-add-form-grid">
+        <form id="search-add-form" class="search-add-form-grid">
           <div class="cfg-field"><label>ID (collection)</label><input name="id" required placeholder="my-notes"></div>
           <div class="cfg-field"><label>Display Name</label><input name="name" required placeholder="My Notes"></div>
           <div class="cfg-field">
@@ -844,22 +856,29 @@ function renderSearchSourcesTab(panel) {
               <option value="file">Single File</option>
             </select>
           </div>
-          <div class="cfg-field"><label>Path / URL</label><input name="path" required placeholder="/home/user/notes or https://..."></div>
-          <div class="cfg-field" data-qmd-field="globs">
+          <div class="cfg-field">
+            <label>Path / URL</label>
+            <div class="search-path-row">
+              <input name="path" required placeholder="S:\\Development or https://...">
+              <button class="btn btn-secondary btn-sm" type="button" id="search-path-browse" hidden>Browse...</button>
+            </div>
+            <div class="search-muted" id="search-path-picker-note" hidden>Opens the local Windows path picker on this machine.</div>
+          </div>
+          <div class="cfg-field" data-search-field="globs">
             <label>Globs</label>
             <input name="globs" placeholder="**/*.md, **/*.txt">
           </div>
-          <div class="cfg-field" data-qmd-field="branch">
+          <div class="cfg-field" data-search-field="branch">
             <label>Git Branch</label>
             <input name="branch" placeholder="main">
           </div>
-          <div class="cfg-field qmd-form-span-2">
+          <div class="cfg-field search-form-span-2">
             <label>Description</label>
             <input name="description" placeholder="Optional description">
           </div>
-          <div class="cfg-actions qmd-form-span-2">
+          <div class="cfg-actions search-form-span-2">
             <button class="btn btn-primary" type="submit">Add Source</button>
-            <button class="btn btn-secondary" type="button" id="qmd-add-cancel">Cancel</button>
+            <button class="btn btn-secondary" type="button" id="search-add-cancel">Cancel</button>
           </div>
         </form>
       </div>
@@ -868,26 +887,29 @@ function renderSearchSourcesTab(panel) {
     <div class="table-container">
       <div class="table-header">
         <h3>Configured Sources</h3>
-        <span class="cfg-header-note" id="qmd-source-count">0 sources</span>
+        <span class="cfg-header-note" id="search-source-count">0 sources</span>
       </div>
-      <div class="cfg-center-body qmd-sources-wrap" id="qmd-sources-area">
+      <div class="cfg-center-body search-sources-wrap" id="search-sources-area">
         <div class="loading">Loading...</div>
       </div>
     </div>
   `;
 
-  const feedbackEl = panel.querySelector('#qmd-feedback');
-  const summaryEl = panel.querySelector('#qmd-summary-grid');
-  const configToggleBtn = panel.querySelector('#qmd-config-toggle');
-  const addBtn = panel.querySelector('#qmd-add-source');
-  const addWrap = panel.querySelector('#qmd-add-form-wrap');
-  const addForm = panel.querySelector('#qmd-add-form');
-  const addCancelBtn = panel.querySelector('#qmd-add-cancel');
-  const refreshBtn = panel.querySelector('#qmd-refresh');
-  const reindexAllBtn = panel.querySelector('#qmd-reindex-all');
-  const filterInput = panel.querySelector('#qmd-source-filter');
-  const sourcesArea = panel.querySelector('#qmd-sources-area');
-  const sourceCountEl = panel.querySelector('#qmd-source-count');
+  const feedbackEl = panel.querySelector('#search-feedback');
+  const summaryEl = panel.querySelector('#search-summary-grid');
+  const configToggleBtn = panel.querySelector('#search-config-toggle');
+  const addBtn = panel.querySelector('#search-add-source');
+  const addWrap = panel.querySelector('#search-add-form-wrap');
+  const addForm = panel.querySelector('#search-add-form');
+  const addCancelBtn = panel.querySelector('#search-add-cancel');
+  const pathInput = addForm.querySelector('input[name="path"]');
+  const pathBrowseBtn = addForm.querySelector('#search-path-browse');
+  const pathPickerNote = addForm.querySelector('#search-path-picker-note');
+  const refreshBtn = panel.querySelector('#search-refresh');
+  const reindexAllBtn = panel.querySelector('#search-reindex-all');
+  const filterInput = panel.querySelector('#search-source-filter');
+  const sourcesArea = panel.querySelector('#search-sources-area');
+  const sourceCountEl = panel.querySelector('#search-source-count');
 
   const typeLabels = {
     directory: 'Directory',
@@ -897,7 +919,7 @@ function renderSearchSourcesTab(panel) {
   };
 
   function setFeedback(message, tone = 'muted') {
-    feedbackEl.className = `qmd-feedback qmd-feedback-${tone}`;
+    feedbackEl.className = `search-feedback search-feedback-${tone}`;
     feedbackEl.textContent = message;
   }
 
@@ -905,17 +927,22 @@ function renderSearchSourcesTab(panel) {
     return state.enabled && state.runtimeAvailable;
   }
 
+  function isUnavailableError(err) {
+    const message = err instanceof Error ? err.message : String(err || '');
+    return /404|not found|not available/i.test(message);
+  }
+
   function updateManageControls() {
     const canManage = canManageSources();
-    addBtn.disabled = false;
-    addBtn.classList.toggle('btn-primary', canManage);
-    addBtn.classList.toggle('btn-secondary', !canManage);
-    addBtn.title = canManage
+    addBtn.disabled = !state.enabled;
+    addBtn.classList.toggle('btn-primary', state.enabled);
+    addBtn.classList.toggle('btn-secondary', !state.enabled);
+    addBtn.title = state.enabled
       ? 'Add a new document source'
-      : 'QMD runtime is unavailable. Click for guidance.';
+      : 'Enable Document Search in config first.';
     reindexAllBtn.disabled = !canManage;
     filterInput.disabled = false;
-    configToggleBtn.textContent = state.enabled ? 'Disable QMD' : 'Enable QMD';
+    configToggleBtn.textContent = state.enabled ? 'Disable Search' : 'Enable Search';
     if (state.enabled) {
       configToggleBtn.classList.remove('btn-primary');
       configToggleBtn.classList.add('btn-secondary');
@@ -939,19 +966,19 @@ function renderSearchSourcesTab(panel) {
 
     summaryEl.innerHTML = `
       <div class="status-card ${installedTone}">
-        <div class="card-title">QMD Installed</div>
+        <div class="card-title">Search Active</div>
         <div class="card-value">${esc(installed)}</div>
-        <div class="card-subtitle">${state.enabled ? 'Runtime binary availability' : 'Service is not active in current config'}</div>
+        <div class="card-subtitle">${state.enabled ? 'Runtime availability' : 'Service is not active in current config'}</div>
       </div>
       <div class="status-card info">
-        <div class="card-title">QMD Version</div>
+        <div class="card-title">Search Version</div>
         <div class="card-value">${versionValue}</div>
         <div class="card-subtitle">Reported by runtime status</div>
       </div>
       <div class="status-card accent">
         <div class="card-title">Collections</div>
         <div class="card-value">${collections}</div>
-        <div class="card-subtitle">Known in QMD index</div>
+        <div class="card-subtitle">Known in search index</div>
       </div>
       <div class="status-card warning">
         <div class="card-title">Configured Sources</div>
@@ -971,12 +998,27 @@ function renderSearchSourcesTab(panel) {
 
   function syncAddFormFields() {
     const type = addForm.querySelector('select[name="type"]')?.value || 'directory';
-    const globsField = addForm.querySelector('[data-qmd-field="globs"]');
-    const branchField = addForm.querySelector('[data-qmd-field="branch"]');
+    const globsField = addForm.querySelector('[data-search-field="globs"]');
+    const branchField = addForm.querySelector('[data-search-field="branch"]');
     const showGlobs = type === 'directory' || type === 'git';
     const showBranch = type === 'git';
+    const canBrowsePath = type === 'directory' || type === 'file';
     if (globsField) globsField.hidden = !showGlobs;
     if (branchField) branchField.hidden = !showBranch;
+    if (pathBrowseBtn) {
+      pathBrowseBtn.hidden = !canBrowsePath;
+      pathBrowseBtn.textContent = type === 'file' ? 'Browse File...' : 'Browse Folder...';
+    }
+    if (pathPickerNote) pathPickerNote.hidden = !canBrowsePath;
+    if (pathInput) {
+      pathInput.placeholder = type === 'url'
+        ? 'https://...'
+        : type === 'git'
+          ? 'S:\\Development\\repo or https://github.com/org/repo.git'
+          : type === 'file'
+            ? 'S:\\Development\\notes\\README.md'
+            : 'S:\\Development';
+    }
   }
 
   function renderSources() {
@@ -999,7 +1041,7 @@ function renderSearchSourcesTab(panel) {
 
     if (state.sources.length === 0) {
       sourcesArea.innerHTML = `
-        <div class="qmd-empty-state">
+        <div class="search-empty-state">
           <strong>No sources configured.</strong>
           <span>Add a source to start indexing notes, repos, or documents.</span>
         </div>
@@ -1009,7 +1051,7 @@ function renderSearchSourcesTab(panel) {
 
     if (filtered.length === 0) {
       sourcesArea.innerHTML = `
-        <div class="qmd-empty-state">
+        <div class="search-empty-state">
           <strong>No matching sources.</strong>
           <span>Try a different filter or clear the search input.</span>
         </div>
@@ -1018,7 +1060,7 @@ function renderSearchSourcesTab(panel) {
     }
 
     sourcesArea.innerHTML = `
-      <div class="qmd-table-wrap">
+      <div class="search-table-wrap">
         <table>
           <thead>
             <tr><th>Name</th><th>Type</th><th>Path</th><th>Pattern</th><th>Status</th><th>Actions</th></tr>
@@ -1027,26 +1069,26 @@ function renderSearchSourcesTab(panel) {
             ${filtered.map((source) => {
     const globs = Array.isArray(source.globs) && source.globs.length > 0
       ? source.globs.map((glob) => `<code>${esc(glob)}</code>`).join(', ')
-      : '<span class="qmd-muted">default</span>';
-    const branch = source.branch ? ` <span class="qmd-muted">(${esc(source.branch)})</span>` : '';
+      : '<span class="search-muted">default</span>';
+    const branch = source.branch ? ` <span class="search-muted">(${esc(source.branch)})</span>` : '';
     return `
                 <tr>
                   <td>
                     <strong>${esc(source.name)}</strong>
-                    <div class="qmd-muted">${esc(source.id)}${source.description ? ` • ${esc(source.description)}` : ''}</div>
+                    <div class="search-muted">${esc(source.id)}${source.description ? ` • ${esc(source.description)}` : ''}</div>
                   </td>
                   <td>${esc(typeLabels[source.type] || source.type)}${branch}</td>
-                  <td class="qmd-path-cell" title="${esc(source.path)}">${esc(source.path)}</td>
+                  <td class="search-path-cell" title="${esc(source.path)}">${esc(source.path)}</td>
                   <td>${globs}</td>
                   <td>
                     <label class="toggle-switch">
-                      <input type="checkbox" ${source.enabled !== false ? 'checked' : ''} data-source-id="${escAttr(source.id)}" class="qmd-toggle" ${canManage ? '' : 'disabled'}>
+                      <input type="checkbox" ${source.enabled !== false ? 'checked' : ''} data-source-id="${escAttr(source.id)}" class="search-toggle" ${canManage ? '' : 'disabled'}>
                       <span class="toggle-slider"></span>
                     </label>
                   </td>
-                  <td class="qmd-actions-cell">
-                    <button class="btn btn-secondary btn-sm qmd-action" data-action="reindex" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Reindex</button>
-                    <button class="btn btn-danger btn-sm qmd-action" data-action="remove" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Remove</button>
+                  <td class="search-actions-cell">
+                    <button class="btn btn-secondary btn-sm search-action" data-action="reindex" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Reindex</button>
+                    <button class="btn btn-danger btn-sm search-action" data-action="remove" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Remove</button>
                   </td>
                 </tr>
               `;
@@ -1059,35 +1101,49 @@ function renderSearchSourcesTab(panel) {
 
   async function refreshStatus() {
     if (!state.enabled) return;
-    state.status = await api.qmdStatus();
+    state.status = await api.searchStatus();
   }
 
   async function refreshSources() {
     if (!state.enabled) return;
-    state.sources = await api.qmdSources();
+    state.sources = await api.searchSources();
   }
 
   async function refreshAll(showMessage = false) {
     try {
       if (state.enabled) {
-        await Promise.all([refreshStatus(), refreshSources()]);
-        state.runtimeAvailable = true;
+        try {
+          await Promise.all([refreshStatus(), refreshSources()]);
+          state.runtimeAvailable = !!(state.status?.available || state.status?.installed);
+        } catch (err) {
+          if (isUnavailableError(err)) {
+            state.runtimeAvailable = false;
+            state.status = {
+              installed: false,
+              available: false,
+              version: 'native',
+              collections: [],
+              configuredSources: [],
+              vectorSearchAvailable: false,
+            };
+            state.sources = Array.isArray(sharedConfig?.assistant?.tools?.search?.sources)
+              ? [...sharedConfig.assistant.tools.search.sources]
+              : [];
+          } else {
+            throw err;
+          }
+        }
       }
       renderSummary();
       renderSources();
       updateManageControls();
       if (showMessage) setFeedback('Search sources refreshed.', 'success');
-      if (state.enabled && state.status?.installed === false) {
-        setFeedback('QMD is unavailable in this runtime. Run npm install to include bundled QMD, or set assistant.tools.qmd.binaryPath.', 'warning');
+      if (state.enabled && !state.runtimeAvailable) {
+        setFeedback('Document Search is enabled in config, but the runtime endpoints are unavailable. You can still save sources to config and they will apply once search is active.', 'warning');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (state.enabled && /not available/i.test(message)) {
-        state.runtimeAvailable = false;
-        setFeedback('QMD is enabled in config but not active in this runtime. Restart GuardianAgent to apply the change.', 'warning');
-      } else {
-        setFeedback(`Failed to refresh search sources: ${message}`, 'error');
-      }
+      setFeedback(`Failed to refresh search sources: ${message}`, 'error');
       renderSummary();
       renderSources();
       updateManageControls();
@@ -1101,12 +1157,12 @@ function renderSearchSourcesTab(panel) {
       const result = await api.updateConfig({
         assistant: {
           tools: {
-            qmd: { enabled: nextEnabled },
+            search: { enabled: nextEnabled },
           },
         },
       });
       if (!result.success) {
-        throw new Error(result.message || 'Failed to update QMD setting.');
+        throw new Error(result.message || 'Failed to update Document Search setting.');
       }
 
       state.enabled = nextEnabled;
@@ -1114,8 +1170,8 @@ function renderSearchSourcesTab(panel) {
       if (sharedConfig) {
         sharedConfig.assistant = sharedConfig.assistant || {};
         sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
-        sharedConfig.assistant.tools.qmd = sharedConfig.assistant.tools.qmd || { sources: [] };
-        sharedConfig.assistant.tools.qmd.enabled = nextEnabled;
+        sharedConfig.assistant.tools.search = sharedConfig.assistant.tools.search || { sources: [] };
+        sharedConfig.assistant.tools.search.enabled = nextEnabled;
       }
       if (!nextEnabled) {
         toggleAddForm(false);
@@ -1124,8 +1180,8 @@ function renderSearchSourcesTab(panel) {
       renderSources();
       updateManageControls();
       setFeedback(
-        `Saved: QMD ${nextEnabled ? 'enabled' : 'disabled'} in config. Restart GuardianAgent to apply runtime changes.`,
-        'warning',
+        `Document Search ${nextEnabled ? 'enabled' : 'disabled'} and hot-reloaded.`,
+        'success',
       );
       if (nextEnabled) {
         void refreshAll();
@@ -1139,11 +1195,7 @@ function renderSearchSourcesTab(panel) {
 
   addBtn.addEventListener('click', () => {
     if (!state.enabled) {
-      setFeedback('QMD is disabled. Enable it first, then restart GuardianAgent to manage live sources.', 'warning');
-      return;
-    }
-    if (!state.runtimeAvailable) {
-      setFeedback('QMD is enabled in config but not active in this runtime. Restart GuardianAgent to manage sources.', 'warning');
+      setFeedback('Document Search is disabled in configuration. Enable it first to manage sources.', 'warning');
       return;
     }
     toggleAddForm(addWrap.hidden);
@@ -1155,12 +1207,34 @@ function renderSearchSourcesTab(panel) {
     toggleAddForm(false);
   });
 
+  pathBrowseBtn?.addEventListener('click', async () => {
+    const sourceType = addForm.querySelector('select[name="type"]')?.value || 'directory';
+    const kind = sourceType === 'file' ? 'file' : 'directory';
+    pathBrowseBtn.disabled = true;
+    try {
+      const result = await api.pickSearchPath(kind);
+      if (result?.canceled) {
+        setFeedback('Path selection cancelled.', 'muted');
+        return;
+      }
+      if (!result?.success || !result?.path) {
+        throw new Error(result?.message || 'Path picker failed.');
+      }
+      pathInput.value = result.path;
+      setFeedback(result.message || 'Path selected.', 'success');
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : String(err), 'warning');
+    } finally {
+      pathBrowseBtn.disabled = false;
+    }
+  });
+
   addForm.querySelector('select[name="type"]')?.addEventListener('change', syncAddFormFields);
 
   addForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!canManageSources()) {
-      setFeedback('QMD source management is unavailable until QMD is enabled and active in runtime.', 'warning');
+    if (!state.enabled) {
+      setFeedback('Enable Document Search in configuration first.', 'warning');
       return;
     }
 
@@ -1196,16 +1270,71 @@ function renderSearchSourcesTab(panel) {
         enabled: true,
       };
 
-      const result = await api.qmdSourceAdd(source);
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to add source.');
+      // 1. If runtime is available, add to live store. If the runtime routes
+      // are unavailable, fall back to config-only persistence.
+      let runtimeUpdated = false;
+      if (state.runtimeAvailable) {
+        try {
+          const result = await api.searchSourceAdd(source);
+          if (result?.success === false) {
+            throw new Error(result.message || 'Failed to add source to the live search runtime.');
+          }
+          runtimeUpdated = true;
+        } catch (err) {
+          if (isUnavailableError(err)) {
+            state.runtimeAvailable = false;
+          } else {
+            throw err;
+          }
+        }
       }
 
+      // 2. Persist to config so it survives restart
+      const currentSources = Array.isArray(sharedConfig?.assistant?.tools?.search?.sources)
+        ? [...sharedConfig.assistant.tools.search.sources]
+        : [];
+      
+      // Upsert
+      const existingIdx = currentSources.findIndex(s => s.id === source.id);
+      if (existingIdx >= 0) {
+        currentSources[existingIdx] = source;
+      } else {
+        currentSources.push(source);
+      }
+
+      const configResult = await api.updateConfig({
+        assistant: {
+          tools: {
+            search: { sources: currentSources },
+          },
+        },
+      });
+
+      if (!configResult.success) {
+        throw new Error(configResult.message || 'Failed to persist source to config.');
+      }
+
+      // Update local state
+      state.sources = currentSources;
+      if (sharedConfig) {
+        sharedConfig.assistant = sharedConfig.assistant || {};
+        sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+        sharedConfig.assistant.tools.search = sharedConfig.assistant.tools.search || {};
+        sharedConfig.assistant.tools.search.sources = currentSources;
+      }
+
+      toggleAddForm(false);
       addForm.reset();
       syncAddFormFields();
-      toggleAddForm(false);
-      setFeedback(`Added source '${sourceId}'.`, 'success');
-      await refreshAll();
+      renderSources();
+      
+      setFeedback(
+        runtimeUpdated
+          ? `Source '${source.id}' added and hot-reloaded.`
+          : `Source '${source.id}' saved to config. Search runtime is currently unavailable, so it will load once search becomes active.`,
+        runtimeUpdated ? 'success' : 'warning',
+      );
+      void refreshAll();
     } catch (err) {
       setFeedback(err instanceof Error ? err.message : String(err), 'error');
     } finally {
@@ -1225,13 +1354,13 @@ function renderSearchSourcesTab(panel) {
 
   reindexAllBtn.addEventListener('click', async () => {
     if (!canManageSources()) {
-      setFeedback('QMD reindex is unavailable until QMD is enabled and active in runtime.', 'warning');
+      setFeedback('Reindex is unavailable until Document Search is enabled and active in runtime.', 'warning');
       return;
     }
     reindexAllBtn.disabled = true;
     reindexAllBtn.textContent = 'Reindexing...';
     try {
-      const result = await api.qmdReindex();
+      const result = await api.searchReindex();
       if (!result.success) throw new Error(result.message || 'Reindex all failed.');
       setFeedback('Reindex started for all sources.', 'success');
     } catch (err) {
@@ -1249,13 +1378,13 @@ function renderSearchSourcesTab(panel) {
 
   sourcesArea.addEventListener('change', async (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement) || !target.classList.contains('qmd-toggle')) return;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains('search-toggle')) return;
     const sourceId = target.dataset.sourceId;
     if (!sourceId || !canManageSources()) return;
 
     target.disabled = true;
     try {
-      const result = await api.qmdSourceToggle(sourceId, target.checked);
+      const result = await api.searchSourceToggle(sourceId, target.checked);
       if (!result.success) throw new Error(result.message || 'Unable to update source status.');
       const item = state.sources.find((source) => source.id === sourceId);
       if (item) item.enabled = target.checked;
@@ -1271,7 +1400,7 @@ function renderSearchSourcesTab(panel) {
 
   sourcesArea.addEventListener('click', async (event) => {
     const button = event.target instanceof HTMLElement
-      ? event.target.closest('.qmd-action')
+      ? event.target.closest('.search-action')
       : null;
     if (!(button instanceof HTMLButtonElement)) return;
     if (!canManageSources()) return;
@@ -1285,13 +1414,13 @@ function renderSearchSourcesTab(panel) {
     try {
       if (action === 'reindex') {
         button.textContent = 'Reindexing...';
-        const result = await api.qmdReindex(sourceId);
+        const result = await api.searchReindex(sourceId);
         if (!result.success) throw new Error(result.message || `Reindex failed for '${sourceId}'.`);
         setFeedback(`Reindex started for '${sourceId}'.`, 'success');
       } else if (action === 'remove') {
         if (!confirm(`Remove source '${sourceId}'?`)) return;
         button.textContent = 'Removing...';
-        const result = await api.qmdSourceRemove(sourceId);
+        const result = await api.searchSourceRemove(sourceId);
         if (!result.success) throw new Error(result.message || `Failed to remove '${sourceId}'.`);
         state.sources = state.sources.filter((source) => source.id !== sourceId);
         setFeedback(`Removed source '${sourceId}'.`, 'success');
@@ -1313,11 +1442,177 @@ function renderSearchSourcesTab(panel) {
   if (!state.enabled) {
     state.runtimeAvailable = false;
     updateManageControls();
-    setFeedback('QMD is disabled in config. Enable it here, then restart GuardianAgent to activate indexing.', 'warning');
+    setFeedback('Document Search is disabled in config. Enable it here, then restart GuardianAgent to activate indexing.', 'warning');
   } else {
-    setFeedback('Loading QMD status and sources...', 'muted');
+    setFeedback('Loading search status and sources...', 'muted');
     void refreshAll();
   }
+}
+
+// ─── Cloud Tab ───────────────────────────────────────────
+
+function renderCloudTab(panel) {
+  const cloud = sharedConfig?.assistant?.tools?.cloud || {
+    enabled: false,
+    cpanelProfiles: [],
+    vercelProfiles: [],
+    cloudflareProfiles: [],
+    awsProfiles: [],
+    gcpProfiles: [],
+    azureProfiles: [],
+    profileCounts: { cpanel: 0, vercel: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
+    security: {
+      inlineSecretProfileCount: 0,
+      credentialRefCount: 0,
+      selfSignedProfileCount: 0,
+      customEndpointProfileCount: 0,
+    },
+  };
+  const providers = [
+    {
+      key: 'cpanelProfiles',
+      label: 'cPanel / WHM',
+      note: 'Profile keys: id, name, type, host, port, username, credentialRef, ssl, allowSelfSigned, defaultCpanelUser. Add apiToken only when setting or rotating an inline token.',
+    },
+    {
+      key: 'vercelProfiles',
+      label: 'Vercel',
+      note: 'Profile keys: id, name, apiBaseUrl, credentialRef, teamId, slug. Add apiToken only when setting or rotating an inline token.',
+    },
+    {
+      key: 'cloudflareProfiles',
+      label: 'Cloudflare',
+      note: 'Profile keys: id, name, apiBaseUrl, credentialRef, accountId, defaultZoneId. Add apiToken only when setting or rotating an inline token.',
+    },
+    {
+      key: 'awsProfiles',
+      label: 'AWS',
+      note: 'Profile keys: id, name, region, accessKeyIdCredentialRef, secretAccessKeyCredentialRef, sessionTokenCredentialRef, endpoints. Add accessKeyId/secretAccessKey/sessionToken only when setting or rotating inline credentials.',
+    },
+    {
+      key: 'gcpProfiles',
+      label: 'GCP',
+      note: 'Profile keys: id, name, projectId, location, accessTokenCredentialRef, serviceAccountCredentialRef, endpoints. Add accessToken or serviceAccountJson only when setting or rotating inline credentials.',
+    },
+    {
+      key: 'azureProfiles',
+      label: 'Azure',
+      note: 'Profile keys: id, name, subscriptionId, tenantId, accessTokenCredentialRef, clientIdCredentialRef, clientSecretCredentialRef, defaultResourceGroup, blobBaseUrl, endpoints. Add accessToken/clientId/clientSecret only when setting or rotating inline credentials.',
+    },
+  ];
+
+  panel.innerHTML = `
+    <div class="intel-summary-grid">
+      <div class="status-card ${cloud.enabled ? 'success' : 'error'}">
+        <div class="card-title">Cloud Runtime</div>
+        <div class="card-value">${cloud.enabled ? 'Enabled' : 'Disabled'}</div>
+        <div class="card-subtitle">Cloud and hosting tools</div>
+      </div>
+      <div class="status-card info">
+        <div class="card-title">Profiles</div>
+        <div class="card-value">${cloud.profileCounts?.total || 0}</div>
+        <div class="card-subtitle">Configured provider connections</div>
+      </div>
+      <div class="status-card ${cloud.security?.inlineSecretProfileCount ? 'warning' : 'success'}">
+        <div class="card-title">Inline Secrets</div>
+        <div class="card-value">${cloud.security?.inlineSecretProfileCount || 0}</div>
+        <div class="card-subtitle">Prefer credential refs when possible</div>
+      </div>
+      <div class="status-card ${cloud.security?.selfSignedProfileCount ? 'warning' : 'accent'}">
+        <div class="card-title">TLS Exceptions</div>
+        <div class="card-value">${cloud.security?.selfSignedProfileCount || 0}</div>
+        <div class="card-subtitle">Profiles allowing self-signed certs</div>
+      </div>
+      <div class="status-card ${cloud.security?.customEndpointProfileCount ? 'warning' : 'info'}">
+        <div class="card-title">Custom Endpoints</div>
+        <div class="card-value">${cloud.security?.customEndpointProfileCount || 0}</div>
+        <div class="card-subtitle">Override APIs or emulator endpoints</div>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <div class="table-header">
+        <h3>Cloud Configuration</h3>
+        <span class="cfg-header-note">Editable provider blocks for <code>assistant.tools.cloud</code></span>
+      </div>
+      <div class="cfg-center-body">
+        <div class="cfg-form-grid">
+          <div class="cfg-field">
+            <label>Enable Cloud Tools</label>
+            <select id="cfg-cloud-enabled">
+              <option value="true" ${cloud.enabled ? 'selected' : ''}>Enabled</option>
+              <option value="false" ${!cloud.enabled ? 'selected' : ''}>Disabled</option>
+            </select>
+          </div>
+          <div class="cfg-field" style="grid-column: 1 / -1;">
+            <label>Security Notes</label>
+            <div style="font-size:0.75rem;color:var(--text-muted);line-height:1.5;">
+              Fields ending in <code>Configured</code> are informational only and indicate an inline secret already exists.<br>
+              To rotate an inline secret, add the real secret field into the JSON for that profile. Leaving secret fields out preserves the current stored value.
+            </div>
+          </div>
+        </div>
+        <div class="cfg-actions">
+          <button class="btn btn-primary" id="cfg-cloud-save" type="button">Save Cloud Configuration</button>
+          <span id="cfg-cloud-status" class="cfg-save-status"></span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  for (const provider of providers) {
+    const section = document.createElement('div');
+    section.className = 'table-container';
+    const profiles = cloud[provider.key] || [];
+    section.innerHTML = `
+      <div class="table-header">
+        <h3>${esc(provider.label)}</h3>
+        <span class="cfg-header-note">${profiles.length} profile${profiles.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="cfg-center-body">
+        <div style="margin-bottom:0.45rem;font-size:0.72rem;color:var(--text-muted);line-height:1.45;">${provider.note}</div>
+        <textarea
+          id="cfg-cloud-${provider.key}"
+          spellcheck="false"
+          style="width:100%;min-height:220px;padding:0.85rem;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:0.74rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-panel);color:var(--text-primary);resize:vertical;"
+        >${esc(JSON.stringify(profiles, null, 2))}</textarea>
+      </div>
+    `;
+    panel.appendChild(section);
+  }
+
+  const statusEl = panel.querySelector('#cfg-cloud-status');
+  panel.querySelector('#cfg-cloud-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const payload = {
+        enabled: panel.querySelector('#cfg-cloud-enabled')?.value === 'true',
+      };
+      for (const provider of providers) {
+        const text = panel.querySelector(`#cfg-cloud-${provider.key}`)?.value || '[]';
+        payload[provider.key] = parseJsonArray(text, provider.label);
+      }
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            cloud: payload,
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        sharedConfig = await api.config();
+        renderCloudTab(panel);
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(panel);
 }
 
 // ─── Settings Tab ────────────────────────────────────────
@@ -1397,9 +1692,24 @@ function renderSettingsTab(panel) {
   const gaConfig = config.guardian?.guardianAgent;
   const trustPreset = config.guardian?.trustPreset || 'custom';
   const authMode = authStatus?.tokenConfigured ? 'Configured' : 'Not set';
+  const notifications = config.assistant?.notifications || {};
+  const notificationsBadge = notifications.enabled !== false
+    ? (notifications.deliveryMode === 'all'
+      ? 'All channels'
+      : summarizeNotificationDestinations(notifications.destinations))
+    : 'Disabled';
+
+  // ── Layout container ──
+  const layout = document.createElement('div');
+  layout.className = 'cfg-categories-layout';
+  const leftCol = document.createElement('div');
+  const rightCol = document.createElement('div');
+  layout.appendChild(leftCol);
+  layout.appendChild(rightCol);
+  panel.appendChild(layout);
 
   // ── Channels group ──
-  panel.appendChild(makeGroup('Channels', `${telegramEnabled ? 'Telegram active' : 'CLI + Web'}`, [
+  leftCol.appendChild(makeGroup('Channels', `${telegramEnabled ? 'Telegram active' : 'CLI + Web'}`, [
     {
       title: 'Telegram',
       badge: telegramEnabled ? 'Enabled' : 'Disabled',
@@ -1413,7 +1723,7 @@ function renderSettingsTab(panel) {
   ]));
 
   // ── Integrations group ──
-  panel.appendChild(makeGroup('Integrations', '', [
+  leftCol.appendChild(makeGroup('Integrations', '', [
     {
       title: 'Browser Automation',
       badge: config.assistant?.tools?.browser?.enabled !== false ? 'Enabled' : 'Disabled',
@@ -1428,7 +1738,7 @@ function renderSettingsTab(panel) {
   ]));
 
   // ── Security group ──
-  panel.appendChild(makeGroup('Security', `${sandboxMode} sandbox`, [
+  leftCol.appendChild(makeGroup('Security', `${sandboxMode} sandbox`, [
     {
       title: 'Guardian Agent',
       badge: gaConfig?.enabled !== false ? `${gaConfig?.llmProvider || 'auto'}` : 'Disabled',
@@ -1445,6 +1755,11 @@ function renderSettingsTab(panel) {
       panel: createSentinelAuditPanel(),
     },
     {
+      title: 'Security Alerts',
+      badge: notificationsBadge,
+      panel: createNotificationsPanel(config, panel),
+    },
+    {
       title: 'Sandbox Enforcement',
       badge: sandboxMode,
       panel: createSandboxPanel(config),
@@ -1459,10 +1774,10 @@ function renderSettingsTab(panel) {
       badge: `${apuCount}/3 enabled`,
       panel: createAgentPolicyAccessPanel(config, panel),
     },
-  ]));
+  ], true));
 
   // ── System group ──
-  panel.appendChild(makeGroup('System', authMode, [
+  rightCol.appendChild(makeGroup('System', authMode, [
     {
       title: 'Authentication',
       badge: authMode,
@@ -1473,7 +1788,7 @@ function renderSettingsTab(panel) {
       badge: '',
       panel: createDangerZonePanel(),
     },
-  ]));
+  ], true));
 
   // ── Config Snapshots group (collapsed by default) ──
   function makeSnapshotPanel(data) {
@@ -1482,10 +1797,11 @@ function renderSettingsTab(panel) {
     el.innerHTML = `<div class="cfg-center-body"><pre style="font-size:0.72rem;overflow-x:auto;max-height:400px;overflow-y:auto;">${highlight(JSON.stringify(data, null, 2))}</pre></div>`;
     return el;
   }
-  panel.appendChild(makeGroup('Config Snapshots', 'Read-only', [
+  rightCol.appendChild(makeGroup('Config Snapshots', 'Read-only', [
     { title: 'Channels', badge: 'read-only', panel: makeSnapshotPanel(config.channels), fullWidth: true },
     { title: 'Guardian', badge: 'read-only', panel: makeSnapshotPanel(config.guardian), fullWidth: true },
     { title: 'Runtime', badge: 'read-only', panel: makeSnapshotPanel(config.runtime), fullWidth: true },
+    { title: 'Cloud', badge: 'read-only', panel: makeSnapshotPanel(config.assistant?.tools?.cloud || {}), fullWidth: true },
     { title: 'Assistant', badge: 'read-only', panel: makeSnapshotPanel(config.assistant), fullWidth: true },
   ]));
 }
@@ -1498,32 +1814,15 @@ function createOverview(config, providers, setupStatus) {
   const defaultProvider = providers.find(p => p.name === config.defaultProvider);
   const connectedText = defaultProvider ? (defaultProvider.connected === false ? 'Disconnected' : 'Connected') : 'Unknown';
   const connectedTone = defaultProvider && defaultProvider.connected === false ? 'error' : 'success';
+  const cloud = config.assistant?.tools?.cloud;
 
   cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Default Provider', config.defaultProvider || 'None', connectedText, connectedTone));
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
   cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Settings tab', config.channels?.telegram?.enabled ? 'success' : 'warning'));
+  cards.appendChild(createMiniCard('Cloud', cloud?.enabled ? 'Enabled' : 'Disabled', `${cloud?.profileCounts?.total || 0} profiles`, cloud?.enabled ? 'success' : 'warning'));
   wrap.appendChild(cards);
 
-  if (setupStatus?.steps?.length) {
-    const stepBox = document.createElement('div');
-    stepBox.className = 'table-container';
-    stepBox.innerHTML = `
-      <div class="table-header"><h3>Readiness Checklist</h3></div>
-      <div class="cfg-checklist-grid">
-        ${setupStatus.steps.map(step => `
-          <div class="cfg-check-item ${esc(step.status)}">
-            <div class="cfg-check-head">
-              <span class="cfg-check-title">${esc(step.title)}</span>
-              <span class="badge ${badgeForStep(step.status)}">${esc(step.status.toUpperCase())}</span>
-            </div>
-            <div class="cfg-check-detail">${esc(step.detail)}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-    wrap.appendChild(stepBox);
-  }
   return wrap;
 }
 
@@ -1596,6 +1895,132 @@ function createTelegramPanel(config, settingsPanel) {
         const tokenInput = section.querySelector('#cfg-telegram-token');
         if (tokenInput) tokenInput.value = '';
       }
+      if (result.success) {
+        await refreshSettingsOverview(settingsPanel);
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
+function createNotificationsPanel(config, settingsPanel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const notifications = config.assistant?.notifications || {};
+  const enabled = notifications.enabled !== false;
+  const minSeverity = notifications.minSeverity || 'warn';
+  const auditEventTypes = Array.isArray(notifications.auditEventTypes) ? notifications.auditEventTypes : [];
+  const suppressedDetailTypes = Array.isArray(notifications.suppressedDetailTypes) ? notifications.suppressedDetailTypes : [];
+  const cooldownSeconds = Math.max(0, Math.round((notifications.cooldownMs || 0) / 1000));
+  const deliveryMode = notifications.deliveryMode || 'selected';
+  const destinations = notifications.destinations || { web: false, cli: true, telegram: false };
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Security Alerts</h3>
+      <span class="cfg-header-note">Filter noisy alerts and choose delivery channels</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Enable Alerts</label>
+          <select id="cfg-notify-enabled">
+            <option value="true" ${enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Minimum Severity</label>
+          <select id="cfg-notify-min-severity">
+            <option value="info" ${minSeverity === 'info' ? 'selected' : ''}>Info</option>
+            <option value="warn" ${minSeverity === 'warn' ? 'selected' : ''}>Warn</option>
+            <option value="critical" ${minSeverity === 'critical' ? 'selected' : ''}>Critical</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Cooldown (seconds)</label>
+          <input id="cfg-notify-cooldown" type="number" min="0" max="86400" value="${cooldownSeconds}">
+        </div>
+        <div class="cfg-field">
+          <label>Channel Delivery</label>
+          <select id="cfg-notify-delivery-mode">
+            <option value="selected" ${deliveryMode === 'selected' ? 'selected' : ''}>Selected channels</option>
+            <option value="all" ${deliveryMode === 'all' ? 'selected' : ''}>All active channels</option>
+          </select>
+        </div>
+        <div class="cfg-field" style="grid-column: 1 / -1;">
+          <label>Alert Event Types</label>
+          <input id="cfg-notify-event-types" type="text" value="${esc(auditEventTypes.join(', '))}" placeholder="host_alert, gateway_alert, anomaly_detected">
+        </div>
+        <div class="cfg-field" style="grid-column: 1 / -1;">
+          <label>Suppressed Detail Types</label>
+          <input id="cfg-notify-suppressed-details" type="text" value="${esc(suppressedDetailTypes.join(', '))}" placeholder="new_external_destination, new_listening_port">
+        </div>
+      </div>
+
+      <div id="cfg-notify-destinations" class="cfg-form-grid" style="margin-top:0.75rem;">
+        <div class="cfg-field">
+          <label><input id="cfg-notify-web" type="checkbox" ${destinations.web ? 'checked' : ''}> Web UI alerts</label>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-notify-cli" type="checkbox" ${destinations.cli ? 'checked' : ''}> CLI alerts</label>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-notify-telegram" type="checkbox" ${destinations.telegram ? 'checked' : ''}> Telegram alerts</label>
+        </div>
+      </div>
+
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Defaults are CLI-only. Web alerts appear as a live tray in the dashboard shell. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="cfg-notify-save" type="button">Save Alert Settings</button>
+        <span id="cfg-notify-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#cfg-notify-status');
+  const deliveryModeSelect = section.querySelector('#cfg-notify-delivery-mode');
+  const destinationsWrap = section.querySelector('#cfg-notify-destinations');
+
+  function syncDeliveryMode() {
+    destinationsWrap.style.opacity = deliveryModeSelect.value === 'all' ? '0.55' : '1';
+    destinationsWrap.style.pointerEvents = deliveryModeSelect.value === 'all' ? 'none' : '';
+  }
+
+  syncDeliveryMode();
+  deliveryModeSelect?.addEventListener('change', syncDeliveryMode);
+
+  section.querySelector('#cfg-notify-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          notifications: {
+            enabled: section.querySelector('#cfg-notify-enabled')?.value === 'true',
+            minSeverity: section.querySelector('#cfg-notify-min-severity')?.value,
+            cooldownMs: Math.max(0, Number(section.querySelector('#cfg-notify-cooldown')?.value || 0)) * 1000,
+            deliveryMode: section.querySelector('#cfg-notify-delivery-mode')?.value,
+            auditEventTypes: parseCommaList(section.querySelector('#cfg-notify-event-types')?.value),
+            suppressedDetailTypes: parseCommaList(section.querySelector('#cfg-notify-suppressed-details')?.value),
+            destinations: {
+              web: !!section.querySelector('#cfg-notify-web')?.checked,
+              cli: !!section.querySelector('#cfg-notify-cli')?.checked,
+              telegram: !!section.querySelector('#cfg-notify-telegram')?.checked,
+            },
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
       if (result.success) {
         await refreshSettingsOverview(settingsPanel);
       }
@@ -2702,6 +3127,35 @@ function parseChatIdsOrUndefined(input) {
   if (!trimmed) return undefined;
   const parsed = trimmed.split(',').map(part => Number(part.trim())).filter(id => Number.isFinite(id));
   return parsed.length > 0 ? parsed : undefined;
+}
+
+function parseCommaList(input) {
+  return String(input || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function parseJsonArray(input, label) {
+  const trimmed = String(input || '').trim();
+  if (!trimmed) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    throw new Error(`${label} must be valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON array.`);
+  }
+  return parsed;
+}
+
+function summarizeNotificationDestinations(destinations) {
+  const enabled = Object.entries(destinations || {})
+    .filter(([, isEnabled]) => !!isEnabled)
+    .map(([name]) => name.toUpperCase());
+  return enabled.length > 0 ? enabled.join(' + ') : 'No channels';
 }
 
 function shortId(id) { return id?.slice(0, 8) || ''; }

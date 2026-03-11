@@ -63,7 +63,7 @@ $AllScripts = @(
     "test-browser"            # browser automation tools
     "test-intel"              # threat intel tools
     "test-contacts"           # contacts, campaigns, email gating
-    "test-qmd"               # QMD document search
+    "test-search"            # document search
     "test-gws"               # Google Workspace tools
     "test-security-api"       # security framework controls
 

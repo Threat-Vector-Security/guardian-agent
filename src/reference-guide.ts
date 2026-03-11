@@ -175,14 +175,14 @@ export function getReferenceGuide(): ReferenceGuide {
           },
           {
             id: 'cloud-providers',
-            title: 'Connect OpenAI Or Anthropic',
-            summary: 'Add external models for quality fallback, smart routing, or explicit cloud use.',
+            title: 'Connect Cloud Providers',
+            summary: 'Add external models from OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini for quality fallback, smart routing, or explicit cloud use.',
             sections: [
               {
                 title: 'External Provider Setup',
                 items: [
-                  'In Configuration > Providers choose External API, then set provider type, model, and API key.',
-                  'CLI equivalent: `/config add <name> openai|anthropic <model> <apiKey>`.',
+                  'In Configuration > Providers choose External API, then select the provider (OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini), model, and API key.',
+                  'CLI equivalent: `/config add <name> <provider> <model> <apiKey>` where provider is openai, anthropic, groq, mistral, deepseek, together, xai, or google.',
                   'Set the default provider from the Providers tab or with `/config set default <name>`.',
                 ],
               },
@@ -245,8 +245,8 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
-            id: 'web-search-and-qmd',
-            title: 'Web Search And QMD',
+            id: 'web-search-and-document-search',
+            title: 'Web Search And Document Search',
             summary: 'Use live web search, page fetch, and local document search together without losing source control.',
             sections: [
               {
@@ -258,13 +258,13 @@ export function getReferenceGuide(): ReferenceGuide {
                 ],
               },
               {
-                title: 'QMD Document Search',
+                title: 'Document Search',
                 items: [
-                  'QMD combines BM25, vectors, and reranking across local directories, repositories, URLs, and files.',
-                  'Use the Search Sources configuration area to add, remove, enable, disable, or reindex QMD sources.',
+                  'Native hybrid search combines BM25 keyword matching and vector similarity across local directories, repositories, URLs, and files.',
+                  'Use the Search Sources configuration area to add, remove, enable, disable, or reindex document sources.',
                   'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
                 ],
-                note: 'Treat web search and QMD as complementary: web search is for external freshness, QMD is for trusted local context.',
+                note: 'Treat web search and document search as complementary: web search is for external freshness, document search is for trusted local context.',
               },
             ],
           },
@@ -285,7 +285,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'The Automations page is the unified home for playbooks and scheduled tasks.',
                   'Automations can run a single tool or multiple tools in sequential or parallel mode.',
-                  'Use Examples to install starter automations and Clone to fork an existing workflow.',
+                  'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
+                  'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
                   'Use Dry Run before live execution when you want a safe preview path.',
                 ],
               },
@@ -293,6 +294,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Scheduling And Limits',
                 items: [
                   'Any automation can be given a cron schedule and turned into a recurring task.',
+                  'Power-user options remain available through the advanced JSON/config sections when you need direct definition edits.',
                   'Engine Settings control max steps, max parallelism, timeout defaults, and execution mode.',
                   'Permission policies restrict what hosts, file paths, and commands an automation can touch.',
                 ],
@@ -304,6 +306,14 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Scheduled tool runs and scheduled playbook runs can be expanded in Automations to inspect captured output.',
                   'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
                   'Live UI invalidation updates the Automations page when runs finish, schedules change, or playbooks are edited.',
+                ],
+              },
+              {
+                title: 'Security Automation Starters',
+                items: [
+                  'Use `agent-host-guard` when you want workstation baseline and anomaly-response playbooks.',
+                  'Use `firewall-sentry` when you want host and gateway firewall posture checks plus firewall-drift triage.',
+                  'Preset scheduled jobs such as `host-monitor-watch`, `firewall-posture-watch`, `gateway-firewall-watch`, and `gateway-firewall-posture` are available from Examples.',
                 ],
               },
             ],
@@ -431,7 +441,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Analytics summary is available in the dashboard and with CLI `/analytics [minutes]`.',
                   'Assistant state exposes running jobs, failed jobs, queue pressure, traces, and policy decisions.',
-                  'Security monitoring surfaces audit volume, denied actions, threat posture, and recent alerts.',
+                  'Security monitoring surfaces audit volume, denied actions, network posture, host-monitor alerts, gateway-firewall alerts, and recent notifications.',
                 ],
               },
               {
@@ -439,6 +449,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use the Security page or CLI `/audit`, `/audit summary`, and `/security` to inspect recent events.',
                   'Audit entries are hash-chained; use the verification control when you need tamper-evidence confirmation.',
+                  'Audit details can be expanded in the web UI when you need the full raw event payload instead of the short preview.',
                   'Policy reloads, auth changes, and tool decisions are all reflected in audit visibility.',
                 ],
               },
@@ -487,7 +498,9 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
                   'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
                   'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
+                  'Security alerts default to CLI-only delivery; use Configuration > Settings > Security > Security Alerts when you want web or Telegram fanout.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',
+                  'Outbound HTTP tool calls are checked against SSRF protection rules that block private IPs, cloud metadata endpoints, and obfuscated addresses.',
                 ],
                 note: 'Configuration changes now propagate to the web UI live, so if something still looks wrong after a save, verify the underlying runtime state rather than assuming the browser is stale.',
               },
