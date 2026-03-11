@@ -46,6 +46,7 @@ import type { NetworkBaselineService } from '../runtime/network-baseline.js';
 import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence.js';
 import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
 import type { HostMonitoringService, HostMonitorReport } from '../runtime/host-monitor.js';
+import type { GatewayFirewallMonitoringService, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
@@ -136,6 +137,10 @@ export interface ToolExecutorOptions {
   hostMonitor?: HostMonitoringService;
   /** Centralized host-monitor check wrapper so alerts are audited/notified consistently. */
   runHostMonitorCheck?: (source: string) => Promise<HostMonitorReport>;
+  /** Gateway firewall monitoring service. */
+  gatewayMonitor?: GatewayFirewallMonitoringService;
+  /** Centralized gateway-monitor check wrapper so alerts are audited/notified consistently. */
+  runGatewayMonitorCheck?: (source: string) => Promise<GatewayMonitorReport>;
   /** Network feature configuration. */
   networkConfig?: AssistantNetworkConfig;
   /** OS-level process sandbox configuration. */
@@ -8969,6 +8974,64 @@ export class ToolExecutor {
         const report = this.options.runHostMonitorCheck
           ? await this.options.runHostMonitorCheck(`tool:host_monitor_check:${request.agentId || 'assistant'}`)
           : await this.options.hostMonitor.runCheck();
+        return { success: true, output: report };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gateway_firewall_status',
+        description: 'Return gateway firewall monitoring posture, including configured targets, recent gateway alerts, firewall state summaries, and baseline status. Read-only.',
+        shortDescription: 'Return gateway firewall posture and active alerts.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max active alerts to include (1-100, default 20).' },
+            includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts (default false).' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.options.gatewayMonitor) {
+          return { success: false, error: 'Gateway firewall monitoring is not available.' };
+        }
+        const limit = Math.max(1, Math.min(100, asNumber(args.limit, 20)));
+        const includeAcknowledged = !!args.includeAcknowledged;
+        this.guardAction(request, 'system_info', { action: 'gateway_firewall_status', limit, includeAcknowledged });
+        return {
+          success: true,
+          output: {
+            status: this.options.gatewayMonitor.getStatus(),
+            alerts: this.options.gatewayMonitor.listAlerts({ includeAcknowledged, limit }),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gateway_firewall_check',
+        description: 'Run an immediate gateway firewall monitoring check. Reads configured gateway collector outputs, detects firewall disablement, rule drift, port-forward changes, and admin-user changes relative to baseline. Read-only.',
+        shortDescription: 'Run an immediate gateway firewall monitoring check.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.gatewayMonitor) {
+          return { success: false, error: 'Gateway firewall monitoring is not available.' };
+        }
+        this.guardAction(request, 'system_info', { action: 'gateway_firewall_check' });
+        const report = this.options.runGatewayMonitorCheck
+          ? await this.options.runGatewayMonitorCheck(`tool:gateway_firewall_check:${request.agentId || 'assistant'}`)
+          : await this.options.gatewayMonitor.runCheck();
         return { success: true, output: report };
       },
     );

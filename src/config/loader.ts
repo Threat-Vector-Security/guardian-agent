@@ -244,6 +244,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     'policy_changed',
     'anomaly_detected',
     'host_alert',
+    'gateway_alert',
     'agent_error',
     'agent_stalled',
     'policy_engine_started',
@@ -271,6 +272,38 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   for (const name of assistant.hostMonitoring.suspiciousProcessNames ?? []) {
     if (typeof name !== 'string' || !name.trim()) {
       errors.push('assistant.hostMonitoring.suspiciousProcessNames must contain only non-empty strings');
+      break;
+    }
+  }
+  if (assistant.gatewayMonitoring.scanIntervalSec < 10) {
+    errors.push('assistant.gatewayMonitoring.scanIntervalSec must be >= 10');
+  }
+  if (assistant.gatewayMonitoring.dedupeWindowMs < 0) {
+    errors.push('assistant.gatewayMonitoring.dedupeWindowMs must be >= 0');
+  }
+  for (const monitor of assistant.gatewayMonitoring.monitors ?? []) {
+    if (!monitor.id?.trim()) {
+      errors.push('assistant.gatewayMonitoring.monitors[].id is required');
+      break;
+    }
+    if (!monitor.displayName?.trim()) {
+      errors.push(`assistant.gatewayMonitoring.monitors['${monitor.id || '?'}'].displayName is required`);
+      break;
+    }
+    if (!['generic_json', 'opnsense', 'pfsense', 'unifi'].includes(monitor.provider)) {
+      errors.push(`assistant.gatewayMonitoring.monitors['${monitor.id || '?'}'].provider must be generic_json, opnsense, pfsense, or unifi`);
+      break;
+    }
+    if (!monitor.command?.trim()) {
+      errors.push(`assistant.gatewayMonitoring.monitors['${monitor.id || '?'}'].command is required`);
+      break;
+    }
+    if (!Array.isArray(monitor.args)) {
+      errors.push(`assistant.gatewayMonitoring.monitors['${monitor.id || '?'}'].args must be an array`);
+      break;
+    }
+    if (monitor.timeoutMs < 1000) {
+      errors.push(`assistant.gatewayMonitoring.monitors['${monitor.id || '?'}'].timeoutMs must be >= 1000`);
       break;
     }
   }

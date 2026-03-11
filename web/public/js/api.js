@@ -241,6 +241,23 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  gatewayMonitorStatus: () => request('/api/gateway-monitor/status'),
+  gatewayMonitorAlerts: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    }
+    const q = qs.toString();
+    return request(`/api/gateway-monitor/alerts${q ? '?' + q : ''}`);
+  },
+  acknowledgeGatewayMonitorAlert: (alertId) => request('/api/gateway-monitor/alerts/ack', {
+    method: 'POST',
+    body: JSON.stringify({ alertId }),
+  }),
+  runGatewayMonitorCheck: () => request('/api/gateway-monitor/check', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
   networkScan: () => request('/api/network/scan', {
     method: 'POST',
     body: JSON.stringify({}),

@@ -110,6 +110,7 @@ async function renderAuditTab(panel) {
         <option value="policy_changed">policy_changed</option>
         <option value="anomaly_detected">anomaly_detected</option>
         <option value="host_alert">host_alert</option>
+        <option value="gateway_alert">gateway_alert</option>
         <option value="agent_error">agent_error</option>
         <option value="agent_stalled">agent_stalled</option>
       </select>
@@ -218,7 +219,7 @@ async function renderMonitoringTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const [agents, budget, analytics, baseline, threatState, hostStatus, hostAlerts] = await Promise.all([
+    const [agents, budget, analytics, baseline, threatState, hostStatus, hostAlerts, gatewayStatus, gatewayAlerts] = await Promise.all([
       api.agents().catch(() => []),
       api.budget().catch(() => ({ agents: [], recentOverruns: [] })),
       api.analyticsSummary(3600000).catch(() => null),
@@ -226,6 +227,8 @@ async function renderMonitoringTab(panel) {
       api.networkThreats({ limit: 50 }).catch(() => null),
       api.hostMonitorStatus().catch(() => null),
       api.hostMonitorAlerts({ limit: 50 }).catch(() => null),
+      api.gatewayMonitorStatus().catch(() => null),
+      api.gatewayMonitorAlerts({ limit: 50 }).catch(() => null),
     ]);
 
     panel.innerHTML = '';
@@ -269,6 +272,23 @@ async function renderMonitoringTab(panel) {
       bySeverity: safeHostStatus.bySeverity,
       baselineReady: safeHostStatus.baselineReady,
       lastUpdatedAt: safeHostStatus.lastUpdatedAt,
+    };
+    const safeGatewayStatus = gatewayStatus || {
+      enabled: false,
+      baselineReady: false,
+      lastUpdatedAt: 0,
+      monitorCount: 0,
+      availableGatewayCount: 0,
+      gateways: [],
+      activeAlertCount: 0,
+      bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
+    };
+    const safeGatewayAlerts = gatewayAlerts || {
+      alerts: [],
+      activeAlertCount: 0,
+      bySeverity: safeGatewayStatus.bySeverity,
+      baselineReady: safeGatewayStatus.baselineReady,
+      lastUpdatedAt: safeGatewayStatus.lastUpdatedAt,
     };
 
     const threatSectionHeader = document.createElement('h3');
@@ -531,6 +551,142 @@ async function renderMonitoringTab(panel) {
       }
     });
 
+    const gatewaySectionHeader = document.createElement('h3');
+    gatewaySectionHeader.className = 'section-header';
+    gatewaySectionHeader.textContent = 'Gateway Firewall Posture';
+    panel.appendChild(gatewaySectionHeader);
+
+    const gatewayGrid = document.createElement('div');
+    gatewayGrid.className = 'cards-grid';
+    panel.appendChild(gatewayGrid);
+
+    const gatewayContainer = document.createElement('div');
+    gatewayContainer.className = 'table-container';
+    gatewayContainer.innerHTML = `
+      <div class="table-header">
+        <h3>Active Gateway Alerts</h3>
+        <div>
+          <span id="gateway-monitor-meta" style="font-size:0.8rem;color:var(--text-muted);margin-right:0.75rem;"></span>
+          <button class="btn btn-secondary" id="gateway-monitor-refresh">Refresh</button>
+          <button class="btn btn-primary" id="gateway-monitor-check">Run Check</button>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Severity</th><th>Gateway</th><th>Type</th><th>Details</th><th>Action</th></tr></thead>
+        <tbody id="gateway-monitor-table-body"></tbody>
+      </table>
+    `;
+    panel.appendChild(gatewayContainer);
+
+    const gatewayMetaEl = gatewayContainer.querySelector('#gateway-monitor-meta');
+    const gatewayTableBody = gatewayContainer.querySelector('#gateway-monitor-table-body');
+
+    const renderGatewayCards = (status, alertState) => {
+      gatewayGrid.innerHTML = '';
+      gatewayGrid.appendChild(createStatusCard(
+        'Gateway Monitors',
+        status.monitorCount || 0,
+        `${status.availableGatewayCount || 0} reachable`,
+        (status.availableGatewayCount || 0) > 0 ? 'info' : 'warning',
+      ));
+      gatewayGrid.appendChild(createStatusCard(
+        'Gateway Alerts',
+        alertState.activeAlertCount || 0,
+        `${alertState.bySeverity?.critical ?? 0} critical / ${alertState.bySeverity?.high ?? 0} high`,
+        (alertState.bySeverity?.critical ?? 0) > 0 ? 'error' : (alertState.bySeverity?.high ?? 0) > 0 ? 'warning' : 'success',
+      ));
+      const firstGateway = status.gateways?.[0];
+      gatewayGrid.appendChild(createStatusCard(
+        'Primary WAN Policy',
+        firstGateway?.wanDefaultAction || 'unknown',
+        firstGateway ? `${firstGateway.displayName} • ${firstGateway.provider}` : 'No gateway snapshot',
+        firstGateway?.wanDefaultAction === 'allow' ? 'warning' : 'info',
+      ));
+      gatewayGrid.appendChild(createStatusCard(
+        'Port Forwards',
+        status.gateways?.reduce((sum, gateway) => sum + (gateway.portForwardCount || 0), 0) || 0,
+        status.gateways?.map((gateway) => `${gateway.displayName}: ${gateway.portForwardCount || 0}`).join(' • ') || 'No gateway snapshot',
+        'info',
+      ));
+    };
+
+    const summarizeGatewayAlert = (alert) => {
+      if (typeof alert?.evidence?.gatewayName === 'string') return alert.evidence.gatewayName;
+      if (typeof alert?.evidence?.gatewayId === 'string') return alert.evidence.gatewayId;
+      if (typeof alert?.targetName === 'string') return alert.targetName;
+      return '-';
+    };
+
+    const renderGatewayRows = (alerts) => {
+      if (!gatewayTableBody) return;
+      if (!alerts || alerts.length === 0) {
+        gatewayTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No active gateway alerts.</td></tr>';
+        return;
+      }
+      gatewayTableBody.innerHTML = alerts.map((alert) => `
+        <tr>
+          <td>${new Date(alert.lastSeenAt || alert.timestamp || Date.now()).toLocaleTimeString()}</td>
+          <td><span class="badge ${severityClass(alert.severity)}">${esc(alert.severity)}</span></td>
+          <td>${esc(summarizeGatewayAlert(alert))}</td>
+          <td>${esc(alert.type)}</td>
+          <td title="${escAttr(alert.description || '')}">${esc(alert.description || '-')}</td>
+          <td><button class="btn btn-secondary gateway-alert-ack" data-alert-id="${escAttr(alert.id)}">Acknowledge</button></td>
+        </tr>
+      `).join('');
+    };
+
+    const applyGatewayState = (status, alertState) => {
+      renderGatewayCards(status, alertState);
+      renderGatewayRows(alertState.alerts || []);
+      if (gatewayMetaEl) {
+        gatewayMetaEl.textContent = `Baseline: ${status.baselineReady ? 'ready' : 'learning'} • Updated: ${status.lastUpdatedAt ? new Date(status.lastUpdatedAt).toLocaleTimeString() : 'never'}`;
+      }
+    };
+
+    const loadGatewayState = async () => {
+      const [latestStatus, latestAlerts] = await Promise.all([
+        api.gatewayMonitorStatus().catch(() => safeGatewayStatus),
+        api.gatewayMonitorAlerts({ limit: 50 }).catch(() => safeGatewayAlerts),
+      ]);
+      applyGatewayState(latestStatus, latestAlerts);
+    };
+
+    applyGatewayState(safeGatewayStatus, safeGatewayAlerts);
+
+    gatewayContainer.querySelector('#gateway-monitor-refresh')?.addEventListener('click', () => {
+      loadGatewayState().catch(() => {});
+    });
+
+    gatewayContainer.querySelector('#gateway-monitor-check')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.disabled = true;
+      try {
+        await api.runGatewayMonitorCheck();
+        await loadGatewayState();
+      } catch {
+        button.disabled = false;
+        return;
+      }
+      button.disabled = false;
+    });
+
+    gatewayContainer.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest('.gateway-alert-ack');
+      if (!(button instanceof HTMLElement)) return;
+      const alertId = button.getAttribute('data-alert-id');
+      if (!alertId) return;
+      button.setAttribute('disabled', 'true');
+      try {
+        await api.acknowledgeGatewayMonitorAlert(alertId);
+        await loadGatewayState();
+      } catch {
+        button.removeAttribute('disabled');
+      }
+    });
+
     // Live event stream
     const sectionHeader1 = document.createElement('h3');
     sectionHeader1.className = 'section-header';
@@ -644,6 +800,7 @@ async function renderMonitoringTab(panel) {
       await Promise.all([
         loadThreatState(),
         loadHostState(),
+        loadGatewayState(),
       ]);
     };
     onSSE('security.alert', monSecurityAlertHandler);

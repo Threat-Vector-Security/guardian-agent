@@ -43,6 +43,7 @@ import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/network-baseline.js';
 import { NetworkTrafficService } from './runtime/network-traffic.js';
 import { HostMonitoringService, type HostMonitorReport } from './runtime/host-monitor.js';
+import { GatewayFirewallMonitoringService, type GatewayMonitorReport } from './runtime/gateway-monitor.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
@@ -2324,6 +2325,12 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         sensitivePathCount: config.assistant.hostMonitoring.sensitivePaths.length,
         suspiciousProcessCount: config.assistant.hostMonitoring.suspiciousProcessNames.length,
       },
+      gatewayMonitoring: {
+        enabled: config.assistant.gatewayMonitoring.enabled,
+        scanIntervalSec: config.assistant.gatewayMonitoring.scanIntervalSec,
+        dedupeWindowMs: config.assistant.gatewayMonitoring.dedupeWindowMs,
+        monitorCount: config.assistant.gatewayMonitoring.monitors.filter((monitor) => monitor.enabled).length,
+      },
       connectors: {
         enabled: config.assistant.connectors.enabled,
         executionMode: config.assistant.connectors.executionMode,
@@ -2418,6 +2425,8 @@ function buildDashboardCallbacks(
   networkBaseline: NetworkBaselineService,
   hostMonitor: HostMonitoringService,
   runHostMonitoring: (source: string) => Promise<HostMonitorReport>,
+  gatewayMonitor: GatewayFirewallMonitoringService,
+  runGatewayMonitoring: (source: string) => Promise<GatewayMonitorReport>,
   runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
@@ -3378,6 +3387,32 @@ function buildDashboardCallbacks(
     },
 
     onHostMonitorCheck: () => runHostMonitoring('web:manual'),
+
+    onGatewayMonitorStatus: () => gatewayMonitor.getStatus(),
+
+    onGatewayMonitorAlerts: (args) => {
+      const includeAcknowledged = !!args?.includeAcknowledged;
+      const parsedLimit = Number(args?.limit ?? 100);
+      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
+      const alerts = gatewayMonitor.listAlerts({ includeAcknowledged, limit });
+      const status = gatewayMonitor.getStatus();
+      return {
+        alerts,
+        activeAlertCount: alerts.length,
+        bySeverity: status.bySeverity,
+        baselineReady: status.baselineReady,
+        lastUpdatedAt: status.lastUpdatedAt,
+      };
+    },
+
+    onGatewayMonitorAcknowledge: (alertId) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      return gatewayMonitor.acknowledgeAlert(alertId.trim());
+    },
+
+    onGatewayMonitorCheck: () => runGatewayMonitoring('web:manual'),
 
     onSSESubscribe: (listener: SSEListener): (() => void) => {
       const cleanups: Array<() => void> = [];
@@ -4807,9 +4842,16 @@ async function main(): Promise<void> {
   });
   await hostMonitor.load().catch(() => {});
 
+  const gatewayMonitor = new GatewayFirewallMonitoringService({
+    config: config.assistant.gatewayMonitoring,
+  });
+  await gatewayMonitor.load().catch(() => {});
+
   let lastNetworkAlertEmitAt = 0;
   let hostMonitorInterval: ReturnType<typeof setInterval> | null = null;
+  let gatewayMonitorInterval: ReturnType<typeof setInterval> | null = null;
   let lastHostMonitorTriggeredAt = 0;
+  let lastGatewayMonitorTriggeredAt = 0;
 
   const runNetworkAnalysis = (source: string): NetworkAnomalyReport => {
     const devices = deviceInventory.listDevices();
@@ -4946,6 +4988,51 @@ async function main(): Promise<void> {
     return report;
   };
 
+  const runGatewayMonitoring = async (source: string) => {
+    const report = await gatewayMonitor.runCheck();
+    if (!configRef.current.assistant.gatewayMonitoring.enabled) {
+      return report;
+    }
+    const now = Date.now();
+
+    runtime.eventBus.emit({
+      type: 'gateway:monitor:check',
+      sourceAgentId: 'gateway-monitor',
+      targetAgentId: '*',
+      payload: {
+        source,
+        baselineReady: report.baselineReady,
+        gatewayCount: report.gateways.length,
+      },
+      timestamp: now,
+    }).catch(() => {});
+
+    for (const alert of report.alerts) {
+      const severity = alert.severity === 'critical'
+        ? 'critical'
+        : alert.severity === 'high' || alert.severity === 'medium'
+          ? 'warn'
+          : 'info';
+      runtime.auditLog.record({
+        type: 'gateway_alert',
+        severity,
+        agentId: 'gateway-monitor',
+        details: {
+          source: 'gateway_monitor',
+          alertType: alert.type,
+          gatewayId: alert.targetId,
+          gatewayName: alert.targetName,
+          provider: alert.provider,
+          description: alert.description,
+          gatewaySeverity: alert.severity,
+          dedupeKey: alert.dedupeKey,
+          evidence: alert.evidence,
+        },
+      });
+    }
+    return report;
+  };
+
   // ─── Guardian Agent (inline LLM blocking) + Sentinel (audit) ──────
   const guardianAgentConfig = config.guardian?.guardianAgent;
   const guardianAgentService = new GuardianAgentService({
@@ -5005,6 +5092,18 @@ async function main(): Promise<void> {
           log.warn({ err: err instanceof Error ? err.message : String(err), toolName }, 'Post-tool host monitoring check failed');
         });
       }
+      const gatewayRelevant = new Set(['net_connections', 'net_ping', 'net_port_check', 'host_monitor_check', 'gateway_firewall_check']);
+      if (
+        configRef.current.assistant.gatewayMonitoring.enabled
+        && result.success
+        && (gatewayRelevant.has(toolName) || toolName.startsWith('net_'))
+        && (now - lastGatewayMonitorTriggeredAt) >= 60_000
+      ) {
+        lastGatewayMonitorTriggeredAt = now;
+        runGatewayMonitoring(`tool:${toolName}`).catch((err) => {
+          log.warn({ err: err instanceof Error ? err.message : String(err), toolName }, 'Post-tool gateway monitoring check failed');
+        });
+      }
     },
     onPolicyUpdate: (policy) => {
       // Persist policy changes to config.yaml so they survive reloads and restarts
@@ -5038,6 +5137,8 @@ async function main(): Promise<void> {
     networkTraffic,
     hostMonitor,
     runHostMonitorCheck: runHostMonitoring,
+    gatewayMonitor,
+    runGatewayMonitorCheck: runGatewayMonitoring,
     networkConfig: config.assistant.network,
     mcpManager,
     sandboxConfig,
@@ -5112,6 +5213,22 @@ async function main(): Promise<void> {
           },
         });
         return hostDecision;
+      }
+      const gatewayDecision = gatewayMonitor.shouldBlockAction(action);
+      if (!gatewayDecision.allowed) {
+        runtime.auditLog.record({
+          type: 'action_denied',
+          severity: 'critical',
+          agentId: action.agentId,
+          controller: 'GatewayMonitor',
+          details: {
+            actionType: action.type,
+            toolName: action.toolName,
+            reason: gatewayDecision.reason,
+            source: 'gateway_monitor_enforcement',
+          },
+        });
+        return gatewayDecision;
       }
 
       if (guardianAgentConfig?.enabled === false) {
@@ -5733,6 +5850,8 @@ async function main(): Promise<void> {
     networkBaseline,
     hostMonitor,
     runHostMonitoring,
+    gatewayMonitor,
+    runGatewayMonitoring,
     runNetworkAnalysis,
     guardianAgentService,
     sentinelAuditService,
@@ -6241,6 +6360,17 @@ async function main(): Promise<void> {
     }, Math.max(10, configRef.current.assistant.hostMonitoring.scanIntervalSec) * 1000);
   }
 
+  if (config.assistant.gatewayMonitoring.enabled) {
+    await runGatewayMonitoring('startup').catch((err) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Initial gateway monitoring check failed');
+    });
+    gatewayMonitorInterval = setInterval(() => {
+      runGatewayMonitoring('interval').catch((err) => {
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Gateway monitoring interval check failed');
+      });
+    }, Math.max(10, configRef.current.assistant.gatewayMonitoring.scanIntervalSec) * 1000);
+  }
+
   // Migrate hardcoded playbook schedules into ScheduledTaskService
   {
     const playbookDefs = connectors.getState().playbooks;
@@ -6311,6 +6441,10 @@ async function main(): Promise<void> {
     if (hostMonitorInterval) {
       clearInterval(hostMonitorInterval);
       hostMonitorInterval = null;
+    }
+    if (gatewayMonitorInterval) {
+      clearInterval(gatewayMonitorInterval);
+      gatewayMonitorInterval = null;
     }
 
     if (mcpManager) {

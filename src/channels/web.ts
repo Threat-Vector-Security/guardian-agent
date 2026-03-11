@@ -1511,6 +1511,74 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/gateway-monitor/status
+      if (req.method === 'GET' && url.pathname === '/api/gateway-monitor/status') {
+        if (!this.dashboard.onGatewayMonitorStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onGatewayMonitorStatus());
+        return;
+      }
+
+      // GET /api/gateway-monitor/alerts
+      if (req.method === 'GET' && url.pathname === '/api/gateway-monitor/alerts') {
+        if (!this.dashboard.onGatewayMonitorAlerts) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
+        const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+        sendJSON(res, 200, this.dashboard.onGatewayMonitorAlerts({
+          includeAcknowledged,
+          limit: Number.isFinite(limit) ? limit : 100,
+        }));
+        return;
+      }
+
+      // POST /api/gateway-monitor/alerts/ack
+      if (req.method === 'POST' && url.pathname === '/api/gateway-monitor/alerts/ack') {
+        if (!this.dashboard.onGatewayMonitorAcknowledge) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        const result = this.dashboard.onGatewayMonitorAcknowledge(parsed.alertId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'gateway-monitor.alert.acknowledged', url.pathname);
+        return;
+      }
+
+      // POST /api/gateway-monitor/check
+      if (req.method === 'POST' && url.pathname === '/api/gateway-monitor/check') {
+        if (!this.dashboard.onGatewayMonitorCheck) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const result = await this.dashboard.onGatewayMonitorCheck();
+        sendJSON(res, 200, result);
+        this.emitUIInvalidation(['security'], 'gateway-monitor.check.completed', url.pathname);
+        return;
+      }
+
       // GET /api/agents — Agent list
       if (req.method === 'GET' && url.pathname === '/api/agents') {
         if (!this.dashboard.onAgents) {

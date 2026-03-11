@@ -158,6 +158,8 @@ function summarizeTitle(event: AuditEvent): string {
       return 'Security anomaly detected';
     case 'host_alert':
       return 'Host monitoring alert';
+    case 'gateway_alert':
+      return 'Gateway firewall alert';
     case 'secret_detected':
       return 'Sensitive data exposure risk detected';
     case 'action_denied':

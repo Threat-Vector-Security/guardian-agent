@@ -47,6 +47,7 @@ Default notification-worthy audit events:
 
 - `anomaly_detected`
 - `host_alert`
+- `gateway_alert`
 - `action_denied`
 - `secret_detected`
 - `policy_changed`
@@ -100,6 +101,7 @@ assistant:
     auditEventTypes:
       - anomaly_detected
       - host_alert
+      - gateway_alert
       - action_denied
       - secret_detected
       - policy_changed
@@ -169,10 +171,12 @@ Telegram notifications should be concise and readable in mobile chat contexts:
 The notification system now has a concrete integration path with workstation monitoring:
 
 - host-monitor checks emit `host_alert` audit events
+- gateway-monitor checks emit `gateway_alert` audit events
 - those events are normalized into `security:alert` notifications
 - the Security page, CLI, and Telegram receive the same operator-facing alert family
 - `host_monitor_check` and the web manual check path both route through the same audit/notification flow
 - current host-monitor coverage includes suspicious process, persistence, sensitive-path, network-drift, and firewall alerts
+- current gateway-monitor coverage includes firewall disablement, ruleset drift, port-forward drift, and admin-user drift
 
 This keeps notifications consistent whether the anomaly came from:
 
