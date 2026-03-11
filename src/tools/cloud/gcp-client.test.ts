@@ -129,4 +129,38 @@ describe('gcp-client', () => {
     const result = await client.putStorageObjectText('app-bucket', 'notes.txt', 'hello cloud', 'text/plain');
     expect(result).toEqual({ name: 'notes.txt', bucket: 'app-bucket' });
   });
+
+  it('creates Cloud Storage buckets with project-scoped JSON API requests', async () => {
+    const server = createServer((req, res) => {
+      expect(req.method).toBe('POST');
+      expect(req.headers.authorization).toBe('Bearer gcp-secret');
+      expect(req.url).toBe('/storage/v1/b?project=guardian-prod');
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        expect(JSON.parse(raw)).toEqual({ name: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1', storageClass: 'STANDARD' });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ name: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1' }));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const client = new GcpClient({
+      id: 'gcp-main',
+      name: 'GCP Main',
+      projectId: 'guardian-prod',
+      accessToken: 'gcp-secret',
+      endpoints: {
+        storage: `http://127.0.0.1:${address.port}`,
+      },
+    });
+
+    const result = await client.createStorageBucket('app-bucket', 'AUSTRALIA-SOUTHEAST1', 'STANDARD');
+    expect(result).toEqual({ name: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1' });
+  });
 });

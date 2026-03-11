@@ -17,8 +17,11 @@ The recommended implementation order is:
 - **Phase 3:** Cloudflare DNS and SSL settings
 - **Phase 4:** AWS foundation
 - **Phase 5:** GCP foundation
-- **Phase 6:** Azure foundation
-- **Phase 7:** DigitalOcean stretch
+- **Phase 6:** Enhanced tooling across implemented providers for create/edit/delete and deeper operational actions
+- **Phase 7:** Azure foundation
+- **Phase 8:** DigitalOcean stretch
+
+The next planned roadmap phase is therefore not another new provider. It is a **cross-provider mutation expansion** to deepen the action surface for the services that already exist in the repo.
 
 ### Delivery Breakdown
 
@@ -95,8 +98,9 @@ The current provider roadmap is:
 | 3 | Cloudflare | Implemented | Core DNS and SSL/TLS operations |
 | 4 | AWS | Implemented foundation | Broad service foundation across EC2, S3, Route53, Lambda, CloudWatch, RDS, IAM, and Cost Explorer |
 | 5 | GCP | Implemented foundation | Hyperscaler coverage focused on hosting/runtime, storage, DNS, and logging |
-| 6 | Azure | Implemented foundation | Hyperscaler coverage focused on VMs, app hosting, storage, DNS, and monitoring |
-| 7 | DigitalOcean | Planned stretch | Smaller hosting-oriented provider surface |
+| 6 | Cross-provider enhancement | Implemented initial slice | Added deeper mutation coverage across Vercel, Cloudflare, AWS, GCP, and Azure while preserving approval-gated destructive flows |
+| 7 | Azure | Implemented foundation | Hyperscaler coverage focused on VMs, app hosting, storage, DNS, and monitoring |
+| 8 | DigitalOcean | Planned stretch | Smaller hosting-oriented provider surface |
 
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
 
@@ -448,9 +452,56 @@ AWS has the largest blast radius, the broadest auth surface, and the highest ver
 
 ---
 
-## Part 6: Azure Integration
+## Part 6: Cross-Provider Mutation Enhancement
 
-### Proposed Tool Set — Category: `cloud`
+### Goal
+
+The biggest remaining gap is not basic visibility. It is **deeper change coverage** across the providers that already exist. This phase focuses on adding create/edit/delete and higher-value operational actions rather than introducing another provider immediately.
+
+### Implemented In This Phase
+
+- `vercel_domains` now supports `update`
+- `cf_cache` adds approval-gated cache purge operations (`purge_everything`, `purge_files`, `purge_tags`, `purge_hosts`, `purge_prefixes`)
+- `aws_s3_buckets` now supports `create_bucket` and `delete_bucket`
+- `gcp_cloud_run` now supports `delete_service`
+- `gcp_storage` now supports `create_bucket` and `delete_bucket`
+- `azure_app_service` now supports `delete`
+- `azure_storage` now supports `create_container` and `delete_container`
+
+This is intentionally an initial enhancement slice, not the end of deeper CRUD coverage for every provider.
+
+### Enhancement Targets
+
+| Provider | Current Gap | Enhancement Direction |
+|------|------|------|
+| cPanel/WHM | Broad operational coverage exists, but still uneven by subsystem | Fill account/domain/DNS/SSL edge cases and more complete edit flows |
+| Vercel | Strong project/deployment/env base, but not full platform coverage | Add richer project settings, checks, DNS, and edge-config style workflows |
+| Cloudflare | DNS/SSL only today | Add cache, firewall, workers, rules, analytics, and more complete setting mutations |
+| AWS | Operational foundation, but limited provisioning | Add create/update/delete flows for core services and richer resource lifecycle tooling |
+| GCP | Operational foundation, but limited provisioning | Add create/update/delete flows for Compute, Cloud Run, Storage, and DNS resources |
+| Azure | Operational foundation, but limited provisioning | Add create/update/delete flows for VMs, App Service, Storage, and DNS resources |
+
+### Scope
+
+- deepen existing tools before adding many new top-level tool names where practical
+- add create/edit/delete actions where provider APIs allow safe approval-gated workflows
+- improve validation, dry-run previews, and destructive-action summaries for high-impact changes
+- add live/staging verification against real provider accounts before marking enhanced actions complete
+
+### Estimated LOC
+
+| Component | LOC |
+|-----------|-----|
+| Existing tool expansion across providers | ~1,050 |
+| Validation, dry-run, and approval UX hardening | ~350 |
+| Tests and staged fixtures | ~500 |
+| **Total** | **~1,900** |
+
+---
+
+## Part 7: Azure Integration
+
+### Implemented Tool Set — Category: `cloud`
 
 | Tool | Purpose | Azure Service | Risk Level | Complexity |
 |------|---------|---------------|-----------|------------|
@@ -479,7 +530,7 @@ AWS has the largest blast radius, the broadest auth surface, and the highest ver
 
 ---
 
-## Part 7: DigitalOcean Integration (Stretch)
+## Part 8: DigitalOcean Integration (Stretch)
 
 ### Proposed Tool Set — Category: `cloud`
 
@@ -864,7 +915,18 @@ Add a **Cloud** section in Configuration for:
 | Tests | 450 |
 | **Subtotal** | **1,570** |
 
-### Phase 6: Azure Foundation
+### Phase 6: Cross-Provider Mutation Enhancement
+
+| Task | Est. LOC |
+|------|---------|
+| Expand existing provider actions for create/edit/delete flows | 1,050 |
+| Approval UX, dry-run, and destructive action hardening | 350 |
+| Tests + staged verification fixtures | 500 |
+| **Subtotal** | **1,900** |
+
+Current state: initial slice implemented and covered by focused client/executor tests.
+
+### Phase 7: Azure Foundation
 
 | Task | Est. LOC |
 |------|---------|
@@ -874,7 +936,7 @@ Add a **Cloud** section in Configuration for:
 | Tests | 450 |
 | **Subtotal** | **1,650** |
 
-### Phase 7: DigitalOcean (Week 6-7, stretch)
+### Phase 8: DigitalOcean (Week 6-7, stretch)
 
 | Task | Est. LOC |
 |------|---------|
@@ -894,9 +956,10 @@ Add a **Cloud** section in Configuration for:
 | 3 | Cloudflare | 8 | 1,160 |
 | 4 | AWS | 10 | 1,870 |
 | 5 | GCP | 6 | 1,570 |
-| 6 | Azure | 6 | 1,650 |
-| 7 | DigitalOcean | 6 | 800 |
-| **Total** | **7 providers + shared foundations** | **60 tools** | **~13,210** |
+| 6 | Cross-provider Enhancement | N/A | 1,900 |
+| 7 | Azure | 6 | 1,650 |
+| 8 | DigitalOcean | 6 | 800 |
+| **Total** | **7 providers + shared foundations + 1 enhancement phase** | **60 tools + expanded action coverage** | **~15,110** |
 
 ---
 

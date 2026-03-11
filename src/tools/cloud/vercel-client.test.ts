@@ -94,4 +94,38 @@ describe('vercel-client', () => {
 
     await expect(client.listProjects()).rejects.toThrow('Request failed with 403: forbidden: Access denied');
   });
+
+  it('updates project domains with a PATCH request', async () => {
+    const server = createServer((req, res) => {
+      expect(req.method).toBe('PATCH');
+      expect(req.url).toBe('/v9/projects/app/domains/example.com?teamId=team_123');
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        expect(JSON.parse(raw)).toEqual({ redirect: 'https://www.example.com', redirectStatusCode: 308 });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ name: 'example.com', redirect: 'https://www.example.com' }));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const client = new VercelClient({
+      id: 'vercel-main',
+      name: 'Vercel Main',
+      apiBaseUrl: `http://127.0.0.1:${address.port}`,
+      apiToken: 'vercel-secret',
+      teamId: 'team_123',
+    });
+
+    const result = await client.updateProjectDomain('app', 'example.com', {
+      redirect: 'https://www.example.com',
+      redirectStatusCode: 308,
+    });
+    expect(result).toEqual({ name: 'example.com', redirect: 'https://www.example.com' });
+  });
 });

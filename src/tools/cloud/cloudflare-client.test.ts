@@ -97,4 +97,37 @@ describe('cloudflare-client', () => {
 
     await expect(client.listZones()).rejects.toThrow('Request failed with 403: Unauthorized to access requested resource');
   });
+
+  it('sends purge cache payloads to the zone purge endpoint', async () => {
+    const server = createServer((req, res) => {
+      expect(req.method).toBe('POST');
+      expect(req.url).toBe('/zones/zone_1/purge_cache');
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        expect(JSON.parse(raw)).toEqual({ tags: ['release-123'] });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          success: true,
+          result: { id: 'purge_1' },
+        }));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const client = new CloudflareClient({
+      id: 'cf-main',
+      name: 'Cloudflare Main',
+      apiBaseUrl: `http://127.0.0.1:${address.port}`,
+      apiToken: 'cf-secret',
+    });
+
+    const result = await client.purgeCache('zone_1', { tags: ['release-123'] });
+    expect(result).toEqual({ id: 'purge_1' });
+  });
 });

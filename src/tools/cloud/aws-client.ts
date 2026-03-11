@@ -20,7 +20,17 @@ import {
   ListResourceRecordSetsCommand,
   Route53Client,
 } from '@aws-sdk/client-route-53';
-import { DeleteObjectCommand, GetObjectCommand, ListBucketsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  BucketLocationConstraint,
+  CreateBucketCommand as S3CreateBucketCommand,
+  DeleteBucketCommand as S3DeleteBucketCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListBucketsCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 
 export interface AwsInstanceConfig {
@@ -136,6 +146,19 @@ export class AwsClient {
 
   async listS3Buckets(): Promise<unknown> {
     return this.s3().send(new ListBucketsCommand({}));
+  }
+
+  async createS3Bucket(bucket: string): Promise<unknown> {
+    return this.s3().send(new S3CreateBucketCommand({
+      Bucket: bucket,
+      CreateBucketConfiguration: this.config.region === 'us-east-1'
+        ? undefined
+        : { LocationConstraint: this.config.region as BucketLocationConstraint },
+    }));
+  }
+
+  async deleteS3Bucket(bucket: string): Promise<unknown> {
+    return this.s3().send(new S3DeleteBucketCommand({ Bucket: bucket }));
   }
 
   async listS3Objects(bucket: string, input: { prefix?: string; maxKeys?: number }): Promise<unknown> {

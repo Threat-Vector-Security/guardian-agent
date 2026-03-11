@@ -952,6 +952,10 @@ export class ToolExecutor {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
+    if (toolName === 'cf_cache') {
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
     if (toolName === 'aws_status' || toolName === 'aws_cloudwatch' || toolName === 'aws_iam' || toolName === 'aws_costs') {
       return 'allow';
     }
@@ -1269,7 +1273,7 @@ export class ToolExecutor {
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
       if (!asString(args.project).trim()) return 'project is required for vercel_domains actions';
-      if ((action === 'get' || action === 'add' || action === 'remove' || action === 'verify') && !asString(args.domain).trim()) {
+      if ((action === 'get' || action === 'add' || action === 'update' || action === 'remove' || action === 'verify') && !asString(args.domain).trim()) {
         return `domain is required for ${action}`;
       }
     }
@@ -1348,6 +1352,19 @@ export class ToolExecutor {
       }
     }
 
+    if (toolName === 'cf_cache') {
+      try {
+        this.createCloudflareClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'purge_files' && asStringArray(args.files).length === 0) return 'files is required for purge_files';
+      if (action === 'purge_tags' && asStringArray(args.tags).length === 0) return 'tags is required for purge_tags';
+      if (action === 'purge_hosts' && asStringArray(args.hosts).length === 0) return 'hosts is required for purge_hosts';
+      if (action === 'purge_prefixes' && asStringArray(args.prefixes).length === 0) return 'prefixes is required for purge_prefixes';
+    }
+
     if (toolName === 'aws_status') {
       try {
         this.createAwsClient(requireString(args.profile, 'profile'), 'sts');
@@ -1390,7 +1407,7 @@ export class ToolExecutor {
         return err instanceof Error ? err.message : String(err);
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
-      if ((action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
+      if ((action === 'create_bucket' || action === 'delete_bucket' || action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
         return `bucket is required for ${action}`;
       }
       if ((action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.key).trim()) {
@@ -1499,10 +1516,10 @@ export class ToolExecutor {
         return err instanceof Error ? err.message : String(err);
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
-      if ((action === 'list_services' || action === 'list_revisions' || action === 'get_service' || action === 'update_traffic') && !this.resolveGcpLocation(args.location, requireString(args.profile, 'profile'), false)) {
+      if ((action === 'list_services' || action === 'list_revisions' || action === 'get_service' || action === 'update_traffic' || action === 'delete_service') && !this.resolveGcpLocation(args.location, requireString(args.profile, 'profile'), false)) {
         return `location is required for ${action} when the GCP profile has no default location`;
       }
-      if ((action === 'get_service' || action === 'update_traffic') && !asString(args.service).trim()) {
+      if ((action === 'get_service' || action === 'update_traffic' || action === 'delete_service') && !asString(args.service).trim()) {
         return `service is required for ${action}`;
       }
       if (action === 'update_traffic' && !Array.isArray(args.traffic)) {
@@ -1517,7 +1534,7 @@ export class ToolExecutor {
         return err instanceof Error ? err.message : String(err);
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
-      if ((action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
+      if ((action === 'create_bucket' || action === 'delete_bucket' || action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
         return `bucket is required for ${action}`;
       }
       if ((action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.object).trim()) {
@@ -1581,25 +1598,25 @@ export class ToolExecutor {
         return err instanceof Error ? err.message : String(err);
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
-      if ((action === 'get' || action === 'config' || action === 'restart') && !this.resolveAzureResourceGroup(args.resourceGroup, requireString(args.profile, 'profile'), false)) {
+      if ((action === 'get' || action === 'config' || action === 'restart' || action === 'delete') && !this.resolveAzureResourceGroup(args.resourceGroup, requireString(args.profile, 'profile'), false)) {
         return `resourceGroup is required for ${action} when the Azure profile has no default resource group`;
       }
-      if ((action === 'get' || action === 'config' || action === 'restart') && !asString(args.name).trim()) {
+      if ((action === 'get' || action === 'config' || action === 'restart' || action === 'delete') && !asString(args.name).trim()) {
         return `name is required for ${action}`;
       }
     }
 
     if (toolName === 'azure_storage') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), asString(args.action).trim().toLowerCase().startsWith('list_') && asString(args.action).trim().toLowerCase() !== 'list_accounts' ? 'blob' : 'management');
+        this.createAzureClient(requireString(args.profile, 'profile'), asString(args.action).trim().toLowerCase() === 'list_accounts' ? 'management' : 'blob');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
       const action = requireString(args.action, 'action').trim().toLowerCase();
-      if ((action === 'list_containers' || action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.accountName).trim()) {
+      if ((action === 'list_containers' || action === 'create_container' || action === 'delete_container' || action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.accountName).trim()) {
         return `accountName is required for ${action}`;
       }
-      if ((action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.container).trim()) {
+      if ((action === 'create_container' || action === 'delete_container' || action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.container).trim()) {
         return `container is required for ${action}`;
       }
       if ((action === 'put_blob' || action === 'delete_blob') && !asString(args.blobName).trim()) {
@@ -1943,6 +1960,7 @@ export class ToolExecutor {
       case 'vercel_domains': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'add') return `Would add Vercel domain '${args.domain}' to project '${args.project}'`;
+        if (action === 'update') return `Would update Vercel domain '${args.domain}' on project '${args.project}'`;
         if (action === 'remove') return `Would remove Vercel domain '${args.domain}' from project '${args.project}'`;
         if (action === 'verify') return `Would verify Vercel domain '${args.domain}' on project '${args.project}'`;
         if (action === 'get') return `Would inspect Vercel domain '${args.domain}' on project '${args.project}'`;
@@ -1975,6 +1993,14 @@ export class ToolExecutor {
         if (action === 'get_setting') return `Would inspect Cloudflare SSL setting '${args.settingId}'`;
         return `Would list Cloudflare SSL settings for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
       }
+      case 'cf_cache': {
+        const action = asString(args.action, 'purge_everything').trim().toLowerCase();
+        if (action === 'purge_files') return `Would purge ${asStringArray(args.files).length} Cloudflare cached file URLs for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+        if (action === 'purge_tags') return `Would purge Cloudflare cache tags for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+        if (action === 'purge_hosts') return `Would purge Cloudflare cache hosts for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+        if (action === 'purge_prefixes') return `Would purge Cloudflare cache prefixes for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+        return `Would purge all Cloudflare cache for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+      }
       case 'aws_status':
         return `Would inspect AWS account status for profile '${args.profile}'`;
       case 'aws_ec2_instances': {
@@ -1990,6 +2016,8 @@ export class ToolExecutor {
       }
       case 'aws_s3_buckets': {
         const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+        if (action === 'create_bucket') return `Would create S3 bucket '${args.bucket}'`;
+        if (action === 'delete_bucket') return `Would delete S3 bucket '${args.bucket}'`;
         if (action === 'put_object') return `Would put S3 object '${args.key}' in bucket '${args.bucket}'`;
         if (action === 'delete_object') return `Would delete S3 object '${args.key}' in bucket '${args.bucket}'`;
         if (action === 'get_object') return `Would fetch S3 object '${args.key}' from bucket '${args.bucket}'`;
@@ -2037,11 +2065,14 @@ export class ToolExecutor {
         const action = asString(args.action, 'list_services').trim().toLowerCase();
         if (action === 'get_service') return `Would inspect Cloud Run service '${args.service}'`;
         if (action === 'update_traffic') return `Would update Cloud Run traffic for service '${args.service}'`;
+        if (action === 'delete_service') return `Would delete Cloud Run service '${args.service}'`;
         if (action === 'list_revisions') return `Would list Cloud Run revisions in location '${args.location ?? '(profile default)'}'`;
         return `Would list Cloud Run services in location '${args.location ?? '(profile default)'}'`;
       }
       case 'gcp_storage': {
         const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+        if (action === 'create_bucket') return `Would create GCS bucket '${args.bucket}'`;
+        if (action === 'delete_bucket') return `Would delete GCS bucket '${args.bucket}'`;
         if (action === 'put_object') return `Would put GCS object '${args.object}' in bucket '${args.bucket}'`;
         if (action === 'delete_object') return `Would delete GCS object '${args.object}' from bucket '${args.bucket}'`;
         if (action === 'get_object') return `Would fetch GCS object '${args.object}' from bucket '${args.bucket}'`;
@@ -2066,6 +2097,7 @@ export class ToolExecutor {
       }
       case 'azure_app_service': {
         const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'delete') return `Would delete Azure Web App '${args.name}'`;
         if (action === 'restart') return `Would restart Azure Web App '${args.name}'`;
         if (action === 'config') return `Would inspect Azure Web App config for '${args.name}'`;
         if (action === 'get') return `Would inspect Azure Web App '${args.name}'`;
@@ -2073,6 +2105,8 @@ export class ToolExecutor {
       }
       case 'azure_storage': {
         const action = asString(args.action, 'list_accounts').trim().toLowerCase();
+        if (action === 'create_container') return `Would create Azure blob container '${args.container}' in account '${args.accountName}'`;
+        if (action === 'delete_container') return `Would delete Azure blob container '${args.container}' in account '${args.accountName}'`;
         if (action === 'put_blob') return `Would upload blob '${args.blobName}' to container '${args.container}'`;
         if (action === 'delete_blob') return `Would delete blob '${args.blobName}' from container '${args.container}'`;
         if (action === 'list_blobs') return `Would list blobs in container '${args.container}'`;
@@ -5579,7 +5613,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'vercel_domains',
-        description: 'List, inspect, add, remove, or verify project domains on Vercel.',
+        description: 'List, inspect, add, update, remove, or verify project domains on Vercel.',
         shortDescription: 'Manage Vercel project domains.',
         risk: 'mutating',
         category: 'cloud',
@@ -5588,12 +5622,12 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
-            action: { type: 'string', description: 'list, get, add, remove, or verify.' },
+            action: { type: 'string', description: 'list, get, add, update, remove, or verify.' },
             project: { type: 'string', description: 'Project id or name.' },
-            domain: { type: 'string', description: 'Domain name for get/add/remove/verify.' },
+            domain: { type: 'string', description: 'Domain name for get/add/update/remove/verify.' },
             gitBranch: { type: 'string', description: 'Optional git branch for branch-specific domains.' },
-            redirect: { type: 'string', description: 'Optional redirect target when adding a domain.' },
-            redirectStatusCode: { type: 'number', description: 'Optional redirect status code when adding a domain.' },
+            redirect: { type: 'string', description: 'Optional redirect target when adding or updating a domain.' },
+            redirectStatusCode: { type: 'number', description: 'Optional redirect status code when adding or updating a domain.' },
             limit: { type: 'number', description: 'Optional list limit.' },
           },
           required: ['profile', 'action'],
@@ -5601,8 +5635,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list', 'get', 'add', 'remove', 'verify'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list, get, add, remove, or verify.' };
+        if (!['list', 'get', 'add', 'update', 'remove', 'verify'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, add, update, remove, or verify.' };
         }
 
         let client: VercelClient;
@@ -5613,7 +5647,13 @@ export class ToolExecutor {
         }
 
         const project = requireString(args.project, 'project').trim();
-        const method = action === 'list' || action === 'get' ? 'GET' : (action === 'remove' ? 'DELETE' : 'POST');
+        const method = action === 'list' || action === 'get'
+          ? 'GET'
+          : action === 'remove'
+            ? 'DELETE'
+            : action === 'update'
+              ? 'PATCH'
+              : 'POST';
         this.guardAction(request, 'http_request', {
           url: this.describeVercelEndpoint(client.config),
           method,
@@ -5691,8 +5731,10 @@ export class ToolExecutor {
             };
           }
 
-          const payload = buildVercelDomainPayload(args);
-          const result = await client.addProjectDomain(project, payload);
+          const payload = buildVercelDomainPayload(args, { includeName: action === 'add' });
+          const result = action === 'update'
+            ? await client.updateProjectDomain(project, domain, payload)
+            : await client.addProjectDomain(project, payload);
           return {
             success: true,
             output: {
@@ -6198,6 +6240,77 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'cf_cache',
+        description: 'Purge Cloudflare zone cache globally or by files, tags, hosts, or prefixes.',
+        shortDescription: 'Purge Cloudflare cache.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cloudflareProfiles id.' },
+            action: { type: 'string', description: 'purge_everything, purge_files, purge_tags, purge_hosts, or purge_prefixes.' },
+            zoneId: { type: 'string', description: 'Zone id override.' },
+            zone: { type: 'string', description: 'Zone name to resolve when zoneId is not provided.' },
+            files: { type: 'array', items: { type: 'string' }, description: 'Absolute URLs for file-based purge.' },
+            tags: { type: 'array', items: { type: 'string' }, description: 'Cache tags to purge.' },
+            hosts: { type: 'array', items: { type: 'string' }, description: 'Hostnames to purge.' },
+            prefixes: { type: 'array', items: { type: 'string' }, description: 'URL prefixes to purge.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['purge_everything', 'purge_files', 'purge_tags', 'purge_hosts', 'purge_prefixes'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use purge_everything, purge_files, purge_tags, purge_hosts, or purge_prefixes.' };
+        }
+
+        let client: CloudflareClient;
+        try {
+          client = this.createCloudflareClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        let zoneId: string;
+        try {
+          zoneId = await client.resolveZoneId(asString(args.zoneId).trim() || asString(args.zone).trim() || undefined);
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudflareEndpoint(client.config),
+          method: 'POST',
+          tool: 'cf_cache',
+          action,
+          zoneId,
+        });
+
+        try {
+          const payload = buildCloudflareCachePurgePayload(args);
+          const result = await client.purgeCache(zoneId, payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeCloudflareEndpoint(client.config),
+              action,
+              zoneId,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Cloudflare cache request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'aws_status',
         description: 'Inspect AWS caller identity, account aliases, and configured region. Read-only.',
         shortDescription: 'Inspect AWS caller identity and account aliases.',
@@ -6421,7 +6534,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'aws_s3_buckets',
-        description: 'List S3 buckets, inspect objects, or put/delete object content.',
+        description: 'List/create/delete S3 buckets, inspect objects, or put/delete object content.',
         shortDescription: 'Manage AWS S3 buckets and objects.',
         risk: 'mutating',
         category: 'cloud',
@@ -6430,7 +6543,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
-            action: { type: 'string', description: 'list_buckets, list_objects, get_object, put_object, or delete_object.' },
+            action: { type: 'string', description: 'list_buckets, create_bucket, delete_bucket, list_objects, get_object, put_object, or delete_object.' },
             bucket: { type: 'string', description: 'Bucket name.' },
             key: { type: 'string', description: 'Object key.' },
             prefix: { type: 'string', description: 'Optional key prefix for list_objects.' },
@@ -6443,8 +6556,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list_buckets', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list_buckets, list_objects, get_object, put_object, or delete_object.' };
+        if (!['list_buckets', 'create_bucket', 'delete_bucket', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_buckets, create_bucket, delete_bucket, list_objects, get_object, put_object, or delete_object.' };
         }
         let client: AwsClient;
         try {
@@ -6454,7 +6567,13 @@ export class ToolExecutor {
         }
         this.guardAction(request, 'http_request', {
           url: this.describeAwsEndpoint(client.config, 's3'),
-          method: 'POST',
+          method: action === 'create_bucket'
+            ? 'PUT'
+            : action === 'delete_bucket' || action === 'delete_object'
+              ? 'DELETE'
+              : action === 'put_object'
+                ? 'PUT'
+                : 'POST',
           tool: 'aws_s3_buckets',
           action,
           bucket: asString(args.bucket).trim() || undefined,
@@ -6476,6 +6595,22 @@ export class ToolExecutor {
             };
           }
           const bucket = requireString(args.bucket, 'bucket').trim();
+          if (action === 'create_bucket' || action === 'delete_bucket') {
+            const result = action === 'create_bucket'
+              ? await client.createS3Bucket(bucket)
+              : await client.deleteS3Bucket(bucket);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                bucket,
+                data: result,
+              },
+            };
+          }
           if (action === 'list_objects') {
             const result = await client.listS3Objects(bucket, {
               prefix: asString(args.prefix).trim() || undefined,
@@ -7086,7 +7221,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'gcp_cloud_run',
-        description: 'List Cloud Run services/revisions, inspect a service, or update service traffic.',
+        description: 'List Cloud Run services/revisions, inspect a service, update traffic, or delete a service.',
         shortDescription: 'Inspect or adjust GCP Cloud Run services.',
         risk: 'mutating',
         category: 'cloud',
@@ -7095,9 +7230,9 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
-            action: { type: 'string', description: 'list_services, get_service, list_revisions, or update_traffic.' },
+            action: { type: 'string', description: 'list_services, get_service, list_revisions, update_traffic, or delete_service.' },
             location: { type: 'string', description: 'Region/location. Falls back to profile default.' },
-            service: { type: 'string', description: 'Cloud Run service name for get_service/update_traffic.' },
+            service: { type: 'string', description: 'Cloud Run service name for get_service/update_traffic/delete_service.' },
             filter: { type: 'string', description: 'Optional filter for list_revisions.' },
             pageSize: { type: 'number', description: 'Optional max results.' },
             traffic: { type: 'array', description: 'Traffic targets for update_traffic.' },
@@ -7108,8 +7243,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list_services', 'get_service', 'list_revisions', 'update_traffic'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list_services, get_service, list_revisions, or update_traffic.' };
+        if (!['list_services', 'get_service', 'list_revisions', 'update_traffic', 'delete_service'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_services, get_service, list_revisions, update_traffic, or delete_service.' };
         }
         let client: GcpClient;
         try {
@@ -7120,7 +7255,7 @@ export class ToolExecutor {
         const location = this.resolveGcpLocation(args.location, client.config.id);
         this.guardAction(request, 'http_request', {
           url: this.describeGcpEndpoint(client.config, 'run'),
-          method: action === 'update_traffic' ? 'PATCH' : 'GET',
+          method: action === 'update_traffic' ? 'PATCH' : action === 'delete_service' ? 'DELETE' : 'GET',
           tool: 'gcp_cloud_run',
           action,
           projectId: client.config.projectId,
@@ -7138,12 +7273,14 @@ export class ToolExecutor {
                   asString(args.filter).trim() || undefined,
                   Number.isFinite(Number(args.pageSize)) ? Number(args.pageSize) : undefined,
                 )
-                : await client.updateCloudRunTraffic(
-                  location,
-                  requireString(args.service, 'service').trim(),
-                  Array.isArray(args.traffic) ? args.traffic : [],
-                  asString(args.etag).trim() || undefined,
-                );
+                : action === 'delete_service'
+                  ? await client.deleteCloudRunService(location, requireString(args.service, 'service').trim())
+                  : await client.updateCloudRunTraffic(
+                    location,
+                    requireString(args.service, 'service').trim(),
+                    Array.isArray(args.traffic) ? args.traffic : [],
+                    asString(args.etag).trim() || undefined,
+                  );
           return {
             success: true,
             output: {
@@ -7165,7 +7302,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'gcp_storage',
-        description: 'List Cloud Storage buckets/objects or read/write object text.',
+        description: 'List/create/delete Cloud Storage buckets or read/write object text.',
         shortDescription: 'Manage GCP Cloud Storage buckets and objects.',
         risk: 'mutating',
         category: 'cloud',
@@ -7174,9 +7311,11 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
-            action: { type: 'string', description: 'list_buckets, list_objects, get_object, put_object, or delete_object.' },
+            action: { type: 'string', description: 'list_buckets, create_bucket, delete_bucket, list_objects, get_object, put_object, or delete_object.' },
             bucket: { type: 'string', description: 'Bucket name.' },
             object: { type: 'string', description: 'Object name/path.' },
+            location: { type: 'string', description: 'Optional bucket location for create_bucket.' },
+            storageClass: { type: 'string', description: 'Optional bucket storage class for create_bucket.' },
             prefix: { type: 'string', description: 'Optional object prefix for list_objects.' },
             maxResults: { type: 'number', description: 'Optional max results.' },
             body: { type: 'string', description: 'Object body text for put_object.' },
@@ -7187,8 +7326,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list_buckets', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list_buckets, list_objects, get_object, put_object, or delete_object.' };
+        if (!['list_buckets', 'create_bucket', 'delete_bucket', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_buckets, create_bucket, delete_bucket, list_objects, get_object, put_object, or delete_object.' };
         }
         let client: GcpClient;
         try {
@@ -7198,7 +7337,11 @@ export class ToolExecutor {
         }
         this.guardAction(request, 'http_request', {
           url: this.describeGcpEndpoint(client.config, 'storage'),
-          method: action === 'put_object' ? 'POST' : action === 'delete_object' ? 'DELETE' : 'GET',
+          method: action === 'create_bucket' || action === 'put_object'
+            ? 'POST'
+            : action === 'delete_bucket' || action === 'delete_object'
+              ? 'DELETE'
+              : 'GET',
           tool: 'gcp_storage',
           action,
           projectId: client.config.projectId,
@@ -7210,6 +7353,14 @@ export class ToolExecutor {
           const objectName = asString(args.object).trim();
           const result = action === 'list_buckets'
             ? await client.listStorageBuckets(Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined)
+            : action === 'create_bucket'
+              ? await client.createStorageBucket(
+                bucket,
+                asString(args.location).trim() || undefined,
+                asString(args.storageClass).trim() || undefined,
+              )
+              : action === 'delete_bucket'
+                ? await client.deleteStorageBucket(bucket)
             : action === 'list_objects'
               ? await client.listStorageObjects(bucket, {
                 prefix: asString(args.prefix).trim() || undefined,
@@ -7504,7 +7655,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'azure_app_service',
-        description: 'List, inspect, inspect config, or restart Azure Web Apps.',
+        description: 'List, inspect, inspect config, restart, or delete Azure Web Apps.',
         shortDescription: 'Manage Azure App Service web apps.',
         risk: 'mutating',
         category: 'cloud',
@@ -7513,7 +7664,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
-            action: { type: 'string', description: 'list, get, config, or restart.' },
+            action: { type: 'string', description: 'list, get, config, restart, or delete.' },
             resourceGroup: { type: 'string', description: 'Resource group. Falls back to profile default.' },
             name: { type: 'string', description: 'Web app name.' },
             softRestart: { type: 'boolean', description: 'Optional softRestart for restart.' },
@@ -7523,8 +7674,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list', 'get', 'config', 'restart'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list, get, config, or restart.' };
+        if (!['list', 'get', 'config', 'restart', 'delete'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, config, restart, or delete.' };
         }
         let client: AzureClient;
         try {
@@ -7535,7 +7686,7 @@ export class ToolExecutor {
         const resourceGroup = this.resolveAzureResourceGroup(args.resourceGroup, client.config.id, action === 'list' ? false : true);
         this.guardAction(request, 'http_request', {
           url: this.describeAzureEndpoint(client.config, 'management'),
-          method: action === 'restart' ? 'POST' : 'GET',
+          method: action === 'restart' ? 'POST' : action === 'delete' ? 'DELETE' : 'GET',
           tool: 'azure_app_service',
           action,
           subscriptionId: client.config.subscriptionId,
@@ -7550,7 +7701,9 @@ export class ToolExecutor {
               ? await client.getWebApp(resourceGroup, name)
               : action === 'config'
                 ? await client.getWebAppConfig(resourceGroup, name)
-                : await client.restartWebApp(resourceGroup, name, args.softRestart === undefined ? undefined : !!args.softRestart);
+                : action === 'delete'
+                  ? await client.deleteWebApp(resourceGroup, name)
+                  : await client.restartWebApp(resourceGroup, name, args.softRestart === undefined ? undefined : !!args.softRestart);
           return {
             success: true,
             output: {
@@ -7572,7 +7725,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'azure_storage',
-        description: 'List storage accounts, containers, blobs, or upload/delete blob text.',
+        description: 'List storage accounts, create/delete containers, list blobs, or upload/delete blob text.',
         shortDescription: 'Manage Azure Storage accounts and blobs.',
         risk: 'mutating',
         category: 'cloud',
@@ -7581,10 +7734,10 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
-            action: { type: 'string', description: 'list_accounts, list_containers, list_blobs, put_blob, or delete_blob.' },
+            action: { type: 'string', description: 'list_accounts, list_containers, create_container, delete_container, list_blobs, put_blob, or delete_blob.' },
             resourceGroup: { type: 'string', description: 'Optional resource group filter for list_accounts.' },
             accountName: { type: 'string', description: 'Storage account name for blob actions.' },
-            container: { type: 'string', description: 'Container name for blob actions.' },
+            container: { type: 'string', description: 'Container name for container/blob actions.' },
             blobName: { type: 'string', description: 'Blob name/path.' },
             prefix: { type: 'string', description: 'Optional blob prefix for list_blobs.' },
             body: { type: 'string', description: 'Blob body text for put_blob.' },
@@ -7595,8 +7748,8 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const action = requireString(args.action, 'action').trim().toLowerCase();
-        if (!['list_accounts', 'list_containers', 'list_blobs', 'put_blob', 'delete_blob'].includes(action)) {
-          return { success: false, error: 'Unsupported action. Use list_accounts, list_containers, list_blobs, put_blob, or delete_blob.' };
+        if (!['list_accounts', 'list_containers', 'create_container', 'delete_container', 'list_blobs', 'put_blob', 'delete_blob'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_accounts, list_containers, create_container, delete_container, list_blobs, put_blob, or delete_blob.' };
         }
         let client: AzureClient;
         try {
@@ -7606,7 +7759,11 @@ export class ToolExecutor {
         }
         this.guardAction(request, 'http_request', {
           url: this.describeAzureEndpoint(client.config, action === 'list_accounts' ? 'management' : 'blob', asString(args.accountName).trim() || undefined),
-          method: action === 'put_blob' ? 'PUT' : action === 'delete_blob' ? 'DELETE' : 'GET',
+          method: action === 'create_container' || action === 'put_blob'
+            ? 'PUT'
+            : action === 'delete_container' || action === 'delete_blob'
+              ? 'DELETE'
+              : 'GET',
           tool: 'azure_storage',
           action,
           subscriptionId: client.config.subscriptionId,
@@ -7619,6 +7776,16 @@ export class ToolExecutor {
             ? await client.listStorageAccounts(asString(args.resourceGroup).trim() || undefined)
             : action === 'list_containers'
               ? await client.listBlobContainers(requireString(args.accountName, 'accountName').trim())
+              : action === 'create_container'
+                ? await client.createBlobContainer(
+                  requireString(args.accountName, 'accountName').trim(),
+                  requireString(args.container, 'container').trim(),
+                )
+                : action === 'delete_container'
+                  ? await client.deleteBlobContainer(
+                    requireString(args.accountName, 'accountName').trim(),
+                    requireString(args.container, 'container').trim(),
+                  )
               : action === 'list_blobs'
                 ? await client.listBlobs(
                   requireString(args.accountName, 'accountName').trim(),
@@ -11170,10 +11337,14 @@ function buildVercelDeploymentPayload(args: Record<string, unknown>): Record<str
   return payload;
 }
 
-function buildVercelDomainPayload(args: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    name: requireString(args.domain, 'domain').trim(),
-  };
+function buildVercelDomainPayload(
+  args: Record<string, unknown>,
+  options: { includeName?: boolean } = {},
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (options.includeName !== false) {
+    payload['name'] = requireString(args.domain, 'domain').trim();
+  }
   const gitBranch = asString(args.gitBranch).trim();
   const redirect = asString(args.redirect).trim();
   if (gitBranch) payload['gitBranch'] = gitBranch;
@@ -11242,6 +11413,23 @@ function buildCloudflareDnsPayload(args: Record<string, unknown>): Record<string
   if (typeof args.priority === 'number' && Number.isFinite(args.priority)) payload['priority'] = args.priority;
   if (typeof args.comment === 'string' && args.comment.trim()) payload['comment'] = args.comment.trim();
   return payload;
+}
+
+function buildCloudflareCachePurgePayload(args: Record<string, unknown>): Record<string, unknown> {
+  const action = requireString(args.action, 'action').trim().toLowerCase();
+  if (action === 'purge_everything') {
+    return { purge_everything: true };
+  }
+  if (action === 'purge_files') {
+    return { files: asStringArray(args.files) };
+  }
+  if (action === 'purge_tags') {
+    return { tags: asStringArray(args.tags) };
+  }
+  if (action === 'purge_hosts') {
+    return { hosts: asStringArray(args.hosts) };
+  }
+  return { prefixes: asStringArray(args.prefixes) };
 }
 
 function flattenEc2Instances(value: unknown): unknown[] {

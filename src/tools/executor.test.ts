@@ -826,6 +826,73 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('requires approval for Vercel domain updates', async () => {
+    const requests: Array<{ method: string; url: string | undefined; body: string }> = [];
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({ method: req.method ?? 'GET', url: req.url, body: raw });
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/v9/projects/web-app/domains/example.com?teamId=team_123') {
+          res.end(JSON.stringify({ name: 'example.com', redirect: 'https://www.example.com' }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: { message: 'not found' } }));
+      });
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+          teamId: 'team_123',
+        }],
+      },
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'vercel_domains',
+      args: {
+        profile: 'vercel-main',
+        action: 'update',
+        project: 'web-app',
+        domain: 'example.com',
+        redirect: 'https://www.example.com',
+      },
+      origin: 'cli',
+    });
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'update',
+      project: 'web-app',
+      domain: 'example.com',
+      data: { name: 'example.com', redirect: 'https://www.example.com' },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'PATCH', url: '/v9/projects/web-app/domains/example.com?teamId=team_123' });
+    expect(JSON.parse(requests[0]!.body)).toEqual({ redirect: 'https://www.example.com' });
+  });
+
   it('executes Cloudflare read-only tools', async () => {
     const server = createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
@@ -1003,6 +1070,70 @@ describe('ToolExecutor', () => {
     expect(requests.some((entry) => entry.url === '/zones/zone_1/dns_records' && entry.method === 'POST')).toBe(true);
   });
 
+  it('requires approval for Cloudflare cache purges', async () => {
+    const requests: Array<{ method: string; url: string | undefined; body: string }> = [];
+    const server = createServer((req, res) => {
+      if (req.url === '/zones?name=example.com&per_page=1') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, result: [{ id: 'zone_1', name: 'example.com' }] }));
+        return;
+      }
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({ method: req.method ?? 'GET', url: req.url, body: raw });
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/zones/zone_1/purge_cache') {
+          res.end(JSON.stringify({ success: true, result: { id: 'purge_1' } }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false, errors: [{ message: 'not found' }], result: null }));
+      });
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cloudflareProfiles: [{
+          id: 'cf-main',
+          name: 'Cloudflare Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+        }],
+      },
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'cf_cache',
+      args: { profile: 'cf-main', action: 'purge_tags', zone: 'example.com', tags: ['release-123'] },
+      origin: 'cli',
+    });
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'purge_tags',
+      zoneId: 'zone_1',
+      data: { id: 'purge_1' },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'POST', url: '/zones/zone_1/purge_cache' });
+    expect(JSON.parse(requests[0]!.body)).toEqual({ tags: ['release-123'] });
+  });
+
   it('executes AWS read-only tools through an AWS profile', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -1142,6 +1273,73 @@ describe('ToolExecutor', () => {
           }],
         },
       },
+    ]);
+  });
+
+  it('requires approval for AWS S3 bucket lifecycle mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['amazonaws.com'],
+      cloudConfig: {
+        enabled: true,
+        awsProfiles: [{
+          id: 'aws-main',
+          name: 'AWS Main',
+          region: 'us-east-1',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'aws-main', name: 'AWS Main', region: 'us-east-1' },
+      createS3Bucket: async (bucket: string) => {
+        calls.push({ method: 'createS3Bucket', payload: bucket });
+        return { Location: '/app-bucket' };
+      },
+      deleteS3Bucket: async (bucket: string) => {
+        calls.push({ method: 'deleteS3Bucket', payload: bucket });
+        return {};
+      },
+    };
+    (executor as unknown as { createAwsClient: () => typeof fakeClient }).createAwsClient = () => fakeClient;
+    (executor as unknown as { describeAwsEndpoint: () => string }).describeAwsEndpoint = () => 'https://s3.us-east-1.amazonaws.com';
+
+    const createPending = await executor.runTool({
+      toolName: 'aws_s3_buckets',
+      args: { profile: 'aws-main', action: 'create_bucket', bucket: 'app-bucket' },
+      origin: 'cli',
+    });
+    expect(createPending.success).toBe(false);
+    expect(createPending.status).toBe('pending_approval');
+    const createApproved = await executor.decideApproval(createPending.approvalId!, 'approved', 'tester');
+    expect(createApproved.success).toBe(true);
+    expect(createApproved.result?.output).toMatchObject({
+      action: 'create_bucket',
+      bucket: 'app-bucket',
+      data: { Location: '/app-bucket' },
+    });
+
+    const deletePending = await executor.runTool({
+      toolName: 'aws_s3_buckets',
+      args: { profile: 'aws-main', action: 'delete_bucket', bucket: 'app-bucket' },
+      origin: 'cli',
+    });
+    expect(deletePending.success).toBe(false);
+    expect(deletePending.status).toBe('pending_approval');
+    const deleteApproved = await executor.decideApproval(deletePending.approvalId!, 'approved', 'tester');
+    expect(deleteApproved.success).toBe(true);
+    expect(deleteApproved.result?.output).toMatchObject({
+      action: 'delete_bucket',
+      bucket: 'app-bucket',
+    });
+
+    expect(calls).toEqual([
+      { method: 'createS3Bucket', payload: 'app-bucket' },
+      { method: 'deleteS3Bucket', payload: 'app-bucket' },
     ]);
   });
 
@@ -1297,6 +1495,82 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  it('requires approval for GCP Cloud Run and Storage lifecycle mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['googleapis.com'],
+      cloudConfig: {
+        enabled: true,
+        gcpProfiles: [{
+          id: 'gcp-main',
+          name: 'GCP Main',
+          projectId: 'guardian-prod',
+          location: 'australia-southeast1',
+          accessToken: 'gcp-secret',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'gcp-main', name: 'GCP Main', projectId: 'guardian-prod', location: 'australia-southeast1' },
+      deleteCloudRunService: async (location: string, service: string) => {
+        calls.push({ method: 'deleteCloudRunService', payload: { location, service } });
+        return { name: 'operations/delete-service-1' };
+      },
+      createStorageBucket: async (bucket: string, location?: string, storageClass?: string) => {
+        calls.push({ method: 'createStorageBucket', payload: { bucket, location, storageClass } });
+        return { name: bucket, location };
+      },
+    };
+    (executor as unknown as { createGcpClient: () => typeof fakeClient }).createGcpClient = () => fakeClient;
+    (executor as unknown as { describeGcpEndpoint: () => string }).describeGcpEndpoint = () => 'https://run.googleapis.com';
+
+    const runPending = await executor.runTool({
+      toolName: 'gcp_cloud_run',
+      args: { profile: 'gcp-main', action: 'delete_service', service: 'web-app' },
+      origin: 'cli',
+    });
+    expect(runPending.success).toBe(false);
+    expect(runPending.status).toBe('pending_approval');
+    const runApproved = await executor.decideApproval(runPending.approvalId!, 'approved', 'tester');
+    expect(runApproved.success).toBe(true);
+    expect(runApproved.result?.output).toMatchObject({
+      action: 'delete_service',
+      location: 'australia-southeast1',
+      service: 'web-app',
+    });
+
+    const bucketPending = await executor.runTool({
+      toolName: 'gcp_storage',
+      args: {
+        profile: 'gcp-main',
+        action: 'create_bucket',
+        bucket: 'app-bucket',
+        location: 'AUSTRALIA-SOUTHEAST1',
+        storageClass: 'STANDARD',
+      },
+      origin: 'cli',
+    });
+    expect(bucketPending.success).toBe(false);
+    expect(bucketPending.status).toBe('pending_approval');
+    const bucketApproved = await executor.decideApproval(bucketPending.approvalId!, 'approved', 'tester');
+    expect(bucketApproved.success).toBe(true);
+    expect(bucketApproved.result?.output).toMatchObject({
+      action: 'create_bucket',
+      bucket: 'app-bucket',
+      data: { name: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1' },
+    });
+
+    expect(calls).toEqual([
+      { method: 'deleteCloudRunService', payload: { location: 'australia-southeast1', service: 'web-app' } },
+      { method: 'createStorageBucket', payload: { bucket: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1', storageClass: 'STANDARD' } },
+    ]);
+  });
+
   it('executes Azure read-only tools through an Azure profile', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -1446,6 +1720,76 @@ describe('ToolExecutor', () => {
           },
         },
       },
+    ]);
+  });
+
+  it('requires approval for Azure App Service and Storage lifecycle mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['management.azure.com', 'blob.core.windows.net', 'login.microsoftonline.com'],
+      cloudConfig: {
+        enabled: true,
+        azureProfiles: [{
+          id: 'azure-main',
+          name: 'Azure Main',
+          subscriptionId: 'sub-123',
+          accessToken: 'azure-secret',
+          defaultResourceGroup: 'rg-main',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'azure-main', name: 'Azure Main', subscriptionId: 'sub-123', defaultResourceGroup: 'rg-main' },
+      deleteWebApp: async (resourceGroup: string, name: string) => {
+        calls.push({ method: 'deleteWebApp', payload: { resourceGroup, name } });
+        return { id: 'delete-webapp-op' };
+      },
+      createBlobContainer: async (accountName: string, container: string) => {
+        calls.push({ method: 'createBlobContainer', payload: { accountName, container } });
+        return {};
+      },
+    };
+    (executor as unknown as { createAzureClient: () => typeof fakeClient }).createAzureClient = () => fakeClient;
+    (executor as unknown as { describeAzureEndpoint: () => string }).describeAzureEndpoint = () => 'https://management.azure.com';
+
+    const appPending = await executor.runTool({
+      toolName: 'azure_app_service',
+      args: { profile: 'azure-main', action: 'delete', name: 'web-app' },
+      origin: 'cli',
+    });
+    expect(appPending.success).toBe(false);
+    expect(appPending.status).toBe('pending_approval');
+    const appApproved = await executor.decideApproval(appPending.approvalId!, 'approved', 'tester');
+    expect(appApproved.success).toBe(true);
+    expect(appApproved.result?.output).toMatchObject({
+      action: 'delete',
+      resourceGroup: 'rg-main',
+      name: 'web-app',
+    });
+
+    const storagePending = await executor.runTool({
+      toolName: 'azure_storage',
+      args: { profile: 'azure-main', action: 'create_container', accountName: 'storageacct', container: 'assets' },
+      origin: 'cli',
+    });
+    expect(storagePending.success).toBe(false);
+    expect(storagePending.status).toBe('pending_approval');
+    const storageApproved = await executor.decideApproval(storagePending.approvalId!, 'approved', 'tester');
+    expect(storageApproved.success).toBe(true);
+    expect(storageApproved.result?.output).toMatchObject({
+      action: 'create_container',
+      accountName: 'storageacct',
+      container: 'assets',
+    });
+
+    expect(calls).toEqual([
+      { method: 'deleteWebApp', payload: { resourceGroup: 'rg-main', name: 'web-app' } },
+      { method: 'createBlobContainer', payload: { accountName: 'storageacct', container: 'assets' } },
     ]);
   });
 

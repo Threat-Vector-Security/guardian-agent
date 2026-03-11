@@ -123,4 +123,28 @@ describe('azure-client', () => {
     const result = await client.listBlobContainers('storageacct');
     expect(result.containers).toEqual(['container-a', 'container-b']);
   });
+
+  it('creates blob containers with restype=container', async () => {
+    const server = createServer((req, res) => {
+      expect(req.method).toBe('PUT');
+      expect(req.headers.authorization).toBe('Bearer azure-secret');
+      expect(req.url).toBe('/assets?restype=container');
+      res.statusCode = 201;
+      res.end('');
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const client = new AzureClient({
+      id: 'azure-main',
+      name: 'Azure Main',
+      subscriptionId: 'sub-123',
+      accessToken: 'azure-secret',
+      blobBaseUrl: `http://127.0.0.1:${address.port}`,
+    });
+
+    const result = await client.createBlobContainer('storageacct', 'assets');
+    expect(result).toEqual({});
+  });
 });

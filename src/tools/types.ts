@@ -94,6 +94,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'cf_status',
     'cf_dns',
     'cf_ssl',
+    'cf_cache',
     'aws_status',
     'aws_ec2_instances',
     'aws_ec2_security_groups',

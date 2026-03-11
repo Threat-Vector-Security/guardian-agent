@@ -178,6 +178,14 @@ export class VercelClient {
     });
   }
 
+  async updateProjectDomain(projectIdOrName: string, domain: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      path: `/v9/projects/${encodeURIComponent(projectIdOrName)}/domains/${encodeURIComponent(domain)}`,
+      body,
+    });
+  }
+
   async removeProjectDomain(projectIdOrName: string, domain: string): Promise<unknown> {
     return this.request({
       method: 'DELETE',
