@@ -226,6 +226,35 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate cloud Cloudflare credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.cloudflare.primary': { source: 'env', env: 'CLOUDFLARE_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cloudflareProfiles: [{
+              id: 'cf-main',
+              name: 'Cloudflare Main',
+              credentialRef: 'cloud.cloudflare.primary',
+              accountId: 'acc_123',
+              defaultZoneId: 'zone_123',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should require telegram botToken when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

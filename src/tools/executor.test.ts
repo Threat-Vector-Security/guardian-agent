@@ -826,6 +826,183 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('executes Cloudflare read-only tools', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/user/tokens/verify') {
+        res.end(JSON.stringify({ success: true, result: { status: 'active' } }));
+        return;
+      }
+      if (req.url === '/accounts/acc_123') {
+        res.end(JSON.stringify({ success: true, result: { id: 'acc_123', name: 'Main Account' } }));
+        return;
+      }
+      if (req.url === '/zones?per_page=20') {
+        res.end(JSON.stringify({ success: true, result: [{ id: 'zone_1', name: 'example.com' }] }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/dns_records') {
+        res.end(JSON.stringify({ success: true, result: [{ id: 'record_1', type: 'A', name: 'app.example.com' }] }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/ssl') {
+        res.end(JSON.stringify({ success: true, result: { id: 'ssl', value: 'full' } }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/min_tls_version') {
+        res.end(JSON.stringify({ success: true, result: { id: 'min_tls_version', value: '1.2' } }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/tls_1_3') {
+        res.end(JSON.stringify({ success: true, result: { id: 'tls_1_3', value: 'on' } }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/always_use_https') {
+        res.end(JSON.stringify({ success: true, result: { id: 'always_use_https', value: 'off' } }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/automatic_https_rewrites') {
+        res.end(JSON.stringify({ success: true, result: { id: 'automatic_https_rewrites', value: 'on' } }));
+        return;
+      }
+      if (req.url === '/zones/zone_1/settings/opportunistic_encryption') {
+        res.end(JSON.stringify({ success: true, result: { id: 'opportunistic_encryption', value: 'on' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false, errors: [{ message: 'not found' }], result: null }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cloudflareProfiles: [{
+          id: 'cf-main',
+          name: 'Cloudflare Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+          accountId: 'acc_123',
+          defaultZoneId: 'zone_1',
+        }],
+      },
+    });
+
+    const status = await executor.runTool({
+      toolName: 'cf_status',
+      args: { profile: 'cf-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(true);
+    expect(status.output).toMatchObject({
+      profile: 'cf-main',
+      token: { status: 'active' },
+      account: { id: 'acc_123', name: 'Main Account' },
+      zones: [{ id: 'zone_1', name: 'example.com' }],
+    });
+
+    const dns = await executor.runTool({
+      toolName: 'cf_dns',
+      args: { profile: 'cf-main', action: 'list' },
+      origin: 'cli',
+    });
+    expect(dns.success).toBe(true);
+    expect(dns.output).toMatchObject({
+      action: 'list',
+      zoneId: 'zone_1',
+      data: [{ id: 'record_1', type: 'A', name: 'app.example.com' }],
+    });
+
+    const ssl = await executor.runTool({
+      toolName: 'cf_ssl',
+      args: { profile: 'cf-main', action: 'list_settings' },
+      origin: 'cli',
+    });
+    expect(ssl.success).toBe(true);
+    expect(ssl.output).toMatchObject({
+      action: 'list_settings',
+      zoneId: 'zone_1',
+    });
+  });
+
+  it('requires approval for Cloudflare DNS mutations', async () => {
+    const requests: Array<{ method: string; url: string | undefined; body: string }> = [];
+    const server = createServer((req, res) => {
+      if (req.url === '/zones?name=example.com&per_page=1') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ success: true, result: [{ id: 'zone_1', name: 'example.com' }] }));
+        return;
+      }
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({ method: req.method ?? 'GET', url: req.url, body: raw });
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/zones/zone_1/dns_records') {
+          res.end(JSON.stringify({
+            success: true,
+            result: { id: 'record_1', type: 'A', name: 'app.example.com', content: '1.2.3.4' },
+          }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ success: false, errors: [{ message: 'not found' }], result: null }));
+      });
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cloudflareProfiles: [{
+          id: 'cf-main',
+          name: 'Cloudflare Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+        }],
+      },
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'cf_dns',
+      args: {
+        profile: 'cf-main',
+        action: 'create',
+        zone: 'example.com',
+        type: 'A',
+        name: 'app.example.com',
+        content: '1.2.3.4',
+      },
+      origin: 'cli',
+    });
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'create',
+      zoneId: 'zone_1',
+      data: { id: 'record_1', type: 'A', name: 'app.example.com', content: '1.2.3.4' },
+    });
+    expect(requests.some((entry) => entry.url === '/zones/zone_1/dns_records' && entry.method === 'POST')).toBe(true);
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

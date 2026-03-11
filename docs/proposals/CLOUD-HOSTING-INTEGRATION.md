@@ -60,6 +60,13 @@ This repository now also implements the core of **Phase 2**:
 
 The remaining work for this provider family is primarily broader action coverage (`vercel_dns`, `vercel_edge_config`, `vercel_checks`), richer provider-specific validation, and live-environment verification against staged Vercel projects.
 
+This repository now also implements the core of **Phase 3**:
+- `cf_status`
+- `cf_dns`
+- `cf_ssl`
+
+The remaining work for this provider family is primarily wider Cloudflare surface area (`cf_firewall`, `cf_cache`, `cf_workers`, `cf_analytics`, `cf_page_rules`) and live-environment verification against a staged Cloudflare account.
+
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
 
 ---
