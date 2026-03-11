@@ -1,5 +1,7 @@
 # Implementation Plan: Dify-Inspired Improvements
 
+> **Note:** This proposal has been promoted to a spec. See [`docs/specs/DIFY-INSPIRED-IMPROVEMENTS-SPEC.md`](../specs/DIFY-INSPIRED-IMPROVEMENTS-SPEC.md) for the authoritative version with implementation status.
+
 > Based on analysis of [Dify](https://github.com/langgenius/dify) against GuardianAgent (2026-03-11)
 
 ## Overview

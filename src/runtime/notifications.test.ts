@@ -13,7 +13,9 @@ function makeConfig(overrides?: Partial<AssistantNotificationsConfig>): Assistan
     enabled: true,
     minSeverity: 'warn',
     auditEventTypes: ['anomaly_detected', 'action_denied', 'secret_detected'],
+    suppressedDetailTypes: [],
     cooldownMs: 60_000,
+    deliveryMode: 'selected',
     destinations: {
       web: true,
       cli: true,
@@ -116,6 +118,69 @@ describe('NotificationService', () => {
 
     expect(vi.mocked(eventBus.emit)).not.toHaveBeenCalled();
     expect(sendCli).not.toHaveBeenCalled();
+  });
+
+  it('suppresses configured detail types', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig({
+        auditEventTypes: ['host_alert'],
+        suppressedDetailTypes: ['new_external_destination'],
+      }),
+      auditLog,
+      eventBus,
+      senders: { sendCli },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'host_alert',
+      severity: 'warn',
+      agentId: 'host-monitor',
+      details: {
+        alertType: 'new_external_destination',
+        description: 'New external destination observed: 1.2.3.4:443',
+      },
+    });
+    await flushAsyncWork();
+
+    expect(vi.mocked(eventBus.emit)).not.toHaveBeenCalled();
+    expect(sendCli).not.toHaveBeenCalled();
+  });
+
+  it('delivers to all available channels when deliveryMode is all', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const sendTelegram = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig({
+        deliveryMode: 'all',
+        destinations: {
+          web: false,
+          cli: false,
+          telegram: false,
+        },
+      }),
+      auditLog,
+      eventBus,
+      senders: { sendCli, sendTelegram },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'anomaly_detected',
+      severity: 'critical',
+      agentId: 'sentinel',
+      details: { anomalyType: 'high_risk_signal', description: 'Potential exfiltration pattern detected' },
+    });
+    await flushAsyncWork();
+
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledTimes(1);
+    expect(sendCli).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
   });
 
   it('formats readable notification text', () => {

@@ -17,13 +17,14 @@ import type {
 import type { LLMConfig } from '../config/types.js';
 
 export class OpenAIProvider implements LLMProvider {
-  readonly name = 'openai';
+  readonly name: string;
   private client: OpenAI;
   private model: string;
   private maxTokens: number;
   private temperature: number;
 
-  constructor(config: LLMConfig) {
+  constructor(config: LLMConfig, providerName?: string) {
+    this.name = providerName ?? 'openai';
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
@@ -129,7 +130,7 @@ export class OpenAIProvider implements LLMProvider {
         models.push({
           id: model.id,
           name: model.id,
-          provider: 'openai',
+          provider: this.name,
         });
       }
       return models;

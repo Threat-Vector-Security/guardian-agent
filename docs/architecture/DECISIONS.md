@@ -471,23 +471,22 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 
 ---
 
-## ADR-025: QMD CLI Subprocess Integration for Hybrid Document Search
+## ADR-025: Native TypeScript Search Pipeline for Hybrid Document Search
 
-**Status:** Accepted
+**Status:** Accepted (supersedes original QMD subprocess approach)
 
-**Context:** The memory system only supports BM25 keyword search (FTS5) over conversation history. There was no semantic/vector search capability, and no way to search external document collections (notes, codebases, wikis). QMD (github.com/tobi/qmd) provides local hybrid search combining BM25 + vector embeddings + LLM re-ranking.
+**Context:** The memory system only supports BM25 keyword search (FTS5) over conversation history. There was no semantic/vector search capability, and no way to search external document collections (notes, codebases, wikis). A native in-process search pipeline eliminates external binary dependencies while providing hybrid search.
 
-**Decision:** Integrate QMD via CLI subprocess invocations (`child_process.exec`) rather than as an MCP server or long-running HTTP sidecar. Each search/status/reindex call spawns a short-lived `qmd` process with `--json` output. Sources support multiple protocols: `directory`, `git`, `url`, `file`.
+**Decision:** Implement a native TypeScript search pipeline (`src/search/`) using SQLite FTS5 for BM25 keyword search and in-JS cosine similarity over embeddings stored as BLOBs for vector search. Results are merged via Reciprocal Rank Fusion (RRF). Parent-child chunking provides both context and search precision. Embedding providers (Ollama, OpenAI) are optional — the system gracefully degrades to keyword-only search.
 
 **Consequences:**
-- (+) No long-running process to manage — deterministic JSON output, process isolation
-- (+) QMD loads its SQLite index on each invocation (fast after OS page cache)
-- (+) Clean separation: QMD tools live in their own `search` category, independent of `memory` tools
+- (+) Zero external dependencies — pure TypeScript/JS, no native extensions, no subprocess overhead
+- (+) Supply chain security: no external binaries to trust or bundle
+- (+) Clean separation: search tools live in their own `search` category, independent of `memory` tools
 - (+) Multi-protocol sources allow indexing diverse document collections
-- (+) Disabled by default — zero overhead when not used
-- (-) Per-query subprocess overhead (~50-200ms) vs in-process search
-- (-) Requires QMD runtime dependency to be present (bundled via npm optional dependency, or provided on PATH)
-- (-) MCP HTTP mode could be added later as optimization if latency matters
+- (+) Graceful degradation: works with keyword-only if no embedding provider is configured
+- (+) In-process search eliminates ~50-200ms subprocess overhead per query
+- (-) Vector search KNN is O(n) cosine similarity in JS rather than ANN index; acceptable for typical collection sizes
 
 ---
 

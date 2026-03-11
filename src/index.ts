@@ -20,7 +20,16 @@ import { Runtime } from './runtime/runtime.js';
 import { CLIChannel } from './channels/cli.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WebChannel, type WebAuthRuntimeConfig } from './channels/web.js';
-import type { DashboardCallbacks, DashboardAgentInfo, DashboardAgentDetail, DashboardProviderInfo, RedactedConfig, SSEListener } from './channels/web-types.js';
+import type {
+  ConfigUpdate,
+  DashboardCallbacks,
+  DashboardAgentInfo,
+  DashboardAgentDetail,
+  DashboardProviderInfo,
+  RedactedCloudConfig,
+  RedactedConfig,
+  SSEListener,
+} from './channels/web-types.js';
 import type { LLMConfig } from './config/types.js';
 import { BaseAgent } from './agent/agent.js';
 import { createAgentDefinition } from './agent/agent.js';
@@ -102,6 +111,39 @@ function generateSecureToken(byteLength = 16): string {
 function previewTokenForLog(token: string): string {
   if (token.length <= 8) return token;
   return `${token.slice(0, 4)}...${token.slice(-4)}`;
+}
+
+function isLoopbackOrPrivateHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return false;
+  if (
+    normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '0.0.0.0'
+    || normalized === 'host.docker.internal'
+  ) {
+    return true;
+  }
+  if (/^10\.\d+\.\d+\.\d+$/.test(normalized)) return true;
+  if (/^192\.168\.\d+\.\d+$/.test(normalized)) return true;
+  const private172 = normalized.match(/^172\.(\d+)\.\d+\.\d+$/);
+  if (private172) {
+    const secondOctet = Number(private172[1]);
+    if (secondOctet >= 16 && secondOctet <= 31) return true;
+  }
+  return false;
+}
+
+function isLocalProviderEndpoint(baseUrl: string | undefined, providerType: string | undefined): boolean {
+  if ((providerType ?? '').trim().toLowerCase() === 'ollama') return true;
+  if (!baseUrl) return false;
+  try {
+    const parsed = new URL(baseUrl);
+    return isLoopbackOrPrivateHost(parsed.hostname);
+  } catch {
+    return /localhost|127\.0\.0\.1|::1|0\.0\.0\.0|host\.docker\.internal/.test(baseUrl);
+  }
 }
 
 type SoulInjectionMode = 'full' | 'summary' | 'disabled';
@@ -186,6 +228,87 @@ function buildManagedMCPServers(_config: GuardianAgentConfig): Array<MCPServerEn
 }
 
 const execFileAsync = promisify(execFileCb);
+
+async function pickNativeSearchPath(kind: 'directory' | 'file'): Promise<{
+  success: boolean;
+  path?: string;
+  canceled?: boolean;
+  message: string;
+}> {
+  if (process.platform !== 'win32') {
+    return {
+      success: false,
+      canceled: false,
+      message: 'Native path picker is currently available on Windows only.',
+    };
+  }
+
+  const script = kind === 'file'
+    ? `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Select a file to index'
+$dialog.CheckFileExists = $true
+$dialog.Multiselect = $false
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.FileName) {
+  @{ success = $true; canceled = $false; path = $dialog.FileName; message = 'File selected.' } | ConvertTo-Json -Compress
+} else {
+  @{ success = $false; canceled = $true; message = 'Selection cancelled.' } | ConvertTo-Json -Compress
+}
+`
+    : `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Select a directory to index'
+$dialog.ShowNewFolderButton = $false
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
+  @{ success = $true; canceled = $false; path = $dialog.SelectedPath; message = 'Directory selected.' } | ConvertTo-Json -Compress
+} else {
+  @{ success = $false; canceled = $true; message = 'Selection cancelled.' } | ConvertTo-Json -Compress
+}
+`;
+
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-STA', '-Command', script],
+      { timeout: 300_000, windowsHide: false, maxBuffer: 1024 * 1024 },
+    );
+    const trimmed = stdout.trim();
+    if (!trimmed) {
+      return {
+        success: false,
+        canceled: true,
+        message: 'Selection cancelled.',
+      };
+    }
+    const parsed = JSON.parse(trimmed) as {
+      success?: boolean;
+      path?: string;
+      canceled?: boolean;
+      message?: string;
+    };
+    return {
+      success: parsed.success === true,
+      path: typeof parsed.path === 'string' ? parsed.path : undefined,
+      canceled: parsed.canceled === true,
+      message: typeof parsed.message === 'string'
+        ? parsed.message
+        : (parsed.success ? 'Path selected.' : 'Selection cancelled.'),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      canceled: false,
+      message: `Failed to open native ${kind} picker: ${message}`,
+    };
+  }
+}
 
 /**
  * Probe the GWS CLI by running `gws --version` and `gws auth status`.
@@ -2182,6 +2305,297 @@ function parseWebSearchIntent(content: string): string | null {
   return query.length >= 3 ? query : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOwnProp(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function trimOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function sanitizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === 'string' && entry.trim()) {
+      result[key] = entry.trim();
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['cloud']): RedactedCloudConfig | undefined {
+  if (!cloud) return undefined;
+
+  let inlineSecretProfileCount = 0;
+  let credentialRefCount = 0;
+  let selfSignedProfileCount = 0;
+  let customEndpointProfileCount = 0;
+
+  const cpanelProfiles = (cloud.cpanelProfiles ?? []).map((profile) => {
+    const apiTokenConfigured = !!profile.apiToken?.trim();
+    if (apiTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.allowSelfSigned) selfSignedProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      type: profile.type,
+      host: profile.host,
+      port: profile.port,
+      username: profile.username,
+      credentialRef: profile.credentialRef,
+      apiTokenConfigured,
+      ssl: profile.ssl !== false,
+      allowSelfSigned: profile.allowSelfSigned === true,
+      defaultCpanelUser: profile.defaultCpanelUser,
+    };
+  });
+
+  const vercelProfiles = (cloud.vercelProfiles ?? []).map((profile) => {
+    const apiTokenConfigured = !!profile.apiToken?.trim();
+    if (apiTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.apiBaseUrl?.trim()) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: profile.apiBaseUrl,
+      credentialRef: profile.credentialRef,
+      apiTokenConfigured,
+      teamId: profile.teamId,
+      slug: profile.slug,
+    };
+  });
+
+  const cloudflareProfiles = (cloud.cloudflareProfiles ?? []).map((profile) => {
+    const apiTokenConfigured = !!profile.apiToken?.trim();
+    if (apiTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.apiBaseUrl?.trim()) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: profile.apiBaseUrl,
+      credentialRef: profile.credentialRef,
+      apiTokenConfigured,
+      accountId: profile.accountId,
+      defaultZoneId: profile.defaultZoneId,
+    };
+  });
+
+  const awsProfiles = (cloud.awsProfiles ?? []).map((profile) => {
+    const accessKeyIdConfigured = !!profile.accessKeyId?.trim();
+    const secretAccessKeyConfigured = !!profile.secretAccessKey?.trim();
+    const sessionTokenConfigured = !!profile.sessionToken?.trim();
+    if (accessKeyIdConfigured || secretAccessKeyConfigured || sessionTokenConfigured) inlineSecretProfileCount += 1;
+    if (profile.accessKeyIdCredentialRef?.trim()) credentialRefCount += 1;
+    if (profile.secretAccessKeyCredentialRef?.trim()) credentialRefCount += 1;
+    if (profile.sessionTokenCredentialRef?.trim()) credentialRefCount += 1;
+    const endpoints = sanitizeStringRecord(profile.endpoints);
+    if (endpoints) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      region: profile.region,
+      accessKeyIdCredentialRef: profile.accessKeyIdCredentialRef,
+      secretAccessKeyCredentialRef: profile.secretAccessKeyCredentialRef,
+      sessionTokenCredentialRef: profile.sessionTokenCredentialRef,
+      accessKeyIdConfigured,
+      secretAccessKeyConfigured,
+      sessionTokenConfigured,
+      endpoints,
+    };
+  });
+
+  const gcpProfiles = (cloud.gcpProfiles ?? []).map((profile) => {
+    const accessTokenConfigured = !!profile.accessToken?.trim();
+    const serviceAccountConfigured = !!profile.serviceAccountJson?.trim();
+    if (accessTokenConfigured || serviceAccountConfigured) inlineSecretProfileCount += 1;
+    if (profile.accessTokenCredentialRef?.trim()) credentialRefCount += 1;
+    if (profile.serviceAccountCredentialRef?.trim()) credentialRefCount += 1;
+    const endpoints = sanitizeStringRecord(profile.endpoints);
+    if (endpoints) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      projectId: profile.projectId,
+      location: profile.location,
+      accessTokenCredentialRef: profile.accessTokenCredentialRef,
+      serviceAccountCredentialRef: profile.serviceAccountCredentialRef,
+      accessTokenConfigured,
+      serviceAccountConfigured,
+      endpoints,
+    };
+  });
+
+  const azureProfiles = (cloud.azureProfiles ?? []).map((profile) => {
+    const accessTokenConfigured = !!profile.accessToken?.trim();
+    const clientIdConfigured = !!profile.clientId?.trim();
+    const clientSecretConfigured = !!profile.clientSecret?.trim();
+    if (accessTokenConfigured || clientIdConfigured || clientSecretConfigured) inlineSecretProfileCount += 1;
+    if (profile.accessTokenCredentialRef?.trim()) credentialRefCount += 1;
+    if (profile.clientIdCredentialRef?.trim()) credentialRefCount += 1;
+    if (profile.clientSecretCredentialRef?.trim()) credentialRefCount += 1;
+    const endpoints = sanitizeStringRecord(profile.endpoints);
+    if (endpoints || profile.blobBaseUrl?.trim()) customEndpointProfileCount += 1;
+    return {
+      id: profile.id,
+      name: profile.name,
+      subscriptionId: profile.subscriptionId,
+      tenantId: profile.tenantId,
+      accessTokenCredentialRef: profile.accessTokenCredentialRef,
+      accessTokenConfigured,
+      clientIdCredentialRef: profile.clientIdCredentialRef,
+      clientIdConfigured,
+      clientSecretCredentialRef: profile.clientSecretCredentialRef,
+      clientSecretConfigured,
+      defaultResourceGroup: profile.defaultResourceGroup,
+      blobBaseUrl: profile.blobBaseUrl,
+      endpoints,
+    };
+  });
+
+  return {
+    enabled: cloud.enabled,
+    cpanelProfiles,
+    vercelProfiles,
+    cloudflareProfiles,
+    awsProfiles,
+    gcpProfiles,
+    azureProfiles,
+    profileCounts: {
+      cpanel: cpanelProfiles.length,
+      vercel: vercelProfiles.length,
+      cloudflare: cloudflareProfiles.length,
+      aws: awsProfiles.length,
+      gcp: gcpProfiles.length,
+      azure: azureProfiles.length,
+      total: cpanelProfiles.length + vercelProfiles.length + cloudflareProfiles.length + awsProfiles.length + gcpProfiles.length + azureProfiles.length,
+    },
+    security: {
+      inlineSecretProfileCount,
+      credentialRefCount,
+      selfSignedProfileCount,
+      customEndpointProfileCount,
+    },
+  };
+}
+
+function mergeCloudConfigForValidation(
+  currentCloud: GuardianAgentConfig['assistant']['tools']['cloud'] | undefined,
+  cloudUpdate: NonNullable<NonNullable<NonNullable<ConfigUpdate['assistant']>['tools']>['cloud']>,
+): GuardianAgentConfig['assistant']['tools']['cloud'] {
+  const current = currentCloud ?? {
+    enabled: false,
+    cpanelProfiles: [],
+    vercelProfiles: [],
+    cloudflareProfiles: [],
+    awsProfiles: [],
+    gcpProfiles: [],
+    azureProfiles: [],
+  };
+
+  return {
+    ...current,
+    ...cloudUpdate,
+    cpanelProfiles: Array.isArray(cloudUpdate.cpanelProfiles)
+      ? cloudUpdate.cpanelProfiles.map((profile) => {
+        const existing = current.cpanelProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          defaultCpanelUser: hasOwnProp(profile, 'defaultCpanelUser') ? trimOptionalString(profile.defaultCpanelUser) : existing?.defaultCpanelUser,
+        };
+      })
+      : current.cpanelProfiles,
+    vercelProfiles: Array.isArray(cloudUpdate.vercelProfiles)
+      ? cloudUpdate.vercelProfiles.map((profile) => {
+        const existing = current.vercelProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? trimOptionalString(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          teamId: hasOwnProp(profile, 'teamId') ? trimOptionalString(profile.teamId) : existing?.teamId,
+          slug: hasOwnProp(profile, 'slug') ? trimOptionalString(profile.slug) : existing?.slug,
+        };
+      })
+      : current.vercelProfiles,
+    cloudflareProfiles: Array.isArray(cloudUpdate.cloudflareProfiles)
+      ? cloudUpdate.cloudflareProfiles.map((profile) => {
+        const existing = current.cloudflareProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? trimOptionalString(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          accountId: hasOwnProp(profile, 'accountId') ? trimOptionalString(profile.accountId) : existing?.accountId,
+          defaultZoneId: hasOwnProp(profile, 'defaultZoneId') ? trimOptionalString(profile.defaultZoneId) : existing?.defaultZoneId,
+        };
+      })
+      : current.cloudflareProfiles,
+    awsProfiles: Array.isArray(cloudUpdate.awsProfiles)
+      ? cloudUpdate.awsProfiles.map((profile) => {
+        const existing = current.awsProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          accessKeyId: hasOwnProp(profile, 'accessKeyId') ? trimOptionalString(profile.accessKeyId) : existing?.accessKeyId,
+          accessKeyIdCredentialRef: hasOwnProp(profile, 'accessKeyIdCredentialRef') ? trimOptionalString(profile.accessKeyIdCredentialRef) : existing?.accessKeyIdCredentialRef,
+          secretAccessKey: hasOwnProp(profile, 'secretAccessKey') ? trimOptionalString(profile.secretAccessKey) : existing?.secretAccessKey,
+          secretAccessKeyCredentialRef: hasOwnProp(profile, 'secretAccessKeyCredentialRef') ? trimOptionalString(profile.secretAccessKeyCredentialRef) : existing?.secretAccessKeyCredentialRef,
+          sessionToken: hasOwnProp(profile, 'sessionToken') ? trimOptionalString(profile.sessionToken) : existing?.sessionToken,
+          sessionTokenCredentialRef: hasOwnProp(profile, 'sessionTokenCredentialRef') ? trimOptionalString(profile.sessionTokenCredentialRef) : existing?.sessionTokenCredentialRef,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+        };
+      })
+      : current.awsProfiles,
+    gcpProfiles: Array.isArray(cloudUpdate.gcpProfiles)
+      ? cloudUpdate.gcpProfiles.map((profile) => {
+        const existing = current.gcpProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          location: hasOwnProp(profile, 'location') ? trimOptionalString(profile.location) : existing?.location,
+          accessToken: hasOwnProp(profile, 'accessToken') ? trimOptionalString(profile.accessToken) : existing?.accessToken,
+          accessTokenCredentialRef: hasOwnProp(profile, 'accessTokenCredentialRef') ? trimOptionalString(profile.accessTokenCredentialRef) : existing?.accessTokenCredentialRef,
+          serviceAccountJson: hasOwnProp(profile, 'serviceAccountJson') ? trimOptionalString(profile.serviceAccountJson) : existing?.serviceAccountJson,
+          serviceAccountCredentialRef: hasOwnProp(profile, 'serviceAccountCredentialRef') ? trimOptionalString(profile.serviceAccountCredentialRef) : existing?.serviceAccountCredentialRef,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+        };
+      })
+      : current.gcpProfiles,
+    azureProfiles: Array.isArray(cloudUpdate.azureProfiles)
+      ? cloudUpdate.azureProfiles.map((profile) => {
+        const existing = current.azureProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          tenantId: hasOwnProp(profile, 'tenantId') ? trimOptionalString(profile.tenantId) : existing?.tenantId,
+          accessToken: hasOwnProp(profile, 'accessToken') ? trimOptionalString(profile.accessToken) : existing?.accessToken,
+          accessTokenCredentialRef: hasOwnProp(profile, 'accessTokenCredentialRef') ? trimOptionalString(profile.accessTokenCredentialRef) : existing?.accessTokenCredentialRef,
+          clientId: hasOwnProp(profile, 'clientId') ? trimOptionalString(profile.clientId) : existing?.clientId,
+          clientIdCredentialRef: hasOwnProp(profile, 'clientIdCredentialRef') ? trimOptionalString(profile.clientIdCredentialRef) : existing?.clientIdCredentialRef,
+          clientSecret: hasOwnProp(profile, 'clientSecret') ? trimOptionalString(profile.clientSecret) : existing?.clientSecret,
+          clientSecretCredentialRef: hasOwnProp(profile, 'clientSecretCredentialRef') ? trimOptionalString(profile.clientSecretCredentialRef) : existing?.clientSecretCredentialRef,
+          defaultResourceGroup: hasOwnProp(profile, 'defaultResourceGroup') ? trimOptionalString(profile.defaultResourceGroup) : existing?.defaultResourceGroup,
+          blobBaseUrl: hasOwnProp(profile, 'blobBaseUrl') ? trimOptionalString(profile.blobBaseUrl) : existing?.blobBaseUrl,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+        };
+      })
+      : current.azureProfiles,
+  };
+}
+
 /** Strip sensitive fields from config for the dashboard. */
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   const llm: Record<string, { provider: string; model: string; baseUrl?: string }> = {};
@@ -2192,6 +2606,8 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       baseUrl: cfg.baseUrl,
     };
   }
+  const searchConfig = config.assistant.tools.search;
+  const searchSources = Array.isArray(searchConfig?.sources) ? searchConfig.sources : [];
 
   return {
     llm,
@@ -2265,7 +2681,9 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         enabled: config.assistant.notifications.enabled,
         minSeverity: config.assistant.notifications.minSeverity,
         auditEventTypes: [...config.assistant.notifications.auditEventTypes],
+        suppressedDetailTypes: [...config.assistant.notifications.suppressedDetailTypes],
         cooldownMs: config.assistant.notifications.cooldownMs,
+        deliveryMode: config.assistant.notifications.deliveryMode,
         destinations: { ...config.assistant.notifications.destinations },
       },
       quickActions: {
@@ -2365,11 +2783,12 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           openRouterConfigured: !!(config.assistant.tools.webSearch?.openRouterApiKey || config.assistant.tools.webSearch?.openRouterCredentialRef),
           braveConfigured: !!(config.assistant.tools.webSearch?.braveApiKey || config.assistant.tools.webSearch?.braveCredentialRef),
         },
-        qmd: config.assistant.tools.qmd ? {
-          enabled: config.assistant.tools.qmd.enabled,
-          sourceCount: config.assistant.tools.qmd.sources.length,
-          defaultMode: config.assistant.tools.qmd.defaultMode ?? 'query',
+        search: searchConfig ? {
+          enabled: searchConfig.enabled,
+          sourceCount: searchSources.length,
+          defaultMode: searchConfig.defaultMode ?? 'keyword',
         } : undefined,
+        cloud: redactCloudConfig(config.assistant.tools.cloud),
         agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
       },
     },
@@ -2431,15 +2850,33 @@ function buildDashboardCallbacks(
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
   policyState: PolicyState,
-): DashboardCallbacks {
+): DashboardCallbacks & {
+  telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
+  reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
+} {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
     const content = readFileSync(configPath, 'utf-8');
     return (yaml.load(content) as Record<string, unknown>) ?? {};
   };
 
+  const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+  const trimOrUndefined = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const existingProfilesById = (rawCloud: Record<string, unknown>, key: string): Map<string, Record<string, unknown>> => {
+    const profiles = Array.isArray(rawCloud[key]) ? rawCloud[key] : [];
+    return new Map(
+      profiles
+        .filter(isRecord)
+        .map((profile) => [typeof profile.id === 'string' ? profile.id : '', profile] as const)
+        .filter(([id]) => !!id),
+    );
+  };
+
   /** Mutable ref set from main() to enable hot-reload of the Telegram channel. */
   const telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null } = { current: null };
+
+  /** Mutable ref set from main() to enable hot-reload of the Document Search engine. */
+  const reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null } = { current: null };
 
   const persistAndApplyConfig = (
     rawConfig: Record<string, unknown>,
@@ -2501,6 +2938,7 @@ function buildDashboardCallbacks(
       };
       applyWebAuthRuntime(webAuthStateRef.current);
       const prevTelegram = configRef.current.channels.telegram;
+      const prevSearch = configRef.current.assistant?.tools?.search;
       configRef.current = nextConfig;
 
       // Hot-reload Telegram channel when config changes
@@ -2513,6 +2951,19 @@ function buildDashboardCallbacks(
       if (telegramChanged && telegramReloadRef.current) {
         telegramReloadRef.current().catch(err => {
           log.error({ err }, 'Telegram hot-reload failed');
+        });
+      }
+
+      // Hot-reload Search engine when config changes
+      const nextSearch = nextConfig.assistant?.tools?.search;
+      const searchChanged =
+        (prevSearch?.enabled !== nextSearch?.enabled)
+        || (JSON.stringify(prevSearch?.sources) !== JSON.stringify(nextSearch?.sources))
+        || (prevSearch?.sqlitePath !== nextSearch?.sqlitePath)
+        || (JSON.stringify(prevSearch?.embedding) !== JSON.stringify(nextSearch?.embedding));
+      if (searchChanged && reloadSearchRef.current) {
+        reloadSearchRef.current().catch(err => {
+          log.error({ err }, 'Search engine hot-reload failed');
         });
       }
 
@@ -2651,8 +3102,7 @@ function buildDashboardCallbacks(
     const results: DashboardProviderInfo[] = [];
     for (const [name, provider] of runtime.providers) {
       const llmConfig = configRef.current.llm[name] as LLMConfig | undefined;
-      const isLocal = provider.name === 'ollama' ||
-        (llmConfig?.baseUrl && (llmConfig.baseUrl.includes('localhost') || llmConfig.baseUrl.includes('127.0.0.1')));
+      const isLocal = isLocalProviderEndpoint(llmConfig?.baseUrl, provider.name);
 
       let connected = false;
       let availableModels: string[] | undefined;
@@ -2804,8 +3254,7 @@ function buildDashboardCallbacks(
       const providers: DashboardProviderInfo[] = [];
       for (const [name, provider] of runtime.providers) {
         const llmConfig = configRef.current.llm[name] as LLMConfig | undefined;
-        const isLocal = provider.name === 'ollama' ||
-          (llmConfig?.baseUrl && (llmConfig.baseUrl.includes('localhost') || llmConfig.baseUrl.includes('127.0.0.1')));
+        const isLocal = isLocalProviderEndpoint(llmConfig?.baseUrl, provider.name);
         providers.push({
           name,
           type: provider.name,
@@ -3680,7 +4129,9 @@ function buildDashboardCallbacks(
           if (!model) {
             return { success: false, message: 'model is required' };
           }
+          const localProviderEndpoint = isLocalProviderEndpoint(input.baseUrl?.trim() || existingProvider?.baseUrl, providerType);
           if (providerType !== 'ollama'
+            && !localProviderEndpoint
             && !(input.apiKey?.trim())
             && !(input.credentialRef?.trim())
             && !existingProvider?.apiKey
@@ -3907,13 +4358,27 @@ function buildDashboardCallbacks(
         },
         async () => {
           const currentConfig = configRef.current;
+          const cloudPatch = updates.assistant?.tools?.cloud
+            ? mergeCloudConfigForValidation(currentConfig.assistant.tools.cloud, updates.assistant.tools.cloud)
+            : undefined;
+          const assistantPatch = updates.assistant
+            ? {
+              ...updates.assistant,
+              tools: updates.assistant.tools
+                ? {
+                  ...updates.assistant.tools,
+                  ...(cloudPatch ? { cloud: cloudPatch } : {}),
+                }
+                : undefined,
+            }
+            : undefined;
 
           // Validate the next in-memory config first.
           const patch = {
             defaultProvider: updates.defaultProvider,
             llm: updates.llm as unknown as GuardianAgentConfig['llm'] | undefined,
             channels: updates.channels as unknown as GuardianAgentConfig['channels'] | undefined,
-            assistant: updates.assistant as unknown as GuardianAgentConfig['assistant'] | undefined,
+            assistant: assistantPatch as unknown as GuardianAgentConfig['assistant'] | undefined,
           } as Partial<GuardianAgentConfig>;
           const nextConfig = deepMerge(currentConfig, patch);
           const errors = validateConfig(nextConfig);
@@ -3995,15 +4460,300 @@ function buildDashboardCallbacks(
             rawChannels.telegram = rawTelegram;
           }
 
-          const qmdEnabledUpdate = updates.assistant?.tools?.qmd?.enabled;
-          if (typeof qmdEnabledUpdate === 'boolean') {
+          const notificationUpdates = updates.assistant?.notifications;
+          if (notificationUpdates && typeof notificationUpdates === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.notifications = (rawAssistant.notifications as Record<string, unknown> | undefined) ?? {};
+            const rawNotifications = rawAssistant.notifications as Record<string, unknown>;
+
+            if (typeof notificationUpdates.enabled === 'boolean') {
+              rawNotifications.enabled = notificationUpdates.enabled;
+            }
+            if (notificationUpdates.minSeverity === 'info' || notificationUpdates.minSeverity === 'warn' || notificationUpdates.minSeverity === 'critical') {
+              rawNotifications.minSeverity = notificationUpdates.minSeverity;
+            }
+            if (Array.isArray(notificationUpdates.auditEventTypes)) {
+              rawNotifications.auditEventTypes = notificationUpdates.auditEventTypes;
+            }
+            if (Array.isArray(notificationUpdates.suppressedDetailTypes)) {
+              rawNotifications.suppressedDetailTypes = notificationUpdates.suppressedDetailTypes;
+            }
+            if (typeof notificationUpdates.cooldownMs === 'number' && Number.isFinite(notificationUpdates.cooldownMs)) {
+              rawNotifications.cooldownMs = notificationUpdates.cooldownMs;
+            }
+            if (notificationUpdates.deliveryMode === 'all' || notificationUpdates.deliveryMode === 'selected') {
+              rawNotifications.deliveryMode = notificationUpdates.deliveryMode;
+            }
+            if (notificationUpdates.destinations && typeof notificationUpdates.destinations === 'object') {
+              rawNotifications.destinations = (rawNotifications.destinations as Record<string, unknown> | undefined) ?? {};
+              const rawDestinations = rawNotifications.destinations as Record<string, unknown>;
+              if (typeof notificationUpdates.destinations.web === 'boolean') rawDestinations.web = notificationUpdates.destinations.web;
+              if (typeof notificationUpdates.destinations.cli === 'boolean') rawDestinations.cli = notificationUpdates.destinations.cli;
+              if (typeof notificationUpdates.destinations.telegram === 'boolean') rawDestinations.telegram = notificationUpdates.destinations.telegram;
+            }
+          }
+
+          const cloudUpdate = updates.assistant?.tools?.cloud;
+          if (cloudUpdate && typeof cloudUpdate === 'object') {
             rawConfig.assistant = rawConfig.assistant ?? {};
             const rawAssistant = rawConfig.assistant as Record<string, unknown>;
             rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
             const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.qmd = (rawTools.qmd as Record<string, unknown> | undefined) ?? {};
-            const rawQmd = rawTools.qmd as Record<string, unknown>;
-            rawQmd.enabled = qmdEnabledUpdate;
+            rawTools.cloud = (rawTools.cloud as Record<string, unknown> | undefined) ?? {};
+            const rawCloud = rawTools.cloud as Record<string, unknown>;
+
+            if (typeof cloudUpdate.enabled === 'boolean') {
+              rawCloud.enabled = cloudUpdate.enabled;
+            }
+
+            if (Array.isArray(cloudUpdate.cpanelProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'cpanelProfiles');
+              rawCloud.cpanelProfiles = cloudUpdate.cpanelProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                  type: profile.type,
+                  host: profile.host.trim(),
+                  username: profile.username.trim(),
+                };
+                if (typeof profile.port === 'number' && Number.isFinite(profile.port)) next.port = profile.port;
+                if (typeof profile.ssl === 'boolean') next.ssl = profile.ssl;
+                if (typeof profile.allowSelfSigned === 'boolean') next.allowSelfSigned = profile.allowSelfSigned;
+                if (hasOwn(profile, 'defaultCpanelUser')) {
+                  const trimmed = trimOrUndefined(profile.defaultCpanelUser);
+                  if (trimmed) next.defaultCpanelUser = trimmed;
+                } else if (typeof current?.defaultCpanelUser === 'string') {
+                  next.defaultCpanelUser = current.defaultCpanelUser;
+                }
+                if (hasOwn(profile, 'credentialRef')) {
+                  const trimmed = trimOrUndefined(profile.credentialRef);
+                  if (trimmed) next.credentialRef = trimmed;
+                } else if (typeof current?.credentialRef === 'string') {
+                  next.credentialRef = current.credentialRef;
+                }
+                if (hasOwn(profile, 'apiToken')) {
+                  const trimmed = trimOrUndefined(profile.apiToken);
+                  if (trimmed) next.apiToken = trimmed;
+                } else if (typeof current?.apiToken === 'string') {
+                  next.apiToken = current.apiToken;
+                }
+                return next;
+              });
+            }
+
+            if (Array.isArray(cloudUpdate.vercelProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'vercelProfiles');
+              rawCloud.vercelProfiles = cloudUpdate.vercelProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                };
+                if (hasOwn(profile, 'apiBaseUrl')) {
+                  const trimmed = trimOrUndefined(profile.apiBaseUrl);
+                  if (trimmed) next.apiBaseUrl = trimmed;
+                } else if (typeof current?.apiBaseUrl === 'string') {
+                  next.apiBaseUrl = current.apiBaseUrl;
+                }
+                if (hasOwn(profile, 'credentialRef')) {
+                  const trimmed = trimOrUndefined(profile.credentialRef);
+                  if (trimmed) next.credentialRef = trimmed;
+                } else if (typeof current?.credentialRef === 'string') {
+                  next.credentialRef = current.credentialRef;
+                }
+                if (hasOwn(profile, 'apiToken')) {
+                  const trimmed = trimOrUndefined(profile.apiToken);
+                  if (trimmed) next.apiToken = trimmed;
+                } else if (typeof current?.apiToken === 'string') {
+                  next.apiToken = current.apiToken;
+                }
+                if (hasOwn(profile, 'teamId')) {
+                  const trimmed = trimOrUndefined(profile.teamId);
+                  if (trimmed) next.teamId = trimmed;
+                } else if (typeof current?.teamId === 'string') {
+                  next.teamId = current.teamId;
+                }
+                if (hasOwn(profile, 'slug')) {
+                  const trimmed = trimOrUndefined(profile.slug);
+                  if (trimmed) next.slug = trimmed;
+                } else if (typeof current?.slug === 'string') {
+                  next.slug = current.slug;
+                }
+                return next;
+              });
+            }
+
+            if (Array.isArray(cloudUpdate.cloudflareProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'cloudflareProfiles');
+              rawCloud.cloudflareProfiles = cloudUpdate.cloudflareProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                };
+                if (hasOwn(profile, 'apiBaseUrl')) {
+                  const trimmed = trimOrUndefined(profile.apiBaseUrl);
+                  if (trimmed) next.apiBaseUrl = trimmed;
+                } else if (typeof current?.apiBaseUrl === 'string') {
+                  next.apiBaseUrl = current.apiBaseUrl;
+                }
+                if (hasOwn(profile, 'credentialRef')) {
+                  const trimmed = trimOrUndefined(profile.credentialRef);
+                  if (trimmed) next.credentialRef = trimmed;
+                } else if (typeof current?.credentialRef === 'string') {
+                  next.credentialRef = current.credentialRef;
+                }
+                if (hasOwn(profile, 'apiToken')) {
+                  const trimmed = trimOrUndefined(profile.apiToken);
+                  if (trimmed) next.apiToken = trimmed;
+                } else if (typeof current?.apiToken === 'string') {
+                  next.apiToken = current.apiToken;
+                }
+                if (hasOwn(profile, 'accountId')) {
+                  const trimmed = trimOrUndefined(profile.accountId);
+                  if (trimmed) next.accountId = trimmed;
+                } else if (typeof current?.accountId === 'string') {
+                  next.accountId = current.accountId;
+                }
+                if (hasOwn(profile, 'defaultZoneId')) {
+                  const trimmed = trimOrUndefined(profile.defaultZoneId);
+                  if (trimmed) next.defaultZoneId = trimmed;
+                } else if (typeof current?.defaultZoneId === 'string') {
+                  next.defaultZoneId = current.defaultZoneId;
+                }
+                return next;
+              });
+            }
+
+            if (Array.isArray(cloudUpdate.awsProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'awsProfiles');
+              rawCloud.awsProfiles = cloudUpdate.awsProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                  region: profile.region.trim(),
+                };
+                for (const field of [
+                  'accessKeyId',
+                  'accessKeyIdCredentialRef',
+                  'secretAccessKey',
+                  'secretAccessKeyCredentialRef',
+                  'sessionToken',
+                  'sessionTokenCredentialRef',
+                ] as const) {
+                  if (hasOwn(profile, field)) {
+                    const trimmed = trimOrUndefined(profile[field]);
+                    if (trimmed) next[field] = trimmed;
+                  } else if (typeof current?.[field] === 'string') {
+                    next[field] = current[field];
+                  }
+                }
+                if (hasOwn(profile, 'endpoints')) {
+                  const endpoints = sanitizeStringRecord(profile.endpoints);
+                  if (endpoints) next.endpoints = endpoints;
+                } else if (isRecord(current?.endpoints)) {
+                  next.endpoints = current.endpoints;
+                }
+                return next;
+              });
+            }
+
+            if (Array.isArray(cloudUpdate.gcpProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'gcpProfiles');
+              rawCloud.gcpProfiles = cloudUpdate.gcpProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                  projectId: profile.projectId.trim(),
+                };
+                if (hasOwn(profile, 'location')) {
+                  const trimmed = trimOrUndefined(profile.location);
+                  if (trimmed) next.location = trimmed;
+                } else if (typeof current?.location === 'string') {
+                  next.location = current.location;
+                }
+                for (const field of [
+                  'accessToken',
+                  'accessTokenCredentialRef',
+                  'serviceAccountJson',
+                  'serviceAccountCredentialRef',
+                ] as const) {
+                  if (hasOwn(profile, field)) {
+                    const trimmed = trimOrUndefined(profile[field]);
+                    if (trimmed) next[field] = trimmed;
+                  } else if (typeof current?.[field] === 'string') {
+                    next[field] = current[field];
+                  }
+                }
+                if (hasOwn(profile, 'endpoints')) {
+                  const endpoints = sanitizeStringRecord(profile.endpoints);
+                  if (endpoints) next.endpoints = endpoints;
+                } else if (isRecord(current?.endpoints)) {
+                  next.endpoints = current.endpoints;
+                }
+                return next;
+              });
+            }
+
+            if (Array.isArray(cloudUpdate.azureProfiles)) {
+              const previous = existingProfilesById(rawCloud, 'azureProfiles');
+              rawCloud.azureProfiles = cloudUpdate.azureProfiles.map((profile) => {
+                const current = previous.get(profile.id);
+                const next: Record<string, unknown> = {
+                  id: profile.id.trim(),
+                  name: profile.name.trim(),
+                  subscriptionId: profile.subscriptionId.trim(),
+                };
+                for (const field of [
+                  'tenantId',
+                  'accessToken',
+                  'accessTokenCredentialRef',
+                  'clientId',
+                  'clientIdCredentialRef',
+                  'clientSecret',
+                  'clientSecretCredentialRef',
+                  'defaultResourceGroup',
+                  'blobBaseUrl',
+                ] as const) {
+                  if (hasOwn(profile, field)) {
+                    const trimmed = trimOrUndefined(profile[field]);
+                    if (trimmed) next[field] = trimmed;
+                  } else if (typeof current?.[field] === 'string') {
+                    next[field] = current[field];
+                  }
+                }
+                if (hasOwn(profile, 'endpoints')) {
+                  const endpoints = sanitizeStringRecord(profile.endpoints);
+                  if (endpoints) next.endpoints = endpoints;
+                } else if (isRecord(current?.endpoints)) {
+                  next.endpoints = current.endpoints;
+                }
+                return next;
+              });
+            }
+          }
+
+          const searchUpdate = updates.assistant?.tools?.search;
+          if (searchUpdate && typeof searchUpdate === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.search = (rawTools.search as Record<string, unknown> | undefined) ?? {};
+            const rawSearch = rawTools.search as Record<string, unknown>;
+            if (!Array.isArray(rawSearch.sources)) {
+              rawSearch.sources = [];
+            }
+            if (typeof searchUpdate.enabled === 'boolean') {
+              rawSearch.enabled = searchUpdate.enabled;
+            }
+            if (Array.isArray(searchUpdate.sources)) {
+              rawSearch.sources = searchUpdate.sources;
+            }
           }
 
           // Sandbox enforcement mode
@@ -4292,6 +5042,9 @@ function buildDashboardCallbacks(
     set onTelegramReload(fn: (() => Promise<{ success: boolean; message: string }>) | undefined) {
       telegramReloadRef.current = fn ?? null;
     },
+
+    telegramReloadRef,
+    reloadSearchRef,
   };
 }
 
@@ -4728,26 +5481,45 @@ async function main(): Promise<void> {
     log.info({ count: skillRegistry.list().length }, 'Native skills loaded');
   }
 
-  // ─── QMD Search Service ─────────────────────────────
-  let qmdSearch: import('./runtime/qmd-search.js').QMDSearchService | undefined;
-  const qmdConfig = config.assistant.tools.qmd;
-  if (qmdConfig?.enabled) {
-    const { QMDSearchService } = await import('./runtime/qmd-search.js');
-    qmdSearch = new QMDSearchService(qmdConfig, sandboxConfig);
-    const installCheck = await qmdSearch.checkInstalled();
-    if (installCheck.installed) {
-      log.info({ version: installCheck.version }, 'QMD search engine detected');
-      const syncResult = await qmdSearch.syncSources();
-      if (syncResult.synced.length > 0) {
-        log.info({ synced: syncResult.synced }, 'QMD collections synced');
+  // ─── Document Search Service ─────────────────────────
+  let docSearch: import('./search/search-service.js').SearchService | undefined;
+  const initialSearchReloadRef = {
+    current: async () => {
+      try {
+        const searchConfig = configRef.current.assistant?.tools?.search;
+        if (docSearch) {
+          docSearch.close();
+          docSearch = undefined;
+          toolExecutor.setDocSearch(undefined);
+        }
+        if (searchConfig?.enabled) {
+          const { SearchService } = await import('./search/search-service.js');
+          docSearch = new SearchService(searchConfig);
+          if (docSearch.isAvailable()) {
+            log.info('Native document search engine (re)initialized');
+            toolExecutor.setDocSearch(docSearch);
+            // Auto-index all enabled sources on startup/reload
+            const indexResult = await docSearch.indexAll();
+            if (indexResult.synced.length > 0) {
+              log.info({ synced: indexResult.synced }, 'Document search sources indexed');
+            }
+            if (indexResult.errors.length > 0) {
+              log.warn({ errors: indexResult.errors }, 'Some search sources failed to index');
+            }
+          } else {
+            log.warn('Document search enabled but SQLite driver not available');
+          }
+        }
+        return { success: true, message: 'Search engine reloaded.' };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        docSearch = undefined;
+        toolExecutor.setDocSearch(undefined);
+        log.error({ err }, 'Search engine reload failed');
+        return { success: false, message: `Search engine reload failed: ${message}` };
       }
-      if (syncResult.errors.length > 0) {
-        log.warn({ errors: syncResult.errors }, 'QMD collection sync errors');
-      }
-    } else {
-      log.warn('QMD enabled but binary not available (bundled dependency missing and not found on PATH)');
-    }
-  }
+    },
+  };
 
   // ─── Google Workspace CLI Service ──────────────────────
   let gwsService: GWSService | undefined;
@@ -5130,7 +5902,7 @@ async function main(): Promise<void> {
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
-    qmdSearch,
+    docSearch,
     gwsService,
     deviceInventory,
     networkBaseline,
@@ -5270,6 +6042,11 @@ async function main(): Promise<void> {
   };
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
+  const initialSearchReload = await initialSearchReloadRef.current();
+  if (!initialSearchReload.success) {
+    console.error(initialSearchReload.message);
+  }
+
   const connectors = new ConnectorPlaybookService({
     config: config.assistant.connectors,
     runTool: async (request) => toolExecutor.runTool(request),
@@ -5828,7 +6605,11 @@ async function main(): Promise<void> {
     },
   };
 
-  const dashboardCallbacks = buildDashboardCallbacks(
+  const {
+    telegramReloadRef,
+    reloadSearchRef,
+    ...dashboardCallbacks
+  } = buildDashboardCallbacks(
     runtime,
     configRef,
     conversations,
@@ -5857,6 +6638,8 @@ async function main(): Promise<void> {
     sentinelAuditService,
     policyState,
   );
+
+  reloadSearchRef.current = initialSearchReloadRef.current;
 
   // Killswitch: triggers graceful shutdown from CLI or web
   dashboardCallbacks.onKillswitch = () => {
@@ -6031,31 +6814,53 @@ async function main(): Promise<void> {
     },
   });
 
-  // ─── QMD Search callbacks ──────────────────────────────
-  if (qmdSearch) {
-    dashboardCallbacks.onQMDStatus = () => qmdSearch!.status();
-    dashboardCallbacks.onQMDSources = () => qmdSearch!.getSources();
-    dashboardCallbacks.onQMDSourceAdd = (source) => {
+  // ─── Document Search callbacks ──────────────────────────
+  dashboardCallbacks.onSearchStatus = () => {
+    const runtimeStatus = docSearch?.status();
+    return {
+      installed: docSearch?.isAvailable() === true,
+      available: runtimeStatus?.available ?? false,
+      version: 'native',
+      collections: runtimeStatus?.collections ?? [],
+      configuredSources: runtimeStatus?.configuredSources ?? (
+        configRef.current.assistant.tools.search?.sources ?? []
+      ).map((source) => ({
+        id: source.id,
+        name: source.name,
+        type: source.type,
+        path: source.path,
+        enabled: source.enabled,
+      })),
+      vectorSearchAvailable: runtimeStatus?.vectorSearchAvailable ?? false,
+    };
+  };
+  dashboardCallbacks.onSearchSources = () => docSearch
+    ? docSearch.getSources()
+    : (configRef.current.assistant.tools.search?.sources ?? []);
+  dashboardCallbacks.onSearchPickPath = ({ kind }) => pickNativeSearchPath(kind);
+
+  if (docSearch) {
+    dashboardCallbacks.onSearchSourceAdd = (source: any) => {
       try {
-        qmdSearch!.addSource(source);
+        docSearch!.addSource(source);
         return { success: true, message: `Source '${source.id}' added.` };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      } catch (err: any) {
+        return { success: false, message: err.message ?? String(err) };
       }
     };
-    dashboardCallbacks.onQMDSourceRemove = (id) => {
-      const removed = qmdSearch!.removeSource(id);
+    dashboardCallbacks.onSearchSourceRemove = (id: string) => {
+      const removed = docSearch!.removeSource(id);
       return removed
         ? { success: true, message: `Source '${id}' removed.` }
         : { success: false, message: `Source '${id}' not found.` };
     };
-    dashboardCallbacks.onQMDSourceToggle = (id, enabled) => {
-      const toggled = qmdSearch!.toggleSource(id, enabled);
+    dashboardCallbacks.onSearchSourceToggle = (id: string, enabled: boolean) => {
+      const toggled = docSearch!.toggleSource(id, enabled);
       return toggled
         ? { success: true, message: `Source '${id}' ${enabled ? 'enabled' : 'disabled'}.` }
         : { success: false, message: `Source '${id}' not found.` };
     };
-    dashboardCallbacks.onQMDReindex = (collection) => qmdSearch!.reindex(collection);
+    dashboardCallbacks.onSearchReindex = (collection?: string) => docSearch!.reindex(collection);
   }
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
@@ -6132,8 +6937,9 @@ async function main(): Promise<void> {
   }
 
   let cliChannel: CLIChannel | null = null;
+  const canStartInteractiveCli = !!process.stdin.isTTY && !!process.stdout.isTTY;
 
-  if (config.channels.cli?.enabled) {
+  if (config.channels.cli?.enabled && canStartInteractiveCli) {
     const enabledChannels: string[] = ['cli'];
     if (config.channels.web?.enabled) enabledChannels.push('web');
     if (config.channels.telegram?.enabled) enabledChannels.push('telegram');
@@ -6181,6 +6987,11 @@ async function main(): Promise<void> {
       return runtime.dispatchMessage(decision.agentId, msg);
     });
     channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
+  } else if (config.channels.cli?.enabled) {
+    log.info({
+      stdinIsTTY: !!process.stdin.isTTY,
+      stdoutIsTTY: !!process.stdout.isTTY,
+    }, 'CLI channel skipped because stdio is not interactive');
   }
 
   let activeTelegram: TelegramChannel | null = null;
@@ -6326,7 +7137,7 @@ async function main(): Promise<void> {
   }
 
   const notificationService = new NotificationService({
-    config: config.assistant.notifications,
+    getConfig: () => configRef.current.assistant.notifications,
     auditLog: runtime.auditLog,
     eventBus: runtime.eventBus,
     senders: {
@@ -6474,6 +7285,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  const fatalMessage = err instanceof Error
+    ? (err.stack ?? err.message)
+    : String(err);
+  console.error(`Fatal startup error: ${fatalMessage}`);
   log.error({ err }, 'Fatal error');
   process.exit(1);
 });

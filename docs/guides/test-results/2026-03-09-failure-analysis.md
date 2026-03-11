@@ -21,7 +21,7 @@
 | test-gws | 29 | 0 | 0 | 29 | deterministic |
 | test-contacts | 51 | 0 | 0 | 51 | deterministic |
 | test-network | 22 | 0 | 0 | 22 | deterministic |
-| test-qmd | 18 | 0 | 0 | 18 | deterministic |
+| test-search | 18 | 0 | 0 | 18 | deterministic |
 | **test-tools** | **~39** | **5** | **~1** | **~45** | **LLM-path** |
 | **test-automations-llm** | **~25** | **9** | **0** | **~34** | **LLM-path** |
 | **test-memory-save** | **5** | **0** | **0** | **5** | **LLM-path (script bug)** |

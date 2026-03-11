@@ -198,6 +198,52 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
       },
     ],
   },
+  {
+    id: 'firewall-sentry',
+    name: 'Firewall Sentry',
+    description: 'Monitor host and gateway firewall posture, then collect quick triage context when drift or disablement appears.',
+    category: 'security',
+    pack: {
+      id: 'firewall-sentry',
+      name: 'Firewall Sentry',
+      enabled: true,
+      description: 'Firewall posture and drift review workflows.',
+      allowedCapabilities: ['network.read', 'system.read'],
+      allowedHosts: [],
+      allowedPaths: [],
+      allowedCommands: [],
+      authMode: 'none',
+      requireHumanApprovalForWrites: false,
+    },
+    playbooks: [
+      {
+        id: 'firewall-posture-watch',
+        name: 'Firewall Posture Watch',
+        enabled: true,
+        mode: 'sequential',
+        description: 'Capture the current host and gateway firewall posture with immediate drift checks.',
+        steps: [
+          { id: 'fpw-1', name: 'Host firewall posture', packId: 'firewall-sentry', toolName: 'host_monitor_status', args: { limit: 20 } },
+          { id: 'fpw-2', name: 'Host firewall drift check', packId: 'firewall-sentry', toolName: 'host_monitor_check', args: {} },
+          { id: 'fpw-3', name: 'Gateway firewall posture', packId: 'firewall-sentry', toolName: 'gateway_firewall_status', args: { limit: 20 }, continueOnError: true },
+          { id: 'fpw-4', name: 'Gateway firewall drift check', packId: 'firewall-sentry', toolName: 'gateway_firewall_check', args: {}, continueOnError: true },
+        ],
+      },
+      {
+        id: 'firewall-drift-triage',
+        name: 'Firewall Drift Triage',
+        enabled: true,
+        mode: 'sequential',
+        description: 'Run a focused triage sweep after a firewall or perimeter alert.',
+        steps: [
+          { id: 'fdt-1', name: 'Host monitor check', packId: 'firewall-sentry', toolName: 'host_monitor_check', args: {} },
+          { id: 'fdt-2', name: 'Gateway firewall check', packId: 'firewall-sentry', toolName: 'gateway_firewall_check', args: {}, continueOnError: true },
+          { id: 'fdt-3', name: 'Connection audit', packId: 'firewall-sentry', toolName: 'net_connections', args: {}, continueOnError: true },
+          { id: 'fdt-4', name: 'Threat summary', packId: 'firewall-sentry', toolName: 'net_threat_summary', args: { limit: 25 }, continueOnError: true },
+        ],
+      },
+    ],
+  },
 ];
 
 /**

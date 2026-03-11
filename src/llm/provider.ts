@@ -2,38 +2,41 @@
  * LLM provider factory.
  *
  * Creates the appropriate provider instance based on configuration.
+ * Uses ProviderRegistry internally — all providers are built-in,
+ * no external plugin loading.
  */
 
 import type { LLMProvider } from './types.js';
 import type { LLMConfig, FailoverConfig } from '../config/types.js';
-import { OllamaProvider } from './ollama.js';
-import { AnthropicProvider } from './anthropic.js';
-import { OpenAIProvider } from './openai.js';
+import { ProviderRegistry } from './provider-registry.js';
 import { FailoverProvider } from './failover-provider.js';
+
+/** Shared registry instance. */
+let sharedRegistry: ProviderRegistry | undefined;
+
+/** Get or create the shared provider registry. */
+export function getProviderRegistry(): ProviderRegistry {
+  if (!sharedRegistry) {
+    sharedRegistry = new ProviderRegistry();
+  }
+  return sharedRegistry;
+}
+
+/** Set the shared provider registry (for testing). */
+export function setProviderRegistry(registry: ProviderRegistry): void {
+  sharedRegistry = registry;
+}
 
 /** Create an LLM provider from configuration. */
 export function createProvider(config: LLMConfig): LLMProvider {
-  switch (config.provider) {
-    case 'ollama':
-      return new OllamaProvider(config);
-    case 'anthropic':
-      return new AnthropicProvider(config);
-    case 'openai':
-      return new OpenAIProvider(config);
-    default:
-      throw new Error(`Unknown LLM provider: ${config.provider as string}`);
-  }
+  return getProviderRegistry().createProvider(config);
 }
 
 /** Create all providers from a config map. */
 export function createProviders(
   configs: Record<string, LLMConfig>,
 ): Map<string, LLMProvider> {
-  const providers = new Map<string, LLMProvider>();
-  for (const [name, config] of Object.entries(configs)) {
-    providers.set(name, createProvider(config));
-  }
-  return providers;
+  return getProviderRegistry().createProviders(configs);
 }
 
 /**
@@ -44,9 +47,10 @@ export function createFailoverProvider(
   configs: Record<string, LLMConfig>,
   failoverConfig?: FailoverConfig,
 ): FailoverProvider {
+  const registry = getProviderRegistry();
   const providerEntries = Object.entries(configs).map(([name, config]) => ({
     name,
-    provider: createProvider(config),
+    provider: registry.createProvider(config),
     priority: config.priority ?? 10,
   }));
 

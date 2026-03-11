@@ -308,15 +308,4 @@ function capSnapshot(text: string): string {
 }
 
 /** Check if a hostname is a private/internal address (SSRF protection). */
-export function isPrivateHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === 'localhost' || h === '[::1]') return true;
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true;
-  if (/^0\./.test(h)) return true;
-  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')) return true;
-  return false;
-}
+export { isPrivateAddress as isPrivateHost } from '../guardian/ssrf-protection.js';

@@ -27,4 +27,17 @@ describe('builtin pack templates', () => {
     expect(service.upsertPack).toHaveBeenCalledTimes(1);
     expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);
   });
+
+  it('includes and installs the firewall sentry template', () => {
+    const service = createMockConnectorService();
+    const templates = listTemplates(service);
+    const template = templates.find((item) => item.id === 'firewall-sentry');
+    expect(template).toBeDefined();
+    expect(template?.playbookCount).toBe(2);
+
+    const result = installTemplate('firewall-sentry', service);
+    expect(result.success).toBe(true);
+    expect(service.upsertPack).toHaveBeenCalledTimes(1);
+    expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);
+  });
 });

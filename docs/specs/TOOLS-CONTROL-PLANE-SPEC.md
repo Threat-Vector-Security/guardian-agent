@@ -28,7 +28,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Network: `net_ping`, `net_arp_scan`, `net_port_check`, `net_interfaces`, `net_connections`, `net_dns_lookup`, `net_traceroute`, `net_oui_lookup`, `net_classify`, `net_banner_grab`, `net_fingerprint`, `net_wifi_scan`, `net_wifi_clients`, `net_connection_profiles`, `net_baseline`, `net_anomaly_check`, `net_threat_summary`, `net_traffic_baseline`, `net_threat_check`
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
 - Memory: `memory_search`, `memory_get`, `memory_save`
-- Search: `qmd_search`, `qmd_status`, `qmd_reindex`
+- Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
 - Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat (the assistant can create automations conversationally via these tools)
 - Policy: `update_tool_policy`
 

@@ -27,7 +27,7 @@ GuardianAgent already has **80+ tools** across security, networking, filesystem,
 | Network scanning | 14 net tools (`arp_scan`, `port_check`, `fingerprint`, etc.) | None — **GA is stronger here** |
 | Threat intel | `intel_*` tools (watchlist, scan, findings) | None — **GA unique** |
 | Memory (FTS5) | `memory_search/recall/save` + SQLite FTS5 | `memory-core` extension |
-| Document search | `qmd_search/status/reindex` (QMD hybrid) | `link-understanding` (vector) |
+| Document search | `doc_search/status/reindex` (native hybrid BM25 + vector) | `link-understanding` (vector) |
 | Cron/scheduling | `ScheduledTaskService` + cron tools | `cron-tool` + service |
 | Automation | `workflow_*` + `task_*` (8 tools) | Lobster pipelines |
 | Guardian security | 4-layer defense, policy engine | Security audit module |

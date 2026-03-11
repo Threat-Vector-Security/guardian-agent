@@ -431,6 +431,24 @@ llm:
     vi.unstubAllEnvs();
   });
 
+  it('should normalize partial search config created by config updates', () => {
+    const configPath = join(TEST_DIR, 'partial-search.yaml');
+    writeFileSync(
+      configPath,
+      `
+assistant:
+  tools:
+    search:
+      enabled: true
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.tools.search).toBeDefined();
+    expect(config.assistant.tools.search?.enabled).toBe(true);
+    expect(config.assistant.tools.search?.sources).toEqual([]);
+  });
+
   it('should throw for missing config file', () => {
     expect(() => loadConfigFromFile('/nonexistent/path/config.yaml')).toThrow(
       'Configuration file not found',

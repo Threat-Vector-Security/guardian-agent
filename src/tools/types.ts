@@ -43,7 +43,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   cloud: { label: 'Cloud & Hosting', description: 'Manage cloud and hosting providers such as cPanel/WHM.' },
   system: { label: 'System', description: 'OS info, resource usage, process listing, and service status.' },
   memory: { label: 'Memory', description: 'Search conversation history and manage persistent knowledge base.' },
-  search: { label: 'Search', description: 'Hybrid search across indexed document collections (BM25 + vector + LLM re-ranking via QMD).' },
+  search: { label: 'Search', description: 'Hybrid search across indexed document collections (BM25 keyword + vector similarity).' },
 };
 
 /** Mapping of each category to its tool names. */
@@ -126,7 +126,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   ],
   system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services', 'host_monitor_status', 'host_monitor_check', 'gateway_firewall_status', 'gateway_firewall_check'],
   memory: ['memory_search', 'memory_recall', 'memory_save'],
-  search: ['qmd_search', 'qmd_status', 'qmd_reindex'],
+  search: ['doc_search', 'doc_search_status', 'doc_search_reindex'],
 };
 
 export interface ToolDefinition {

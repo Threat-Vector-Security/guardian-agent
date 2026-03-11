@@ -16,6 +16,8 @@ import { PiiScanner, type PiiEntityType, DEFAULT_VALIDATION_PII_ENTITIES } from 
 import { RateLimiter } from './rate-limiter.js';
 import type { RateLimiterConfig } from './rate-limiter.js';
 import { ShellCommandController } from './shell-command-controller.js';
+import { SsrfController } from './ssrf-protection.js';
+import type { SsrfConfig } from './ssrf-protection.js';
 import { createLogger } from '../util/logging.js';
 import { runAdmissionPipeline, sortControllersByPhase } from './workflows.js';
 import { handleAdmissionResult } from './operations.js';
@@ -279,6 +281,8 @@ export interface GuardianCreateOptions {
   rateLimit?: Partial<RateLimiterConfig>;
   /** Allowed shell commands for ShellCommandController. */
   allowedCommands?: string[];
+  /** SSRF protection configuration. */
+  ssrf?: Partial<SsrfConfig>;
 }
 
 /** Guardian — composable admission controller pipeline. */
@@ -356,7 +360,7 @@ export class Guardian {
    *   MUTATING:   1. InputSanitizer
    *   VALIDATING: 2. RateLimiter → 3. CapabilityController →
    *               4. SecretScanController → 5. PiiScanController →
-   *               6. DeniedPathController
+   *               6. DeniedPathController → 7. SsrfController
    */
   static createDefault(options?: GuardianCreateOptions): Guardian {
     const guardian = new Guardian({ logDenials: options?.logDenials });
@@ -378,6 +382,11 @@ export class Guardian {
       guardian.use(new PiiScanController(options?.piiRedaction?.entities));
     }
     guardian.use(new DeniedPathController(options?.additionalSecretPatterns, options?.deniedPaths));
+
+    // SSRF protection (enabled by default)
+    if (options?.ssrf?.enabled !== false) {
+      guardian.use(new SsrfController(options?.ssrf));
+    }
 
     // Shell command validation (if allowed commands provided)
     if (options?.allowedCommands && options.allowedCommands.length > 0) {

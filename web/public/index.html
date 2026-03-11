@@ -12,9 +12,11 @@
     <div class="modal-content">
       <h2>Guardian Agent</h2>
       <p>Enter your authentication token to continue.</p>
-      <input type="password" id="auth-token-input" placeholder="Bearer token" autocomplete="off">
-      <button id="auth-submit" class="btn btn-primary">Connect</button>
-      <p id="auth-error" class="error-text" style="display:none;"></p>
+      <form id="auth-form">
+        <input type="password" id="auth-token-input" placeholder="Bearer token" autocomplete="off">
+        <button id="auth-submit" class="btn btn-primary" type="submit">Connect</button>
+        <p id="auth-error" class="error-text" style="display:none;"></p>
+      </form>
     </div>
   </div>
 

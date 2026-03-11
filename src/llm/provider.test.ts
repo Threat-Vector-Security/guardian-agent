@@ -37,7 +37,7 @@ describe('createProvider', () => {
 
   it('should throw for unknown provider', () => {
     const config = { provider: 'unknown', model: 'test' } as LLMConfig;
-    expect(() => createProvider(config)).toThrow('Unknown LLM provider: unknown');
+    expect(() => createProvider(config)).toThrow("Unknown LLM provider: 'unknown'");
   });
 });
 

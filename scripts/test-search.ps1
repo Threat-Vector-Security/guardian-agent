@@ -1,17 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    GuardianAgent QMD Document Search Test Harness (PowerShell)
+    GuardianAgent Document Search Document Search Test Harness (PowerShell)
 
 .DESCRIPTION
-    Tests QMD document search tool integration: status, search, reindex,
+    Tests Document Search document search tool integration: status, search, reindex,
     and policy enforcement (approval gating for mutating operations).
 
     Uses direct tool API calls (POST /api/tools/run) for deterministic approval
     testing and autonomous mode for read/write operation testing.
 
     Requires a running GuardianAgent instance with web channel enabled, an LLM
-    provider configured, and the QMD CLI (@tobilu/qmd) available.
+    provider configured, and document search enabled.
 
 .PARAMETER SkipStart
     Assume the app is already running.
@@ -26,14 +26,14 @@
     Auth token (default: auto-generated, or env HARNESS_TOKEN).
 
 .EXAMPLE
-    .\scripts\test-qmd.ps1
+    .\scripts\test-search.ps1
 
 .EXAMPLE
-    .\scripts\test-qmd.ps1 -SkipStart -Port 3000 -Token "your-token"
+    .\scripts\test-search.ps1 -SkipStart -Port 3000 -Token "your-token"
 
 .NOTES
     See docs/guides/INTEGRATION-TEST-HARNESS.md for full documentation.
-    QMD tests require the QMD CLI (@tobilu/qmd) to be installed.
+    Document search tests require search to be enabled in config.
     All mutating operations (reindex) are denied after assertion in approval tests.
 #>
 
@@ -41,7 +41,7 @@ param(
     [switch]$SkipStart,
     [switch]$Keep,
     [int]$Port = $( if ($env:HARNESS_PORT) { [int]$env:HARNESS_PORT } else { 3000 } ),
-    [string]$Token = $( if ($env:HARNESS_TOKEN) { $env:HARNESS_TOKEN } else { "test-qmd-$(Get-Date -Format 'yyyyMMddHHmmss')" } )
+    [string]$Token = $( if ($env:HARNESS_TOKEN) { $env:HARNESS_TOKEN } else { "test-search-$(Get-Date -Format 'yyyyMMddHHmmss')" } )
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,10 +56,10 @@ $Pass = 0
 $Fail = 0
 $Skip = 0
 $Results = @()
-$LogFile = Join-Path $env:TEMP "guardian-qmd-harness.log"
+$LogFile = Join-Path $env:TEMP "guardian-search-harness.log"
 
 # --- Helpers ---
-function Write-Log($msg) { Write-Host "[qmd] $msg" -ForegroundColor Cyan }
+function Write-Log($msg) { Write-Host "[search] $msg" -ForegroundColor Cyan }
 function Write-Pass($name) {
     Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $name
     $script:Pass++; $script:Results += "PASS: $name"
@@ -228,9 +228,9 @@ if (-not $SkipStart) {
 
     $projectRoot = Split-Path -Parent $PSScriptRoot
     $userConfig = Join-Path $env:USERPROFILE ".guardianagent\config.yaml"
-    $harnessConfig = Join-Path $env:TEMP "guardian-qmd-harness-config.yaml"
+    $harnessConfig = Join-Path $env:TEMP "guardian-search-harness-config.yaml"
 
-    if (-not $Token -or $Token -match "^test-qmd-") {
+    if (-not $Token -or $Token -match "^test-search-") {
         $Token = "harness-" + [guid]::NewGuid().ToString("N")
     }
 
@@ -313,7 +313,7 @@ $cleanupBlock = {
             $script:AppProcess.Kill()
         }
     }
-    $tempCfg = Join-Path $env:TEMP "guardian-qmd-harness-config.yaml"
+    $tempCfg = Join-Path $env:TEMP "guardian-search-harness-config.yaml"
     if (Test-Path $tempCfg) { Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue }
 }
 
@@ -339,103 +339,163 @@ catch {
 }
 
 # ===============================================================
-# QMD PREREQUISITE CHECK
+# Document Search PREREQUISITE CHECK
 # ===============================================================
 Write-Host ""
-Write-Log "=== QMD Prerequisite Check ==="
+Write-Log "=== Document Search Prerequisite Check ==="
 
-$qmdAvailable = $false
+$searchAvailable = $false
 
-# Try a read-only QMD call via direct tool API to check availability
+# Try a read-only Document Search call via direct tool API to check availability
 $probeArgs = @{}
-$qmdProbe = Invoke-ToolRun -ToolName "qmd_status" -ToolArgs $probeArgs
+$searchProbe = Invoke-ToolRun -ToolName "doc_search_status" -ToolArgs $probeArgs
 
-if ($qmdProbe.success -eq $true -or $qmdProbe.status -eq "succeeded" -or $qmdProbe.status -eq "failed") {
-    $qmdAvailable = $true
-    Write-Pass "qmd: tool available (probe status: $($qmdProbe.status))"
+if ($searchProbe.success -eq $true -or $searchProbe.status -eq "succeeded" -or $searchProbe.status -eq "failed") {
+    $searchAvailable = $true
+    Write-Pass "search: tool available (probe status: $($searchProbe.status))"
 }
-elseif ($qmdProbe.message -match "not enabled|not configured") {
-    Write-Skip "qmd: all QMD tests" "QMD not enabled or not configured"
+elseif ($searchProbe.message -match "not enabled|not configured") {
+    Write-Skip "search: all Document Search tests" "Document Search not enabled or not configured"
 }
-elseif ($qmdProbe.message -match "Unknown tool") {
-    Write-Skip "qmd: all QMD tests" "qmd_status tool not registered (search category may be disabled)"
+elseif ($searchProbe.message -match "Unknown tool") {
+    Write-Skip "search: all Document Search tests" "doc_search_status tool not registered (search category may be disabled)"
 }
-elseif ($qmdProbe.error -match "not enabled|not configured") {
-    Write-Skip "qmd: all QMD tests" "QMD not enabled or not configured"
+elseif ($searchProbe.error -match "not enabled|not configured") {
+    Write-Skip "search: all Document Search tests" "Document Search not enabled or not configured"
 }
-elseif ($qmdProbe.error -match "Unknown tool") {
-    Write-Skip "qmd: all QMD tests" "qmd_status tool not registered (search category may be disabled)"
+elseif ($searchProbe.error -match "Unknown tool") {
+    Write-Skip "search: all Document Search tests" "doc_search_status tool not registered (search category may be disabled)"
 }
 else {
-    Write-Skip "qmd: all QMD tests" "unexpected probe result: status=$($qmdProbe.status), error=$($qmdProbe.error), message=$($qmdProbe.message)"
+    Write-Skip "search: all Document Search tests" "unexpected probe result: status=$($searchProbe.status), error=$($searchProbe.error), message=$($searchProbe.message)"
 }
 
-if ($qmdAvailable) {
+if ($searchAvailable) {
 
 # ===============================================================
-# QMD TOOL TESTS (autonomous mode, direct API)
+# Document Search TOOL TESTS (autonomous mode, direct API)
 # ===============================================================
 Write-Host ""
-Write-Log "=== QMD Tool Tests (Autonomous Mode) ==="
+Write-Log "=== Document Search Tool Tests (Autonomous Mode) ==="
 
 $null = Invoke-ToolPolicy @{ mode = "autonomous" }
-Write-Pass "setup: autonomous policy for QMD tests"
+Write-Pass "setup: autonomous policy for Document Search tests"
 
 Start-Sleep -Seconds 2
 
-# --- Test 1: qmd_status (read_only) ---
+# --- Test 1: doc_search_status (read_only) ---
 Write-Host ""
-Write-Log "--- Test 1: qmd_status ---"
+Write-Log "--- Test 1: doc_search_status ---"
 
 $statusArgs = @{}
-$statusResult = Invoke-ToolRun -ToolName "qmd_status" -ToolArgs $statusArgs
+$statusResult = Invoke-ToolRun -ToolName "doc_search_status" -ToolArgs $statusArgs
 
 if ($statusResult.success -eq $true -or $statusResult.status -eq "succeeded" -or $statusResult.status -eq "failed") {
-    Write-Pass "qmd_status: tool executed (status: $($statusResult.status))"
+    Write-Pass "doc_search_status: tool executed (status: $($statusResult.status))"
 }
 else {
-    Write-Fail "qmd_status: tool execution" "status=$($statusResult.status), error=$($statusResult.error)"
+    Write-Fail "doc_search_status: tool execution" "status=$($statusResult.status), error=$($statusResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test 2: qmd_search (read_only) ---
+# --- Test 2: doc_search (read_only) ---
 Write-Host ""
-Write-Log "--- Test 2: qmd_search ---"
+Write-Log "--- Test 2: doc_search ---"
 
 $searchArgs = @{ query = "test" }
-$searchResult = Invoke-ToolRun -ToolName "qmd_search" -ToolArgs $searchArgs
+$searchResult = Invoke-ToolRun -ToolName "doc_search" -ToolArgs $searchArgs
 
 if ($searchResult.success -eq $true -or $searchResult.status -eq "succeeded" -or $searchResult.status -eq "failed") {
-    Write-Pass "qmd_search: tool executed (status: $($searchResult.status))"
+    Write-Pass "doc_search: tool executed (status: $($searchResult.status))"
 }
 else {
-    Write-Fail "qmd_search: tool execution" "status=$($searchResult.status), error=$($searchResult.error)"
+    Write-Fail "doc_search: tool execution" "status=$($searchResult.status), error=$($searchResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test 3: qmd_reindex (mutating) ---
+# --- Test 3: doc_search_reindex (mutating) ---
 Write-Host ""
-Write-Log "--- Test 3: qmd_reindex ---"
+Write-Log "--- Test 3: doc_search_reindex ---"
 
 $reindexArgs = @{}
-$reindexResult = Invoke-ToolRun -ToolName "qmd_reindex" -ToolArgs $reindexArgs
+$reindexResult = Invoke-ToolRun -ToolName "doc_search_reindex" -ToolArgs $reindexArgs
 
 if ($reindexResult.success -eq $true -or $reindexResult.status -eq "succeeded" -or $reindexResult.status -eq "failed") {
-    Write-Pass "qmd_reindex: tool executed (status: $($reindexResult.status))"
+    Write-Pass "doc_search_reindex: tool executed (status: $($reindexResult.status))"
 }
 else {
-    Write-Fail "qmd_reindex: tool execution" "status=$($reindexResult.status), error=$($reindexResult.error)"
+    Write-Fail "doc_search_reindex: tool execution" "status=$($reindexResult.status), error=$($reindexResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
 # ===============================================================
-# QMD APPROVAL TESTS (approve_by_policy via direct API)
+# Document Search HOT RELOAD TEST
 # ===============================================================
 Write-Host ""
-Write-Log "=== QMD Approval Tests (approve_by_policy) ==="
+Write-Log "=== Document Search Hot Reload Test ==="
+
+# 1. Disable search via config API
+$configPatch = @{
+    assistant = @{
+        tools = @{
+            search = @{ enabled = $false }
+        }
+    }
+}
+$disableResp = Invoke-RestMethod -Uri "$BaseUrl/api/config" `
+    -Method Post `
+    -Headers @{ Authorization = "Bearer $Token" } `
+    -ContentType "application/json" `
+    -Body ($configPatch | ConvertTo-Json -Depth 4 -Compress) `
+    -TimeoutSec 10
+
+Write-Pass "hot-reload: disabled search in config"
+Start-Sleep -Seconds 5 # Wait for hot-reload to propagate
+
+# 2. Check tool availability (should be disabled/unavailable)
+$statusDisabled = Invoke-ToolRun -ToolName "doc_search_status" -ToolArgs @{}
+if ($statusDisabled.success -eq $false -or $statusDisabled.output.available -eq $false) {
+    Write-Pass "hot-reload: tool correctly reported unavailable after disable"
+} else {
+    Write-Fail "hot-reload: tool still available after disable" "status=$($statusDisabled.status)"
+}
+
+# 3. Re-enable search via config API
+$configPatchEnable = @{
+    assistant = @{
+        tools = @{
+            search = @{ enabled = $true }
+        }
+    }
+}
+$enableResp = Invoke-RestMethod -Uri "$BaseUrl/api/config" `
+    -Method Post `
+    -Headers @{ Authorization = "Bearer $Token" } `
+    -ContentType "application/json" `
+    -Body ($configPatchEnable | ConvertTo-Json -Depth 4 -Compress) `
+    -TimeoutSec 10
+
+Write-Pass "hot-reload: re-enabled search in config"
+Start-Sleep -Seconds 5 # Wait for hot-reload to propagate
+
+# 4. Check tool availability (should be back)
+$statusEnabled = Invoke-ToolRun -ToolName "doc_search_status" -ToolArgs @{}
+if ($statusEnabled.success -eq $true -and $statusEnabled.output.available -eq $true) {
+    Write-Pass "hot-reload: tool correctly reported available after re-enable"
+} else {
+    Write-Fail "hot-reload: tool still unavailable after re-enable" "error=$($statusEnabled.error)"
+}
+
+Start-Sleep -Seconds 2
+
+# ===============================================================
+# Document Search APPROVAL TESTS (approve_by_policy via direct API)
+# ===============================================================
+Write-Host ""
+Write-Log "=== Document Search Approval Tests (approve_by_policy) ==="
 
 # --- Test 4: Switch to approve_by_policy ---
 $policyResult = Invoke-ToolPolicy @{ mode = "approve_by_policy" }
@@ -448,49 +508,49 @@ else {
 
 Start-Sleep -Seconds 2
 
-# --- Test 5: qmd_search (read_only) should be allowed without approval ---
+# --- Test 5: doc_search (read_only) should be allowed without approval ---
 Write-Host ""
-Write-Log "--- Test 5: qmd_search under approve_by_policy ---"
+Write-Log "--- Test 5: doc_search under approve_by_policy ---"
 
 $searchPolicyArgs = @{ query = "test" }
-$searchPolicyResult = Invoke-ToolRun -ToolName "qmd_search" -ToolArgs $searchPolicyArgs
+$searchPolicyResult = Invoke-ToolRun -ToolName "doc_search" -ToolArgs $searchPolicyArgs
 
 if ($searchPolicyResult.status -eq "pending_approval") {
-    Write-Fail "qmd_search (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
+    Write-Fail "doc_search (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
 }
 elseif ($searchPolicyResult.success -eq $true -or $searchPolicyResult.status -eq "succeeded") {
-    Write-Pass "qmd_search (approve_by_policy): allowed without approval"
+    Write-Pass "doc_search (approve_by_policy): allowed without approval"
 }
 elseif ($searchPolicyResult.status -eq "failed" -or $searchPolicyResult.status -eq "error") {
     # Tool executed past approval gate — acceptable (may have no sources)
-    Write-Pass "qmd_search (approve_by_policy): tool executed without approval (status: $($searchPolicyResult.status))"
+    Write-Pass "doc_search (approve_by_policy): tool executed without approval (status: $($searchPolicyResult.status))"
 }
 else {
-    Write-Fail "qmd_search (approve_by_policy): unexpected" "status=$($searchPolicyResult.status), error=$($searchPolicyResult.error)"
+    Write-Fail "doc_search (approve_by_policy): unexpected" "status=$($searchPolicyResult.status), error=$($searchPolicyResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test 6: qmd_reindex (mutating) should require approval ---
+# --- Test 6: doc_search_reindex (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test 6: qmd_reindex under approve_by_policy ---"
+Write-Log "--- Test 6: doc_search_reindex under approve_by_policy ---"
 
 $reindexPolicyArgs = @{}
-$reindexPolicyResult = Invoke-ToolRun -ToolName "qmd_reindex" -ToolArgs $reindexPolicyArgs
+$reindexPolicyResult = Invoke-ToolRun -ToolName "doc_search_reindex" -ToolArgs $reindexPolicyArgs
 
 if ($reindexPolicyResult.status -eq "pending_approval") {
-    Write-Pass "qmd_reindex (approve_by_policy): requires approval (pending_approval)"
+    Write-Pass "doc_search_reindex (approve_by_policy): requires approval (pending_approval)"
     if ($reindexPolicyResult.approvalId) {
         $deny = Invoke-ApprovalDecision $reindexPolicyResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "qmd_reindex (approve_by_policy): denial accepted" }
-        else { Write-Fail "qmd_reindex (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "doc_search_reindex (approve_by_policy): denial accepted" }
+        else { Write-Fail "doc_search_reindex (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($reindexPolicyResult.success -eq $true) {
-    Write-Fail "qmd_reindex (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "doc_search_reindex (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "qmd_reindex (approve_by_policy): unexpected" "status=$($reindexPolicyResult.status), error=$($reindexPolicyResult.error)"
+    Write-Fail "doc_search_reindex (approve_by_policy): unexpected" "status=$($reindexPolicyResult.status), error=$($reindexPolicyResult.error)"
 }
 
 Start-Sleep -Seconds 2
@@ -519,22 +579,22 @@ try {
         -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 5
 
     $jobs = $state.jobs
-    $qmdJobs = $jobs | Where-Object { $_.toolName -match "qmd" }
-    if ($qmdJobs -and $qmdJobs.Count -gt 0) {
-        Write-Pass "job history: $($qmdJobs.Count) QMD tool executions recorded"
+    $searchJobs = $jobs | Where-Object { $_.toolName -match "search" }
+    if ($searchJobs -and $searchJobs.Count -gt 0) {
+        Write-Pass "job history: $($searchJobs.Count) Document Search tool executions recorded"
 
-        $statuses = ($qmdJobs | ForEach-Object { $_.status } | Sort-Object -Unique) -join ", "
-        Write-Pass "job history: QMD statuses: $statuses"
+        $statuses = ($searchJobs | ForEach-Object { $_.status } | Sort-Object -Unique) -join ", "
+        Write-Pass "job history: Document Search statuses: $statuses"
     }
     else {
-        Write-Fail "job history" "no QMD jobs recorded"
+        Write-Fail "job history" "no Document Search jobs recorded"
     }
 }
 catch {
     Write-Fail "job history" $_.Exception.Message
 }
 
-} # end if ($qmdAvailable)
+} # end if ($searchAvailable)
 
 # --- Summary ---
 Write-Host ""

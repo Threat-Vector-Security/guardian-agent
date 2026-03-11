@@ -39,6 +39,10 @@ Current extensions:
 │  │  │  │ Sequential │  │  Parallel  │  │    Loop    │         │  │  │
 │  │  │  │   Agent    │  │   Agent    │  │   Agent    │         │  │  │
 │  │  │  └────────────┘  └────────────┘  └────────────┘         │  │  │
+│  │  │  ┌────────────┐  Per-step retry + fail-branch            │  │  │
+│  │  │  │Conditional │  Array iteration mode for LoopAgent      │  │  │
+│  │  │  │   Agent    │                                          │  │  │
+│  │  │  └────────────┘                                          │  │  │
 │  │  │  Uses ctx.dispatch() → full Guardian pipeline per step   │  │  │
 │  │  │  SharedState: per-invocation, orchestrator-owned         │  │  │
 │  │  └──────────────────────────────────────────────────────────┘  │  │
@@ -57,10 +61,10 @@ Current extensions:
 │  ║  │  Input    │→│   Rate    │→│Capability│→│  Secret  │→┐     ║  │
 │  ║  │Sanitizer  │ │  Limiter  │ │Controller│ │  Scanner │ │     ║  │
 │  ║  └───────────┘ └───────────┘ └──────────┘ └──────────┘ │     ║  │
-│  ║  ┌──────────┐  ┌──────────┐                              │     ║  │
-│  ║  │  Denied  │→ │  Shell   │←─────────────────────────────┘     ║  │
-│  ║  │  Path    │  │ Command  │                                    ║  │
-│  ║  └──────────┘  └──────────┘                                    ║  │
+│  ║  ┌──────────┐  ┌──────────┐  ┌──────────┐                │     ║  │
+│  ║  │  Denied  │→ │  Shell   │→ │   SSRF   │←──────────────┘     ║  │
+│  ║  │  Path    │  │ Command  │  │Controller│                      ║  │
+│  ║  └──────────┘  └──────────┘  └──────────┘                      ║  │
 │  ║                                                                ║  │
 │  ║  Layer 2: GUARDIAN AGENT (inline LLM, before tool execution)   ║  │
 │  ║  ┌───────────────────────┐                                    ║  │
@@ -104,7 +108,7 @@ Current extensions:
 ```
 Runtime (src/runtime/runtime.ts)
 ├── Config (src/config/)                — YAML config with env var interpolation
-├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI
+├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI + 6 OpenAI-compatible via ProviderRegistry
 ├── Assistant Orchestrator (src/runtime/orchestrator.ts) — per-session queueing + timing state
 ├── Registry (src/agent/registry.ts)    — agent registration/discovery
 ├── EventBus (src/queue/event-bus.ts)   — inter-agent events + opt-in classify/policy pipeline hooks
@@ -127,6 +131,7 @@ Runtime (src/runtime/runtime.ts)
 │   ├── secret-scanner.ts             — 28+ credential patterns (Layer 1 & 3)
 │   ├── shell-validator.ts            — POSIX shell tokenizer + command validation (Layer 1)
 │   ├── shell-command-controller.ts   — shell command admission controller (Layer 1)
+│   ├── ssrf-protection.ts           — centralized SSRF protection + SsrfController (Layer 1)
 │   ├── output-guardian.ts             — response redaction (Layer 3)
 │   ├── audit-log.ts                   — structured event logging (Layer 2 & 4)
 │   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 4)
@@ -134,8 +139,9 @@ Runtime (src/runtime/runtime.ts)
 ├── Guardian Agent (src/runtime/sentinel.ts) — inline LLM action evaluation (Layer 2)
 ├── Sentinel Audit (src/runtime/sentinel.ts) — retrospective anomaly detection (Layer 4)
 ├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
+│   └── ConditionalAgent (src/agent/conditional.ts) — conditional branching orchestration
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
-├── QMD Search (src/runtime/qmd-search.ts) — hybrid document search via QMD CLI subprocess
+├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
 ├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws`
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
@@ -193,14 +199,16 @@ This gives us:
 
 ### Orchestration Agents
 
-Three orchestration primitives extend `BaseAgent` to compose sub-agents into structured workflows:
+Four orchestration primitives extend `BaseAgent` to compose sub-agents into structured workflows:
 
 ```typescript
-// Sequential: pipeline of steps with state passing
+// Sequential: pipeline of steps with state passing, per-step retry + fail-branch
 const pipeline = new SequentialAgent('scan', 'Security Pipeline', {
   steps: [
     { agentId: 'analyzer', outputKey: 'analysis' },
-    { agentId: 'scanner',  inputKey: 'analysis', outputKey: 'vulns' },
+    { agentId: 'scanner',  inputKey: 'analysis', outputKey: 'vulns',
+      retry: { maxRetries: 2, initialDelayMs: 1000, backoffMultiplier: 2 },
+      onError: { agentId: 'fallback-scanner' } },
     { agentId: 'reporter', inputKey: 'vulns',    outputKey: 'report' },
   ],
 });
@@ -219,6 +227,21 @@ const refiner = new LoopAgent('refine', 'Refiner', {
   agentId: 'editor',
   maxIterations: 5,
   condition: (i, resp) => !resp?.content.includes('[DONE]'),
+});
+
+// Loop: array iteration mode with configurable concurrency
+const processor = new LoopAgent('process', 'Batch Processor', {
+  agentId: 'item-handler',
+  items: { key: 'itemList', concurrency: 3, collectKey: 'results' },
+});
+
+// Conditional: ordered branch evaluation, first match wins
+const router = new ConditionalAgent('route', 'Intent Router', {
+  branches: [
+    { name: 'billing', condition: (s) => s.get('intent') === 'billing', steps: billingSteps },
+    { name: 'technical', condition: (s) => s.get('intent') === 'technical', steps: techSteps },
+  ],
+  defaultSteps: generalSteps,
 });
 ```
 

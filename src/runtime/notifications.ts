@@ -31,7 +31,8 @@ interface NotificationSenders {
 }
 
 export interface NotificationServiceOptions {
-  config: AssistantNotificationsConfig;
+  config?: AssistantNotificationsConfig;
+  getConfig?: () => AssistantNotificationsConfig;
   auditLog: AuditLog;
   eventBus: EventBus;
   senders?: NotificationSenders;
@@ -39,7 +40,8 @@ export interface NotificationServiceOptions {
 }
 
 export class NotificationService {
-  private readonly config: AssistantNotificationsConfig;
+  private readonly config?: AssistantNotificationsConfig;
+  private readonly getConfig?: () => AssistantNotificationsConfig;
   private readonly auditLog: AuditLog;
   private readonly eventBus: EventBus;
   private readonly senders: NotificationSenders;
@@ -49,6 +51,7 @@ export class NotificationService {
 
   constructor(options: NotificationServiceOptions) {
     this.config = options.config;
+    this.getConfig = options.getConfig;
     this.auditLog = options.auditLog;
     this.eventBus = options.eventBus;
     this.senders = options.senders ?? {};
@@ -56,7 +59,6 @@ export class NotificationService {
   }
 
   start(): void {
-    if (!this.config.enabled) return;
     this.unsubscribeAudit = this.auditLog.addListener((event) => {
       void this.handleAuditEvent(event);
     });
@@ -68,13 +70,17 @@ export class NotificationService {
   }
 
   private async handleAuditEvent(event: AuditEvent): Promise<void> {
-    if (!this.shouldNotify(event)) return;
+    const config = this.getActiveConfig();
+    if (!config.enabled) return;
+    if (!this.shouldNotify(config, event)) return;
 
     const notification = this.buildNotification(event);
     if (!notification) return;
-    if (!this.shouldEmit(notification)) return;
+    if (!this.shouldEmit(config, notification)) return;
 
-    if (this.config.destinations.web) {
+    const destinations = resolveDestinations(config);
+
+    if (destinations.web) {
       await this.eventBus.emit({
         type: 'security:alert',
         sourceAgentId: 'notification-service',
@@ -87,10 +93,10 @@ export class NotificationService {
     const text = formatNotificationText(notification);
     const deliveries: Array<Promise<void>> = [];
 
-    if (this.config.destinations.cli && this.senders.sendCli) {
+    if (destinations.cli && this.senders.sendCli) {
       deliveries.push(Promise.resolve(this.senders.sendCli(text)));
     }
-    if (this.config.destinations.telegram && this.senders.sendTelegram) {
+    if (destinations.telegram && this.senders.sendTelegram) {
       deliveries.push(Promise.resolve(this.senders.sendTelegram(text)));
     }
 
@@ -103,24 +109,31 @@ export class NotificationService {
     }
   }
 
-  private shouldNotify(event: AuditEvent): boolean {
-    if (!this.config.auditEventTypes.includes(event.type)) return false;
-    return SEVERITY_WEIGHT[event.severity] >= SEVERITY_WEIGHT[this.config.minSeverity];
+  private shouldNotify(config: AssistantNotificationsConfig, event: AuditEvent): boolean {
+    if (!config.auditEventTypes.includes(event.type)) return false;
+    if (SEVERITY_WEIGHT[event.severity] < SEVERITY_WEIGHT[config.minSeverity]) return false;
+
+    const detailType = extractDetailType(event.details);
+    if (detailType && config.suppressedDetailTypes.includes(detailType)) {
+      return false;
+    }
+
+    return true;
   }
 
-  private shouldEmit(notification: SecurityNotification): boolean {
+  private shouldEmit(config: AssistantNotificationsConfig, notification: SecurityNotification): boolean {
     const lastSent = this.recentByKey.get(notification.dedupeKey);
     const now = this.now();
-    this.pruneRecent(now);
-    if (lastSent !== undefined && this.config.cooldownMs > 0 && (now - lastSent) < this.config.cooldownMs) {
+    this.pruneRecent(config, now);
+    if (lastSent !== undefined && config.cooldownMs > 0 && (now - lastSent) < config.cooldownMs) {
       return false;
     }
     this.recentByKey.set(notification.dedupeKey, now);
     return true;
   }
 
-  private pruneRecent(now: number): void {
-    const retentionMs = Math.max(this.config.cooldownMs, 60_000);
+  private pruneRecent(config: AssistantNotificationsConfig, now: number): void {
+    const retentionMs = Math.max(config.cooldownMs, 60_000);
     for (const [key, timestamp] of this.recentByKey.entries()) {
       if ((now - timestamp) > retentionMs) {
         this.recentByKey.delete(key);
@@ -150,6 +163,44 @@ export class NotificationService {
       details: { ...event.details },
     };
   }
+
+  private getActiveConfig(): AssistantNotificationsConfig {
+    return this.getConfig?.() ?? this.config ?? {
+      enabled: true,
+      minSeverity: 'warn',
+      auditEventTypes: [],
+      suppressedDetailTypes: [],
+      cooldownMs: 60_000,
+      deliveryMode: 'selected',
+      destinations: {
+        web: false,
+        cli: true,
+        telegram: false,
+      },
+    };
+  }
+}
+
+function resolveDestinations(config: AssistantNotificationsConfig): AssistantNotificationsConfig['destinations'] {
+  if (config.deliveryMode === 'all') {
+    return {
+      web: true,
+      cli: true,
+      telegram: true,
+    };
+  }
+  return config.destinations;
+}
+
+function extractDetailType(details: Record<string, unknown>): string | null {
+  const keys = ['alertType', 'anomalyType', 'type'];
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }
 
 function summarizeTitle(event: AuditEvent): string {
