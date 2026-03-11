@@ -12,7 +12,7 @@ import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService 
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
-import { hashRedactedObject, redactSensitiveValue } from '../util/crypto-guardrails.js';
+import { hashRedactedObject, normalizeSensitiveKeyName, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
   ToolCategory,
   ToolDecision,
@@ -28,7 +28,7 @@ import type {
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import { MCPClientManager } from './mcp-client.js';
-import type { AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
+import type { AssistantCloudConfig, AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import {
@@ -47,6 +47,7 @@ import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence
 import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
+import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
 
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
@@ -76,6 +77,8 @@ export interface ToolExecutorOptions {
   webSearch?: WebSearchConfig;
   /** Browser automation configuration (agent-browser). */
   browserConfig?: BrowserConfig;
+  /** Cloud and hosting provider integrations. */
+  cloudConfig?: AssistantCloudConfig;
   /** Tool categories to disable at startup. */
   disabledCategories?: ToolCategory[];
   /** Conversation service for memory_search tool. */
@@ -206,6 +209,7 @@ export class ToolExecutor {
   private readonly sandboxConfig: SandboxConfig;
   private readonly sandboxHealth?: SandboxHealth;
   private readonly networkConfig: AssistantNetworkConfig;
+  private cloudConfig: AssistantCloudConfig;
   private policy: ToolPolicySnapshot;
   private readonly runtimeNotices: ToolRuntimeNotice[] = [];
 
@@ -217,6 +221,7 @@ export class ToolExecutor {
     this.webSearchConfig = options.webSearch ?? {};
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
     this.sandboxHealth = options.sandboxHealth;
+    this.cloudConfig = options.cloudConfig ?? { enabled: false, cpanelProfiles: [] };
     this.networkConfig = options.networkConfig ?? {
       deviceIntelligence: { enabled: true, ouiDatabase: 'bundled', autoClassify: true },
       baseline: {
@@ -342,6 +347,10 @@ export class ToolExecutor {
 
   setGwsService(gwsService: import('../runtime/gws-service.js').GWSService | undefined): void {
     this.options.gwsService = gwsService;
+  }
+
+  setCloudConfig(cloudConfig: AssistantCloudConfig | undefined): void {
+    this.cloudConfig = cloudConfig ?? { enabled: false, cpanelProfiles: [] };
   }
 
   /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
@@ -770,6 +779,11 @@ export class ToolExecutor {
       return gwsDecision;
     }
 
+    const cloudDecision = this.decideCloudTool(definition.name, args);
+    if (cloudDecision) {
+      return cloudDecision;
+    }
+
     // Read-only shell commands skip approval even under approve_by_policy
     if (definition.name === 'shell_safe' && this.policy.mode !== 'approve_each') {
       const fullCmd = ((args as Record<string, unknown>).command as string ?? '').trim();
@@ -825,6 +839,64 @@ export class ToolExecutor {
     // All other GWS write operations: approval-gated in non-autonomous modes
     // Covers calendar, drive, docs, sheets, and any future services (fail-closed)
     return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+  }
+
+  private decideCloudTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
+    if (toolName === 'whm_accounts') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'cpanel_domains') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'list' || action === 'list_redirects') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'cpanel_dns') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'parse_zone') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'cpanel_backups') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'cpanel_ssl') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'list_certs' || action === 'fetch_best_for_domain') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'whm_dns') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'parse_zone') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'whm_ssl') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'list_providers' || action === 'get_excluded_domains') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'whm_backup') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'config_get' || action === 'destination_list' || action === 'date_list' || action === 'user_list') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'whm_services') {
+      const action = asString(args.action).trim().toLowerCase();
+      if (action === 'status' || action === 'get_config') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    return null;
   }
 
   private validateToolArgs(definition: ToolDefinition, args: Record<string, unknown>): string | null {
@@ -888,6 +960,133 @@ export class ToolExecutor {
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
+      }
+    }
+
+    if (toolName === 'whm_accounts') {
+      try {
+        this.createWhmClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'create') {
+        if (!asString(args.username).trim()) return 'username is required for create';
+        if (!asString(args.domain).trim()) return 'domain is required for create';
+        if (!asString(args.password).trim()) return 'password is required for create';
+      } else if (action === 'suspend' || action === 'unsuspend' || action === 'modify' || action === 'remove') {
+        if (!asString(args.username).trim()) return `username is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'cpanel_domains') {
+      try {
+        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'add_subdomain' || action === 'delete_subdomain') && !asString(args.domain).trim()) {
+        return `domain is required for ${action}`;
+      }
+      if ((action === 'add_subdomain' || action === 'delete_subdomain') && !asString(args.rootDomain).trim()) {
+        return `rootDomain is required for ${action}`;
+      }
+      if (action === 'add_redirect') {
+        if (!asString(args.domain).trim()) return 'domain is required for add_redirect';
+        if (!asString(args.destination).trim()) return 'destination is required for add_redirect';
+      }
+      if (action === 'delete_redirect' && !asString(args.redirectId).trim()) {
+        return 'redirectId is required for delete_redirect';
+      }
+    }
+
+    if (toolName === 'cpanel_dns') {
+      try {
+        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (!asString(args.zone).trim()) return 'zone is required for cpanel_dns actions';
+      if (action === 'mass_edit_zone') {
+        const add = Array.isArray(args.add) ? args.add.length : 0;
+        const edit = Array.isArray(args.edit) ? args.edit.length : 0;
+        const remove = Array.isArray(args.remove) ? args.remove.length : 0;
+        if (add + edit + remove === 0) return 'mass_edit_zone requires at least one add, edit, or remove entry';
+      }
+    }
+
+    if (toolName === 'cpanel_backups') {
+      try {
+        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      requireString(args.action, 'action');
+    }
+
+    if (toolName === 'cpanel_ssl') {
+      try {
+        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action !== 'list_certs' && !asString(args.domain).trim()) return `domain is required for ${action}`;
+      if (action === 'install_ssl') {
+        if (!asString(args.certificate).trim()) return 'certificate is required for install_ssl';
+        if (!asString(args.privateKey).trim()) return 'privateKey is required for install_ssl';
+      }
+    }
+
+    if (toolName === 'whm_dns') {
+      try {
+        this.createWhmClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'parse_zone' && !asString(args.zone).trim()) return 'zone is required for parse_zone';
+      if ((action === 'create_zone' || action === 'delete_zone' || action === 'reset_zone') && !asString(args.domain).trim()) {
+        return `domain is required for ${action}`;
+      }
+      if (action === 'create_zone' && !asString(args.ip).trim()) return 'ip is required for create_zone';
+    }
+
+    if (toolName === 'whm_ssl') {
+      try {
+        this.createWhmClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'check_user' || action === 'get_excluded_domains' || action === 'set_excluded_domains') && !asString(args.username).trim()) {
+        return `username is required for ${action}`;
+      }
+      if (action === 'set_provider' && !asString(args.provider).trim()) return 'provider is required for set_provider';
+    }
+
+    if (toolName === 'whm_backup') {
+      try {
+        this.createWhmClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'user_list' && !asString(args.restorePoint).trim()) return 'restorePoint is required for user_list';
+      if (action === 'config_set' && !isRecord(args.settings)) return 'settings object is required for config_set';
+    }
+
+    if (toolName === 'whm_services') {
+      try {
+        this.createWhmClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get_config' || action === 'restart') && !asString(args.service).trim()) {
+        return `service is required for ${action}`;
       }
     }
 
@@ -1070,6 +1269,80 @@ export class ToolExecutor {
         return `Would perform browser ${args.action} on ${args.ref}${args.value ? ` with value '${args.value}'` : ''}`;
       case 'browser_task':
         return `Would render and read: ${args.url}`;
+      case 'whm_accounts': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create') {
+          return `Would create WHM account '${args.username}' for domain '${args.domain}'`;
+        }
+        if (action === 'suspend' || action === 'unsuspend' || action === 'modify' || action === 'remove') {
+          return `Would ${action} WHM account '${args.username}'`;
+        }
+        return `Would list WHM accounts for profile '${args.profile}'`;
+      }
+      case 'cpanel_domains': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'add_subdomain') {
+          return `Would add subdomain '${args.domain}' under '${args.rootDomain}'`;
+        }
+        if (action === 'delete_subdomain') {
+          return `Would delete subdomain '${args.domain}' under '${args.rootDomain}'`;
+        }
+        if (action === 'add_redirect') {
+          return `Would add redirect for '${args.domain}' to '${args.destination}'`;
+        }
+        if (action === 'delete_redirect') {
+          return `Would delete redirect '${args.redirectId}'`;
+        }
+        return `Would inspect domains for profile '${args.profile}'`;
+      }
+      case 'cpanel_dns': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'mass_edit_zone') {
+          return `Would apply DNS changes to zone '${args.zone}'`;
+        }
+        return `Would parse DNS zone '${args.zone}'`;
+      }
+      case 'cpanel_backups':
+        return asString(args.action, 'list').trim().toLowerCase() === 'create'
+          ? `Would create a full backup for profile '${args.profile}'`
+          : `Would list backups for profile '${args.profile}'`;
+      case 'cpanel_ssl': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'install_ssl') return `Would install SSL for '${args.domain}'`;
+        if (action === 'delete_ssl') return `Would delete SSL for '${args.domain}'`;
+        if (action === 'fetch_best_for_domain') return `Would inspect best SSL certificate for '${args.domain}'`;
+        return `Would list SSL certificates for profile '${args.profile}'`;
+      }
+      case 'whm_dns': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
+        if (action === 'delete_zone') return `Would delete WHM DNS zone '${args.domain}'`;
+        if (action === 'reset_zone') return `Would reset WHM DNS zone '${args.domain}'`;
+        if (action === 'parse_zone') return `Would parse WHM DNS zone '${args.zone}'`;
+        return `Would list WHM DNS zones for profile '${args.profile}'`;
+      }
+      case 'whm_ssl': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'set_provider') return `Would set WHM AutoSSL provider to '${args.provider}'`;
+        if (action === 'check_user') return `Would start AutoSSL check for '${args.username}'`;
+        if (action === 'check_all') return 'Would start AutoSSL checks for all users';
+        if (action === 'set_excluded_domains') return `Would update AutoSSL excluded domains for '${args.username}'`;
+        if (action === 'get_excluded_domains') return `Would list AutoSSL excluded domains for '${args.username}'`;
+        return `Would list WHM AutoSSL providers for profile '${args.profile}'`;
+      }
+      case 'whm_backup': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'config_set') return `Would update WHM backup configuration for profile '${args.profile}'`;
+        if (action === 'toggle_all') return `Would set WHM backup skip-all=${!!args.state} for version '${args.backupVersion ?? 'backup'}'`;
+        if (action === 'user_list') return `Would list backup users for restore point '${args.restorePoint}'`;
+        return `Would inspect WHM backup state with action '${action}'`;
+      }
+      case 'whm_services': {
+        const action = asString(args.action).trim().toLowerCase();
+        if (action === 'restart') return `Would restart WHM service '${args.service}'`;
+        if (action === 'get_config') return `Would fetch WHM service config for '${args.service}'`;
+        return `Would inspect WHM service status for profile '${args.profile}'`;
+      }
       default:
         return `Would execute tool '${toolName}' with args: ${sanitizePreview(JSON.stringify(args))}`;
     }
@@ -3549,6 +3822,1441 @@ export class ToolExecutor {
       },
     );
 
+    // ── Cloud & Hosting Tools ───────────────────────────────────
+
+    this.registry.register(
+      {
+        name: 'cpanel_account',
+        description: 'Inspect a cPanel account via direct cPanel auth or via a WHM profile bridged into a target account. Supports summary, domains, bandwidth, and resource usage views. Read-only.',
+        shortDescription: 'Inspect cPanel account stats, domains, bandwidth, and resource usage.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id.' },
+            action: { type: 'string', description: 'summary, domains, bandwidth, or resource_usage (default: summary).' },
+            account: { type: 'string', description: 'Target cPanel username when using a WHM profile.' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        const action = asString(args.action, 'summary').trim().toLowerCase();
+        if (!['summary', 'domains', 'bandwidth', 'resource_usage'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use summary, domains, bandwidth, or resource_usage.' };
+        }
+        let account: string | undefined;
+        let client: CpanelClient;
+        try {
+          ({ client, account } = this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method: 'GET',
+          tool: 'cpanel_account',
+          action,
+          account,
+        });
+
+        try {
+          const invoke = async (
+            module: string,
+            fn: string,
+            params?: Record<string, string | number | boolean | undefined>,
+          ): Promise<import('./cloud/cpanel-client.js').NormalizedApiResponse> => {
+            return client.config.type === 'cpanel'
+              ? client.uapi(module, fn, params)
+              : client.whmCpanel(account!, module, fn, params);
+          };
+
+          if (action === 'domains') {
+            const domains = await invoke('DomainInfo', 'list_domains');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                data: domains.data,
+                warnings: domains.warnings,
+              },
+            };
+          }
+
+          if (action === 'bandwidth') {
+            const bandwidth = await invoke('Bandwidth', 'query');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                data: bandwidth.data,
+                warnings: bandwidth.warnings,
+              },
+            };
+          }
+
+          if (action === 'resource_usage') {
+            const resourceUsage = await invoke('ResourceUsage', 'get_usages');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                data: resourceUsage.data,
+                warnings: resourceUsage.warnings,
+              },
+            };
+          }
+
+          const [stats, domains, resourceUsage] = await Promise.all([
+            invoke('StatsBar', 'get_stats'),
+            invoke('DomainInfo', 'list_domains'),
+            invoke('ResourceUsage', 'get_usages').catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+          ]);
+
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              account,
+              action,
+              stats: stats.data,
+              domains: domains.data,
+              resourceUsage: 'data' in resourceUsage ? resourceUsage.data : null,
+              resourceUsageError: 'error' in resourceUsage ? resourceUsage.error : undefined,
+              warnings: [...stats.warnings, ...domains.warnings],
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `cPanel account request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cpanel_domains',
+        description: 'Manage cPanel account domains and redirects via direct cPanel auth or a WHM bridge. Supports list, list_redirects, add_subdomain, delete_subdomain, add_redirect, and delete_redirect.',
+        shortDescription: 'List or mutate cPanel subdomains and redirects.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id.' },
+            action: { type: 'string', description: 'list, list_redirects, add_subdomain, delete_subdomain, add_redirect, or delete_redirect.' },
+            account: { type: 'string', description: 'Target cPanel username when using a WHM profile.' },
+            domain: { type: 'string', description: 'Domain or subdomain name.' },
+            rootDomain: { type: 'string', description: 'Root domain used for subdomain creation/deletion.' },
+            dir: { type: 'string', description: 'Document root or redirect target path, depending on action.' },
+            destination: { type: 'string', description: 'Redirect destination URL.' },
+            redirectId: { type: 'string', description: 'Redirect identifier for delete_redirect.' },
+            redirectType: { type: 'string', description: 'Redirect type for add_redirect, e.g. temporary or permanent.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        const supportedActions = ['list', 'list_redirects', 'add_subdomain', 'delete_subdomain', 'add_redirect', 'delete_redirect'];
+        if (!supportedActions.includes(action)) {
+          return {
+            success: false,
+            error: `Unsupported action. Use ${supportedActions.join(', ')}.`,
+          };
+        }
+
+        let account: string | undefined;
+        let client: CpanelClient;
+        try {
+          ({ client, account } = this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = (action === 'list' || action === 'list_redirects') ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'cpanel_domains',
+          action,
+          account,
+        });
+
+        try {
+          const invoke = async (
+            module: string,
+            fn: string,
+            params?: Record<string, string | number | boolean | undefined>,
+            options?: { method?: 'GET' | 'POST' },
+          ): Promise<import('./cloud/cpanel-client.js').NormalizedApiResponse> => {
+            return client.config.type === 'cpanel'
+              ? client.uapi(module, fn, params, options)
+              : client.whmCpanel(account!, module, fn, params, options);
+          };
+
+          switch (action) {
+            case 'list': {
+              const domains = await invoke('DomainInfo', 'list_domains');
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  data: domains.data,
+                  warnings: domains.warnings,
+                },
+              };
+            }
+            case 'list_redirects': {
+              const redirects = await invoke('Redirects', 'list_redirects');
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  data: redirects.data,
+                  warnings: redirects.warnings,
+                },
+              };
+            }
+            case 'add_subdomain': {
+              const domain = requireString(args.domain, 'domain').trim();
+              const rootDomain = requireString(args.rootDomain, 'rootDomain').trim();
+              const dir = asString(args.dir).trim() || undefined;
+              const created = await invoke('SubDomain', 'addsubdomain', {
+                domain,
+                rootdomain: rootDomain,
+                dir,
+              }, { method: 'POST' });
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  domain,
+                  rootDomain,
+                  dir: dir ?? null,
+                  data: created.data,
+                  warnings: created.warnings,
+                },
+              };
+            }
+            case 'delete_subdomain': {
+              const domain = requireString(args.domain, 'domain').trim();
+              const rootDomain = requireString(args.rootDomain, 'rootDomain').trim();
+              const removed = await invoke('SubDomain', 'delsubdomain', {
+                domain,
+                rootdomain: rootDomain,
+              }, { method: 'POST' });
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  domain,
+                  rootDomain,
+                  data: removed.data,
+                  warnings: removed.warnings,
+                },
+              };
+            }
+            case 'add_redirect': {
+              const domain = requireString(args.domain, 'domain').trim();
+              const destination = requireString(args.destination, 'destination').trim();
+              const redirectType = asString(args.redirectType, 'temporary').trim() || 'temporary';
+              const redirectTarget = asString(args.dir).trim() || '/';
+              const created = await invoke('Redirects', 'add_redirect', {
+                domain,
+                url: destination,
+                redirect_type: redirectType,
+                path: redirectTarget,
+              }, { method: 'POST' });
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  domain,
+                  destination,
+                  redirectType,
+                  path: redirectTarget,
+                  data: created.data,
+                  warnings: created.warnings,
+                },
+              };
+            }
+            case 'delete_redirect': {
+              const redirectId = requireString(args.redirectId, 'redirectId').trim();
+              const removed = await invoke('Redirects', 'delete_redirect', {
+                id: redirectId,
+              }, { method: 'POST' });
+              return {
+                success: true,
+                output: {
+                  profile: client.config.id,
+                  profileName: client.config.name,
+                  host: client.config.host,
+                  account,
+                  action,
+                  redirectId,
+                  data: removed.data,
+                  warnings: removed.warnings,
+                },
+              };
+            }
+            default:
+              return { success: false, error: `Unsupported action '${action}'.` };
+          }
+        } catch (err) {
+          return { success: false, error: `cPanel domain request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cpanel_dns',
+        description: 'Inspect or edit a cPanel account DNS zone via direct cPanel auth or a WHM bridge. Supports parse_zone and mass_edit_zone.',
+        shortDescription: 'Parse or mass-edit a cPanel DNS zone.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id.' },
+            action: { type: 'string', description: 'parse_zone or mass_edit_zone.' },
+            account: { type: 'string', description: 'Target cPanel username when using a WHM profile.' },
+            zone: { type: 'string', description: 'DNS zone name.' },
+            serial: { type: 'number', description: 'Optional zone serial for mass_edit_zone.' },
+            add: { type: 'array', description: 'Records to add as JSON-serializable strings/objects.' },
+            edit: { type: 'array', description: 'Records to edit as JSON-serializable strings/objects.' },
+            remove: { type: 'array', description: 'Record line numbers or identifiers to remove.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['parse_zone', 'mass_edit_zone'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use parse_zone or mass_edit_zone.' };
+        }
+
+        let account: string | undefined;
+        let client: CpanelClient;
+        try {
+          ({ client, account } = this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const zone = requireString(args.zone, 'zone').trim();
+        const method = action === 'parse_zone' ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'cpanel_dns',
+          action,
+          account,
+          zone,
+        });
+
+        const invoke = async (
+          module: string,
+          fn: string,
+          params?: Record<string, string | number | boolean | undefined>,
+          options?: { method?: 'GET' | 'POST' },
+        ): Promise<import('./cloud/cpanel-client.js').NormalizedApiResponse> => {
+          return client.config.type === 'cpanel'
+            ? client.uapi(module, fn, params, options)
+            : client.whmCpanel(account!, module, fn, params, options);
+        };
+
+        try {
+          if (action === 'parse_zone') {
+            const parsed = await invoke('DNS', 'parse_zone', { zone });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                zone,
+                data: parsed.data,
+                warnings: parsed.warnings,
+              },
+            };
+          }
+
+          const edited = await invoke('DNS', 'mass_edit_zone', {
+            zone,
+            serial: Number.isFinite(Number(args.serial)) ? Number(args.serial) : undefined,
+            add: encodeJsonParamArray(args.add),
+            edit: encodeJsonParamArray(args.edit),
+            remove: encodeScalarArray(args.remove),
+          }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              account,
+              action,
+              zone,
+              changes: {
+                add: Array.isArray(args.add) ? args.add.length : 0,
+                edit: Array.isArray(args.edit) ? args.edit.length : 0,
+                remove: Array.isArray(args.remove) ? args.remove.length : 0,
+              },
+              data: edited.data,
+              warnings: edited.warnings,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `cPanel DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cpanel_backups',
+        description: 'List account backups or trigger a full backup to the account home directory.',
+        shortDescription: 'List backups or create a full account backup.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id.' },
+            action: { type: 'string', description: 'list or create.' },
+            account: { type: 'string', description: 'Target cPanel username when using a WHM profile.' },
+            email: { type: 'string', description: 'Optional completion notification email for create.' },
+            homedir: { type: 'string', description: 'include or skip for create.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'create'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list or create.' };
+        }
+
+        let account: string | undefined;
+        let client: CpanelClient;
+        try {
+          ({ client, account } = this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const method = action === 'list' ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'cpanel_backups',
+          action,
+          account,
+        });
+
+        const invoke = async (
+          fn: string,
+          params?: Record<string, string | number | boolean | undefined>,
+          options?: { method?: 'GET' | 'POST' },
+        ): Promise<import('./cloud/cpanel-client.js').NormalizedApiResponse> => {
+          return client.config.type === 'cpanel'
+            ? client.uapi('Backup', fn, params, options)
+            : client.whmCpanel(account!, 'Backup', fn, params, options);
+        };
+
+        try {
+          if (action === 'list') {
+            const backups = await invoke('list_backups');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                data: backups.data,
+                warnings: backups.warnings,
+              },
+            };
+          }
+
+          const email = asString(args.email).trim() || undefined;
+          const homedir = asString(args.homedir, 'include').trim().toLowerCase() === 'skip' ? 'skip' : 'include';
+          const created = await invoke('fullbackup_to_homedir', {
+            email,
+            homedir,
+          }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              account,
+              action,
+              email: email ?? null,
+              homedir,
+              data: created.data,
+              warnings: created.warnings,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `cPanel backup request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cpanel_ssl',
+        description: 'Inspect or manage cPanel account SSL certificates. Supports list_certs, fetch_best_for_domain, install_ssl, and delete_ssl.',
+        shortDescription: 'List, inspect, install, or delete cPanel SSL certs.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id.' },
+            action: { type: 'string', description: 'list_certs, fetch_best_for_domain, install_ssl, or delete_ssl.' },
+            account: { type: 'string', description: 'Target cPanel username when using a WHM profile.' },
+            domain: { type: 'string', description: 'Target domain.' },
+            certificate: { type: 'string', description: 'Certificate PEM for install_ssl.' },
+            privateKey: { type: 'string', description: 'Private key PEM for install_ssl.' },
+            caBundle: { type: 'string', description: 'CA bundle PEM for install_ssl.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_certs', 'fetch_best_for_domain', 'install_ssl', 'delete_ssl'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_certs, fetch_best_for_domain, install_ssl, or delete_ssl.' };
+        }
+
+        let account: string | undefined;
+        let client: CpanelClient;
+        try {
+          ({ client, account } = this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const method = (action === 'list_certs' || action === 'fetch_best_for_domain') ? 'GET' : 'POST';
+        const domain = asString(args.domain).trim() || undefined;
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'cpanel_ssl',
+          action,
+          account,
+          domain,
+        });
+
+        const invoke = async (
+          fn: string,
+          params?: Record<string, string | number | boolean | undefined>,
+          options?: { method?: 'GET' | 'POST' },
+        ): Promise<import('./cloud/cpanel-client.js').NormalizedApiResponse> => {
+          return client.config.type === 'cpanel'
+            ? client.uapi('SSL', fn, params, options)
+            : client.whmCpanel(account!, 'SSL', fn, params, options);
+        };
+
+        try {
+          if (action === 'list_certs') {
+            const certs = await invoke('list_certs');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                data: sanitizeSslData(certs.data),
+                warnings: certs.warnings,
+              },
+            };
+          }
+          if (action === 'fetch_best_for_domain') {
+            const target = requireString(args.domain, 'domain').trim();
+            const best = await invoke('fetch_best_for_domain', { domain: target });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                domain: target,
+                data: sanitizeSslData(best.data),
+                warnings: best.warnings,
+              },
+            };
+          }
+          if (action === 'install_ssl') {
+            const target = requireString(args.domain, 'domain').trim();
+            const installed = await invoke('install_ssl', {
+              domain: target,
+              cert: requireString(args.certificate, 'certificate'),
+              key: requireString(args.privateKey, 'privateKey'),
+              cabundle: asString(args.caBundle).trim() || undefined,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                account,
+                action,
+                domain: target,
+                data: sanitizeSslData(installed.data),
+                warnings: installed.warnings,
+              },
+            };
+          }
+
+          const target = requireString(args.domain, 'domain').trim();
+          const deleted = await invoke('delete_ssl', { domain: target }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              account,
+              action,
+              domain: target,
+              data: sanitizeSslData(deleted.data),
+              warnings: deleted.warnings,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `cPanel SSL request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_status',
+        description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
+        shortDescription: 'Inspect WHM server hostname, version, load, and services.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            includeServices: { type: 'boolean', description: 'Include service status details (default: true).' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const includeServices = args.includeServices !== false;
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method: 'GET',
+          tool: 'whm_status',
+        });
+
+        try {
+          const [hostname, version, load, services] = await Promise.all([
+            client.whm('gethostname'),
+            client.whm('version'),
+            client.whm('systemloadavg'),
+            includeServices ? client.whm('servicestatus') : Promise.resolve(null),
+          ]);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              hostname: hostname.data,
+              version: version.data,
+              loadAverage: load.data,
+              services: services?.data ?? null,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `WHM status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_accounts',
+        description: 'Manage accounts on a WHM server profile. Supports list, create, suspend, unsuspend, modify, and remove.',
+        shortDescription: 'List or mutate accounts on a WHM server profile.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            action: { type: 'string', description: 'list, create, suspend, unsuspend, modify, or remove.' },
+            search: { type: 'string', description: 'Optional username/domain/owner filter applied client-side.' },
+            limit: { type: 'number', description: 'Maximum accounts to return (1-200, default 50).' },
+            username: { type: 'string', description: 'Account username.' },
+            domain: { type: 'string', description: 'Primary domain for account creation.' },
+            password: { type: 'string', description: 'Password used for account creation.' },
+            email: { type: 'string', description: 'Contact email for account creation.' },
+            plan: { type: 'string', description: 'WHM package name.' },
+            owner: { type: 'string', description: 'Optional account owner/reseller.' },
+            reason: { type: 'string', description: 'Suspend reason.' },
+            quota: { type: 'number', description: 'Disk quota for modify actions.' },
+            maxpark: { type: 'number', description: 'Alias domain limit for modify actions.' },
+            maxaddon: { type: 'number', description: 'Addon domain limit for modify actions.' },
+            maxsub: { type: 'number', description: 'Subdomain limit for modify actions.' },
+            maxftp: { type: 'number', description: 'FTP account limit for modify actions.' },
+            maxsql: { type: 'number', description: 'Database limit for modify actions.' },
+            hasshell: { type: 'boolean', description: 'Enable shell access during modify.' },
+            keepDns: { type: 'boolean', description: 'When removing, keep DNS zone if supported.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        const supportedActions = ['list', 'create', 'suspend', 'unsuspend', 'modify', 'remove'];
+        if (!supportedActions.includes(action)) {
+          return { success: false, error: `Unsupported action. Use ${supportedActions.join(', ')}.` };
+        }
+
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const search = asString(args.search).trim().toLowerCase();
+        const limit = Math.max(1, Math.min(200, asNumber(args.limit, 50)));
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method: action === 'list' ? 'GET' : 'POST',
+          tool: 'whm_accounts',
+          action,
+        });
+
+        try {
+          if (action === 'list') {
+            const accounts = await client.whm('listaccts');
+            const accountData = (accounts.data && typeof accounts.data === 'object')
+              ? accounts.data as { acct?: Array<Record<string, unknown>> }
+              : {};
+            const allAccounts = Array.isArray(accountData.acct) ? accountData.acct : [];
+            const filtered = search
+              ? allAccounts.filter((account) => {
+                return ['user', 'domain', 'owner']
+                  .some((key) => String(account[key] ?? '').toLowerCase().includes(search));
+              })
+              : allAccounts;
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                total: allAccounts.length,
+                returned: Math.min(filtered.length, limit),
+                accounts: filtered.slice(0, limit),
+              },
+            };
+          }
+
+          if (action === 'create') {
+            const username = requireString(args.username, 'username').trim();
+            const domain = requireString(args.domain, 'domain').trim();
+            const password = requireString(args.password, 'password');
+            const email = asString(args.email).trim() || undefined;
+            const plan = asString(args.plan).trim() || undefined;
+            const owner = asString(args.owner).trim() || undefined;
+            const created = await client.whm('createacct', {
+              username,
+              domain,
+              password,
+              contactemail: email,
+              plan,
+              owner,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                domain,
+                email: email ?? null,
+                plan: plan ?? null,
+                owner: owner ?? null,
+                data: created.data,
+                warnings: created.warnings,
+              },
+            };
+          }
+
+          if (action === 'suspend') {
+            const username = requireString(args.username, 'username').trim();
+            const reason = asString(args.reason).trim() || undefined;
+            const suspended = await client.whm('suspendacct', {
+              user: username,
+              reason,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                reason: reason ?? null,
+                data: suspended.data,
+                warnings: suspended.warnings,
+              },
+            };
+          }
+
+          if (action === 'unsuspend') {
+            const username = requireString(args.username, 'username').trim();
+            const unsuspended = await client.whm('unsuspendacct', {
+              user: username,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                data: unsuspended.data,
+                warnings: unsuspended.warnings,
+              },
+            };
+          }
+
+          if (action === 'modify') {
+            const username = requireString(args.username, 'username').trim();
+            const modified = await client.whm('modifyacct', {
+              user: username,
+              quota: toOptionalNumberString(args.quota),
+              maxpark: toOptionalNumberString(args.maxpark),
+              maxaddon: toOptionalNumberString(args.maxaddon),
+              maxsub: toOptionalNumberString(args.maxsub),
+              maxftp: toOptionalNumberString(args.maxftp),
+              maxsql: toOptionalNumberString(args.maxsql),
+              hasshell: toOptionalBooleanString(args.hasshell),
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                changes: {
+                  quota: args.quota ?? null,
+                  maxpark: args.maxpark ?? null,
+                  maxaddon: args.maxaddon ?? null,
+                  maxsub: args.maxsub ?? null,
+                  maxftp: args.maxftp ?? null,
+                  maxsql: args.maxsql ?? null,
+                  hasshell: args.hasshell ?? null,
+                },
+                data: modified.data,
+                warnings: modified.warnings,
+              },
+            };
+          }
+
+          if (action === 'remove') {
+            const username = requireString(args.username, 'username').trim();
+            const keepDns = !!args.keepDns;
+            const removed = await client.whm('removeacct', {
+              user: username,
+              keepdns: keepDns ? 1 : 0,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                keepDns,
+                data: removed.data,
+                warnings: removed.warnings,
+              },
+            };
+          }
+
+          return { success: false, error: `Unsupported action '${action}'.` };
+        } catch (err) {
+          return { success: false, error: `WHM account request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_dns',
+        description: 'Inspect or manage WHM DNS zones. Supports list, parse_zone, create_zone, delete_zone, and reset_zone.',
+        shortDescription: 'List, parse, create, delete, or reset WHM DNS zones.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            action: { type: 'string', description: 'list, parse_zone, create_zone, delete_zone, or reset_zone.' },
+            zone: { type: 'string', description: 'Zone name for parse_zone.' },
+            domain: { type: 'string', description: 'Domain for create/delete/reset.' },
+            ip: { type: 'string', description: 'IP address for create_zone.' },
+            owner: { type: 'string', description: 'Optional true owner for create_zone.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'parse_zone', 'create_zone', 'delete_zone', 'reset_zone'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, parse_zone, create_zone, delete_zone, or reset_zone.' };
+        }
+
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = (action === 'list' || action === 'parse_zone') ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'whm_dns',
+          action,
+        });
+
+        try {
+          if (action === 'list') {
+            const zones = await client.whm('listzones');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: zones.data,
+              },
+            };
+          }
+          if (action === 'parse_zone') {
+            const zone = requireString(args.zone, 'zone').trim();
+            const parsed = await client.whm('parse_dns_zone', { zone });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                zone,
+                data: parsed.data,
+              },
+            };
+          }
+          if (action === 'create_zone') {
+            const domain = requireString(args.domain, 'domain').trim();
+            const ip = requireString(args.ip, 'ip').trim();
+            const owner = asString(args.owner).trim() || undefined;
+            const created = await client.whm('adddns', {
+              domain,
+              ip,
+              trueowner: owner,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                domain,
+                ip,
+                owner: owner ?? null,
+                data: created.data,
+              },
+            };
+          }
+          if (action === 'delete_zone') {
+            const domain = requireString(args.domain, 'domain').trim();
+            const deleted = await client.whm('killdns', { domain }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                domain,
+                data: deleted.data,
+              },
+            };
+          }
+          const domain = requireString(args.domain, 'domain').trim();
+          const reset = await client.whm('resetzone', { domain }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              action,
+              domain,
+              data: reset.data,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `WHM DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_ssl',
+        description: 'Inspect or manage WHM AutoSSL settings. Supports list_providers, check_user, check_all, set_provider, get_excluded_domains, and set_excluded_domains.',
+        shortDescription: 'Manage WHM AutoSSL providers and account checks.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            action: { type: 'string', description: 'list_providers, check_user, check_all, set_provider, get_excluded_domains, or set_excluded_domains.' },
+            username: { type: 'string', description: 'cPanel username for account-specific actions.' },
+            provider: { type: 'string', description: 'AutoSSL provider name for set_provider.' },
+            domains: { type: 'array', items: { type: 'string' }, description: 'Excluded domains for set_excluded_domains.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_providers', 'check_user', 'check_all', 'set_provider', 'get_excluded_domains', 'set_excluded_domains'].includes(action)) {
+          return { success: false, error: 'Unsupported action for whm_ssl.' };
+        }
+
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = (action === 'list_providers' || action === 'get_excluded_domains') ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'whm_ssl',
+          action,
+        });
+
+        try {
+          if (action === 'list_providers') {
+            const providers = await client.whm('get_autossl_providers');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: providers.data,
+              },
+            };
+          }
+          if (action === 'check_user') {
+            const username = requireString(args.username, 'username').trim();
+            const check = await client.whm('start_autossl_check_for_one_user', { username }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                data: check.data,
+              },
+            };
+          }
+          if (action === 'check_all') {
+            const check = await client.whm('start_autossl_check_for_all_users', undefined, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: check.data,
+              },
+            };
+          }
+          if (action === 'set_provider') {
+            const provider = requireString(args.provider, 'provider').trim();
+            const updated = await client.whm('set_autossl_provider', { provider }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                provider,
+                data: updated.data,
+              },
+            };
+          }
+          if (action === 'get_excluded_domains') {
+            const username = requireString(args.username, 'username').trim();
+            const excluded = await client.whm('get_autossl_user_excluded_domains', { username });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                username,
+                data: excluded.data,
+              },
+            };
+          }
+          const username = requireString(args.username, 'username').trim();
+          const domains = asStringArray(args.domains);
+          const domainParams: Record<string, string> = {};
+          domains.forEach((domain, index) => {
+            domainParams[index === 0 ? 'domain' : `domain-${index}`] = domain;
+          });
+          const updated = await client.whm('set_autossl_user_excluded_domains', {
+            username,
+            ...domainParams,
+          }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              action,
+              username,
+              domains,
+              data: updated.data,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `WHM SSL request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_backup',
+        description: 'Inspect or manage WHM backup configuration. Supports config_get, config_set, destination_list, date_list, user_list, and toggle_all.',
+        shortDescription: 'Manage WHM backup configuration and backup inventory.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            action: { type: 'string', description: 'config_get, config_set, destination_list, date_list, user_list, or toggle_all.' },
+            restorePoint: { type: 'string', description: 'ISO-8601 restore point for user_list.' },
+            backupVersion: { type: 'string', description: 'backup or legacy for toggle_all.' },
+            state: { type: 'boolean', description: 'Enable or disable for toggle_all.' },
+            settings: { type: 'object', description: 'backup_config_set key/value updates.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['config_get', 'config_set', 'destination_list', 'date_list', 'user_list', 'toggle_all'].includes(action)) {
+          return { success: false, error: 'Unsupported action for whm_backup.' };
+        }
+
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = ['config_get', 'destination_list', 'date_list', 'user_list'].includes(action) ? 'GET' : 'POST';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'whm_backup',
+          action,
+        });
+
+        try {
+          if (action === 'config_get') {
+            const config = await client.whm('backup_config_get');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: config.data,
+              },
+            };
+          }
+          if (action === 'destination_list') {
+            const destinations = await client.whm('backup_destination_list');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: destinations.data,
+              },
+            };
+          }
+          if (action === 'date_list') {
+            const dates = await client.whm('backup_date_list');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: dates.data,
+              },
+            };
+          }
+          if (action === 'user_list') {
+            const restorePoint = requireString(args.restorePoint, 'restorePoint').trim();
+            const users = await client.whm('backup_user_list', { restore_point: restorePoint });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                restorePoint,
+                data: users.data,
+              },
+            };
+          }
+          if (action === 'toggle_all') {
+            const backupVersion = asString(args.backupVersion, 'backup').trim() === 'legacy' ? 'legacy' : 'backup';
+            const state = !!args.state;
+            const toggled = await client.whm('backup_skip_users_all', {
+              backupversion: backupVersion,
+              state: state ? 1 : 0,
+            }, { method: 'POST' });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                backupVersion,
+                state,
+                data: toggled.data,
+              },
+            };
+          }
+          const settings = isRecord(args.settings) ? args.settings : {};
+          const params = Object.fromEntries(
+            Object.entries(settings)
+              .map(([key, value]) => [key, coerceWhmScalar(value)])
+              .filter(([, value]) => value !== undefined),
+          ) as Record<string, string | number | boolean | undefined>;
+          const updated = await client.whm('backup_config_set', params, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              action,
+              settings: params,
+              data: updated.data,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `WHM backup request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'whm_services',
+        description: 'Inspect or restart WHM-managed services. Supports status, get_config, and restart.',
+        shortDescription: 'Inspect or restart WHM services.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cpanelProfiles id for a WHM profile.' },
+            action: { type: 'string', description: 'status, get_config, or restart.' },
+            service: { type: 'string', description: 'Service name for get_config or restart.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['status', 'get_config', 'restart'].includes(action)) {
+          return { success: false, error: 'Unsupported action for whm_services.' };
+        }
+
+        let client: CpanelClient;
+        try {
+          client = this.createWhmClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = action === 'restart' ? 'POST' : 'GET';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudEndpoint(client.config),
+          method,
+          tool: 'whm_services',
+          action,
+        });
+
+        try {
+          if (action === 'status') {
+            const status = await client.whm('servicestatus');
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                data: status.data,
+              },
+            };
+          }
+          const service = requireString(args.service, 'service').trim();
+          if (action === 'get_config') {
+            const config = await client.whm('get_service_config', { service });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                host: client.config.host,
+                action,
+                service,
+                data: config.data,
+              },
+            };
+          }
+          const restarted = await client.whm('restartservice', { service }, { method: 'POST' });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              host: client.config.host,
+              action,
+              service,
+              data: restarted.data,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `WHM services request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
     // ── System Tools ─────────────────────────────────────────────
 
     this.registry.register(
@@ -5058,6 +6766,76 @@ export class ToolExecutor {
     }
   }
 
+  private createWhmClient(profileId: string): CpanelClient {
+    const config = this.getCloudCpanelProfile(profileId);
+    if (config.type !== 'whm') {
+      throw new Error(`Profile '${profileId}' is not a WHM profile.`);
+    }
+    return new CpanelClient(config);
+  }
+
+  private resolveCpanelAccountContext(profileId: string, requestedAccount?: string): {
+    client: CpanelClient;
+    account?: string;
+  } {
+    const config = this.getCloudCpanelProfile(profileId);
+    const client = new CpanelClient(config);
+    if (config.type === 'cpanel') {
+      return {
+        client,
+        account: config.username,
+      };
+    }
+
+    const account = requestedAccount?.trim() || config.defaultCpanelUser?.trim();
+    if (!account) {
+      throw new Error(`WHM profile '${profileId}' requires an account argument or defaultCpanelUser.`);
+    }
+    return { client, account };
+  }
+
+  private getCloudCpanelProfile(profileId: string): CpanelInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = this.cloudConfig.cpanelProfiles.find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown cloud profile '${id}'.`);
+    }
+    if (!profile.apiToken?.trim()) {
+      throw new Error(`Cloud profile '${id}' does not have a resolved API token.`);
+    }
+    if (!this.isHostAllowed(profile.host)) {
+      throw new Error(`Host '${profile.host}' is not in allowedDomains.`);
+    }
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      host: profile.host,
+      port: profile.port,
+      username: profile.username,
+      apiToken: profile.apiToken,
+      type: profile.type,
+      ssl: profile.ssl,
+      allowSelfSigned: profile.allowSelfSigned,
+      defaultCpanelUser: profile.defaultCpanelUser,
+    };
+  }
+
+  private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
+    const ssl = profile.ssl !== false;
+    const defaultPort = profile.type === 'whm'
+      ? (ssl ? 2087 : 2086)
+      : (ssl ? 2083 : 2082);
+    const port = profile.port ?? defaultPort;
+    return `${ssl ? 'https' : 'http'}://${profile.host}:${port}`;
+  }
+
   private isHostAllowed(host: string): boolean {
     const normalized = host.trim().toLowerCase();
     if (!normalized) return false;
@@ -5616,6 +7394,68 @@ function asStringArray(value: unknown): string[] {
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function encodeJsonParamArray(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return JSON.stringify(value);
+}
+
+function encodeScalarArray(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return JSON.stringify(
+    value
+      .map((item) => typeof item === 'number' || typeof item === 'string' ? item : null)
+      .filter((item) => item !== null),
+  );
+}
+
+function toOptionalNumberString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return String(parsed);
+  }
+  return undefined;
+}
+
+function toOptionalBooleanString(value: unknown): string | undefined {
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return '1';
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return '0';
+  }
+  return undefined;
+}
+
+function sanitizeSslData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSslData(item));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const normalized = normalizeSensitiveKeyName(key);
+      if (normalized === 'privatekey' || normalized === 'key') {
+        out[key] = '[REDACTED]';
+      } else {
+        out[key] = sanitizeSslData(child);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+function coerceWhmScalar(value: unknown): string | number | boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  return JSON.stringify(value);
 }
 
 function extractEmails(text: string): string[] {

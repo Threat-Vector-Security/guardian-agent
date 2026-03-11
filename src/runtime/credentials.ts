@@ -6,6 +6,7 @@
  */
 
 import type {
+  AssistantCloudConfig,
   AssistantCredentialsConfig,
   CredentialRefConfig,
   GuardianAgentConfig,
@@ -118,17 +119,39 @@ export function resolveWebSearchCredentialConfig(
   };
 }
 
+export function resolveCloudCredentialConfig(
+  config: AssistantCloudConfig | undefined,
+  provider: CredentialProvider,
+): AssistantCloudConfig | undefined {
+  if (!config) return config;
+
+  return {
+    ...config,
+    cpanelProfiles: config.cpanelProfiles.map((profile) => ({
+      ...profile,
+      apiToken: resolveCredentialValue(
+        profile.apiToken,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.cpanelProfiles.${profile.id}`,
+      ),
+    })),
+  };
+}
+
 export function resolveRuntimeCredentialView(
   config: GuardianAgentConfig,
 ): {
   credentialProvider: CredentialProvider;
   resolvedLLM: Record<string, LLMConfig>;
   resolvedWebSearch: WebSearchConfig | undefined;
+  resolvedCloud: AssistantCloudConfig | undefined;
 } {
   const credentialProvider = new ConfigCredentialProvider(config.assistant.credentials);
   return {
     credentialProvider,
     resolvedLLM: resolveLLMCredentialConfig(config.llm, credentialProvider),
     resolvedWebSearch: resolveWebSearchCredentialConfig(config.assistant.tools.webSearch, credentialProvider),
+    resolvedCloud: resolveCloudCredentialConfig(config.assistant.tools.cloud, credentialProvider),
   };
 }

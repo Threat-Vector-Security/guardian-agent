@@ -2442,6 +2442,7 @@ function buildDashboardCallbacks(
       });
       runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
       toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
+      toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);
       const nextGwsConfig = nextConfig.assistant.tools.mcp?.managedProviders?.gws;
       if (nextGwsConfig?.enabled) {
         toolExecutor.setGwsService(new GWSService({
@@ -4349,6 +4350,7 @@ async function main(): Promise<void> {
       ...config.assistant,
       tools: {
         ...config.assistant.tools,
+        cloud: resolvedRuntimeCredentials.resolvedCloud,
         webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
       },
     },
@@ -4912,6 +4914,7 @@ async function main(): Promise<void> {
       }
     },
     webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
+    cloudConfig: resolvedRuntimeCredentials.resolvedCloud,
     browserConfig: config.assistant.tools.browser,
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,

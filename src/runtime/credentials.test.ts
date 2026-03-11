@@ -113,4 +113,36 @@ describe('resolveRuntimeCredentialView', () => {
     expect(resolved.resolvedLLM.primary.apiKey).toBe('sk-runtime-openai');
     expect(resolved.resolvedWebSearch?.braveApiKey).toBe('brave-runtime-key');
   });
+
+  it('resolves cloud profile API tokens from credential refs', () => {
+    vi.stubEnv('CPANEL_TOKEN', 'cpanel-runtime-token');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cpanelProfiles: [{
+              id: 'primary',
+              name: 'Primary cPanel',
+              type: 'cpanel',
+              host: 'server.example.com',
+              username: 'alice',
+              credentialRef: 'cloud.cpanel.primary',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.cpanelProfiles[0]?.apiToken).toBe('cpanel-runtime-token');
+  });
 });

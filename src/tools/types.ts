@@ -22,6 +22,7 @@ export type ToolCategory =
   | 'intel'
   | 'forum'
   | 'network'
+  | 'cloud'
   | 'system'
   | 'memory'
   | 'search';
@@ -39,6 +40,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   intel: { label: 'Threat Intel', description: 'Threat intelligence monitoring, scanning, and response actions.' },
   forum: { label: 'Forum', description: 'Post responses to external forums (approval-gated).' },
   network: { label: 'Network', description: 'Local network diagnostics: ping, ARP, port check, DNS, traceroute.' },
+  cloud: { label: 'Cloud & Hosting', description: 'Manage cloud and hosting providers such as cPanel/WHM.' },
   system: { label: 'System', description: 'OS info, resource usage, process listing, and service status.' },
   memory: { label: 'Memory', description: 'Search conversation history and manage persistent knowledge base.' },
   search: { label: 'Search', description: 'Hybrid search across indexed document collections (BM25 + vector + LLM re-ranking via QMD).' },
@@ -76,6 +78,19 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'net_threat_summary',
     'net_traffic_baseline',
     'net_threat_check',
+  ],
+  cloud: [
+    'cpanel_account',
+    'cpanel_domains',
+    'cpanel_dns',
+    'cpanel_backups',
+    'cpanel_ssl',
+    'whm_status',
+    'whm_accounts',
+    'whm_dns',
+    'whm_ssl',
+    'whm_backup',
+    'whm_services',
   ],
   system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services'],
   memory: ['memory_search', 'memory_recall', 'memory_save'],
