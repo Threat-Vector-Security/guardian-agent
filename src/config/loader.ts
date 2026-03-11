@@ -245,6 +245,41 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   assertCredentialRef(assistant.tools.webSearch?.braveCredentialRef, 'assistant.tools.webSearch.braveCredentialRef');
   assertCredentialRef(assistant.tools.webSearch?.perplexityCredentialRef, 'assistant.tools.webSearch.perplexityCredentialRef');
   assertCredentialRef(assistant.tools.webSearch?.openRouterCredentialRef, 'assistant.tools.webSearch.openRouterCredentialRef');
+  const cloud = assistant.tools.cloud;
+  if (cloud) {
+    const seenProfileIds = new Set<string>();
+    for (const profile of cloud.cpanelProfiles) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.cpanelProfiles.id is required');
+      } else if (seenProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!['cpanel', 'whm'].includes(profile.type)) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.type must be 'cpanel' or 'whm'`);
+      }
+      if (!profile.host?.trim()) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.host is required`);
+      }
+      if (!profile.username?.trim()) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.username is required`);
+      }
+      if (!profile.apiToken?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.apiToken or credentialRef is required`);
+      }
+      if (profile.port !== undefined && (profile.port < 1 || profile.port > 65535)) {
+        errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.port must be between 1 and 65535`);
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+    }
+  }
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {
     errors.push("assistant.tools.sandbox.enforcementMode must be 'permissive' or 'strict'");

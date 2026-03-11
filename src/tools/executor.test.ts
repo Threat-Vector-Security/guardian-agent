@@ -1,5 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +10,7 @@ import { ToolExecutor } from './executor.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 const testDirs: string[] = [];
+const testServers: Server[] = [];
 
 function createExecutorRoot(): string {
   const root = join(tmpdir(), `guardianagent-tools-${randomUUID()}`);
@@ -37,6 +40,15 @@ afterEach(() => {
   for (const dir of testDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+afterEach(async () => {
+  await Promise.all(testServers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  })));
 });
 
 describe('ToolExecutor', () => {
@@ -81,6 +93,568 @@ describe('ToolExecutor', () => {
 
     const alwaysLoaded = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
     expect(alwaysLoaded).toContain('update_tool_policy');
+  });
+
+  it('returns cPanel account summaries through a configured profile', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/execute/StatsBar/get_stats')) {
+        res.end(JSON.stringify({
+          result: {
+            status: 1,
+            data: { disk_used_percent: 42 },
+          },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/DomainInfo/list_domains')) {
+        res.end(JSON.stringify({
+          result: {
+            status: 1,
+            data: { main_domain: 'example.com', addon_domains: ['shop.example.com'] },
+          },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/ResourceUsage/get_usages')) {
+        res.end(JSON.stringify({
+          result: {
+            status: 1,
+            data: [{ description: 'CPU', state: 'ok' }],
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'primary',
+          name: 'Primary cPanel',
+          type: 'cpanel',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'alice',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'cpanel_account',
+      args: { profile: 'primary' },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      profile: 'primary',
+      account: 'alice',
+      stats: { disk_used_percent: 42 },
+      domains: { main_domain: 'example.com', addon_domains: ['shop.example.com'] },
+    });
+  });
+
+  it('lists WHM accounts through a configured profile', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/listaccts')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: {
+            acct: [
+              { user: 'alice', domain: 'example.com', owner: 'root' },
+              { user: 'bob', domain: 'example.net', owner: 'root' },
+            ],
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm-main',
+          name: 'WHM Main',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'whm_accounts',
+      args: { profile: 'whm-main', action: 'list', search: 'bob' },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      profile: 'whm-main',
+      action: 'list',
+      total: 2,
+      returned: 1,
+      accounts: [{ user: 'bob', domain: 'example.net', owner: 'root' }],
+    });
+  });
+
+  it('requires approval for WHM account creation and executes after approval', async () => {
+    const requests: Array<{ method: string; url: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ method: req.method ?? 'GET', url: req.url });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/createacct')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: {
+            acct: [{ user: 'alice', domain: 'example.com' }],
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm-main',
+          name: 'WHM Main',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'whm_accounts',
+      args: {
+        profile: 'whm-main',
+        action: 'create',
+        username: 'alice',
+        domain: 'example.com',
+        password: 'StrongPass!23',
+      },
+      origin: 'cli',
+    });
+
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+    expect(pending.approvalId).toBeDefined();
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'create',
+      username: 'alice',
+      domain: 'example.com',
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'POST' });
+    expect(requests[0]?.url).toContain('/json-api/createacct');
+  });
+
+  it('lists cPanel domains without approval and gates mutations', async () => {
+    const requests: Array<{ method: string; url: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ method: req.method ?? 'GET', url: req.url });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/execute/DomainInfo/list_domains')) {
+        res.end(JSON.stringify({
+          result: {
+            status: 1,
+            data: { main_domain: 'example.com', sub_domains: ['dev.example.com'] },
+          },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/SubDomain/addsubdomain')) {
+        res.end(JSON.stringify({
+          result: {
+            status: 1,
+            data: { statusmsg: 'created' },
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'primary',
+          name: 'Primary cPanel',
+          type: 'cpanel',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'alice',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const list = await executor.runTool({
+      toolName: 'cpanel_domains',
+      args: { profile: 'primary', action: 'list' },
+      origin: 'cli',
+    });
+
+    expect(list.success).toBe(true);
+    expect(list.output).toMatchObject({
+      action: 'list',
+      data: { main_domain: 'example.com', sub_domains: ['dev.example.com'] },
+    });
+
+    const addPending = await executor.runTool({
+      toolName: 'cpanel_domains',
+      args: {
+        profile: 'primary',
+        action: 'add_subdomain',
+        domain: 'blog',
+        rootDomain: 'example.com',
+      },
+      origin: 'cli',
+    });
+
+    expect(addPending.success).toBe(false);
+    expect(addPending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(addPending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'add_subdomain',
+      domain: 'blog',
+      rootDomain: 'example.com',
+    });
+
+    expect(requests[0]).toMatchObject({ method: 'GET' });
+    expect(requests[1]).toMatchObject({ method: 'POST' });
+  });
+
+  it('parses cPanel DNS zones without approval and gates mass edits', async () => {
+    const requests: Array<{ method: string; url: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ method: req.method ?? 'GET', url: req.url });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/execute/DNS/parse_zone')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: { zone: 'example.com', records: [{ name: 'www', type: 'A' }] } },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/DNS/mass_edit_zone')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: { updated: true } },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'cp',
+          name: 'CP',
+          type: 'cpanel',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'alice',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const read = await executor.runTool({
+      toolName: 'cpanel_dns',
+      args: { profile: 'cp', action: 'parse_zone', zone: 'example.com' },
+      origin: 'cli',
+    });
+    expect(read.success).toBe(true);
+    expect(read.output).toMatchObject({ action: 'parse_zone', zone: 'example.com' });
+
+    const edit = await executor.runTool({
+      toolName: 'cpanel_dns',
+      args: { profile: 'cp', action: 'mass_edit_zone', zone: 'example.com', add: [{ name: 'blog', type: 'A', address: '1.2.3.4' }] },
+      origin: 'cli',
+    });
+    expect(edit.success).toBe(false);
+    expect(edit.status).toBe('pending_approval');
+    const approved = await executor.decideApproval(edit.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(requests[0]).toMatchObject({ method: 'GET' });
+    expect(requests[1]).toMatchObject({ method: 'POST' });
+  });
+
+  it('lists cPanel backups and approval-gates backup creation', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/execute/Backup/list_backups')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: [{ file: 'backup-1.tar.gz' }] },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/Backup/fullbackup_to_homedir')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: { queued: true } },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'cp',
+          name: 'CP',
+          type: 'cpanel',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'alice',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const list = await executor.runTool({
+      toolName: 'cpanel_backups',
+      args: { profile: 'cp', action: 'list' },
+      origin: 'cli',
+    });
+    expect(list.success).toBe(true);
+    expect(list.output).toMatchObject({ action: 'list', data: [{ file: 'backup-1.tar.gz' }] });
+
+    const create = await executor.runTool({
+      toolName: 'cpanel_backups',
+      args: { profile: 'cp', action: 'create', homedir: 'include' },
+      origin: 'cli',
+    });
+    expect(create.success).toBe(false);
+    expect(create.status).toBe('pending_approval');
+  });
+
+  it('lists cPanel SSL certs and redacts private key material from install output', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/execute/SSL/list_certs')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: [{ domain: 'example.com', not_after: '2026-12-31' }] },
+        }));
+        return;
+      }
+      if (req.url?.includes('/execute/SSL/install_ssl')) {
+        res.end(JSON.stringify({
+          result: { status: 1, data: { domain: 'example.com', key: 'PRIVATE-KEY' } },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'cp',
+          name: 'CP',
+          type: 'cpanel',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'alice',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const list = await executor.runTool({
+      toolName: 'cpanel_ssl',
+      args: { profile: 'cp', action: 'list_certs' },
+      origin: 'cli',
+    });
+    expect(list.success).toBe(true);
+
+    const install = await executor.runTool({
+      toolName: 'cpanel_ssl',
+      args: {
+        profile: 'cp',
+        action: 'install_ssl',
+        domain: 'example.com',
+        certificate: 'CERT',
+        privateKey: 'KEY',
+      },
+      origin: 'cli',
+    });
+    expect(install.success).toBe(false);
+    expect(install.status).toBe('pending_approval');
+    const approved = await executor.decideApproval(install.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'install_ssl',
+      domain: 'example.com',
+      data: { domain: 'example.com', key: '[REDACTED]' },
+    });
+  });
+
+  it('supports WHM DNS, SSL, backup, and service phase-one actions', async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url ?? '');
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/listzones')) {
+        res.end(JSON.stringify({ metadata: { result: 1 }, data: { zones: ['example.com'] } }));
+        return;
+      }
+      if (req.url?.includes('/json-api/get_autossl_providers')) {
+        res.end(JSON.stringify({ metadata: { result: 1 }, data: { providers: ['letsencrypt'] } }));
+        return;
+      }
+      if (req.url?.includes('/json-api/backup_config_get')) {
+        res.end(JSON.stringify({ metadata: { result: 1 }, data: { enabled: true } }));
+        return;
+      }
+      if (req.url?.includes('/json-api/servicestatus')) {
+        res.end(JSON.stringify({ metadata: { result: 1 }, data: { service: [{ name: 'httpd', running: 1 }] } }));
+        return;
+      }
+      if (req.url?.includes('/json-api/restartservice')) {
+        res.end(JSON.stringify({ metadata: { result: 1 }, data: { restarted: 'httpd' } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm',
+          name: 'WHM',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    expect((await executor.runTool({ toolName: 'whm_dns', args: { profile: 'whm', action: 'list' }, origin: 'cli' })).success).toBe(true);
+    expect((await executor.runTool({ toolName: 'whm_ssl', args: { profile: 'whm', action: 'list_providers' }, origin: 'cli' })).success).toBe(true);
+    expect((await executor.runTool({ toolName: 'whm_backup', args: { profile: 'whm', action: 'config_get' }, origin: 'cli' })).success).toBe(true);
+    expect((await executor.runTool({ toolName: 'whm_services', args: { profile: 'whm', action: 'status' }, origin: 'cli' })).success).toBe(true);
+
+    const restart = await executor.runTool({
+      toolName: 'whm_services',
+      args: { profile: 'whm', action: 'restart', service: 'httpd' },
+      origin: 'cli',
+    });
+    expect(restart.success).toBe(false);
+    expect(restart.status).toBe('pending_approval');
+    await executor.decideApproval(restart.approvalId!, 'approved', 'tester');
+    expect(requests.some((url) => url.includes('/json-api/restartservice'))).toBe(true);
   });
 
   it('rejects fs_write content containing secrets before writing', async () => {
@@ -1589,7 +2163,7 @@ describe('ToolExecutor', () => {
       }
     });
 
-    it('getCategoryInfo returns all 10 categories with correct counts', () => {
+    it('getCategoryInfo returns all categories with correct counts', () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         enabled: true,
@@ -1597,7 +2171,7 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(14);
+      expect(info.length).toBe(15);
       const names = info.map((c) => c.category);
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');
@@ -1608,10 +2182,12 @@ describe('ToolExecutor', () => {
       expect(names).toContain('intel');
       expect(names).toContain('forum');
       expect(names).toContain('network');
+      expect(names).toContain('cloud');
       expect(names).toContain('system');
       expect(names).toContain('memory');
       expect(names).toContain('search');
       expect(names).toContain('automation');
+      expect(names).toContain('workspace');
       const fs = info.find((c) => c.category === 'filesystem')!;
       expect(fs.toolCount).toBe(6);
       expect(fs.enabled).toBe(true);

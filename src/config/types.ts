@@ -788,6 +788,40 @@ export interface WebSearchConfig {
   cacheTtlMs?: number;
 }
 
+/** A cPanel or WHM server profile for hosted operations. */
+export interface AssistantCloudCpanelProfileConfig {
+  /** Unique profile id referenced by cloud tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Endpoint type. */
+  type: 'cpanel' | 'whm';
+  /** cPanel/WHM hostname. */
+  host: string;
+  /** Port override. Defaults to 2083/2082 for cPanel, 2087/2086 for WHM based on ssl. */
+  port?: number;
+  /** API username for Authorization header. */
+  username: string;
+  /** Inline API token (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  apiToken?: string;
+  /** Credential reference for the API token. */
+  credentialRef?: string;
+  /** Use HTTPS/TLS. Default true. */
+  ssl?: boolean;
+  /** Allow invalid/self-signed certificates. Default false. */
+  allowSelfSigned?: boolean;
+  /** Default cPanel account to target when calling account-level actions through WHM. */
+  defaultCpanelUser?: string;
+}
+
+/** Hosting and cloud-provider tool configuration. */
+export interface AssistantCloudConfig {
+  /** Enable built-in hosting/cloud tools. */
+  enabled: boolean;
+  /** Available cPanel/WHM profiles. */
+  cpanelProfiles: AssistantCloudCpanelProfileConfig[];
+}
+
 /** Controls which policy areas the assistant can modify with user approval via chat. */
 export interface AgentPolicyUpdatesConfig {
   /** Allow the assistant to add filesystem paths to the allowlist (always requires approval). */
@@ -822,6 +856,8 @@ export interface AssistantToolsConfig {
   webSearch?: WebSearchConfig;
   /** Browser automation configuration (agent-browser). Enables JS-rendered page interaction. */
   browser?: BrowserConfig;
+  /** Cloud and hosting provider integrations. */
+  cloud?: AssistantCloudConfig;
   /** QMD hybrid search engine. Indexes local document collections for BM25 + vector + LLM re-ranked search. */
   qmd?: QMDConfig;
   /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
@@ -1128,6 +1164,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'openrouter.ai',
       ],
       browser: { enabled: true },
+      cloud: {
+        enabled: false,
+        cpanelProfiles: [],
+      },
       qmd: {
         enabled: true,
         defaultMode: 'query',

@@ -168,6 +168,36 @@ describe('validateConfig', () => {
     expect(errors).toContain('assistant.credentials.refs.broken.env is required');
   });
 
+  it('should validate cloud cPanel credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cpanelProfiles: [{
+              id: 'primary',
+              name: 'Primary cPanel',
+              type: 'cpanel',
+              host: 'server.example.com',
+              username: 'alice',
+              credentialRef: 'cloud.cpanel.primary',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should require telegram botToken when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
