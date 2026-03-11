@@ -145,6 +145,15 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.vercelProfiles.${profile.id}`,
       ),
     })),
+    cloudflareProfiles: (config.cloudflareProfiles ?? []).map((profile) => ({
+      ...profile,
+      apiToken: resolveCredentialValue(
+        profile.apiToken,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.cloudflareProfiles.${profile.id}`,
+      ),
+    })),
   };
 }
 

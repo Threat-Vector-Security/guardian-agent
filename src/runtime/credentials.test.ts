@@ -175,4 +175,34 @@ describe('resolveRuntimeCredentialView', () => {
     const resolved = resolveRuntimeCredentialView(config);
     expect(resolved.resolvedCloud?.vercelProfiles?.[0]?.apiToken).toBe('vercel-runtime-token');
   });
+
+  it('resolves Cloudflare profile API tokens from credential refs', () => {
+    vi.stubEnv('CLOUDFLARE_TOKEN', 'cloudflare-runtime-token');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.cloudflare.primary': { source: 'env', env: 'CLOUDFLARE_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cloudflareProfiles: [{
+              id: 'cf-main',
+              name: 'Cloudflare Main',
+              credentialRef: 'cloud.cloudflare.primary',
+              accountId: 'acc_123',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.cloudflareProfiles?.[0]?.apiToken).toBe('cloudflare-runtime-token');
+  });
 });

@@ -48,6 +48,7 @@ import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
+import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
 
 const MAX_JOBS = 200;
@@ -61,12 +62,21 @@ const MAX_SEARCH_FILES = 100_000;
 const MAX_SEARCH_FILE_BYTES = 1_000_000;
 const SEARCH_CACHE_TTL_MS = 300_000; // 5 minutes
 const MAX_TOOL_ARG_BYTES = 128_000;
+const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
+  'ssl',
+  'min_tls_version',
+  'tls_1_3',
+  'always_use_https',
+  'automatic_https_rewrites',
+  'opportunistic_encryption',
+];
 
 function emptyCloudConfig(): AssistantCloudConfig {
   return {
     enabled: false,
     cpanelProfiles: [],
     vercelProfiles: [],
+    cloudflareProfiles: [],
   };
 }
 
@@ -909,6 +919,22 @@ export class ToolExecutor {
       return 'allow';
     }
 
+    if (toolName === 'cf_status') {
+      return 'allow';
+    }
+
+    if (toolName === 'cf_dns') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'cf_ssl') {
+      const action = asString(args.action, 'list_settings').trim().toLowerCase();
+      if (action === 'list_settings' || action === 'get_setting') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
     if (toolName === 'whm_dns') {
       const action = asString(args.action, 'list').trim().toLowerCase();
       if (action === 'list' || action === 'parse_zone') return 'allow';
@@ -1166,6 +1192,46 @@ export class ToolExecutor {
         if (!asString(args.deploymentId).trim()) return 'deploymentId is required for runtime logs';
       } else if (action === 'events') {
         if (!asString(args.deploymentId).trim()) return 'deploymentId is required for deployment events';
+      }
+    }
+
+    if (toolName === 'cf_status') {
+      try {
+        this.createCloudflareClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'cf_dns') {
+      try {
+        this.createCloudflareClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'update' || action === 'delete') && !asString(args.recordId).trim()) {
+        return `recordId is required for ${action}`;
+      }
+      if ((action === 'create' || action === 'update') && !isRecord(args.record)) {
+        if (!asString(args.type).trim()) return `type is required for ${action}`;
+        if (!asString(args.name).trim()) return `name is required for ${action}`;
+        if (!asString(args.content).trim()) return `content is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'cf_ssl') {
+      try {
+        this.createCloudflareClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get_setting' || action === 'update_setting') && !asString(args.settingId).trim()) {
+        return `settingId is required for ${action}`;
+      }
+      if (action === 'update_setting' && args.value === undefined) {
+        return 'value is required for update_setting';
       }
     }
 
@@ -1479,6 +1545,22 @@ export class ToolExecutor {
         return asString(args.action, 'runtime').trim().toLowerCase() === 'events'
           ? `Would fetch Vercel deployment events for '${args.deploymentId}'`
           : `Would fetch Vercel runtime logs for deployment '${args.deploymentId}'`;
+      case 'cf_status':
+        return `Would summarize Cloudflare zones for profile '${args.profile}'`;
+      case 'cf_dns': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create') return `Would create Cloudflare DNS record '${args.type} ${args.name}'`;
+        if (action === 'update') return `Would update Cloudflare DNS record '${args.recordId}'`;
+        if (action === 'delete') return `Would delete Cloudflare DNS record '${args.recordId}'`;
+        if (action === 'get') return `Would inspect Cloudflare DNS record '${args.recordId}'`;
+        return `Would list Cloudflare DNS records for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+      }
+      case 'cf_ssl': {
+        const action = asString(args.action, 'list_settings').trim().toLowerCase();
+        if (action === 'update_setting') return `Would set Cloudflare SSL setting '${args.settingId}'`;
+        if (action === 'get_setting') return `Would inspect Cloudflare SSL setting '${args.settingId}'`;
+        return `Would list Cloudflare SSL settings for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
+      }
       case 'whm_dns': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
@@ -5306,6 +5388,286 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'cf_status',
+        description: 'Summarize Cloudflare token validity, optional account details, and zones. Read-only.',
+        shortDescription: 'Summarize Cloudflare account and zone state.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cloudflareProfiles id.' },
+            limit: { type: 'number', description: 'Maximum zones to return (default: 20).' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: CloudflareClient;
+        try {
+          client = this.createCloudflareClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const limit = Math.max(1, Math.min(100, asNumber(args.limit, 20)));
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudflareEndpoint(client.config),
+          method: 'GET',
+          tool: 'cf_status',
+        });
+
+        try {
+          const [token, account, zones] = await Promise.all([
+            client.verifyToken(),
+            client.config.accountId ? client.getAccount().catch((error) => ({ error: error instanceof Error ? error.message : String(error) })) : Promise.resolve(null),
+            client.listZones({ per_page: limit }),
+          ]);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeCloudflareEndpoint(client.config),
+              accountId: client.config.accountId ?? null,
+              defaultZoneId: client.config.defaultZoneId ?? null,
+              token,
+              account: isRecord(account) && !('error' in account) ? account : null,
+              accountError: isRecord(account) && 'error' in account ? account.error : undefined,
+              zones,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Cloudflare status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cf_dns',
+        description: 'List, inspect, create, update, or delete Cloudflare DNS records.',
+        shortDescription: 'Manage Cloudflare DNS records.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cloudflareProfiles id.' },
+            action: { type: 'string', description: 'list, get, create, update, or delete.' },
+            zoneId: { type: 'string', description: 'Zone id override.' },
+            zone: { type: 'string', description: 'Zone name to resolve when zoneId is not provided.' },
+            recordId: { type: 'string', description: 'DNS record id for get/update/delete.' },
+            type: { type: 'string', description: 'Record type shorthand for create/update.' },
+            name: { type: 'string', description: 'Record name shorthand for create/update.' },
+            content: { type: 'string', description: 'Record content shorthand for create/update.' },
+            ttl: { type: 'number', description: 'Optional TTL shorthand.' },
+            proxied: { type: 'boolean', description: 'Optional proxied flag shorthand.' },
+            priority: { type: 'number', description: 'Optional priority shorthand.' },
+            comment: { type: 'string', description: 'Optional comment shorthand.' },
+            record: { type: 'object', description: 'Raw DNS record payload for create/update.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'create', 'update', 'delete'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, create, update, or delete.' };
+        }
+
+        let client: CloudflareClient;
+        try {
+          client = this.createCloudflareClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        let zoneId: string;
+        try {
+          zoneId = await client.resolveZoneId(asString(args.zoneId).trim() || asString(args.zone).trim() || undefined);
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = action === 'list' || action === 'get' ? 'GET' : (action === 'delete' ? 'DELETE' : (action === 'update' ? 'PATCH' : 'POST'));
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudflareEndpoint(client.config),
+          method,
+          tool: 'cf_dns',
+          action,
+          zoneId,
+          recordId: asString(args.recordId).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list') {
+            const result = await client.listDnsRecords(zoneId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeCloudflareEndpoint(client.config),
+                action,
+                zoneId,
+                data: result,
+              },
+            };
+          }
+          if (action === 'get') {
+            const recordId = requireString(args.recordId, 'recordId').trim();
+            const result = await client.getDnsRecord(zoneId, recordId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeCloudflareEndpoint(client.config),
+                action,
+                zoneId,
+                recordId,
+                data: result,
+              },
+            };
+          }
+          if (action === 'delete') {
+            const recordId = requireString(args.recordId, 'recordId').trim();
+            const result = await client.deleteDnsRecord(zoneId, recordId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeCloudflareEndpoint(client.config),
+                action,
+                zoneId,
+                recordId,
+                data: result,
+              },
+            };
+          }
+
+          const payload = buildCloudflareDnsPayload(args);
+          const result = action === 'create'
+            ? await client.createDnsRecord(zoneId, payload)
+            : await client.updateDnsRecord(zoneId, requireString(args.recordId, 'recordId').trim(), payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeCloudflareEndpoint(client.config),
+              action,
+              zoneId,
+              recordId: asString(args.recordId).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Cloudflare DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'cf_ssl',
+        description: 'Inspect or update key Cloudflare zone SSL/TLS settings.',
+        shortDescription: 'Inspect or update Cloudflare SSL/TLS settings.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.cloudflareProfiles id.' },
+            action: { type: 'string', description: 'list_settings, get_setting, or update_setting.' },
+            zoneId: { type: 'string', description: 'Zone id override.' },
+            zone: { type: 'string', description: 'Zone name to resolve when zoneId is not provided.' },
+            settingId: { type: 'string', description: 'Cloudflare setting id, e.g. ssl or min_tls_version.' },
+            value: { description: 'New setting value for update_setting.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_settings', 'get_setting', 'update_setting'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_settings, get_setting, or update_setting.' };
+        }
+
+        let client: CloudflareClient;
+        try {
+          client = this.createCloudflareClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        let zoneId: string;
+        try {
+          zoneId = await client.resolveZoneId(asString(args.zoneId).trim() || asString(args.zone).trim() || undefined);
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = action === 'update_setting' ? 'PATCH' : 'GET';
+        this.guardAction(request, 'http_request', {
+          url: this.describeCloudflareEndpoint(client.config),
+          method,
+          tool: 'cf_ssl',
+          action,
+          zoneId,
+          settingId: asString(args.settingId).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list_settings') {
+            const result = await Promise.all(
+              DEFAULT_CLOUDFLARE_SSL_SETTING_IDS.map(async (settingId) => ({
+                settingId,
+                data: await client.getZoneSetting(zoneId, settingId),
+              })),
+            );
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeCloudflareEndpoint(client.config),
+                action,
+                zoneId,
+                settings: result,
+              },
+            };
+          }
+
+          const settingId = requireString(args.settingId, 'settingId').trim();
+          const result = action === 'get_setting'
+            ? await client.getZoneSetting(zoneId, settingId)
+            : await client.updateZoneSetting(zoneId, settingId, args.value);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeCloudflareEndpoint(client.config),
+              action,
+              zoneId,
+              settingId,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Cloudflare SSL request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'whm_status',
         description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
         shortDescription: 'Inspect WHM server hostname, version, load, and services.',
@@ -7654,6 +8016,11 @@ export class ToolExecutor {
     return new VercelClient(config);
   }
 
+  private createCloudflareClient(profileId: string): CloudflareClient {
+    const config = this.getCloudflareProfile(profileId);
+    return new CloudflareClient(config);
+  }
+
   private getCloudVercelProfile(profileId: string): VercelInstanceConfig {
     if (!this.cloudConfig.enabled) {
       throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
@@ -7693,6 +8060,42 @@ export class ToolExecutor {
     };
   }
 
+  private getCloudflareProfile(profileId: string): CloudflareInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.cloudflareProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Cloudflare profile '${id}'.`);
+    }
+    if (!profile.apiToken?.trim()) {
+      throw new Error(`Cloudflare profile '${id}' does not have a resolved API token.`);
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
+    } catch {
+      throw new Error(`Cloudflare profile '${id}' has an invalid apiBaseUrl.`);
+    }
+    if (!this.isHostAllowed(baseUrl.hostname)) {
+      throw new Error(`Host '${baseUrl.hostname}' is not in allowedDomains.`);
+    }
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: baseUrl.toString(),
+      apiToken: profile.apiToken,
+      accountId: profile.accountId,
+      defaultZoneId: profile.defaultZoneId,
+    };
+  }
+
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
     const ssl = profile.ssl !== false;
     const defaultPort = profile.type === 'whm'
@@ -7704,6 +8107,11 @@ export class ToolExecutor {
 
   private describeVercelEndpoint(profile: VercelInstanceConfig): string {
     const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
+    return url.origin;
+  }
+
+  private describeCloudflareEndpoint(profile: CloudflareInstanceConfig): string {
+    const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
     return url.origin;
   }
 
@@ -8432,6 +8840,23 @@ function redactVercelEnvData(value: unknown): unknown {
     out[key] = redactVercelEnvData(child);
   }
   return out;
+}
+
+function buildCloudflareDnsPayload(args: Record<string, unknown>): Record<string, unknown> {
+  if (isRecord(args.record)) {
+    return { ...args.record };
+  }
+
+  const payload: Record<string, unknown> = {
+    type: requireString(args.type, 'type').trim(),
+    name: requireString(args.name, 'name').trim(),
+    content: requireString(args.content, 'content').trim(),
+  };
+  if (typeof args.ttl === 'number' && Number.isFinite(args.ttl)) payload['ttl'] = args.ttl;
+  if (typeof args.proxied === 'boolean') payload['proxied'] = args.proxied;
+  if (typeof args.priority === 'number' && Number.isFinite(args.priority)) payload['priority'] = args.priority;
+  if (typeof args.comment === 'string' && args.comment.trim()) payload['comment'] = args.comment.trim();
+  return payload;
 }
 
 function extractEmails(text: string): string[] {

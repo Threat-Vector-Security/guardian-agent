@@ -312,6 +312,36 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         `assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.credentialRef`,
       );
     }
+    const seenCloudflareProfileIds = new Set<string>();
+    for (const profile of cloud.cloudflareProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.cloudflareProfiles.id is required');
+      } else if (seenCloudflareProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.cloudflareProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenCloudflareProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.apiToken?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiToken or credentialRef is required`);
+      }
+      if (profile.apiBaseUrl?.trim()) {
+        try {
+          const parsed = new URL(profile.apiBaseUrl);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must be a valid URL`);
+        }
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+    }
   }
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {

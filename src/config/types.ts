@@ -832,6 +832,24 @@ export interface AssistantCloudVercelProfileConfig {
   slug?: string;
 }
 
+/** A Cloudflare account profile for cloud operations. */
+export interface AssistantCloudCloudflareProfileConfig {
+  /** Unique profile id referenced by Cloudflare tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Base URL override. Defaults to https://api.cloudflare.com/client/v4. */
+  apiBaseUrl?: string;
+  /** Inline bearer token (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  apiToken?: string;
+  /** Credential reference for the bearer token. */
+  credentialRef?: string;
+  /** Optional account identifier for account-scoped operations. */
+  accountId?: string;
+  /** Optional default zone identifier for zone-scoped operations. */
+  defaultZoneId?: string;
+}
+
 /** Hosting and cloud-provider tool configuration. */
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
@@ -840,6 +858,8 @@ export interface AssistantCloudConfig {
   cpanelProfiles?: AssistantCloudCpanelProfileConfig[];
   /** Available Vercel profiles. */
   vercelProfiles?: AssistantCloudVercelProfileConfig[];
+  /** Available Cloudflare profiles. */
+  cloudflareProfiles?: AssistantCloudCloudflareProfileConfig[];
 }
 
 /** Controls which policy areas the assistant can modify with user approval via chat. */
@@ -1188,6 +1208,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         enabled: false,
         cpanelProfiles: [],
         vercelProfiles: [],
+        cloudflareProfiles: [],
       },
       qmd: {
         enabled: true,
