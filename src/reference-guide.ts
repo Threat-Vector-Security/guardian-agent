@@ -2,182 +2,497 @@
  * Shared reference guide content for CLI, Telegram, and Web UI.
  */
 
-export interface ReferenceGuideSection {
+export interface ReferenceGuidePageSection {
   title: string;
   items: string[];
+  note?: string;
+}
+
+export interface ReferenceGuidePage {
+  id: string;
+  title: string;
+  summary: string;
+  sections: ReferenceGuidePageSection[];
+}
+
+export interface ReferenceGuideCategory {
+  id: string;
+  title: string;
+  description: string;
+  pages: ReferenceGuidePage[];
 }
 
 export interface ReferenceGuide {
   title: string;
   intro: string;
-  sections: ReferenceGuideSection[];
+  categories: ReferenceGuideCategory[];
 }
 
 export function getReferenceGuide(): ReferenceGuide {
   return {
     title: 'Guardian Agent Reference Guide',
-    intro: 'How to use your assistant, configure LLMs, and connect channels.',
-    sections: [
+    intro: 'Operator wiki for setup, day-to-day use, automations, and security controls across web, CLI, and Telegram.',
+    categories: [
       {
-        title: 'Quick Start',
-        items: [
-          'Run: npx guardianagent',
-          'Open web dashboard at http://localhost:3000 (if web channel enabled)',
-          'Open Config Center in web or use CLI /config to set provider details (config is created/updated automatically)',
-          'Use Config Center Web Authentication panel or CLI /auth status to manage bearer token mode',
-          'Set default provider with web Config Center or CLI /config set default <provider>',
-          'Check assistant runtime state with web Assistant State tab or CLI /assistant',
-          'Web auth token: if not configured, Guardian Agent generates an ephemeral token at startup (shown in console)',
-          'Verify provider connectivity: web Config page or CLI /providers',
-          'In CLI, type /help for commands and /guide for this reference',
+        id: 'getting-started',
+        title: 'Getting Started',
+        description: 'Bootstrap the assistant, learn the control surfaces, and manage conversations.',
+        pages: [
+          {
+            id: 'quick-start',
+            title: 'Quick Start',
+            summary: 'Bring the assistant online, open the dashboard, and confirm your provider and auth configuration.',
+            sections: [
+              {
+                title: 'Start The System',
+                items: [
+                  'Run Guardian Agent from the repo root with the platform startup script or `npx guardianagent`.',
+                  'Open the web dashboard at `http://localhost:3000` when the web channel is enabled.',
+                  'If no web auth token is configured, Guardian Agent generates an ephemeral token at startup and prints it to the console.',
+                  'Use the Configuration Center in the web UI or CLI `/config` to create or update provider settings instead of editing YAML by hand.',
+                ],
+              },
+              {
+                title: 'Verify Readiness',
+                items: [
+                  'Use the Dashboard page to confirm runtime status, agent health, provider connectivity, and assistant state.',
+                  'Open `#/config` to verify the default provider, web auth settings, and channel configuration.',
+                  'Use CLI `/providers` or the Providers tab to confirm the selected provider is reachable.',
+                  'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
+                ],
+                note: 'Most configuration changes now appear in the web UI without a manual browser refresh because the dashboard listens for server-sent invalidation events.',
+              },
+            ],
+          },
+          {
+            id: 'chat-sessions',
+            title: 'Chat, Sessions, And Quick Actions',
+            summary: 'Use the assistant conversationally while keeping context, approvals, and fast actions under control.',
+            sections: [
+              {
+                title: 'Normal Chat Flow',
+                items: [
+                  'Choose an agent in the web chat panel or with CLI `/chat <agentId>` when you want to pin work to one agent.',
+                  'Conversation memory is scoped per user, channel, and agent unless identity mode intentionally shares it.',
+                  'Use the web New Conversation control, CLI `/reset [agentId]`, or Telegram `/reset [agentId]` to clear context.',
+                ],
+              },
+              {
+                title: 'Session Management',
+                items: [
+                  'Use CLI `/session list`, `/session use <sessionId>`, and `/session new` to revisit or branch prior work.',
+                  'Assistant state in the dashboard shows queued and running sessions, wait times, execution times, and recent traces.',
+                  'Quick actions are available through the web quick-action bar, CLI `/quick <email|task|calendar> <details>`, and Telegram `/quick ...`.',
+                ],
+                note: 'Chat streaming uses SSE. Tool calls, token streaming, and completion events show up live in the web chat panel.',
+              },
+            ],
+          },
+          {
+            id: 'assistant-control-plane',
+            title: 'Assistant Control Plane',
+            summary: 'Inspect runtime state, approvals, jobs, traces, and policy decisions from the operator surfaces.',
+            sections: [
+              {
+                title: 'Web Control Surfaces',
+                items: [
+                  'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
+                  'Configuration > Tools exposes tool policy mode, sandbox boundaries, provider routing, categories, approvals, and recent jobs.',
+                  'Security shows audit history, network posture, and threat-intel workflows.',
+                ],
+              },
+              {
+                title: 'CLI Control Surfaces',
+                items: [
+                  'Use `/assistant summary`, `/assistant sessions`, `/assistant jobs`, `/assistant traces`, and `/assistant policy` for the same orchestration state in the terminal.',
+                  'Use `/tools` to inspect tool policy and pending approvals, and `/approve` or `/deny` as fallback commands if native prompts are not suitable.',
+                  'Use `/mode` to switch between auto, local-only, and external-only routing without changing agent definitions.',
+                ],
+                note: 'Approval prompts should normally be handled through the native buttons or inline prompt flow first. Fallback commands remain useful for remote or scripted sessions.',
+              },
+            ],
+          },
+          {
+            id: 'tools-and-approvals',
+            title: 'Tools, Approvals, And Browser Automation',
+            summary: 'Run workstation tools safely, tune policy boundaries, and understand how browser sessions behave.',
+            sections: [
+              {
+                title: 'Tool Governance',
+                items: [
+                  'Configuration > Tools is the main operator surface for policy mode, category enablement, provider routing, approvals, and recent jobs.',
+                  'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
+                  'Allowed paths, commands, and domains should be adjusted deliberately; treat them as policy boundaries, not convenience toggles.',
+                ],
+              },
+              {
+                title: 'Approvals',
+                items: [
+                  'Pending tool actions are surfaced in web approvals, CLI native prompts, and Telegram approval flows.',
+                  'Use `/approve [approvalId]` and `/deny [approvalId]` as fallback commands when native approval controls are unavailable.',
+                  'Recent approval outcomes show up in audit history and assistant policy views, so you can verify what was allowed and why.',
+                ],
+              },
+              {
+                title: 'Browser Automation',
+                items: [
+                  'Browser tools open managed sessions through the `agent-browser` binary and keep them scoped to the current user and channel.',
+                  'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
+                  'Close stale browser sessions or let idle cleanup remove them automatically when they are no longer needed.',
+                ],
+              },
+            ],
+          },
         ],
       },
       {
-        title: 'Use The Assistant',
-        items: [
-          'Choose an agent in web Chat or with CLI /chat <agentId>',
-          'Send normal messages; conversation memory is kept per user+channel+agent',
-          'Reset context: CLI /reset [agentId], Telegram /reset [agentId], or web New Conversation button',
-          'Quick actions: CLI /quick <email|task|calendar> <details>, Telegram /quick ..., or web Quick Actions bar',
-          'Session controls: CLI /session list|use|new to revisit or branch conversations',
+        id: 'providers-and-channels',
+        title: 'Providers And Channels',
+        description: 'Connect LLMs and external channels, then validate each path end to end.',
+        pages: [
+          {
+            id: 'ollama-local',
+            title: 'Connect Ollama (Local)',
+            summary: 'Configure a local model for private, low-latency operation.',
+            sections: [
+              {
+                title: 'Local Provider Setup',
+                items: [
+                  'Install and run Ollama locally before configuring Guardian Agent.',
+                  'Pull at least one model first, for example `ollama pull llama3.2`.',
+                  'In the Providers tab choose the local provider path, then set a profile name, model, and base URL if needed.',
+                  'CLI equivalent: `/config add ollama ollama llama3.2` followed by `/config set default ollama`.',
+                ],
+              },
+              {
+                title: 'Validation',
+                items: [
+                  'Use the Providers tab test button or CLI `/providers` to verify connectivity and model discovery.',
+                  'If the provider is unavailable, check the Ollama process and base URL before changing Guardian configuration.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'cloud-providers',
+            title: 'Connect OpenAI Or Anthropic',
+            summary: 'Add external models for quality fallback, smart routing, or explicit cloud use.',
+            sections: [
+              {
+                title: 'External Provider Setup',
+                items: [
+                  'In Configuration > Providers choose External API, then set provider type, model, and API key.',
+                  'CLI equivalent: `/config add <name> openai|anthropic <model> <apiKey>`.',
+                  'Set the default provider from the Providers tab or with `/config set default <name>`.',
+                ],
+              },
+              {
+                title: 'Routing Notes',
+                items: [
+                  'Tools can route to local or external providers by category when smart provider routing is enabled.',
+                  'You can disable smart routing or override specific tool or category behavior in Configuration > Tools.',
+                  'Provider changes propagate to the running web UI immediately.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'google-workspace',
+            title: 'Google Workspace',
+            summary: 'Enable Gmail, Calendar, Drive, Docs, and Sheets through the `gws` CLI path.',
+            sections: [
+              {
+                title: 'Credential Prerequisites',
+                items: [
+                  'Install the Google Workspace CLI (`gws`) and create Google Cloud OAuth desktop credentials.',
+                  'Quick path: install `gcloud`, run `gcloud auth login`, then `gws auth setup`.',
+                  'Manual path: create a Google Cloud project, configure an External app in Google Auth Platform, publish it, create a Desktop OAuth client, and save the downloaded secret to `~/.config/gws/client_secret.json`.',
+                ],
+              },
+              {
+                title: 'Enable And Verify',
+                items: [
+                  'After credentials are in place, run `gws auth login` to complete the browser sign-in flow.',
+                  'Enable only the Google APIs you need in Google Cloud Console.',
+                  'In Guardian Agent, open Settings > Google Workspace, choose services, enable the integration, and restart if the tools are not already loaded.',
+                  'Verify with the Settings panel or CLI `/google status`.',
+                ],
+                note: 'If Google shows `access_denied` or `app not verified`, return to the Google Auth Platform Audience settings and either publish the app or add yourself as a test user.',
+              },
+            ],
+          },
+          {
+            id: 'telegram',
+            title: 'Telegram Channel',
+            summary: 'Bring the assistant into Telegram with BotFather setup and allowed chat IDs.',
+            sections: [
+              {
+                title: 'Bot Setup',
+                items: [
+                  'Create the bot through `@BotFather` using `/newbot`, then copy the returned token.',
+                  'Enable Telegram in Configuration > Settings > Telegram Channel, paste the token, and save.',
+                  'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
+                  'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
+                ],
+              },
+              {
+                title: 'CLI Equivalent',
+                items: [
+                  'Use `/config telegram on`, `/config telegram token <token>`, `/config telegram chatids <id1,id2,...>`, and `/config telegram status`.',
+                  'Telegram channel changes are hot-reloaded, so enable/disable and token updates apply without a full application restart.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'web-search-and-qmd',
+            title: 'Web Search And QMD',
+            summary: 'Use live web search, page fetch, and local document search together without losing source control.',
+            sections: [
+              {
+                title: 'Web Search',
+                items: [
+                  'Built-in web search and fetch tools can run through the configured search provider path without leaving Guardian controls.',
+                  'Use Configuration > Search Sources to set provider options and credentials for premium search providers.',
+                  'Search config changes apply immediately and invalidate the web UI so the current state stays visible.',
+                ],
+              },
+              {
+                title: 'QMD Document Search',
+                items: [
+                  'QMD combines BM25, vectors, and reranking across local directories, repositories, URLs, and files.',
+                  'Use the Search Sources configuration area to add, remove, enable, disable, or reindex QMD sources.',
+                  'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
+                ],
+                note: 'Treat web search and QMD as complementary: web search is for external freshness, QMD is for trusted local context.',
+              },
+            ],
+          },
         ],
       },
       {
-        title: 'Assistant Control Plane',
-        items: [
-          'Use web Assistant State to inspect session queues, priority scheduling, latency, traces, background jobs, and policy decisions',
-          'CLI: /assistant summary for top-level state, /assistant sessions for queue detail',
-          'CLI: /assistant jobs to inspect scan/config jobs and failures',
-          'CLI: /assistant policy to review recent allow/deny/rate-limit decisions',
-          'CLI: /assistant traces to inspect per-request step traces and timing',
-          'Use web Tools tab or CLI /tools to run approved workstation tools and review approvals/jobs',
-          'For chat-driven tool approvals, use the native prompt or buttons first (CLI: Approve (y) / Deny (n), Telegram: inline buttons); /approve [approvalId] and /deny [approvalId] remain available as fallback commands',
-          'For local file discovery, use tool fs_search (chat can call it) and include your folder in Tools -> Allowed Paths',
-          'CLI policy shortcut: /tools policy paths <comma,separated,paths> (supports C:\\... and /mnt/c/... formats)',
-          'Campaign automation commands: CLI /campaign help (discover contacts, create campaigns, preview, run with approvals)',
+        id: 'automation-and-operations',
+        title: 'Automation And Operations',
+        description: 'Operate scheduled work, inspect tool output, and manage network or intel workflows.',
+        pages: [
+          {
+            id: 'automations',
+            title: 'Automations',
+            summary: 'Build single-tool jobs or multi-step pipelines, then run them manually or on a cron schedule.',
+            sections: [
+              {
+                title: 'Create And Run',
+                items: [
+                  'The Automations page is the unified home for playbooks and scheduled tasks.',
+                  'Automations can run a single tool or multiple tools in sequential or parallel mode.',
+                  'Use Examples to install starter automations and Clone to fork an existing workflow.',
+                  'Use Dry Run before live execution when you want a safe preview path.',
+                ],
+              },
+              {
+                title: 'Scheduling And Limits',
+                items: [
+                  'Any automation can be given a cron schedule and turned into a recurring task.',
+                  'Engine Settings control max steps, max parallelism, timeout defaults, and execution mode.',
+                  'Permission policies restrict what hosts, file paths, and commands an automation can touch.',
+                ],
+              },
+              {
+                title: 'Inspect Results',
+                items: [
+                  'Run history now keeps per-step output, not just status text.',
+                  'Scheduled tool runs and scheduled playbook runs can be expanded in Automations to inspect captured output.',
+                  'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
+                  'Live UI invalidation updates the Automations page when runs finish, schedules change, or playbooks are edited.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'network-operations',
+            title: 'Network Operations',
+            summary: 'Use the Network page for inventory, threat posture, one-off scans, and network run history.',
+            sections: [
+              {
+                title: 'Core Tabs',
+                items: [
+                  'Overview summarizes device counts, baseline readiness, active alerts, and quick actions.',
+                  'Devices shows discovered devices, trust state, open ports, and first/last seen timestamps.',
+                  'Threats shows active alerts plus acknowledgment controls and on-demand threat checks.',
+                  'History shows recent scheduled and manual network runs with expandable per-step output.',
+                ],
+              },
+              {
+                title: 'Tools Tab',
+                items: [
+                  'The Tools tab now groups network tools by category and uses dropdown selectors instead of a scrolling tab strip.',
+                  'Choose a category first, then select the specific tool to run.',
+                  'Each tool panel keeps its own argument form and result viewer so raw output is inspectable immediately.',
+                  'Live result panels include Copy, Text export, and HTML export actions so one-off scan output can be reused outside the dashboard.',
+                ],
+              },
+              {
+                title: 'What Gets Persisted',
+                items: [
+                  'Inventory-oriented outputs feed the device inventory service automatically.',
+                  'Threat and baseline actions update the network baseline and alert state.',
+                  'Scheduled network jobs also write structured history entries so operators can review what ran and what it returned.',
+                  'Expanded history output uses the same copy and export controls as live results, so archived runs can be saved as `.txt` or `.html` without rerunning the tool.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'threat-intel-and-campaigns',
+            title: 'Threat Intel And Campaigns',
+            summary: 'Run watchlist scans, triage findings, draft responses, and use approval-gated outreach workflows.',
+            sections: [
+              {
+                title: 'Threat Intel',
+                items: [
+                  'Use the web Threat Intel tab, CLI `/intel ...`, or Telegram `/intel ...` for summary, scans, watchlists, and findings.',
+                  'Response mode can be manual, assisted, or autonomous depending on your tolerance for automatic action.',
+                  'Dark-web scanning is opt-in and disabled by default unless explicitly enabled.',
+                  'Moltbook connectors should be treated as hostile integrations and kept behind strict allowlists and approval gates.',
+                ],
+              },
+              {
+                title: 'Campaign Workflows',
+                items: [
+                  'Discover contacts with `/campaign discover <url> [tagsCsv]` or import them from CSV.',
+                  'Create campaigns with `/campaign create <name> | <subjectTemplate> | <bodyTemplate>`.',
+                  'Preview content with `/campaign preview <campaignId> [limit]` before sending.',
+                  'Run sends with `/campaign run <campaignId> [maxRecipients]`; outbound sends remain approval-gated.',
+                ],
+                note: 'Template placeholders such as `{name}`, `{company}`, and `{email}` are available in campaign subject and body templates.',
+              },
+            ],
+          },
+          {
+            id: 'quick-actions-and-schedules',
+            title: 'Quick Actions And Schedules',
+            summary: 'Use fast structured actions for routine work, then promote repeatable tasks into scheduled automations.',
+            sections: [
+              {
+                title: 'Quick Actions',
+                items: [
+                  'Quick actions are available in the web UI, CLI `/quick ...`, and Telegram `/quick ...` for common email, task, and calendar flows.',
+                  'Use quick actions when the job is structured but not worth building a full playbook.',
+                  'Quick action runs still pass through normal approval, policy, and audit controls.',
+                ],
+              },
+              {
+                title: 'When To Schedule',
+                items: [
+                  'Promote repetitive quick or manual workflows into Automations when they need cron execution, output history, or stronger guardrails.',
+                  'Use scheduled tasks for periodic network checks, intel scans, system health checks, and repeatable playbook runs.',
+                  'Review run history and step output after the first scheduled execution to confirm the automation is doing what you expect.',
+                ],
+              },
+            ],
+          },
         ],
       },
       {
-        title: 'Connect Ollama (Local)',
-        items: [
-          'Install and run Ollama locally',
-          'Pull a model first, for example: ollama pull llama3.2',
-          'In Config Center choose Local (Ollama), then set profile name and model',
-          'CLI equivalent: /config add ollama ollama llama3.2 and /config set default ollama',
-          'Use CLI /providers or web Config to verify connectivity',
-        ],
-      },
-      {
-        title: 'Connect OpenAI or Anthropic',
-        items: [
-          'In Config Center choose External API, then set provider type, API key, and model',
-          'CLI equivalent: /config add <name> openai|anthropic <model> <apiKey>',
-          'Switch default provider via CLI /config set default <name> or web Config page',
-          'Optional advanced path: use CLI /config add and /config set for provider fine-tuning',
-        ],
-      },
-      {
-        title: 'Connect Google Workspace (Gmail, Calendar, Drive)',
-        items: [
-          'Google Workspace tools use the gws CLI (https://github.com/googleworkspace/cli) — install it globally or from the GitHub releases page',
-          'You need a Google Cloud project with OAuth 2.0 credentials before you can sign in',
-          'Quick path (requires gcloud CLI): install the Google Cloud CLI from https://docs.cloud.google.com/sdk/docs/install-sdk, run "gcloud auth login", then "gws auth setup"',
-          'Manual path (no gcloud needed): go to Google Cloud Console > APIs & Services > Credentials (https://console.cloud.google.com/apis/credentials)',
-          'Manual step 1: Create a project if you don\'t have one (top-left project selector > New Project)',
-          'Manual step 2: Go to Google Auth Platform > Audience (left sidebar). Set user type to External, fill in app name and your email, save',
-          'Manual step 3: On the Audience page, under "Publishing status", click Publish App to move out of Testing mode — otherwise only manually-added test users can authenticate',
-          'Manual step 4: Go to Credentials (left sidebar) > + Create Credentials > OAuth client ID. Set Application type to "Desktop app" (NOT Web application). Name it anything. Click Create',
-          'Manual step 5: Download the client secret JSON from the confirmation dialog. Save it as ~/.config/gws/client_secret.json (Windows: %USERPROFILE%\\.config\\gws\\client_secret.json). Create the folder if needed',
-          'After setting up credentials (either path), run "gws auth login" in your terminal — a browser window opens for Google consent',
-          'If you see "access_denied" or "app not verified": go back to Google Auth Platform > Audience and either Publish the app or add your email under Test Users',
-          'Enable the APIs you need: go to APIs & Services > Library in Cloud Console and enable Gmail API, Google Calendar API, Google Drive API, Google Docs API, Google Sheets API (only enable what you need)',
-          'Enable in Guardian Agent: open Settings > Google Workspace, select services, and click Enable. Restart Guardian Agent for the tools to become available',
-          'Verify setup: Settings > Google Workspace should show CLI Installed, Auth Connected, Integration Enabled',
-          'CLI check: /google status shows connection state from the command line',
-        ],
-      },
-      {
-        title: 'Gmail Campaign Automation',
-        items: [
-          'Set Google OAuth access token in env var GOOGLE_OAUTH_ACCESS_TOKEN (gmail.send scope)',
-          'Discover contacts from sites: /campaign discover <url> [tagsCsv]',
-          'Import contacts from CSV: /campaign import <csvPath> [source]',
-          'Create campaign: /campaign create <name> | <subjectTemplate> | <bodyTemplate>',
-          'Preview content before sending: /campaign preview <campaignId> [limit]',
-          'Run campaign send: /campaign run <campaignId> [maxRecipients] (approval required before send)',
-          'Use placeholders in templates: {name}, {company}, {email}',
-        ],
-      },
-      {
-        title: 'Connect Telegram',
-        items: [
-          'Step 1: Open Telegram, search for @BotFather, open it, and press Start',
-          'Step 2: Send /newbot and follow prompts for bot name + username (username must end with "bot")',
-          'Step 3: Copy the bot token returned by BotFather (format: 123456789:AA...) and keep it secret',
-          'Step 4: In Guardian Agent, open Config Center -> Settings -> Telegram Channel, set Enable Telegram = Yes, paste token, and save',
-          'Step 5: In Telegram, open your new bot and send one message (for example: /start)',
-          'Step 6: Get your chat ID by opening https://api.telegram.org/bot<token>/getUpdates and copying message.chat.id',
-          'Step 7: Paste chat ID(s) into Allowed Chat IDs and save (group IDs are usually negative, often -100...)',
-          'CLI equivalent: /config telegram on, /config telegram token <token>, /config telegram chatids <id1,id2,...>, /config telegram status',
-          'Telegram channel changes (enable/disable/token/chat IDs) are applied immediately without restart',
-          'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>, /approve [approvalId], /deny [approvalId]',
-        ],
-      },
-      {
-        title: 'Identity & Memory',
-        items: [
-          "Identity mode 'single_user' shares one assistant identity across web/CLI/Telegram",
-          "Identity mode 'channel_user' keeps identities separate unless alias-mapped",
-          'Conversation memory is persisted in SQLite with retention policy controls',
-          'Use Config Center to adjust retention and default identity',
-        ],
-      },
-      {
-        title: 'Analytics',
-        items: [
-          'Assistant interactions are logged to SQLite analytics storage',
-          'View analytics in web Monitoring or CLI /analytics [minutes]',
-          'Track command usage, message errors, quick actions, and config outcomes',
-        ],
-      },
-      {
-        title: 'Threat Intel & Deepfake Defense',
-        items: [
-          'Open web Threat Intel tab for watchlist, scans, findings triage, and action drafts',
-          'CLI commands: /intel status, /intel watch add <target>, /intel scan [query], /intel findings',
-          'Telegram quick intel: /intel status, /intel scan <query>, /intel findings',
-          'Moltbook connector can run in mock or API mode under assistant.threatIntel.moltbook settings',
-          'Moltbook is treated as hostile: strict allowedHosts + timeout/size guards + manual publishing by default',
-          'Darkweb scanning is configurable and disabled by default unless explicitly enabled',
-          'Use assisted/manual response mode for human approval before external publishing actions',
-        ],
-      },
-      {
-        title: 'Automations',
-        items: [
-          'Automations page manages all automated tasks — from single-tool runs to multi-step pipelines',
-          'Each automation can run one tool or chain multiple tools in sequence or parallel',
-          'Optional cron schedule turns any automation into a recurring task',
-          '18+ built-in examples available via the Examples button (network, system, security categories)',
-          'Permission policies restrict what hosts, paths, and commands an automation can access',
-          'Run or Dry Run any automation on demand; scheduled automations also run on their cron',
-          'Clone any automation to create a copy for modification',
-          'Engine Settings panel configures global limits (max steps, timeouts, execution mode)',
-          'Run history shows all recent executions with status, duration, and step details',
-          'Cron format: minute hour day month weekday. Examples: */15 * * * * (every 15 min), 0 * * * * (every hour), 0 0 * * * (daily midnight)',
-          'Devices tab on Network page shows discovered network devices; Threats tab shows alerts',
-        ],
-      },
-      {
-        title: 'Security And Troubleshooting',
-        items: [
-          'Guardian blocks prompt-injection and secret leaks by default',
-          'Web dashboard requires bearer token authentication (no unauthenticated mode)',
-          'Manage/rotate token via Config Center Web Authentication panel or CLI /auth rotate',
-          'Review events in web Security tab or CLI /audit /security',
-          'If file access is denied, add the target root folder in Tools policy Allowed Paths, then retry',
-          'Check model connectivity with CLI /providers or web LLM status',
-          'If config changes are not reflected, use /config test and confirm provider status',
+        id: 'data-security-and-troubleshooting',
+        title: 'Data, Security, And Troubleshooting',
+        description: 'Understand identity, observability, and the fastest operator checks when something is off.',
+        pages: [
+          {
+            id: 'identity-and-memory',
+            title: 'Identity And Memory',
+            summary: 'Control how users map across channels and how conversation state is retained.',
+            sections: [
+              {
+                title: 'Identity Modes',
+                items: [
+                  '`single_user` shares one assistant identity across web, CLI, and Telegram.',
+                  '`channel_user` keeps identities separate by channel unless you alias-map them deliberately.',
+                  'Choose the mode that matches whether you want one shared assistant memory or distinct channel personas.',
+                ],
+              },
+              {
+                title: 'Memory Behavior',
+                items: [
+                  'Conversation memory is stored in SQLite when available, with retention settings exposed through configuration.',
+                  'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
+                  'Assistant memory, analytics, and search-oriented history should be reviewed together when debugging stale context.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'analytics-and-observability',
+            title: 'Analytics And Observability',
+            summary: 'Use built-in analytics, audit history, and assistant state views to understand system behavior.',
+            sections: [
+              {
+                title: 'Operator Views',
+                items: [
+                  'Analytics summary is available in the dashboard and with CLI `/analytics [minutes]`.',
+                  'Assistant state exposes running jobs, failed jobs, queue pressure, traces, and policy decisions.',
+                  'Security monitoring surfaces audit volume, denied actions, threat posture, and recent alerts.',
+                ],
+              },
+              {
+                title: 'Audit Workflow',
+                items: [
+                  'Use the Security page or CLI `/audit`, `/audit summary`, and `/security` to inspect recent events.',
+                  'Audit entries are hash-chained; use the verification control when you need tamper-evidence confirmation.',
+                  'Policy reloads, auth changes, and tool decisions are all reflected in audit visibility.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'policy-and-audit',
+            title: 'Policy-As-Code And Audit',
+            summary: 'Use deterministic policy rules and audit evidence together when you need to explain or change behavior safely.',
+            sections: [
+              {
+                title: 'Policy Engine',
+                items: [
+                  'Policy-as-code supports off, shadow, and enforce modes depending on how aggressively you want rules to apply.',
+                  'Configuration > Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
+                  'Shadow mode is the safest way to compare rule output with current behavior before switching to enforce.',
+                ],
+              },
+              {
+                title: 'Audit Use',
+                items: [
+                  'Audit entries capture policy changes, approvals, denials, security events, and important operator actions.',
+                  'Use audit verification and summary views before changing policy if you need evidence of what actually happened.',
+                  'Prefer adjusting the policy model or tool boundaries instead of repeatedly approving the same risky action by hand.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'security-and-troubleshooting',
+            title: 'Security And Troubleshooting',
+            summary: 'Start with auth, provider health, permissions, and audit evidence before assuming a deeper runtime bug.',
+            sections: [
+              {
+                title: 'First Checks',
+                items: [
+                  'If the web dashboard rejects you, confirm the bearer token or session cookie state in Web Authentication settings.',
+                  'If a model appears offline, verify connectivity in the Providers tab or with CLI `/providers`.',
+                  'If file or command execution is blocked, review Tools policy and allowed path or command settings before retrying.',
+                  'If network data looks stale, use the Network History tab and recent outputs to confirm whether the scan actually ran.',
+                ],
+              },
+              {
+                title: 'Security Defaults',
+                items: [
+                  'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
+                  'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
+                  'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
+                  'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',
+                ],
+                note: 'Configuration changes now propagate to the web UI live, so if something still looks wrong after a save, verify the underlying runtime state rather than assuming the browser is stale.',
+              },
+            ],
+          },
         ],
       },
     ],
@@ -190,12 +505,25 @@ export function formatGuideForCLI(guide: ReferenceGuide = getReferenceGuide()): 
   lines.push(guide.intro);
   lines.push('');
 
-  for (const section of guide.sections) {
-    lines.push(section.title);
-    for (const item of section.items) {
-      lines.push(`  - ${item}`);
-    }
+  for (const category of guide.categories) {
+    lines.push(category.title);
+    lines.push(`  ${category.description}`);
     lines.push('');
+
+    for (const page of category.pages) {
+      lines.push(`- ${page.title}`);
+      lines.push(`  ${page.summary}`);
+      for (const section of page.sections) {
+        lines.push(`  ${section.title}:`);
+        for (const item of section.items) {
+          lines.push(`    - ${item}`);
+        }
+        if (section.note) {
+          lines.push(`    Note: ${section.note}`);
+        }
+      }
+      lines.push('');
+    }
   }
 
   return lines;
@@ -207,12 +535,24 @@ export function formatGuideForTelegram(guide: ReferenceGuide = getReferenceGuide
   lines.push(guide.intro);
   lines.push('');
 
-  for (const section of guide.sections) {
-    lines.push(`${section.title}:`);
-    for (const item of section.items) {
-      lines.push(`- ${item}`);
-    }
+  for (const category of guide.categories) {
+    lines.push(`${category.title}:`);
+    lines.push(category.description);
     lines.push('');
+
+    for (const page of category.pages) {
+      lines.push(`${page.title} - ${page.summary}`);
+      for (const section of page.sections) {
+        lines.push(`${section.title}:`);
+        for (const item of section.items) {
+          lines.push(`- ${item}`);
+        }
+        if (section.note) {
+          lines.push(`Note: ${section.note}`);
+        }
+      }
+      lines.push('');
+    }
   }
 
   return lines.join('\n').trim();

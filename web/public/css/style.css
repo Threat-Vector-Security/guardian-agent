@@ -1054,40 +1054,284 @@ tr:hover td {
 
 /* ─── Reference Guide ────────────────────────────────────── */
 
-.guide-intro {
-  margin-bottom: 1rem;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
+.guide-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(220px, 0.8fr);
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1.25rem;
+  padding: 1.2rem 1.3rem;
+  background: linear-gradient(135deg, rgba(79, 172, 254, 0.12), rgba(19, 26, 44, 0.88));
+  border: 1px solid var(--guardian-border);
+  border-radius: 12px;
+  box-shadow: var(--guardian-halo);
 }
 
-.guide-grid {
+.guide-kicker {
+  color: var(--accent);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.45rem;
+}
+
+.guide-hero h3 {
+  font-size: 1.25rem;
+  font-family: var(--font-display);
+  margin-bottom: 0.45rem;
+  color: var(--text-primary);
+}
+
+.guide-hero p {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  max-width: 70ch;
+}
+
+.guide-hero-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
   gap: 1rem;
 }
 
-.guide-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem 1rem 0.75rem;
+.guide-stat {
+  display: grid;
+  gap: 0.3rem;
+  align-content: center;
+  padding: 0.95rem 1rem;
+  background: rgba(8, 12, 20, 0.55);
+  border: 1px solid var(--guardian-border);
+  border-radius: 10px;
 }
 
-.guide-card h3 {
-  font-size: 0.85rem;
+.guide-stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.guide-stat-label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.guide-wiki {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.guide-sidebar {
+  position: sticky;
+  top: 0;
+}
+
+.guide-sidebar-inner {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 7rem);
+  overflow: auto;
+  padding: 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.guide-sidebar-title {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.guide-nav-category + .guide-nav-category {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.guide-nav-heading {
   color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.guide-nav-description {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.45;
   margin-bottom: 0.6rem;
 }
 
-.guide-card ul {
+.guide-nav-links {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.guide-nav-link {
+  display: grid;
+  gap: 0.2rem;
+  text-decoration: none;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s;
+}
+
+.guide-nav-link:hover {
+  background: rgba(79, 172, 254, 0.08);
+  border-color: rgba(79, 172, 254, 0.15);
+  transform: translateX(2px);
+}
+
+.guide-nav-link.active {
+  background: rgba(79, 172, 254, 0.12);
+  border-color: rgba(79, 172, 254, 0.28);
+}
+
+.guide-nav-link-title {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.guide-nav-link-summary {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.guide-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.guide-category-block {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.guide-category-header {
+  padding: 1rem 1.1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.guide-category-kicker {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+}
+
+.guide-category-header h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--text-primary);
+  margin-bottom: 0.35rem;
+}
+
+.guide-category-header p {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.guide-article {
+  padding: 1.15rem 1.15rem 0.95rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  scroll-margin-top: 1rem;
+}
+
+.guide-article-header {
+  margin-bottom: 0.9rem;
+}
+
+.guide-article-header h4 {
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.guide-page-summary {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.guide-section + .guide-section {
+  margin-top: 0.95rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+}
+
+.guide-section h5 {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  margin-bottom: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.guide-section ul {
   margin-left: 1rem;
 }
 
-.guide-card li {
+.guide-section li {
   margin-bottom: 0.45rem;
   color: var(--text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.guide-note {
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  background: rgba(79, 172, 254, 0.08);
+  border: 1px solid rgba(79, 172, 254, 0.18);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 980px) {
+  .guide-hero,
+  .guide-wiki {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-sidebar,
+  .guide-sidebar-inner {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .guide-hero-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .guide-article,
+  .guide-category-header,
+  .guide-sidebar-inner,
+  .guide-hero {
+    padding: 0.95rem;
+  }
 }
 
 /* ─── Setup Status Widgets ───────────────────────────────── */
@@ -2629,6 +2873,36 @@ tr:hover td {
   font-size: 0.78rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.network-output-shell {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.network-output-shell.compact {
+  margin-top: 0;
+}
+
+.network-output-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.network-output-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.network-output-feedback {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  min-height: 1em;
 }
 
 .preset-bar {
