@@ -110,7 +110,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Network** (`#/network`) — Connectors tab, Devices tab
 - **Automations** (`#/automations`) — unified automation catalog (single-tool and multi-step pipelines), optional cron scheduling, examples, clone, run history, engine settings
 - **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab (QMD), Settings tab
-- **Reference Guide** (`#/reference`) — unchanged
+- **Reference Guide** (`#/reference`) — wiki-style operator guide backed by `src/reference-guide.ts`; update it whenever user-facing capabilities, workflows, controls, output handling, or export behavior changes anywhere in the app
 - **Chat** — persistent right panel
 
 ### Memory System
@@ -179,6 +179,11 @@ Config loaded from `~/.guardianagent/config.yaml` with `${ENV_VAR}` interpolatio
 Key config sections: `llm`, `defaultProvider`, `channels` (cli/telegram/web), `guardian`, `assistant` (soul, memory, analytics, tools, quickActions, threatIntel, connectors), `runtime`.
 
 See README.md for the full config reference.
+
+## Documentation
+
+- Keep `src/reference-guide.ts` in sync with the app. Any change to user-facing behavior, workflows, controls, tool output, exports, automation behavior, or navigation should include a Reference Guide update in the same change.
+- If a feature is exposed in multiple channels, document the shared behavior once in the Reference Guide and keep channel-specific notes aligned in the relevant docs.
 
 ## Testing
 

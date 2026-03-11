@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/cli-startup.png" alt="GuardianAgent CLI" width="100%"/>
+  <img src="docs/images/guardian agent banner.png" alt="GuardianAgent banner" width="100%"/>
 </p>
 
 <h1 align="center">GuardianAgent</h1>

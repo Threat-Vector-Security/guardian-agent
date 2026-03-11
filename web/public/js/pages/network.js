@@ -156,7 +156,11 @@ async function renderOverviewTab(panel) {
             <button class="btn btn-secondary" id="network-overview-baseline">Refresh Baseline</button>
           </div>
           <div id="network-overview-status" class="cfg-save-status" style="margin-top:0.75rem;"></div>
-          <pre id="network-overview-output" class="network-tool-result" style="margin-top:0.75rem;">Run an action to see output here.</pre>
+          ${renderOutputPanel({
+            id: 'network-overview-output',
+            exportName: 'network-overview-output',
+            initialText: 'Run an action to see output here.',
+          })}
         </div>
       </div>
 
@@ -188,6 +192,7 @@ async function renderOverviewTab(panel) {
       success: 'Baseline refresh complete.',
     }));
 
+    bindOutputActions(panel);
     applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -230,7 +235,13 @@ async function renderDevicesTab(panel) {
           </div>
         </div>
         <div id="network-device-status" style="padding:0 1rem"></div>
-        <div style="padding:0 1rem 1rem"><pre id="network-device-output" class="network-tool-result">Run a scan to inspect discovery output here.</pre></div>
+        <div style="padding:0 1rem 1rem">
+          ${renderOutputPanel({
+            id: 'network-device-output',
+            exportName: 'network-device-output',
+            initialText: 'Run a scan to inspect discovery output here.',
+          })}
+        </div>
         <table>
           <thead>
             <tr><th>Status</th><th>IP Address</th><th>MAC Address</th><th>Hostname</th><th>Vendor</th><th>Type</th><th>Trust</th><th>Open Ports</th><th>First Seen</th><th>Last Seen</th></tr>
@@ -281,6 +292,7 @@ async function renderDevicesTab(panel) {
 
     panel.querySelector('#network-device-refresh')?.addEventListener('click', () => renderDevicesTab(panel));
 
+    bindOutputActions(panel);
     applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -340,7 +352,13 @@ async function renderThreatsTab(panel) {
           </div>
         </div>
         <div id="network-threat-status" style="padding:0 1rem"></div>
-        <div style="padding:0 1rem 1rem"><pre id="network-threat-output" class="network-tool-result">Run a threat action to inspect output here.</pre></div>
+        <div style="padding:0 1rem 1rem">
+          ${renderOutputPanel({
+            id: 'network-threat-output',
+            exportName: 'network-threat-output',
+            initialText: 'Run a threat action to inspect output here.',
+          })}
+        </div>
       </div>
 
       <div class="table-container">
@@ -394,6 +412,7 @@ async function renderThreatsTab(panel) {
       });
     });
 
+    bindOutputActions(panel);
     applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -469,7 +488,7 @@ async function renderHistoryTab(panel) {
                 ${run.steps.length > 0 ? `
                 <tr id="network-run-detail-${escAttr(run.id)}" style="display:none">
                   <td colspan="6" style="padding:0.75rem 1rem;background:var(--bg-secondary)">
-                    ${renderRunSteps(run.steps)}
+                    ${renderRunSteps(run.steps, run.name || run.id)}
                   </td>
                 </tr>
                 ` : ''}
@@ -502,6 +521,7 @@ async function renderHistoryTab(panel) {
       });
     });
 
+    bindOutputActions(panel);
     applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -647,7 +667,11 @@ function renderNetworkToolPanel(panel, tool) {
         <div class="table-container" style="margin-top:1rem;margin-bottom:0;">
           <div class="table-header"><h3>Result</h3></div>
           <div class="cfg-center-body">
-            <pre class="network-tool-result">Run the tool to see output here.</pre>
+            ${renderOutputPanel({
+              id: `network-tool-output-${tool.name}`,
+              exportName: tool.name,
+              initialText: 'Run the tool to see output here.',
+            })}
           </div>
         </div>
       </div>
@@ -696,6 +720,7 @@ function renderNetworkToolPanel(panel, tool) {
     panel.querySelector('.network-tool-result').textContent = 'Run the tool to see output here.';
   });
 
+  bindOutputActions(panel);
   applyInputTooltips(panel);
 }
 
@@ -846,7 +871,7 @@ async function runThreatAction(panel, config) {
   }
 }
 
-function renderRunSteps(steps) {
+function renderRunSteps(steps, runName = 'network-run') {
   if (!steps || steps.length === 0) {
     return '<div style="color:var(--text-muted)">No output recorded.</div>';
   }
@@ -862,10 +887,148 @@ function renderRunSteps(steps) {
           <span style="margin-left:auto;color:var(--text-muted)">${Number(step.durationMs || 0)}ms</span>
           ${hasOutput ? `<button class="btn btn-secondary btn-sm auto-step-output-toggle" data-output-id="${outputId}">Output</button>` : ''}
         </div>
-        ${hasOutput ? `<div id="${outputId}" style="display:none;padding-top:0.5rem"><pre class="network-tool-result">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
+        ${hasOutput ? `<div id="${outputId}" style="display:none;padding-top:0.5rem">${renderOutputPanel({
+          id: `${outputId}-content`,
+          exportName: `${runName}-${step.toolName || 'step'}-${index + 1}`,
+          initialText: typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2),
+          compact: true,
+        })}</div>` : ''}
       </div>
     `;
   }).join('');
+}
+
+function renderOutputPanel({ id, exportName, initialText, compact = false }) {
+  return `
+    <div class="network-output-shell${compact ? ' compact' : ''}">
+      <div class="network-output-toolbar">
+        <div class="network-output-actions">
+          <button class="btn btn-secondary btn-sm" data-output-action="copy" data-output-target="${escAttr(id)}" data-export-name="${escAttr(exportName)}">Copy</button>
+          <button class="btn btn-secondary btn-sm" data-output-action="text" data-output-target="${escAttr(id)}" data-export-name="${escAttr(exportName)}">Text</button>
+          <button class="btn btn-secondary btn-sm" data-output-action="html" data-output-target="${escAttr(id)}" data-export-name="${escAttr(exportName)}">HTML</button>
+        </div>
+        <span class="network-output-feedback" data-output-feedback="${escAttr(id)}"></span>
+      </div>
+      <pre id="${escAttr(id)}" class="network-tool-result">${esc(initialText || '')}</pre>
+    </div>
+  `;
+}
+
+function bindOutputActions(root) {
+  root.querySelectorAll('[data-output-action]').forEach((button) => {
+    if (button.dataset.outputBound === 'true') return;
+    button.dataset.outputBound = 'true';
+    button.addEventListener('click', async () => {
+      const targetId = button.getAttribute('data-output-target') || '';
+      const target = root.querySelector(`#${cssEscape(targetId)}`);
+      if (!target) return;
+
+      const exportName = button.getAttribute('data-export-name') || 'network-output';
+      const content = target.textContent || '';
+      const action = button.getAttribute('data-output-action');
+      const feedback = root.querySelector(`[data-output-feedback="${cssEscapeAttr(targetId)}"]`);
+
+      try {
+        if (action === 'copy') {
+          await copyText(content);
+          setOutputFeedback(feedback, 'Copied');
+          return;
+        }
+
+        if (action === 'text') {
+          downloadOutput(`${exportName}.txt`, content, 'text/plain;charset=utf-8');
+          setOutputFeedback(feedback, 'Saved .txt');
+          return;
+        }
+
+        if (action === 'html') {
+          const html = buildOutputHtml(exportName, content);
+          downloadOutput(`${exportName}.html`, html, 'text/html;charset=utf-8');
+          setOutputFeedback(feedback, 'Saved .html');
+        }
+      } catch (err) {
+        setOutputFeedback(feedback, err instanceof Error ? err.message : 'Action failed');
+      }
+    });
+  });
+}
+
+async function copyText(content) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'absolute';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
+function downloadOutput(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = sanitizeFilename(filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function buildOutputHtml(title, content) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 24px; background: #0b1220; color: #e5edf7; }
+    h1 { font-size: 18px; margin-bottom: 12px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #11192b; border: 1px solid #23314f; border-radius: 8px; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  <pre>${escapeHtml(content)}</pre>
+</body>
+</html>`;
+}
+
+function setOutputFeedback(element, message) {
+  if (!element) return;
+  element.textContent = message;
+  clearTimeout(Number(element.dataset.feedbackTimer || 0));
+  const timer = window.setTimeout(() => {
+    element.textContent = '';
+    element.dataset.feedbackTimer = '';
+  }, 1800);
+  element.dataset.feedbackTimer = String(timer);
+}
+
+function sanitizeFilename(filename) {
+  return String(filename || 'network-output')
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    || 'network-output';
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildNetworkToolGroups(networkTools) {
@@ -959,6 +1122,10 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
+}
+
+function cssEscapeAttr(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function cssEscape(value) {
