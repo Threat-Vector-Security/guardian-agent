@@ -32,6 +32,7 @@ import type { QMDStatusResponse } from '../runtime/qmd-search.js';
 import type { QMDSourceConfig } from '../config/types.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
+import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
 import type { SandboxHealth } from '../sandbox/index.js';
 import type { SkillRisk } from '../skills/types.js';
 
@@ -188,6 +189,12 @@ export interface RedactedConfig {
       monitorFirewall: boolean;
       sensitivePathCount: number;
       suspiciousProcessCount: number;
+    };
+    gatewayMonitoring: {
+      enabled: boolean;
+      scanIntervalSec: number;
+      dedupeWindowMs: number;
+      monitorCount: number;
     };
     connectors: {
       enabled: boolean;
@@ -576,6 +583,16 @@ export interface DashboardCallbacks {
   };
   onHostMonitorAcknowledge?: (alertId: string) => { success: boolean; message: string };
   onHostMonitorCheck?: () => Promise<HostMonitorReport> | HostMonitorReport;
+  onGatewayMonitorStatus?: () => GatewayMonitorStatus;
+  onGatewayMonitorAlerts?: (args?: { includeAcknowledged?: boolean; limit?: number }) => {
+    alerts: GatewayMonitorAlert[];
+    activeAlertCount: number;
+    bySeverity: { low: number; medium: number; high: number; critical: number };
+    baselineReady: boolean;
+    lastUpdatedAt: number;
+  };
+  onGatewayMonitorAcknowledge?: (alertId: string) => { success: boolean; message: string };
+  onGatewayMonitorCheck?: () => Promise<GatewayMonitorReport> | GatewayMonitorReport;
   onConnectorsSettingsUpdate?: (input: {
     enabled?: boolean;
     executionMode?: ConnectorExecutionMode;

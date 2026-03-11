@@ -25,6 +25,7 @@ export type AuditEventType =
   | 'policy_changed'
   | 'anomaly_detected'
   | 'host_alert'
+  | 'gateway_alert'
   | 'agent_error'
   | 'agent_stalled'
   | 'policy_engine_started'

@@ -44,6 +44,7 @@ GuardianAgent is an AI agent orchestration system where:
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
 | Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
 | Host-installed agent drift or suspicious local activity | Host monitor baselines suspicious processes, persistence, sensitive paths, and network deltas; critical findings can block risky actions |
+| Gateway firewall drift or perimeter weakening | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
 
 ---
 
@@ -330,6 +331,43 @@ This means GuardianAgent can police itself when the local machine starts showing
 - file drift on sensitive directories is metadata-based rather than full content inspection
 - Windows helper-backed deep process/file correlation is still future work
 - Linux `auditd`/eBPF and macOS EndpointSecurity-class telemetry remain future optional depth layers
+
+---
+
+## Gateway Firewall Monitoring
+
+GuardianAgent now also supports gateway-firewall monitoring as a separate subsystem for edge devices such as OPNsense, pfSense, and UniFi-class gateways.
+
+### Current Model
+
+- configuration path: `assistant.gatewayMonitoring`
+- collector mode: operator-configured command returning normalized JSON
+- persisted baseline:
+  - firewall enabled/disabled state
+  - WAN default action
+  - rule count
+  - port forwards
+  - admin users
+  - optional firmware version
+- alert family: `gateway_alert`
+
+### Current Behavior
+
+- detects gateway firewall disablement or relaxation
+- detects gateway configuration drift
+- detects port-forward changes
+- detects admin-user changes
+- records alerts to audit + notification pipelines
+- can block sensitive follow-up actions when critical gateway alerts are active
+
+### Trust Boundary
+
+Gateway monitoring is intentionally separate from local host monitoring:
+
+- host monitoring observes the machine GuardianAgent runs on
+- gateway monitoring observes remote perimeter devices through operator-supplied collectors
+
+This separation avoids conflating local OS telemetry with remote appliance state while still letting Guardian correlate both.
 
 ---
 

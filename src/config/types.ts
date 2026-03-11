@@ -572,6 +572,23 @@ export interface AssistantHostMonitoringConfig {
   suspiciousProcessNames: string[];
 }
 
+export interface AssistantGatewayFirewallTargetConfig {
+  id: string;
+  enabled: boolean;
+  displayName: string;
+  provider: 'generic_json' | 'opnsense' | 'pfsense' | 'unifi';
+  command: string;
+  args: string[];
+  timeoutMs: number;
+}
+
+export interface AssistantGatewayMonitoringConfig {
+  enabled: boolean;
+  scanIntervalSec: number;
+  dedupeWindowMs: number;
+  monitors: AssistantGatewayFirewallTargetConfig[];
+}
+
 /** Connector execution mode. */
 export type ConnectorExecutionMode = 'plan_then_execute' | 'direct_execute';
 
@@ -1079,6 +1096,7 @@ export interface AssistantConfig {
   threatIntel: AssistantThreatIntelConfig;
   network: AssistantNetworkConfig;
   hostMonitoring: AssistantHostMonitoringConfig;
+  gatewayMonitoring: AssistantGatewayMonitoringConfig;
   connectors: AssistantConnectorsConfig;
   tools: AssistantToolsConfig;
 }
@@ -1225,6 +1243,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       auditEventTypes: [
         'anomaly_detected',
         'host_alert',
+        'gateway_alert',
         'action_denied',
         'secret_detected',
         'policy_changed',
@@ -1347,6 +1366,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'socat',
         'nc',
       ],
+    },
+    gatewayMonitoring: {
+      enabled: false,
+      scanIntervalSec: 300,
+      dedupeWindowMs: 1_800_000,
+      monitors: [],
     },
     connectors: {
       enabled: false,

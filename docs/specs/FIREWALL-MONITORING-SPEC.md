@@ -1,6 +1,6 @@
 # Firewall Monitoring Spec
 
-**Status:** Host firewall v1 implemented, gateway firewall designed  
+**Status:** Host firewall v1 implemented, gateway firewall v1 implemented  
 **Date:** 2026-03-11
 
 ## Goal
@@ -79,6 +79,53 @@ interface HostMonitorSnapshot {
 - Normalize into existing audit/notification/self-policing pipelines rather than inventing a new alert stack.
 - Separate **gateway** firewall work from **host** firewall work so trust boundaries remain clear.
 
+## Gateway Firewall Implementation
+
+Gateway firewall monitoring now exists as a separate runtime service with command-driven collectors.
+
+### Current Collector Contract
+
+Each configured gateway monitor runs an operator-supplied command that returns JSON shaped like:
+
+```json
+{
+  "displayName": "HQ Gateway",
+  "provider": "opnsense",
+  "available": true,
+  "firewallEnabled": true,
+  "ruleCount": 18,
+  "wanDefaultAction": "deny",
+  "portForwards": ["wan:443->192.168.1.20:443"],
+  "adminUsers": ["admin"],
+  "idsEnabled": true,
+  "firmwareVersion": "24.7.1",
+  "summary": "Firewall enabled; WAN default deny; rules 18"
+}
+```
+
+Configured providers currently supported for labeling and severity tuning:
+
+- `generic_json`
+- `opnsense`
+- `pfsense`
+- `unifi`
+
+### Current Runtime Coverage
+
+- persisted baseline per gateway target
+- alerts for:
+  - `gateway_firewall_disabled`
+  - `gateway_firewall_change`
+  - `gateway_port_forward_change`
+  - `gateway_admin_change`
+  - `gateway_monitor_error`
+- tools:
+  - `gateway_firewall_status`
+  - `gateway_firewall_check`
+- Security page gateway posture cards and active alert table
+- audit + notifications via `gateway_alert`
+- Guardian self-policing on critical/high gateway alerts
+
 ## Gateway Firewall Design
 
 Gateway firewall monitoring should be implemented as a separate service that correlates with, but does not merge into, host monitoring internals.
@@ -90,16 +137,16 @@ Gateway firewall monitoring should be implemented as a separate service that cor
 - the data source is usually remote API/SSH, not local OS commands
 - action surfaces can be much broader than read-only posture checks
 
-### Proposed Runtime Shape
+### Runtime Shape
 
-- new service: `GatewaySecurityService`
-- new audit event type:
+- current service: `GatewayFirewallMonitoringService`
+- audit event type:
   - `gateway_alert`
-- optional event bus family:
-  - `security:gateway:alert`
-- optional tool surfaces:
+- current tool surfaces:
   - `gateway_firewall_status`
   - `gateway_firewall_check`
+- future optional event bus family:
+  - `security:gateway:alert`
 
 ### Gateway Signals to Baseline
 
@@ -134,15 +181,17 @@ These correlations should escalate severity faster than any one signal alone.
 
 ## Recommended Next Steps
 
-1. Keep the current host firewall collectors as the baseline implementation.
+1. Keep the current host and gateway collectors as the baseline implementation.
 2. Add Windows-specific deeper checks:
    - firewall service state
    - default inbound/outbound action extraction
    - helper-backed Defender correlation
-3. Add Linux backend normalization:
+3. Add gateway provider adapters beyond command JSON wrappers:
+   - direct OPNsense/pfSense API integration
+   - direct UniFi controller integration
+4. Add Linux backend normalization:
    - explicit `nftables` and `iptables` policy parsing
-4. Add macOS Application Firewall visibility if practical in addition to `pf`
-5. Implement `GatewaySecurityService` with one provider first, preferably OPNsense/pfSense or UniFi.
+5. Add macOS Application Firewall visibility if practical in addition to `pf`
 6. Add cross-signal escalation rules between host, network, and gateway findings.
 
 ## Non-Goals
