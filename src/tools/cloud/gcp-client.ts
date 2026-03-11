@@ -174,6 +174,14 @@ export class GcpClient {
     });
   }
 
+  async deleteCloudRunService(location: string, serviceName: string): Promise<unknown> {
+    return this.request({
+      method: 'DELETE',
+      service: 'run',
+      path: `/v2/projects/${encodeURIComponent(this.config.projectId)}/locations/${encodeURIComponent(location)}/services/${encodeURIComponent(serviceName)}`,
+    });
+  }
+
   async listStorageBuckets(maxResults?: number): Promise<unknown> {
     return this.request({
       method: 'GET',
@@ -183,6 +191,28 @@ export class GcpClient {
         project: this.config.projectId,
         maxResults,
       },
+    });
+  }
+
+  async createStorageBucket(bucket: string, location?: string, storageClass?: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      service: 'storage',
+      path: '/storage/v1/b',
+      query: { project: this.config.projectId },
+      body: {
+        name: bucket,
+        ...(location?.trim() ? { location: location.trim() } : {}),
+        ...(storageClass?.trim() ? { storageClass: storageClass.trim() } : {}),
+      },
+    });
+  }
+
+  async deleteStorageBucket(bucket: string): Promise<unknown> {
+    return this.request({
+      method: 'DELETE',
+      service: 'storage',
+      path: `/storage/v1/b/${encodeURIComponent(bucket)}`,
     });
   }
 

@@ -188,6 +188,14 @@ export class CloudflareClient {
     });
   }
 
+  async purgeCache(zoneId: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      path: `/zones/${encodeURIComponent(zoneId)}/purge_cache`,
+      body,
+    });
+  }
+
   async resolveZoneId(zoneIdOrName: string | undefined): Promise<string> {
     const candidate = zoneIdOrName?.trim() || this.config.defaultZoneId?.trim();
     if (!candidate) {

@@ -161,6 +161,15 @@ export class AzureClient {
     });
   }
 
+  async deleteWebApp(resourceGroup: string, name: string): Promise<unknown> {
+    return this.request({
+      method: 'DELETE',
+      service: 'management',
+      path: `/subscriptions/${encodeURIComponent(this.config.subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.Web/sites/${encodeURIComponent(name)}`,
+      query: { 'api-version': ARM_API_VERSIONS.web },
+    });
+  }
+
   async listStorageAccounts(resourceGroup?: string): Promise<unknown> {
     return this.request({
       method: 'GET',
@@ -214,6 +223,30 @@ export class AzureClient {
         'Content-Type': contentType?.trim() || 'text/plain; charset=utf-8',
       },
       bodyText: body,
+    });
+  }
+
+  async createBlobContainer(accountName: string, container: string): Promise<unknown> {
+    const token = await this.getAccessToken('https://storage.azure.com/.default');
+    return this.requestRaw({
+      method: 'PUT',
+      url: this.buildBlobUrl(accountName, `/${encodeURIComponent(container)}`, { restype: 'container' }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-ms-version': '2023-11-03',
+      },
+    });
+  }
+
+  async deleteBlobContainer(accountName: string, container: string): Promise<unknown> {
+    const token = await this.getAccessToken('https://storage.azure.com/.default');
+    return this.requestRaw({
+      method: 'DELETE',
+      url: this.buildBlobUrl(accountName, `/${encodeURIComponent(container)}`, { restype: 'container' }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-ms-version': '2023-11-03',
+      },
     });
   }
 
