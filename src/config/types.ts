@@ -45,7 +45,7 @@ export interface FailoverConfig {
 }
 
 /** Environment-backed credential reference. */
-export interface CredentialRefConfig {
+export interface EnvCredentialRefConfig {
   /** Credential source type. */
   source: 'env';
   /** Environment variable to read when resolving the credential. */
@@ -53,6 +53,18 @@ export interface CredentialRefConfig {
   /** Optional human-readable purpose/description for operators. */
   description?: string;
 }
+
+/** App-managed local secret reference. Secret bytes live in the encrypted local secret store. */
+export interface LocalCredentialRefConfig {
+  /** Credential source type. */
+  source: 'local';
+  /** Opaque identifier inside the encrypted local secret store. */
+  secretId: string;
+  /** Optional human-readable purpose/description for operators. */
+  description?: string;
+}
+
+export type CredentialRefConfig = EnvCredentialRefConfig | LocalCredentialRefConfig;
 
 /** Shared credential reference registry for provider/tool integrations. */
 export interface AssistantCredentialsConfig {
@@ -62,9 +74,9 @@ export interface AssistantCredentialsConfig {
 
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
-  /** Provider type. Built-in: 'ollama' | 'anthropic' | 'openai'. Plugins can register additional types. */
+  /** Provider type. Built-in families come from the runtime registry, including ollama, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
   provider: string;
-  /** API key (supports ${ENV_VAR} interpolation). */
+  /** Runtime-only resolved API key. Do not persist raw values in config files; use credentialRef instead. */
   apiKey?: string;
   /** Reference into assistant.credentials.refs (preferred over inline apiKey). */
   credentialRef?: string;
@@ -153,8 +165,10 @@ export interface ChannelsConfig {
   /** Telegram channel configuration. */
   telegram?: {
     enabled: boolean;
-    /** Bot token (supports ${ENV_VAR} interpolation). */
+    /** Runtime-only resolved bot token. Do not persist raw values in config files; use botTokenCredentialRef instead. */
     botToken?: string;
+    /** Reference into assistant.credentials.refs for the Telegram bot token. */
+    botTokenCredentialRef?: string;
     /** Allowed chat IDs (empty = allow all). */
     allowedChatIds?: number[];
     /** Default agent to route messages to. */
@@ -1104,6 +1118,11 @@ export interface AssistantToolsConfig {
   /** When true, tools are automatically routed between local and external providers based on task type.
    * When false, all tools use the default provider only. Default: true. */
   providerRoutingEnabled?: boolean;
+  /** Preferred provider profile for each locality when routing selects local or external execution. */
+  preferredProviders?: {
+    local?: string;
+    external?: string;
+  };
 }
 
 /** Personal assistant feature configuration. */
@@ -1503,6 +1522,9 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       contextBudget: 80_000,
       providerRouting: {},
       providerRoutingEnabled: true,
+      preferredProviders: {
+        local: 'ollama',
+      },
       disabledCategories: [],
       sandbox: {
         enabled: true,

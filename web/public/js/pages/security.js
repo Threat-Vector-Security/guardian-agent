@@ -15,80 +15,90 @@ let monAuditHandler = null;
 let monMetricsHandler = null;
 let monSecurityAlertHandler = null;
 let currentContainer = null;
+let intelUiState = {
+  notice: null,
+  lastScan: null,
+};
 
 const SECURITY_HELP = {
   overview: {
     'Security Domains': {
-      whatItIs: 'This section shows where major security responsibilities live across the app.',
-      whatSeeing: 'You are seeing alert ownership, cloud ownership, network ownership, and direct links into each destination.',
-      whatCanDo: 'Use it to understand which page owns the next action before you drill further.',
-      howLinks: 'It links Security, Cloud, and Network together without duplicating their full control planes.',
+      whatItIs: 'This section maps the major security responsibilities across Guardian so you can see which page owns the next action.',
+      whatSeeing: 'You are seeing a compact ownership matrix for alerts, cloud work, network operations, and threat-intel activity together with direct links into the right destination.',
+      whatCanDo: 'Use it to decide whether the next step belongs in Security itself, or whether you should jump into Cloud or Network.',
+      howLinks: 'It ties the security-related pages together without duplicating their full control planes inside one view.',
     },
     'Recent Security Activity': {
-      whatItIs: 'This is the recent cross-domain activity feed for notable security events.',
-      whatSeeing: 'You are seeing recent high-signal audit events such as denials, anomalies, host alerts, gateway alerts, and promoted automation findings.',
-      whatCanDo: 'Scan for recent change, then move to Alerts or Audit depending on whether you need action or investigation.',
-      howLinks: 'It bridges the summary view in Overview with the deeper queues in Alerts and Audit.',
+      whatItIs: 'This section is the recent high-signal event feed for security-relevant activity across the product.',
+      whatSeeing: 'You are seeing notable recent audit events such as denials, anomalies, host alerts, gateway alerts, and promoted automation findings.',
+      whatCanDo: 'Scan for change quickly, then move to Alerts when you need action or Audit when you need the fuller historical record.',
+      howLinks: 'It bridges the overview summary with the deeper operator queues in Alerts and Audit.',
     },
   },
   alerts: {
     'Unified Alert Queue': {
-      whatItIs: 'This is the main operator queue for actionable security issues.',
-      whatSeeing: 'You are seeing normalized alerts from network, host, gateway, cloud, policy, and automation sources in one place.',
-      whatCanDo: 'Filter by source or severity, acknowledge supported alerts, and open linked automation runs when relevant.',
-      howLinks: 'Alerts is the action surface; detailed evidence and history continue to live in Audit and the originating owner pages.',
+      whatItIs: 'This is the main operator queue for actionable security issues that need triage, acknowledgement, or follow-up.',
+      whatSeeing: 'You are seeing normalized alerts from network, host, gateway, cloud, policy, and automation sources in one combined queue.',
+      whatCanDo: 'Filter by severity or source, acknowledge supported alerts, and open linked runs or owner pages when you need more detail.',
+      howLinks: 'Alerts is the action surface for live issues, while full evidence and history still live in Audit and the originating owner pages.',
     },
   },
   audit: {
     'Audit Chain Integrity': {
-      whatItIs: 'This section verifies the tamper-evident audit chain.',
-      whatSeeing: 'You are seeing a manual integrity check for the stored audit ledger.',
-      whatCanDo: 'Run verification when you need confidence that the event history has not been altered.',
-      howLinks: 'This supports trust in the Audit tab and any downstream investigation based on those events.',
+      whatItIs: 'This section verifies the tamper-evident integrity of the stored audit ledger.',
+      whatSeeing: 'You are seeing the manual verification control for the audit chain rather than the event rows themselves.',
+      whatCanDo: 'Run an integrity check when you need confidence that the event history used in an investigation has not been altered.',
+      howLinks: 'This underpins trust in the Audit tab and in any downstream investigation based on those events.',
     },
     'Audit Log': {
-      whatItIs: 'This is the canonical historical ledger of security and policy events.',
-      whatSeeing: 'You are seeing filterable audit events with timestamps, event types, controller context, and full detail payloads.',
-      whatCanDo: 'Filter by event type, severity, or agent and expand rows for deeper investigation.',
-      howLinks: 'Audit complements Alerts by preserving full history even when an event never became an active alert.',
+      whatItIs: 'This is the canonical historical ledger for security, policy, approval, and operational events across Guardian.',
+      whatSeeing: 'You are seeing a filterable event table with timestamps, event types, controller context, severity, and expandable detail payloads.',
+      whatCanDo: 'Filter by event type, severity, or agent and expand rows when you need the full context behind a decision or incident.',
+      howLinks: 'Audit complements Alerts by preserving the complete historical record, including events that never became an active alert.',
     },
     'Top Denied Agents': {
-      whatItIs: 'This is a short summary of which agents are most often blocked by policy.',
-      whatSeeing: 'You are seeing the agents with the highest denial counts over the current summary window.',
-      whatCanDo: 'Use it to identify noisy automations, misconfigured routing, or overly aggressive agent behavior.',
-      howLinks: 'It helps explain patterns you see in the Audit log and policy-related alerts.',
+      whatItIs: 'This section summarizes which agents or automation paths are being denied by policy most often.',
+      whatSeeing: 'You are seeing the highest-denial agents over the current summary window rather than the full event-by-event ledger.',
+      whatCanDo: 'Use it to spot noisy automations, bad routing, or agent behavior that is repeatedly colliding with policy.',
+      howLinks: 'It helps explain patterns that then show up in the full Audit log and policy-related alerts.',
     },
   },
   intel: {
     'Operations Configuration': {
-      whatItIs: 'This section summarizes the active threat-intel operating mode.',
-      whatSeeing: 'You are seeing response mode, darkweb status, and forum connector posture.',
-      whatCanDo: 'Refresh the page and confirm how aggressive the threat-intel workflow is configured to be.',
-      howLinks: 'It provides the policy context for the watchlist, findings, and drafted actions below.',
+      whatItIs: 'This section is the control plane for local threat-intel posture, source coverage, and how intel work should be handled operationally.',
+      whatSeeing: 'You are seeing response mode, darkweb capability, connector posture, and any example or scheduled automation coverage relevant to threat-intel scans.',
+      whatCanDo: 'Change the operating mode, confirm which sources are actually available, and jump toward the automation path when you want recurring scans.',
+      howLinks: 'It provides the policy and automation context for the watchlist, manual scans, findings, and drafted actions below.',
+    },
+    'Run Scan': {
+      whatItIs: 'This is the manual execution surface for one-off threat-intel collection and investigation.',
+      whatSeeing: 'You are seeing an optional single-use query, source selectors, darkweb controls when available, and the summary of the latest scan run.',
+      whatCanDo: 'Run targeted searches for identity abuse, impersonation, fraud, leaks, or related threats and review the resulting findings here in Security.',
+      howLinks: 'Manual scans feed the Findings table directly, and high-risk results can also be promoted into the wider security signal path.',
     },
     Watchlist: {
-      whatItIs: 'This is the set of monitored targets for threat-intel scanning.',
-      whatSeeing: 'You are seeing people, handles, brands, domains, or phrases currently under watch.',
-      whatCanDo: 'Review coverage and confirm the monitored set before interpreting findings.',
-      howLinks: 'Watchlist entries feed the Findings and Drafted Actions sections.',
+      whatItIs: 'This section is the persistent set of monitored targets used for ongoing threat-intel work.',
+      whatSeeing: 'You are seeing the people, aliases, handles, brands, domains, or phrases currently under watch together with controls to add or remove them.',
+      whatCanDo: 'Maintain the list of monitored identity targets without leaving the Security page.',
+      howLinks: 'Watchlist entries feed manual scans, scheduled scans, findings, and drafted response actions.',
     },
     Findings: {
-      whatItIs: 'This section contains the current threat-intel detections.',
-      whatSeeing: 'You are seeing findings with severity, confidence, status, and action shortcuts.',
-      whatCanDo: 'Triages findings, update their status, and draft follow-up actions.',
-      howLinks: 'Findings drive drafted actions and inform the operating plan.',
+      whatItIs: 'This section contains the current threat-intel findings produced by watchlist or manual scans.',
+      whatSeeing: 'You are seeing findings with severity, confidence, status, source context, and shortcuts for follow-up action.',
+      whatCanDo: 'Triage findings, update their status, and create or review follow-up actions from the same page.',
+      howLinks: 'Findings are the bridge between collection and response, driving drafted actions and the broader operating plan.',
     },
     'Drafted Actions': {
-      whatItIs: 'This is the queue of generated follow-up actions for threat-intel findings.',
-      whatSeeing: 'You are seeing response, reporting, or takedown drafts along with approval posture.',
-      whatCanDo: 'Review what actions have been drafted and whether they need approval.',
-      howLinks: 'These actions are downstream of Findings and should be evaluated against the Operating Plan.',
+      whatItIs: 'This section is the queue of drafted follow-up actions generated from threat-intel findings.',
+      whatSeeing: 'You are seeing proposed response, reporting, or takedown actions together with their approval posture.',
+      whatCanDo: 'Review the drafted actions, decide whether they are sensible, and determine whether they need approval or further editing.',
+      howLinks: 'These actions are downstream of findings and should be evaluated against the operating plan before execution.',
     },
     'Operating Plan': {
-      whatItIs: 'This section outlines the current phased response plan for threat-intel work.',
-      whatSeeing: 'You are seeing the plan title, objectives, and deliverables by phase.',
-      whatCanDo: 'Use it to align triage and response work with the intended operating sequence.',
-      howLinks: 'It gives broader context for how Watchlist items, Findings, and Actions should be handled.',
+      whatItIs: 'This section outlines the phased operating plan for how threat-intel work should progress from collection to response.',
+      whatSeeing: 'You are seeing the current plan title, objectives, and phase-by-phase deliverables for the threat-intel workflow.',
+      whatCanDo: 'Use it to keep triage, investigation, and response work aligned with the intended sequence rather than treating each finding in isolation.',
+      howLinks: 'It provides the strategic context for how watchlist items, findings, and drafted actions should be handled.',
     },
   },
 };
@@ -108,10 +118,10 @@ export async function renderSecurity(container, options = {}) {
     ${renderGuidancePanel({
       kicker: 'Security Guide',
       title: 'Investigation, triage, and evidence',
-      whatItIs: 'Security is the canonical home for alert triage, audit review, and threat-intel investigation.',
-      whatSeeing: 'You are seeing tabs for posture overview, the active alert queue, the historical audit ledger, and threat-intel operations.',
-      whatCanDo: 'Use Alerts for action now, Audit for full history and verification, Overview for posture, and Threat Intel for monitoring and response planning.',
-      howLinks: 'Security receives normalized signals from Network, Cloud, policy, and automations, while deep operational edits stay on the owner pages.',
+      whatItIs: 'Security is the canonical home for live alert triage, historical audit review, and threat-intel investigation and response planning.',
+      whatSeeing: 'You are seeing tabs for a cross-domain overview, the active alert queue, the historical audit ledger, and the threat-intel workspace.',
+      whatCanDo: 'Use Overview for posture, Alerts for action now, Audit for full history and verification, and Threat Intel for identity-abuse monitoring and response planning.',
+      howLinks: 'Security receives normalized signals from Network, Cloud, policy, and automations, while deep domain-specific edits still stay on the owner pages.',
     })}
   `;
 
@@ -1408,18 +1418,22 @@ async function renderIntelTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const [summary, plan, watchlistResponse, findings, actions] = await Promise.all([
+    const [summary, plan, watchlistResponse, findings, actions, presets] = await Promise.all([
       api.threatIntelSummary(),
       api.threatIntelPlan(),
       api.threatIntelWatchlist(),
       api.threatIntelFindings({ limit: 30 }),
       api.threatIntelActions(30),
+      api.scheduledTaskPresets().catch(() => []),
     ]);
 
     const watchlist = watchlistResponse.targets ?? [];
     const connectorText = (summary.forumConnectors || [])
       .map(c => `${c.id}:${c.enabled ? 'on' : 'off'}:${c.mode}${c.hostile ? ':hostile' : ''}`)
       .join(', ');
+    const scanPreset = (presets || []).find((preset) => preset.id === 'threat-intel-scan' || preset.target === 'intel_scan');
+    const notice = intelUiState.notice;
+    const lastScan = intelUiState.lastScan;
 
     panel.innerHTML = `
       <div class="intel-summary-grid">
@@ -1450,26 +1464,96 @@ async function renderIntelTab(panel) {
           <h3>Operations Configuration</h3>
           <button class="btn btn-secondary" id="intel-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
         </div>
-        <div class="intel-controls" style="pointer-events: none; opacity: 0.8;">
+        <div class="intel-controls">
           <div class="intel-control-row">
             <label>Response Mode</label>
-            <span class="intel-inline">${esc(summary.responseMode)}</span>
+            <select id="intel-mode">
+              ${['manual', 'assisted', 'autonomous'].map((mode) => `
+                <option value="${mode}" ${summary.responseMode === mode ? 'selected' : ''}>${mode}</option>
+              `).join('')}
+            </select>
             <span class="intel-muted">Darkweb scans: ${summary.darkwebEnabled ? 'enabled' : 'disabled'}</span>
             <span class="intel-muted">Forum connectors: ${esc(connectorText || 'none')}</span>
           </div>
+          <div class="intel-control-row" style="margin-top:0.75rem;">
+            <span class="intel-muted">${summary.lastScanAt ? `Last scan ${new Date(summary.lastScanAt).toLocaleString()}` : 'No scan has run yet.'}</span>
+            <span class="intel-muted">${scanPreset ? `Example automation available: ${esc(scanPreset.name)}` : 'No built-in threat-intel automation preset found.'}</span>
+            <a href="#/operations" class="btn btn-secondary btn-sm">Open Operations</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Run Scan</h3></div>
+        <div style="padding:0.9rem 1rem;display:grid;gap:0.85rem;">
+          <div class="cfg-form-grid">
+            <div class="cfg-field">
+              <label>One-Off Query</label>
+              <input id="intel-scan-query" type="text" placeholder="name, handle, domain, brand, fraud phrase">
+            </div>
+            <div class="cfg-field">
+              <label>Darkweb</label>
+              <label style="display:flex;align-items:center;gap:0.5rem;height:100%;">
+                <input id="intel-scan-darkweb" type="checkbox" ${summary.darkwebEnabled ? '' : 'disabled'}>
+                <span>${summary.darkwebEnabled ? 'Include when this scan runs' : 'Disabled in config'}</span>
+              </label>
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:0.75rem;">
+            ${['web', 'news', 'social', 'forum', 'darkweb'].map((source) => `
+              <label style="display:flex;align-items:center;gap:0.4rem;">
+                <input class="intel-source" type="checkbox" value="${source}" ${source === 'darkweb' && !summary.darkwebEnabled ? 'disabled' : ''} ${source !== 'darkweb' ? 'checked' : ''}>
+                <span>${source}</span>
+              </label>
+            `).join('')}
+          </div>
+          <div class="cfg-actions" style="justify-content:flex-start;">
+            <button class="btn btn-primary" id="intel-scan-run" type="button">Run Scan</button>
+            <span id="intel-scan-status" class="cfg-save-status"></span>
+          </div>
+          ${lastScan ? `
+            <div class="cfg-check-item ${lastScan.success ? 'complete' : 'warning'}">
+              <div class="cfg-check-head">
+                <span class="cfg-check-title">Latest Scan Output</span>
+                <span class="badge ${lastScan.success ? 'badge-running' : 'badge-queued'}">${lastScan.success ? 'completed' : 'needs attention'}</span>
+              </div>
+              <div class="cfg-check-detail">${esc(lastScan.message)}</div>
+              <div class="cfg-check-detail">Created ${lastScan.findings?.length || 0} finding(s) at ${esc(new Date(lastScan.at).toLocaleString())}.</div>
+              ${Array.isArray(lastScan.findings) && lastScan.findings.length > 0 ? `
+                <div class="cfg-check-detail">${lastScan.findings.slice(0, 5).map((finding) => `${finding.target} (${finding.sourceType}/${finding.severity})`).join(' • ')}</div>
+              ` : ''}
+            </div>
+          ` : ''}
         </div>
       </div>
 
       <div class="table-container">
         <div class="table-header"><h3>Watchlist</h3></div>
         <div class="intel-watchlist-panel">
+          <div class="cfg-actions" style="justify-content:flex-start;padding:0 0 0.85rem;">
+            <input id="intel-watch-target" type="text" placeholder="person, handle, domain, brand, keyword" style="min-width:18rem;max-width:100%;">
+            <button class="btn btn-primary" id="intel-watch-add" type="button">Add Target</button>
+          </div>
           <div class="intel-watch-items">
             ${watchlist.length === 0
               ? '<span class="intel-muted">No watch targets configured.</span>'
-              : watchlist.map(target => `<span class="intel-chip">${esc(target)}</span>`).join('')}
+              : watchlist.map(target => `
+                <span class="intel-chip">
+                  ${esc(target)}
+                  <button class="btn btn-secondary btn-sm intel-watch-remove" data-target="${escAttr(target)}" type="button">Remove</button>
+                </span>
+              `).join('')}
           </div>
         </div>
       </div>
+
+      ${notice ? `
+        <div class="table-container">
+          <div style="padding:0.9rem 1rem;color:${notice.tone === 'error' ? 'var(--error)' : notice.tone === 'warning' ? 'var(--warning)' : 'var(--success)'};">
+            ${esc(notice.message)}
+          </div>
+        </div>
+      ` : ''}
 
       <div class="table-container">
         <div class="table-header"><h3>Findings</h3></div>
@@ -1548,14 +1632,121 @@ async function renderIntelTab(panel) {
 
     // Event listeners
     panel.querySelector('#intel-refresh')?.addEventListener('click', () => renderIntelTab(panel));
+    panel.querySelector('#intel-mode')?.addEventListener('change', async (event) => {
+      const mode = event.target?.value;
+      if (!mode) return;
+      try {
+        const result = await api.threatIntelSetResponseMode(mode);
+        intelUiState.notice = {
+          tone: result.success ? 'success' : 'warning',
+          message: result.message,
+        };
+        await renderIntelTab(panel);
+      } catch (err) {
+        intelUiState.notice = {
+          tone: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        };
+        await renderIntelTab(panel);
+      }
+    });
+
+    panel.querySelector('#intel-watch-add')?.addEventListener('click', async () => {
+      const input = panel.querySelector('#intel-watch-target');
+      const target = input?.value?.trim();
+      if (!target) {
+        intelUiState.notice = { tone: 'warning', message: 'Enter a target before adding it to the watchlist.' };
+        await renderIntelTab(panel);
+        return;
+      }
+      try {
+        const result = await api.threatIntelWatch(target, 'add');
+        intelUiState.notice = {
+          tone: result.success ? 'success' : 'warning',
+          message: result.message,
+        };
+        await renderIntelTab(panel);
+      } catch (err) {
+        intelUiState.notice = {
+          tone: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        };
+        await renderIntelTab(panel);
+      }
+    });
+
+    panel.querySelectorAll('.intel-watch-remove').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const target = button.getAttribute('data-target');
+        if (!target) return;
+        try {
+          const result = await api.threatIntelWatch(target, 'remove');
+          intelUiState.notice = {
+            tone: result.success ? 'success' : 'warning',
+            message: result.message,
+          };
+          await renderIntelTab(panel);
+        } catch (err) {
+          intelUiState.notice = {
+            tone: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          };
+          await renderIntelTab(panel);
+        }
+      });
+    });
+
+    panel.querySelector('#intel-scan-run')?.addEventListener('click', async () => {
+      const statusEl = panel.querySelector('#intel-scan-status');
+      const query = panel.querySelector('#intel-scan-query')?.value?.trim() || undefined;
+      const includeDarkWeb = !!panel.querySelector('#intel-scan-darkweb')?.checked;
+      const sources = Array.from(panel.querySelectorAll('.intel-source:checked'))
+        .map((input) => input.value)
+        .filter(Boolean);
+      statusEl.textContent = 'Running scan...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.threatIntelScan({
+          query,
+          includeDarkWeb,
+          sources,
+        });
+        intelUiState.lastScan = {
+          ...result,
+          at: Date.now(),
+        };
+        intelUiState.notice = {
+          tone: result.success ? 'success' : 'warning',
+          message: result.message,
+        };
+        await renderIntelTab(panel);
+      } catch (err) {
+        intelUiState.notice = {
+          tone: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        };
+        await renderIntelTab(panel);
+      }
+    });
 
     panel.querySelectorAll('[data-finding-status]').forEach(select => {
       select.addEventListener('change', async () => {
         const findingId = select.getAttribute('data-finding-status');
         if (!findingId) return;
         try {
-          await api.threatIntelSetFindingStatus(findingId, select.value);
-        } catch { /* ignore */ }
+          const result = await api.threatIntelSetFindingStatus(findingId, select.value);
+          intelUiState.notice = {
+            tone: result.success ? 'success' : 'warning',
+            message: result.message,
+          };
+          await renderIntelTab(panel);
+        } catch (err) {
+          intelUiState.notice = {
+            tone: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          };
+          await renderIntelTab(panel);
+        }
       });
     });
 
@@ -1566,8 +1757,18 @@ async function renderIntelTab(panel) {
         if (!findingId || !type) return;
         try {
           const result = await api.threatIntelDraftAction(findingId, type);
-          if (result.success) await renderIntelTab(panel);
-        } catch { /* ignore */ }
+          intelUiState.notice = {
+            tone: result.success ? 'success' : 'warning',
+            message: result.message,
+          };
+          await renderIntelTab(panel);
+        } catch (err) {
+          intelUiState.notice = {
+            tone: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          };
+          await renderIntelTab(panel);
+        }
       });
     });
 
@@ -1594,9 +1795,9 @@ function severityClass(severity) {
 
 function createGenericHelpFactory(area) {
   return (title) => ({
-    whatItIs: `${title} is part of ${area}.`,
-    whatSeeing: 'You are seeing the current data, controls, or actions available in this section.',
-    whatCanDo: 'Review the current state here and use the controls or links in the section when you need to act.',
+    whatItIs: `${title} is a specific subsection inside ${area} for one part of the security triage, audit, or threat-intel workflow.`,
+    whatSeeing: 'You are seeing the live security data, controls, or actions that belong to this subsection.',
+    whatCanDo: 'Use the rows, controls, and links here to inspect state or perform the action this subsection is responsible for.',
     howLinks: `This section supports the broader ${area} workflow and links outward to related owner pages when deeper work is needed.`,
   });
 }

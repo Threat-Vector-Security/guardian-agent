@@ -152,6 +152,8 @@ Every major section title must include a small info affordance next to the title
 
 That affordance may be an info icon, help badge, or similar compact control, but it must support hover and keyboard focus.
 
+When a custom themed tooltip is used for section help, the UI must not also show the browser's native `title` tooltip for the same affordance.
+
 The section help content must answer:
 
 - `What it is`

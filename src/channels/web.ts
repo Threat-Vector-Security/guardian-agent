@@ -2090,6 +2090,16 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/providers/types — available LLM provider families from runtime registry
+      if (req.method === 'GET' && url.pathname === '/api/providers/types') {
+        if (!this.dashboard.onProviderTypes) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onProviderTypes());
+        return;
+      }
+
       // GET /api/providers/status — LLM provider list with live connectivity check
       if (req.method === 'GET' && url.pathname === '/api/providers/status') {
         if (!this.dashboard.onProvidersStatus) {
@@ -2097,6 +2107,48 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, await this.dashboard.onProvidersStatus());
+        return;
+      }
+
+      // POST /api/providers/models — list models for a provider family/config
+      if (req.method === 'POST' && url.pathname === '/api/providers/models') {
+        if (!this.dashboard.onProviderModels) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const providerType = typeof parsed.providerType === 'string' ? parsed.providerType.trim() : '';
+        if (!providerType) {
+          sendJSON(res, 400, { error: 'providerType is required' });
+          return;
+        }
+        try {
+          const result = await this.dashboard.onProviderModels({
+            providerType,
+            model: typeof parsed.model === 'string' ? parsed.model : undefined,
+            apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : undefined,
+            credentialRef: typeof parsed.credentialRef === 'string' ? parsed.credentialRef : undefined,
+            baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : undefined,
+          });
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to load provider models';
+          sendJSON(res, 400, { error: message });
+        }
         return;
       }
 

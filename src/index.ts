@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
-import type { GuardianAgentConfig, MCPServerEntry } from './config/types.js';
+import type { GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
 import { CLIChannel } from './channels/cli.js';
@@ -46,6 +46,7 @@ import { AnalyticsService } from './runtime/analytics.js';
 import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
 import { evaluateSetupStatus } from './runtime/setup.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
+import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
 import { ConnectorPlaybookService } from './runtime/connectors.js';
 import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
@@ -70,17 +71,19 @@ import { MCPClientManager } from './tools/mcp-client.js';
 import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
+import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
-import { createProviders } from './llm/provider.js';
+import { createProviders, getProviderRegistry } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
+import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from './runtime/pending-approval-copy.js';
 
@@ -146,6 +149,13 @@ function isLocalProviderEndpoint(baseUrl: string | undefined, providerType: stri
   } catch {
     return /localhost|127\.0\.0\.1|::1|0\.0\.0\.0|host\.docker\.internal/.test(baseUrl);
   }
+}
+
+function getProviderLocality(
+  llmCfg: Pick<LLMConfig, 'provider' | 'baseUrl'> | undefined,
+): 'local' | 'external' | undefined {
+  if (!llmCfg?.provider) return undefined;
+  return isLocalProviderEndpoint(llmCfg.baseUrl, llmCfg.provider) ? 'local' : 'external';
 }
 
 type SoulInjectionMode = 'full' | 'summary' | 'disabled';
@@ -380,6 +390,8 @@ class ChatAgent extends BaseAgent {
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
   private memoryStore?: AgentMemoryStore;
+  /** Logical state identity used for shared conversation/memory context. */
+  private readonly stateAgentId: string;
   /** Resolver for the GWS LLM provider — looked up at request time so hot-reloaded config is used. */
   private resolveGwsProvider?: () => LLMProvider | undefined;
   /** Approximate token budget for tool results in context. */
@@ -444,6 +456,7 @@ class ChatAgent extends BaseAgent {
     fallbackChain?: ModelFallbackChain,
     soulPrompt?: string,
     memoryStore?: AgentMemoryStore,
+    stateAgentId?: string,
     resolveGwsProvider?: () => LLMProvider | undefined,
     contextBudget?: number,
     qualityFallback?: boolean,
@@ -467,6 +480,7 @@ class ChatAgent extends BaseAgent {
     this.maxToolRounds = 6;
     this.fallbackChain = fallbackChain;
     this.memoryStore = memoryStore;
+    this.stateAgentId = stateAgentId ?? id;
     this.resolveGwsProvider = resolveGwsProvider;
     this.contextBudget = contextBudget ?? 80_000;
     this.qualityFallbackEnabled = qualityFallback ?? true;
@@ -498,6 +512,7 @@ class ChatAgent extends BaseAgent {
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
+    const stateAgentId = this.stateAgentId;
     if (workerManager) {
       try {
         const activeSkills = this.skillResolver?.resolve({
@@ -507,9 +522,9 @@ class ChatAgent extends BaseAgent {
           content: message.content,
           enabledManagedProviders: this.enabledManagedProviders,
         }) ?? [];
-        const knowledgeBase = this.memoryStore?.loadForContext(this.id) ?? '';
+        const knowledgeBase = this.memoryStore?.loadForContext(stateAgentId) ?? '';
         const history = this.conversationService?.getHistoryForContext({
-          agentId: this.id,
+          agentId: stateAgentId,
           userId: message.userId,
           channel: message.channel,
         }) ?? [];
@@ -528,7 +543,7 @@ class ChatAgent extends BaseAgent {
         });
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: this.id, userId: message.userId, channel: message.channel },
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
             message.content,
             result.content,
           );
@@ -554,7 +569,7 @@ class ChatAgent extends BaseAgent {
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
+          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
           message.content,
           approvalResult,
         );
@@ -609,7 +624,7 @@ class ChatAgent extends BaseAgent {
         enabledManagedProviders: this.enabledManagedProviders,
       }) ?? [];
       if (this.memoryStore) {
-        const kb = this.memoryStore.loadForContext(this.id);
+        const kb = this.memoryStore.loadForContext(stateAgentId);
         if (kb) {
           enrichedSystemPrompt += `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${kb}\n</knowledge-base>`;
         }
@@ -630,7 +645,7 @@ class ChatAgent extends BaseAgent {
 
       llmMessages = this.conversationService
         ? this.conversationService.buildMessages(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
+          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
           enrichedSystemPrompt,
           message.content,
         )
@@ -650,7 +665,7 @@ class ChatAgent extends BaseAgent {
         finalContent = directSearch;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: this.id, userId: message.userId, channel: message.channel },
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
             message.content,
             finalContent,
           );
@@ -666,7 +681,7 @@ class ChatAgent extends BaseAgent {
         finalContent = directWorkspaceWrite;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: this.id, userId: message.userId, channel: message.channel },
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
             message.content,
             finalContent,
           );
@@ -682,7 +697,7 @@ class ChatAgent extends BaseAgent {
         finalContent = directWorkspaceRead;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: this.id, userId: message.userId, channel: message.channel },
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
             message.content,
             finalContent,
           );
@@ -734,7 +749,7 @@ class ChatAgent extends BaseAgent {
         }
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: this.id, userId: message.userId, channel: message.channel },
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
             message.content,
             finalContent,
           );
@@ -1173,7 +1188,7 @@ class ChatAgent extends BaseAgent {
 
     if (this.conversationService) {
       this.conversationService.recordTurn(
-        { agentId: this.id, userId: message.userId, channel: message.channel },
+        { agentId: stateAgentId, userId: message.userId, channel: message.channel },
         message.content,
         finalContent,
       );
@@ -1997,10 +2012,14 @@ const CATEGORY_NATURAL_LOCALITY: Record<string, 'local' | 'external'> = {
  * - Only external available: everything routes to external
  */
 function computeCategoryDefaults(
-  llmConfig: Record<string, { provider?: string }>,
+  llmConfig: Record<string, { provider?: string; baseUrl?: string }>,
 ): Record<string, 'local' | 'external'> {
-  const hasLocal = Object.values(llmConfig).some(c => c.provider === 'ollama');
-  const hasExternal = Object.values(llmConfig).some(c => c.provider !== 'ollama');
+  const hasLocal = Object.values(llmConfig).some((cfg) =>
+    !!cfg.provider && isLocalProviderEndpoint(cfg.baseUrl, cfg.provider),
+  );
+  const hasExternal = Object.values(llmConfig).some((cfg) =>
+    !!cfg.provider && !isLocalProviderEndpoint(cfg.baseUrl, cfg.provider),
+  );
 
   const defaults: Record<string, 'local' | 'external'> = {};
   for (const [category, natural] of Object.entries(CATEGORY_NATURAL_LOCALITY)) {
@@ -2645,12 +2664,13 @@ function mergeCloudConfigForValidation(
 
 /** Strip sensitive fields from config for the dashboard. */
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
-  const llm: Record<string, { provider: string; model: string; baseUrl?: string }> = {};
+  const llm: Record<string, { provider: string; model: string; baseUrl?: string; credentialRef?: string }> = {};
   for (const [name, cfg] of Object.entries(config.llm)) {
     llm[name] = {
       provider: cfg.provider,
       model: cfg.model,
       baseUrl: cfg.baseUrl,
+      credentialRef: cfg.credentialRef,
     };
   }
   const searchConfig = config.assistant.tools.search;
@@ -2663,7 +2683,8 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       cli: config.channels.cli ? { enabled: config.channels.cli.enabled } : undefined,
       telegram: config.channels.telegram ? {
         enabled: config.channels.telegram.enabled,
-        botTokenConfigured: !!config.channels.telegram.botToken?.trim(),
+        botTokenConfigured: !!(config.channels.telegram.botToken?.trim() || config.channels.telegram.botTokenCredentialRef?.trim()),
+        botTokenCredentialRef: config.channels.telegram.botTokenCredentialRef,
         allowedChatIds: config.channels.telegram.allowedChatIds,
         defaultAgent: config.channels.telegram.defaultAgent,
       } : undefined,
@@ -2735,6 +2756,15 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       },
       quickActions: {
         enabled: config.assistant.quickActions.enabled,
+      },
+      credentials: {
+        refs: Object.fromEntries(
+          Object.entries(config.assistant.credentials.refs ?? {}).map(([name, ref]) => [name, {
+            source: ref.source,
+            env: ref.source === 'env' ? ref.env : undefined,
+            description: ref.description,
+          }]),
+        ),
       },
       threatIntel: {
         enabled: config.assistant.threatIntel.enabled,
@@ -2824,11 +2854,15 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         allowedPathsCount: config.assistant.tools.allowedPaths.length,
         allowedCommandsCount: config.assistant.tools.allowedCommands.length,
         allowedDomainsCount: config.assistant.tools.allowedDomains.length,
+        preferredProviders: config.assistant.tools.preferredProviders,
         webSearch: {
           provider: config.assistant.tools.webSearch?.provider ?? 'auto',
           perplexityConfigured: !!(config.assistant.tools.webSearch?.perplexityApiKey || config.assistant.tools.webSearch?.perplexityCredentialRef),
+          perplexityCredentialRef: config.assistant.tools.webSearch?.perplexityCredentialRef,
           openRouterConfigured: !!(config.assistant.tools.webSearch?.openRouterApiKey || config.assistant.tools.webSearch?.openRouterCredentialRef),
+          openRouterCredentialRef: config.assistant.tools.webSearch?.openRouterCredentialRef,
           braveConfigured: !!(config.assistant.tools.webSearch?.braveApiKey || config.assistant.tools.webSearch?.braveCredentialRef),
+          braveCredentialRef: config.assistant.tools.webSearch?.braveCredentialRef,
         },
         search: searchConfig ? {
           enabled: searchConfig.enabled,
@@ -2868,10 +2902,22 @@ interface PolicyState {
   reload: () => { success: boolean; message: string; loaded: number; skipped: number; errors: string[] };
 }
 
+function resolveTelegramBotToken(config: GuardianAgentConfig, secretStore: LocalSecretStore): string | undefined {
+  const runtimeCredentials = resolveRuntimeCredentialView(config, secretStore);
+  const refName = config.channels.telegram?.botTokenCredentialRef?.trim();
+  if (refName) {
+    return runtimeCredentials.credentialProvider.resolve(refName);
+  }
+  const direct = config.channels.telegram?.botToken?.trim();
+  return direct || undefined;
+}
+
 /** Build dashboard callbacks wired to runtime internals. */
 function buildDashboardCallbacks(
   runtime: Runtime,
   configRef: { current: GuardianAgentConfig },
+  threatIntelWebSearchConfigRef: { current: WebSearchConfig | undefined },
+  secretStore: LocalSecretStore,
   conversations: ConversationService,
   identity: IdentityService,
   analytics: AnalyticsService,
@@ -2906,6 +2952,10 @@ function buildDashboardCallbacks(
     const content = readFileSync(configPath, 'utf-8');
     return (yaml.load(content) as Record<string, unknown>) ?? {};
   };
+  const resolveSharedStateAgentId = (agentId?: string): string | undefined => resolveAgentStateId(agentId, {
+    localAgentId: router.findAgentByRole('local')?.id,
+    externalAgentId: router.findAgentByRole('external')?.id,
+  });
 
   const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
   const trimOrUndefined = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -2940,7 +2990,7 @@ function buildDashboardCallbacks(
 
       // Reload with defaults/env interpolation to maintain canonical runtime config.
       const nextConfig = loadConfig(configPath);
-      const resolvedNextCredentials = resolveRuntimeCredentialView(nextConfig);
+      const resolvedNextCredentials = resolveRuntimeCredentialView(nextConfig, secretStore);
       runtime.applyLLMConfiguration({
         llm: resolvedNextCredentials.resolvedLLM,
         defaultProvider: nextConfig.defaultProvider,
@@ -2958,6 +3008,7 @@ function buildDashboardCallbacks(
       });
       runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
       toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
+      threatIntelWebSearchConfigRef.current = resolvedNextCredentials.resolvedWebSearch ?? {};
       toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);
       const nextGwsConfig = nextConfig.assistant.tools.mcp?.managedProviders?.gws;
       if (nextGwsConfig?.enabled) {
@@ -2993,6 +3044,7 @@ function buildDashboardCallbacks(
       const telegramChanged =
         (prevTelegram?.enabled !== nextTelegram?.enabled)
         || (prevTelegram?.botToken !== nextTelegram?.botToken)
+        || (prevTelegram?.botTokenCredentialRef !== nextTelegram?.botTokenCredentialRef)
         || (prevTelegram?.defaultAgent !== nextTelegram?.defaultAgent)
         || (JSON.stringify(prevTelegram?.allowedChatIds) !== JSON.stringify(nextTelegram?.allowedChatIds));
       if (telegramChanged && telegramReloadRef.current) {
@@ -3069,6 +3121,104 @@ function buildDashboardCallbacks(
     port: configRef.current.channels.web?.port ?? 3000,
   });
 
+  const normalizeCredentialRefUpdates = (refs: Record<string, {
+    source?: 'env' | 'local';
+    env?: string;
+    secretId?: string;
+    secretValue?: string;
+    description?: string;
+  }>): Record<string, {
+    source: 'env' | 'local';
+    env?: string;
+    secretId?: string;
+    description?: string;
+  }> => {
+    const entries: Array<[string, {
+      source: 'env' | 'local';
+      env?: string;
+      secretId?: string;
+      description?: string;
+    }]> = [];
+    for (const [name, ref] of Object.entries(refs)) {
+      const normalizedName = name.trim();
+      const normalizedDescription = ref.description?.trim() || undefined;
+      if (!normalizedName) continue;
+
+      if ((ref.source ?? 'env') === 'local') {
+        const secretId = ref.secretId?.trim() || randomUUID();
+        const secretValue = ref.secretValue?.trim();
+        if (secretValue) {
+          secretStore.set(secretId, secretValue);
+        }
+        entries.push([normalizedName, {
+          source: 'local',
+          secretId,
+          description: normalizedDescription,
+        }]);
+        continue;
+      }
+
+      const normalizedEnv = ref.env?.trim();
+      if (!normalizedEnv) continue;
+      entries.push([normalizedName, {
+        source: 'env',
+        env: normalizedEnv,
+        description: normalizedDescription,
+      }]);
+    }
+    return Object.fromEntries(entries);
+  };
+
+  const upsertLocalCredentialRef = (
+    rawConfig: Record<string, unknown>,
+    refName: string,
+    secretValue: string,
+    description: string,
+  ): string => {
+    const normalizedRefName = refName.trim();
+    if (!normalizedRefName) {
+      throw new Error('credentialRef is required to store a local secret');
+    }
+
+    rawConfig.assistant = rawConfig.assistant ?? {};
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
+    const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
+    rawCredentials.refs = (rawCredentials.refs as Record<string, unknown> | undefined) ?? {};
+    const rawRefs = rawCredentials.refs as Record<string, Record<string, unknown>>;
+    const existing = rawRefs[normalizedRefName];
+    const existingSecretId = typeof existing?.secretId === 'string' ? existing.secretId.trim() : '';
+    const secretId = existingSecretId || randomUUID();
+
+    secretStore.set(secretId, secretValue);
+    rawRefs[normalizedRefName] = {
+      source: 'local',
+      secretId,
+      description,
+    };
+    return normalizedRefName;
+  };
+
+  const deleteUnusedLocalSecrets = (
+    previousRefs: Record<string, { source: 'env' | 'local'; env?: string; secretId?: string; description?: string }>,
+    nextRefs: Record<string, { source: 'env' | 'local'; env?: string; secretId?: string; description?: string }>,
+  ): void => {
+    const nextSecretIds = new Set(
+      Object.values(nextRefs)
+        .filter((ref) => ref.source === 'local')
+        .map((ref) => ref.secretId?.trim())
+        .filter((secretId): secretId is string => !!secretId),
+    );
+
+    for (const ref of Object.values(previousRefs)) {
+      if (ref.source !== 'local') continue;
+      const secretId = ref.secretId?.trim();
+      if (secretId && !nextSecretIds.has(secretId)) {
+        secretStore.delete(secretId);
+      }
+    }
+  };
+
   const persistAuthState = (): { success: boolean; message: string } => {
     const rawConfig = loadRawConfig();
     rawConfig.channels = rawConfig.channels ?? {};
@@ -3077,11 +3227,11 @@ function buildDashboardCallbacks(
     rawWeb.enabled = rawWeb.enabled ?? true;
     rawWeb.auth = {
       mode: 'bearer_required',
-      token: webAuthStateRef.current.token,
       rotateOnStartup: webAuthStateRef.current.rotateOnStartup ?? false,
       sessionTtlMinutes: webAuthStateRef.current.sessionTtlMinutes,
-      tokenSource: webAuthStateRef.current.tokenSource ?? 'config',
+      tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
     };
+    delete (rawWeb.auth as Record<string, unknown>).token;
     delete rawWeb.authToken;
     rawChannels.web = rawWeb;
     return persistAndApplyConfig(rawConfig, {
@@ -3178,23 +3328,56 @@ function buildDashboardCallbacks(
     return results;
   };
 
+  const getDefaultModelForProviderType = (providerType: string): string => {
+    switch (providerType.trim().toLowerCase()) {
+      case 'ollama': return 'llama3.2';
+      case 'anthropic': return 'claude-sonnet-4-6';
+      case 'openai': return 'gpt-4o';
+      case 'groq': return 'llama-3.3-70b-versatile';
+      case 'mistral': return 'mistral-large-latest';
+      case 'deepseek': return 'deepseek-chat';
+      case 'together': return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
+      case 'xai': return 'grok-2-latest';
+      case 'google': return 'gemini-2.0-flash';
+      default: return 'provider-model';
+    }
+  };
+
+  const resolveCredentialForProviderInput = (credentialRef: string | undefined, apiKey: string | undefined): string | undefined => {
+    const direct = apiKey?.trim();
+    if (direct) return direct;
+    const ref = credentialRef?.trim();
+    if (!ref) return undefined;
+    const runtimeCredentials = resolveRuntimeCredentialView(configRef.current, secretStore);
+    return runtimeCredentials.credentialProvider.resolve(ref);
+  };
+
+  const toDashboardAgentInfo = (inst: ReturnType<typeof runtime.registry.getAll>[number]): DashboardAgentInfo => {
+    const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
+    const providerConfig = configRef.current.llm[providerName];
+    const providerLocality = getProviderLocality(providerConfig);
+    const isInternal = router.findAgentByRole('local')?.id === inst.agent.id
+      || router.findAgentByRole('external')?.id === inst.agent.id;
+    return {
+      id: inst.agent.id,
+      name: inst.agent.name,
+      state: inst.state,
+      canChat: inst.agent.capabilities.handleMessages,
+      internal: isInternal,
+      capabilities: inst.definition.grantedCapabilities,
+      provider: providerName,
+      providerType: providerConfig?.provider,
+      providerModel: providerConfig?.model,
+      providerLocality,
+      schedule: inst.definition.schedule,
+      lastActivityMs: inst.lastActivityMs,
+      consecutiveErrors: inst.consecutiveErrors,
+    };
+  };
+
   return {
     onAgents: (): DashboardAgentInfo[] => {
-      const isInternal = (agentId: string) =>
-        router.findAgentByRole('local')?.id === agentId
-        || router.findAgentByRole('external')?.id === agentId;
-      return runtime.registry.getAll().map(inst => ({
-        id: inst.agent.id,
-        name: inst.agent.name,
-        state: inst.state,
-        canChat: inst.agent.capabilities.handleMessages,
-        internal: isInternal(inst.agent.id),
-        capabilities: inst.definition.grantedCapabilities,
-        provider: inst.definition.providerName,
-        schedule: inst.definition.schedule,
-        lastActivityMs: inst.lastActivityMs,
-        consecutiveErrors: inst.consecutiveErrors,
-      }));
+      return runtime.registry.getAll().map((inst) => toDashboardAgentInfo(inst));
     },
 
     onAgentDetail: (id: string): DashboardAgentDetail | null => {
@@ -3203,6 +3386,8 @@ function buildDashboardCallbacks(
       const isInternal =
         router.findAgentByRole('local')?.id === id
         || router.findAgentByRole('external')?.id === id;
+      const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
+      const providerConfig = configRef.current.llm[providerName];
       return {
         id: inst.agent.id,
         name: inst.agent.name,
@@ -3210,7 +3395,10 @@ function buildDashboardCallbacks(
         canChat: inst.agent.capabilities.handleMessages,
         internal: isInternal,
         capabilities: inst.definition.grantedCapabilities,
-        provider: inst.definition.providerName,
+        provider: providerName,
+        providerType: providerConfig?.provider,
+        providerModel: providerConfig?.model,
+        providerLocality: getProviderLocality(providerConfig),
         schedule: inst.definition.schedule,
         lastActivityMs: inst.lastActivityMs,
         consecutiveErrors: inst.consecutiveErrors,
@@ -3229,18 +3417,21 @@ function buildDashboardCallbacks(
     onAuthStatus: () => getAuthStatus(),
 
     onAuthUpdate: async (input) => {
-      const nextToken = input.token?.trim()
-        ? input.token.trim()
-        : (webAuthStateRef.current.token || generateSecureToken());
+      if (input.token?.trim()) {
+        return {
+          success: false,
+          message: 'Dashboard auth no longer accepts raw token values. Use Rotate Token for an ephemeral runtime token instead.',
+          status: getAuthStatus(),
+        };
+      }
+      const nextToken = webAuthStateRef.current.token || generateSecureToken();
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
         mode: 'bearer_required',
         token: nextToken,
         rotateOnStartup: input.rotateOnStartup ?? webAuthStateRef.current.rotateOnStartup,
         sessionTtlMinutes: input.sessionTtlMinutes ?? webAuthStateRef.current.sessionTtlMinutes,
-        tokenSource: input.token?.trim()
-          ? 'config'
-          : webAuthStateRef.current.tokenSource ?? 'config',
+        tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
       };
       applyWebAuthRuntime(webAuthStateRef.current);
       const persisted = persistAuthState();
@@ -3262,7 +3453,7 @@ function buildDashboardCallbacks(
         ...webAuthStateRef.current,
         mode: 'bearer_required',
         token,
-        tokenSource: 'config',
+        tokenSource: 'ephemeral',
       };
       applyWebAuthRuntime(webAuthStateRef.current);
       const persisted = persistAuthState();
@@ -3314,7 +3505,36 @@ function buildDashboardCallbacks(
       return providers;
     },
 
+    onProviderTypes: () => getProviderRegistry().listProviderTypes().map((type) => ({
+      ...type,
+      locality: isLocalProviderEndpoint(undefined, type.name) ? 'local' : 'external',
+    })),
+
     onProvidersStatus: async () => buildProviderInfo(true),
+
+    onProviderModels: async (input) => {
+      const providerType = input.providerType.trim().toLowerCase();
+      if (!getProviderRegistry().hasProvider(providerType)) {
+        throw new Error(`Unknown provider type '${providerType}'`);
+      }
+
+      const apiKey = resolveCredentialForProviderInput(input.credentialRef, input.apiKey);
+      const providerConfig: LLMConfig = {
+        provider: providerType,
+        model: input.model?.trim() || getDefaultModelForProviderType(providerType),
+        baseUrl: input.baseUrl?.trim() || undefined,
+        apiKey,
+      };
+
+      if (providerType !== 'ollama' && !providerConfig.apiKey) {
+        throw new Error('Provide an API key or credential ref to load models for this provider.');
+      }
+
+      const models = await getProviderRegistry().createProvider(providerConfig).listModels();
+      return {
+        models: models.map((model) => model.id),
+      };
+    },
 
     onAssistantState: () => {
       const policyTypes = new Set([
@@ -3926,12 +4146,7 @@ function buildDashboardCallbacks(
 
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
-        const agents = runtime.registry.getAll().map(inst => ({
-          id: inst.agent.id,
-          name: inst.agent.name,
-          state: inst.state,
-          lastActivityMs: inst.lastActivityMs,
-        }));
+        const agents = runtime.registry.getAll().map((inst) => toDashboardAgentInfo(inst));
         listener({
           type: 'metrics',
           data: {
@@ -4068,7 +4283,8 @@ function buildDashboardCallbacks(
 
     onConversationReset: async ({ agentId, userId, channel }) => {
       const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      const removed = conversations.resetConversation({ agentId, userId: canonicalUserId, channel });
+      const stateAgentId = resolveSharedStateAgentId(agentId) ?? agentId;
+      const removed = conversations.resetConversation({ agentId: stateAgentId, userId: canonicalUserId, channel });
       analytics.track({
         type: 'conversation_reset',
         channel,
@@ -4086,13 +4302,13 @@ function buildDashboardCallbacks(
 
     onConversationSessions: ({ userId, channel, agentId }) => {
       const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      return conversations.listSessions(canonicalUserId, channel, agentId);
+      return conversations.listSessions(canonicalUserId, channel, resolveSharedStateAgentId(agentId) ?? agentId);
     },
 
     onConversationUseSession: ({ agentId, userId, channel, sessionId }) => {
       const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
       const ok = conversations.setActiveSession({
-        agentId,
+        agentId: resolveSharedStateAgentId(agentId) ?? agentId,
         userId: canonicalUserId,
         channel,
       }, sessionId);
@@ -4175,14 +4391,61 @@ function buildDashboardCallbacks(
           if (!model) {
             return { success: false, message: 'model is required' };
           }
+          const nextCredentialRefs = { ...(configRef.current.assistant.credentials.refs ?? {}) };
+          const pendingLocalSecrets: Array<{ refName: string; secretId: string; value: string; description: string }> = [];
+          let providerCredentialRef = input.credentialRef?.trim() || existingProvider?.credentialRef?.trim() || undefined;
+          if (input.apiKey?.trim()) {
+            const refName = input.credentialRef?.trim() || providerCredentialRef || `llm.${providerName}.local`;
+            const existingRef = nextCredentialRefs[refName];
+            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+              ? existingRef.secretId.trim()
+              : randomUUID();
+            nextCredentialRefs[refName] = {
+              source: 'local',
+              secretId,
+              description: `${providerName} ${providerType} credential`,
+            };
+            pendingLocalSecrets.push({
+              refName,
+              secretId,
+              value: input.apiKey.trim(),
+              description: `${providerName} ${providerType} credential`,
+            });
+            providerCredentialRef = refName;
+          } else if (input.credentialRef !== undefined) {
+            providerCredentialRef = input.credentialRef.trim() || undefined;
+          }
+
           const localProviderEndpoint = isLocalProviderEndpoint(input.baseUrl?.trim() || existingProvider?.baseUrl, providerType);
+          const providerLocality: 'local' | 'external' = localProviderEndpoint ? 'local' : 'external';
           if (providerType !== 'ollama'
             && !localProviderEndpoint
-            && !(input.apiKey?.trim())
-            && !(input.credentialRef?.trim())
-            && !existingProvider?.apiKey
-            && !existingProvider?.credentialRef) {
+            && !providerCredentialRef) {
             return { success: false, message: 'apiKey or credentialRef is required for external providers' };
+          }
+
+          const explicitPreferredProvider = configRef.current.assistant.tools.preferredProviders?.[providerLocality]?.trim();
+          const shouldSetPreferredProvider = !explicitPreferredProvider
+            || getProviderLocality(configRef.current.llm[explicitPreferredProvider]) !== providerLocality;
+
+          let telegramCredentialRef = configRef.current.channels.telegram?.botTokenCredentialRef?.trim() || undefined;
+          if (input.telegramBotToken?.trim()) {
+            telegramCredentialRef = telegramCredentialRef || 'telegram.bot.primary';
+            const existingRef = nextCredentialRefs[telegramCredentialRef];
+            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+              ? existingRef.secretId.trim()
+              : randomUUID();
+            nextCredentialRefs[telegramCredentialRef] = {
+              source: 'local',
+              secretId,
+              description: 'Telegram bot token',
+            };
+            pendingLocalSecrets.push({
+              refName: telegramCredentialRef,
+              secretId,
+              value: input.telegramBotToken.trim(),
+              description: 'Telegram bot token',
+            });
           }
 
           const patch: Partial<GuardianAgentConfig> = {
@@ -4190,18 +4453,33 @@ function buildDashboardCallbacks(
               [providerName]: {
                 provider: providerType,
                 model,
-                apiKey: input.apiKey?.trim() || undefined,
-                credentialRef: input.credentialRef?.trim() || undefined,
+                credentialRef: providerCredentialRef,
                 baseUrl: input.baseUrl?.trim() || (providerType === 'ollama' ? 'http://127.0.0.1:11434' : undefined),
               },
             } as GuardianAgentConfig['llm'],
             assistant: {
               ...configRef.current.assistant,
+              credentials: {
+                refs: nextCredentialRefs,
+              },
               setup: {
                 completed: input.setupCompleted ?? true,
               },
             },
           };
+
+          if (shouldSetPreferredProvider) {
+            patch.assistant = {
+              ...(patch.assistant ?? configRef.current.assistant),
+              tools: {
+                ...configRef.current.assistant.tools,
+                preferredProviders: {
+                  ...configRef.current.assistant.tools.preferredProviders,
+                  [providerLocality]: providerName,
+                },
+              },
+            };
+          }
 
           if (input.setDefaultProvider !== false) {
             patch.defaultProvider = providerName;
@@ -4213,7 +4491,7 @@ function buildDashboardCallbacks(
               telegram: {
                 enabled: input.telegramEnabled,
                 polling: configRef.current.channels.telegram?.polling ?? true,
-                botToken: input.telegramBotToken ?? configRef.current.channels.telegram?.botToken,
+                botTokenCredentialRef: telegramCredentialRef,
                 allowedChatIds: input.telegramAllowedChatIds ?? configRef.current.channels.telegram?.allowedChatIds,
                 defaultAgent: configRef.current.channels.telegram?.defaultAgent,
               },
@@ -4239,6 +4517,13 @@ function buildDashboardCallbacks(
             ...(rawAssistant.setup as Record<string, unknown> ?? {}),
             completed: input.setupCompleted ?? true,
           };
+          rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
+          (rawAssistant.credentials as Record<string, unknown>).refs = {
+            ...((rawAssistant.credentials as Record<string, unknown>).refs as Record<string, unknown> ?? {}),
+          };
+          for (const pending of pendingLocalSecrets) {
+            upsertLocalCredentialRef(rawConfig, pending.refName, pending.value, pending.description);
+          }
 
           rawConfig.llm = rawConfig.llm ?? {};
           const rawLLM = rawConfig.llm as Record<string, Record<string, unknown>>;
@@ -4251,13 +4536,9 @@ function buildDashboardCallbacks(
           if (providerType === 'ollama' && !rawLLM[providerName].baseUrl) {
             rawLLM[providerName].baseUrl = 'http://127.0.0.1:11434';
           }
-          if (input.apiKey !== undefined) {
-            const trimmed = input.apiKey.trim();
-            if (trimmed) rawLLM[providerName].apiKey = trimmed;
-            else delete rawLLM[providerName].apiKey;
-          }
-          if (input.credentialRef !== undefined) {
-            const trimmed = input.credentialRef.trim();
+          delete rawLLM[providerName].apiKey;
+          if (providerCredentialRef !== undefined) {
+            const trimmed = providerCredentialRef.trim();
             if (trimmed) rawLLM[providerName].credentialRef = trimmed;
             else delete rawLLM[providerName].credentialRef;
           }
@@ -4266,13 +4547,25 @@ function buildDashboardCallbacks(
             rawConfig.defaultProvider = providerName;
           }
 
+          if (shouldSetPreferredProvider) {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
+            rawAssistantObj.tools = (rawAssistantObj.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistantObj.tools as Record<string, unknown>;
+            rawTools.preferredProviders = {
+              ...((rawTools.preferredProviders as Record<string, unknown> | undefined) ?? {}),
+              [providerLocality]: providerName,
+            };
+          }
+
           if (input.telegramEnabled !== undefined) {
             rawConfig.channels = rawConfig.channels ?? {};
             const rawChannels = rawConfig.channels as Record<string, unknown>;
             const rawTelegram = (rawChannels.telegram as Record<string, unknown> | undefined) ?? {};
             rawTelegram.enabled = input.telegramEnabled;
             rawTelegram.polling = rawTelegram.polling ?? true;
-            if (input.telegramBotToken?.trim()) rawTelegram.botToken = input.telegramBotToken.trim();
+            delete rawTelegram.botToken;
+            if (telegramCredentialRef) rawTelegram.botTokenCredentialRef = telegramCredentialRef;
             if (input.telegramAllowedChatIds) rawTelegram.allowedChatIds = input.telegramAllowedChatIds;
             rawChannels.telegram = rawTelegram;
           }
@@ -4298,26 +4591,29 @@ function buildDashboardCallbacks(
             rawTools.webSearch = rawTools.webSearch ?? {};
             const rawWS = rawTools.webSearch as Record<string, unknown>;
             if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-            if (input.perplexityApiKey !== undefined) {
-              if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
-              else delete rawWS.perplexityApiKey;
+            if (input.perplexityApiKey?.trim()) {
+              const refName = input.perplexityCredentialRef?.trim() || rawWS.perplexityCredentialRef as string || 'search.perplexity.local';
+              rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.perplexityApiKey.trim(), 'Perplexity search API key');
             }
+            delete rawWS.perplexityApiKey;
             if (input.perplexityCredentialRef !== undefined) {
               if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
               else delete rawWS.perplexityCredentialRef;
             }
-            if (input.openRouterApiKey !== undefined) {
-              if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
-              else delete rawWS.openRouterApiKey;
+            if (input.openRouterApiKey?.trim()) {
+              const refName = input.openRouterCredentialRef?.trim() || rawWS.openRouterCredentialRef as string || 'search.openrouter.local';
+              rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.openRouterApiKey.trim(), 'OpenRouter search API key');
             }
+            delete rawWS.openRouterApiKey;
             if (input.openRouterCredentialRef !== undefined) {
               if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
               else delete rawWS.openRouterCredentialRef;
             }
-            if (input.braveApiKey !== undefined) {
-              if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
-              else delete rawWS.braveApiKey;
+            if (input.braveApiKey?.trim()) {
+              const refName = input.braveCredentialRef?.trim() || rawWS.braveCredentialRef as string || 'search.brave.local';
+              rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.braveApiKey.trim(), 'Brave search API key');
             }
+            delete rawWS.braveApiKey;
             if (input.braveCredentialRef !== undefined) {
               if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
               else delete rawWS.braveCredentialRef;
@@ -4356,27 +4652,29 @@ function buildDashboardCallbacks(
       const rawWS = rawTools.webSearch as Record<string, unknown>;
 
       if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-      // Empty string = clear the key, undefined = leave unchanged, non-empty = set
-      if (input.perplexityApiKey !== undefined) {
-        if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
-        else delete rawWS.perplexityApiKey;
+      if (input.perplexityApiKey?.trim()) {
+        const refName = input.perplexityCredentialRef?.trim() || (typeof rawWS.perplexityCredentialRef === 'string' ? rawWS.perplexityCredentialRef : '') || 'search.perplexity.local';
+        rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.perplexityApiKey.trim(), 'Perplexity search API key');
       }
+      delete rawWS.perplexityApiKey;
       if (input.perplexityCredentialRef !== undefined) {
         if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
         else delete rawWS.perplexityCredentialRef;
       }
-      if (input.openRouterApiKey !== undefined) {
-        if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
-        else delete rawWS.openRouterApiKey;
+      if (input.openRouterApiKey?.trim()) {
+        const refName = input.openRouterCredentialRef?.trim() || (typeof rawWS.openRouterCredentialRef === 'string' ? rawWS.openRouterCredentialRef : '') || 'search.openrouter.local';
+        rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.openRouterApiKey.trim(), 'OpenRouter search API key');
       }
+      delete rawWS.openRouterApiKey;
       if (input.openRouterCredentialRef !== undefined) {
         if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
         else delete rawWS.openRouterCredentialRef;
       }
-      if (input.braveApiKey !== undefined) {
-        if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
-        else delete rawWS.braveApiKey;
+      if (input.braveApiKey?.trim()) {
+        const refName = input.braveCredentialRef?.trim() || (typeof rawWS.braveCredentialRef === 'string' ? rawWS.braveCredentialRef : '') || 'search.brave.local';
+        rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.braveApiKey.trim(), 'Brave search API key');
       }
+      delete rawWS.braveApiKey;
       if (input.braveCredentialRef !== undefined) {
         if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
         else delete rawWS.braveCredentialRef;
@@ -4404,12 +4702,69 @@ function buildDashboardCallbacks(
         },
         async () => {
           const currentConfig = configRef.current;
+          let credentialRefsChanged = !!updates.assistant?.credentials?.refs;
+          const nextCredentialRefs = updates.assistant?.credentials?.refs
+            ? normalizeCredentialRefUpdates(updates.assistant.credentials.refs)
+            : { ...(currentConfig.assistant.credentials.refs ?? {}) };
+          const llmPatch = updates.llm
+            ? Object.fromEntries(Object.entries(updates.llm).map(([name, providerUpdates]) => {
+              let credentialRef = providerUpdates.credentialRef;
+              if (providerUpdates.apiKey?.trim()) {
+                const refName = providerUpdates.credentialRef?.trim()
+                  || currentConfig.llm[name]?.credentialRef?.trim()
+                  || `llm.${name}.local`;
+                const existingRef = nextCredentialRefs[refName];
+                const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+                  ? existingRef.secretId.trim()
+                  : randomUUID();
+                nextCredentialRefs[refName] = {
+                  source: 'local',
+                  secretId,
+                  description: `${name} provider credential`,
+                };
+                credentialRefsChanged = true;
+                secretStore.set(secretId, providerUpdates.apiKey.trim());
+                credentialRef = refName;
+              }
+              return [name, {
+                ...providerUpdates,
+                apiKey: undefined,
+                credentialRef,
+              }];
+            }))
+            : undefined;
+          const telegramUpdates = updates.channels?.telegram
+            ? { ...updates.channels.telegram }
+            : undefined;
+          if (telegramUpdates?.botToken?.trim()) {
+            const refName = telegramUpdates.botTokenCredentialRef?.trim()
+              || currentConfig.channels.telegram?.botTokenCredentialRef?.trim()
+              || 'telegram.bot.primary';
+            const existingRef = nextCredentialRefs[refName];
+            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
+              ? existingRef.secretId.trim()
+              : randomUUID();
+            nextCredentialRefs[refName] = {
+              source: 'local',
+              secretId,
+              description: 'Telegram bot token',
+            };
+            credentialRefsChanged = true;
+            secretStore.set(secretId, telegramUpdates.botToken.trim());
+            telegramUpdates.botTokenCredentialRef = refName;
+            telegramUpdates.botToken = undefined;
+          }
           const cloudPatch = updates.assistant?.tools?.cloud
             ? mergeCloudConfigForValidation(currentConfig.assistant.tools.cloud, updates.assistant.tools.cloud)
             : undefined;
           const assistantPatch = updates.assistant
             ? {
               ...updates.assistant,
+              credentials: credentialRefsChanged || updates.assistant.credentials
+                ? {
+                  refs: nextCredentialRefs,
+                }
+                : undefined,
               tools: updates.assistant.tools
                 ? {
                   ...updates.assistant.tools,
@@ -4422,8 +4777,13 @@ function buildDashboardCallbacks(
           // Validate the next in-memory config first.
           const patch = {
             defaultProvider: updates.defaultProvider,
-            llm: updates.llm as unknown as GuardianAgentConfig['llm'] | undefined,
-            channels: updates.channels as unknown as GuardianAgentConfig['channels'] | undefined,
+            llm: llmPatch as unknown as GuardianAgentConfig['llm'] | undefined,
+            channels: updates.channels
+              ? {
+                ...updates.channels,
+                telegram: telegramUpdates,
+              } as unknown as GuardianAgentConfig['channels']
+              : undefined,
             assistant: assistantPatch as unknown as GuardianAgentConfig['assistant'] | undefined,
           } as Partial<GuardianAgentConfig>;
           const nextConfig = deepMerge(currentConfig, patch);
@@ -4449,19 +4809,15 @@ function buildDashboardCallbacks(
             rawConfig.defaultProvider = updates.defaultProvider;
           }
 
-          if (updates.llm) {
+          if (llmPatch) {
             const llmSection = (rawConfig.llm ?? {}) as Record<string, Record<string, unknown>>;
-            for (const [name, providerUpdates] of Object.entries(updates.llm)) {
+            for (const [name, providerUpdates] of Object.entries(llmPatch)) {
               if (!llmSection[name]) {
                 llmSection[name] = {};
               }
               if (providerUpdates.provider) llmSection[name].provider = providerUpdates.provider;
               if (providerUpdates.model) llmSection[name].model = providerUpdates.model;
-              if (providerUpdates.apiKey !== undefined) {
-                const trimmed = providerUpdates.apiKey.trim();
-                if (trimmed) llmSection[name].apiKey = trimmed;
-                else delete llmSection[name].apiKey;
-              }
+              delete llmSection[name].apiKey;
               if (providerUpdates.credentialRef !== undefined) {
                 const trimmed = providerUpdates.credentialRef.trim();
                 if (trimmed) llmSection[name].credentialRef = trimmed;
@@ -4476,10 +4832,9 @@ function buildDashboardCallbacks(
             rawConfig.llm = llmSection;
           }
 
-          if (updates.channels?.telegram) {
+          if (telegramUpdates) {
             rawConfig.channels = rawConfig.channels ?? {};
             const rawChannels = rawConfig.channels as Record<string, unknown>;
-            const telegramUpdates = updates.channels.telegram;
             const rawTelegram = (rawChannels.telegram as Record<string, unknown> | undefined) ?? {};
 
             if (typeof telegramUpdates.enabled === 'boolean') {
@@ -4493,10 +4848,11 @@ function buildDashboardCallbacks(
               if (trimmed) rawTelegram.defaultAgent = trimmed;
               else delete rawTelegram.defaultAgent;
             }
-            if (telegramUpdates.botToken !== undefined) {
-              const trimmed = telegramUpdates.botToken.trim();
-              if (trimmed) rawTelegram.botToken = trimmed;
-              else delete rawTelegram.botToken;
+            delete rawTelegram.botToken;
+            if (telegramUpdates.botTokenCredentialRef !== undefined) {
+              const trimmed = telegramUpdates.botTokenCredentialRef.trim();
+              if (trimmed) rawTelegram.botTokenCredentialRef = trimmed;
+              else delete rawTelegram.botTokenCredentialRef;
             }
             if (telegramUpdates.allowedChatIds !== undefined) {
               if (telegramUpdates.allowedChatIds.length > 0) rawTelegram.allowedChatIds = telegramUpdates.allowedChatIds;
@@ -4504,6 +4860,14 @@ function buildDashboardCallbacks(
             }
 
             rawChannels.telegram = rawTelegram;
+          }
+
+          if (credentialRefsChanged) {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
+            const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
+            rawCredentials.refs = nextCredentialRefs;
           }
 
           const notificationUpdates = updates.assistant?.notifications;
@@ -4537,6 +4901,29 @@ function buildDashboardCallbacks(
               if (typeof notificationUpdates.destinations.web === 'boolean') rawDestinations.web = notificationUpdates.destinations.web;
               if (typeof notificationUpdates.destinations.cli === 'boolean') rawDestinations.cli = notificationUpdates.destinations.cli;
               if (typeof notificationUpdates.destinations.telegram === 'boolean') rawDestinations.telegram = notificationUpdates.destinations.telegram;
+            }
+          }
+
+          const preferredProviderUpdates = updates.assistant?.tools?.preferredProviders;
+          if (preferredProviderUpdates && typeof preferredProviderUpdates === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.preferredProviders = {
+              ...((rawTools.preferredProviders as Record<string, unknown> | undefined) ?? {}),
+            };
+            const rawPreferredProviders = rawTools.preferredProviders as Record<string, unknown>;
+
+            if (preferredProviderUpdates.local !== undefined) {
+              const trimmed = preferredProviderUpdates.local.trim();
+              if (trimmed) rawPreferredProviders.local = trimmed;
+              else delete rawPreferredProviders.local;
+            }
+            if (preferredProviderUpdates.external !== undefined) {
+              const trimmed = preferredProviderUpdates.external.trim();
+              if (trimmed) rawPreferredProviders.external = trimmed;
+              else delete rawPreferredProviders.external;
             }
           }
 
@@ -4863,6 +5250,9 @@ function buildDashboardCallbacks(
             canonicalUserId: currentConfig.assistant.identity.primaryUserId,
             metadata: { result: result.message },
           });
+          if (result.success && credentialRefsChanged) {
+            deleteUnusedLocalSecrets(currentConfig.assistant.credentials.refs, nextCredentialRefs);
+          }
           return result;
         },
       );
@@ -5183,6 +5573,8 @@ async function main(): Promise<void> {
   }
 
   const configRef = { current: loadConfig(configPath) };
+  const threatIntelWebSearchConfigRef: { current: WebSearchConfig | undefined } = { current: undefined };
+  const secretStore = new LocalSecretStore({ baseDir: dirname(configPath) });
 
   // Auto-detect Ollama model if configured model is not available.
   // Prevents startup failures when the default model (e.g. llama3.2) isn't pulled.
@@ -5225,7 +5617,8 @@ async function main(): Promise<void> {
     }
   }
 
-  const resolvedRuntimeCredentials = resolveRuntimeCredentialView(config);
+  const resolvedRuntimeCredentials = resolveRuntimeCredentialView(config, secretStore);
+  threatIntelWebSearchConfigRef.current = resolvedRuntimeCredentials.resolvedWebSearch ?? {};
   const runtime = new Runtime({
     ...config,
     llm: resolvedRuntimeCredentials.resolvedLLM,
@@ -5389,12 +5782,26 @@ async function main(): Promise<void> {
     onSecurityEvent: onMoltbookSecurityEvent,
   });
 
+  const threatIntelSourceScanners = createThreatIntelSourceScanners({
+    getWebSearchConfig: () => threatIntelWebSearchConfigRef.current,
+    admitRequest: (url) => {
+      const decision = runtime.guardian.check({
+        type: 'http_request',
+        agentId: 'threat-intel:osint',
+        capabilities: ['network_access'],
+        params: { url },
+      });
+      return { allowed: decision.allowed, reason: decision.reason };
+    },
+  });
+
   const threatIntel = new ThreatIntelService({
     enabled: config.assistant.threatIntel.enabled,
     allowDarkWeb: config.assistant.threatIntel.allowDarkWeb,
     responseMode: config.assistant.threatIntel.responseMode,
     watchlist: config.assistant.threatIntel.watchlist,
     forumConnectors: [moltbookConnector],
+    sourceScanners: threatIntelSourceScanners,
   });
   // ─── OS-Level Process Sandbox ───────────────────────────────
   const sandboxConfig: SandboxConfig = {
@@ -5867,6 +6274,13 @@ async function main(): Promise<void> {
     anomalyThresholds: sentinelAuditConfig?.anomalyThresholds,
   });
 
+  // ─── Message router ────────────────────────────────────────
+  const router = new MessageRouter(config.routing);
+  const resolveSharedStateAgentId = (agentId?: string): string | undefined => resolveAgentStateId(agentId, {
+    localAgentId: router.findAgentByRole('local')?.id,
+    externalAgentId: router.findAgentByRole('external')?.id,
+  });
+
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
     workspaceRoot: process.cwd(),
@@ -5948,6 +6362,7 @@ async function main(): Promise<void> {
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
+    resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
     gwsService,
     deviceInventory,
@@ -6205,18 +6620,26 @@ async function main(): Promise<void> {
   const orchestrator = new AssistantOrchestrator();
   const jobTracker = new AssistantJobTracker();
 
-  // ─── Helper: detect external (non-Ollama) LLM provider ───
-  const findExternalProvider = (cfg: GuardianAgentConfig): string | null => {
+  const findProviderByLocality = (
+    cfg: GuardianAgentConfig,
+    locality: 'local' | 'external',
+  ): string | null => {
+    const preferred = cfg.assistant.tools.preferredProviders?.[locality]?.trim();
+    if (preferred && getProviderLocality(cfg.llm[preferred]) === locality) {
+      return preferred;
+    }
+
+    if (getProviderLocality(cfg.llm[cfg.defaultProvider]) === locality) {
+      return cfg.defaultProvider;
+    }
+
     for (const [name, llmCfg] of Object.entries(cfg.llm)) {
-      if (llmCfg.provider === 'anthropic' || llmCfg.provider === 'openai') {
+      if (getProviderLocality(llmCfg) === locality) {
         return name;
       }
     }
     return null;
   };
-
-  // ─── Message router ────────────────────────────────────────
-  const router = new MessageRouter(config.routing);
 
   // ─── Model fallback chain ─────────────────────────────────
   // Build a fallback chain from config.fallbacks: [defaultProvider, ...fallbacks]
@@ -6242,7 +6665,8 @@ async function main(): Promise<void> {
   }
 
   // Register agents from config, auto-create dual agents, or single default
-  const externalProviderName = findExternalProvider(config);
+  const localProviderName = findProviderByLocality(config, 'local');
+  const externalProviderName = findProviderByLocality(config, 'external');
   const soulProfile = loadSoulProfile(config);
   if (soulProfile) {
     log.info(
@@ -6268,20 +6692,12 @@ async function main(): Promise<void> {
       const provider = runtime.getProvider(gwsModelName);
       if (provider) return provider;
     }
-    // 2. Auto-detect: if default is Ollama, find first non-Ollama provider
-    const defaultCfg = currentConfig.llm[currentConfig.defaultProvider];
-    if (defaultCfg?.provider === 'ollama') {
-      for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
-        if (llmCfg.provider !== 'ollama') {
-          const provider = runtime.getProvider(name);
-          if (provider) return provider;
-        }
-      }
-      // No external provider available — return undefined so chatWithFallback is used
+    // 2. Use the preferred external provider for external/tool-calling work.
+    const externalName = findProviderByLocality(currentConfig, 'external');
+    if (!externalName) {
       return undefined;
     }
-    // 3. Default provider is already external (OpenAI/Anthropic) — use it
-    return runtime.getProvider(currentConfig.defaultProvider);
+    return runtime.getProvider(externalName);
   };
   // Log initial resolution at startup
   if (gwsService && enabledManagedProviders.has('gws')) {
@@ -6291,15 +6707,9 @@ async function main(): Promise<void> {
       if (gwsModelName && runtime.getProvider(gwsModelName)) {
         console.log(`  Google Workspace: using '${gwsModelName}' model for tool-calling`);
       } else {
-        const defaultCfg = config.llm[config.defaultProvider];
-        if (defaultCfg?.provider === 'ollama') {
-          // Find which one was auto-selected
-          for (const [name, llmCfg] of Object.entries(config.llm)) {
-            if (llmCfg.provider !== 'ollama' && runtime.getProvider(name)) {
-              console.log(`  Google Workspace: default is Ollama, auto-selected '${name}' for tool-calling`);
-              break;
-            }
-          }
+        const preferredExternal = findProviderByLocality(config, 'external');
+        if (preferredExternal) {
+          console.log(`  Google Workspace: using preferred external provider '${preferredExternal}' for tool-calling`);
         }
       }
     } else {
@@ -6323,23 +6733,11 @@ async function main(): Promise<void> {
     if (pref === 'default') return undefined;
 
     const currentConfig = configRef.current;
-    if (pref === 'local') {
-      for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
-        if (llmCfg.provider === 'ollama') {
-          const provider = runtime.getProvider(name);
-          if (provider) return { provider, locality: 'local' };
-        }
-      }
-      return undefined;
-    }
-    // pref === 'external'
-    for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
-      if (llmCfg.provider !== 'ollama') {
-        const provider = runtime.getProvider(name);
-        if (provider) return { provider, locality: 'external' };
-      }
-    }
-    return undefined;
+    const providerName = findProviderByLocality(currentConfig, pref);
+    if (!providerName) return undefined;
+    const provider = runtime.getProvider(providerName);
+    if (!provider) return undefined;
+    return { provider, locality: pref };
   };
 
   // Resolve agent capabilities from trust preset / config.
@@ -6363,6 +6761,9 @@ async function main(): Promise<void> {
       const soulMode: SoulInjectionMode = agentConfig.id === primaryConfiguredAgentId
         ? config.assistant.soul.primaryMode
         : config.assistant.soul.delegatedMode;
+      const sharedStateAgentId = agentConfig.role === 'local' || agentConfig.role === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentConfig.id;
       const agent = new ChatAgent(
         agentConfig.id,
         agentConfig.name,
@@ -6375,6 +6776,7 @@ async function main(): Promise<void> {
         fallbackChain,
         selectSoulPrompt(soulProfile, soulMode),
         agentMemoryStore,
+        sharedStateAgentId,
         resolveGwsProvider,
         config.assistant.tools.contextBudget,
         config.qualityFallback,
@@ -6395,7 +6797,7 @@ async function main(): Promise<void> {
         agentConfig.role,
       );
     }
-  } else if (externalProviderName) {
+  } else if (localProviderName && externalProviderName) {
     // Auto dual-agent: local (Ollama) + external (Anthropic/OpenAI)
     const localPrompt = 'You specialize in local workstation tasks: file operations, code editing, git, build tools, and local command execution. Focus on filesystem, development, and local system tasks. If the user asks to search the web or look something up online, use the web_search and web_fetch tools — they are available to you.';
     const externalPrompt = 'You specialize in external and network tasks: web research, API calls, email, threat intelligence, and online services. Use web_search to find information online and web_fetch to read web pages. Always use these tools when the user asks to search, look up, or find something on the web.';
@@ -6412,6 +6814,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
@@ -6420,7 +6823,7 @@ async function main(): Promise<void> {
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
-      providerName: config.defaultProvider,
+      providerName: localProviderName,
       grantedCapabilities: agentCapabilities,
     }));
 
@@ -6436,6 +6839,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
       agentMemoryStore,
+      SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
@@ -6468,7 +6872,7 @@ async function main(): Promise<void> {
     }, 'external');
 
     log.info(
-      { local: config.defaultProvider, external: externalProviderName },
+      { local: localProviderName, external: externalProviderName },
       'Auto-created dual agents: local + external',
     );
   } else {
@@ -6485,6 +6889,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      'default',
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
@@ -6560,7 +6965,7 @@ async function main(): Promise<void> {
   // Start channels
   const channels: { name: string; stop: () => Promise<void> }[] = [];
 
-  const defaultAgentId = config.agents[0]?.id ?? (externalProviderName ? 'local' : 'default');
+  const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
 
   /** Resolve target agent with tier routing: channel override → tier router → plain router. */
   const resolveAgentWithTier = (channelDefault: string | undefined, content: string): RouteDecision => {
@@ -6716,6 +7121,8 @@ async function main(): Promise<void> {
   } = buildDashboardCallbacks(
     runtime,
     configRef,
+    threatIntelWebSearchConfigRef,
+    secretStore,
     conversations,
     identity,
     analytics,
@@ -7117,10 +7524,11 @@ async function main(): Promise<void> {
 
   const startTelegram = async (): Promise<void> => {
     const tgConfig = configRef.current.channels.telegram;
-    if (!tgConfig?.enabled || !tgConfig.botToken) return;
+    const botToken = resolveTelegramBotToken(configRef.current, secretStore);
+    if (!tgConfig?.enabled || !botToken) return;
     const telegramDefaultAgent = tgConfig.defaultAgent ?? defaultAgentId;
     const telegram = new TelegramChannel({
-      botToken: tgConfig.botToken,
+      botToken,
       allowedChatIds: tgConfig.allowedChatIds,
       defaultAgent: telegramDefaultAgent,
       guideText: formatGuideForTelegram(),
@@ -7185,7 +7593,7 @@ async function main(): Promise<void> {
       }
       await startTelegram();
       const tgConfig = configRef.current.channels.telegram;
-      if (tgConfig?.enabled && tgConfig.botToken) {
+      if (tgConfig?.enabled && resolveTelegramBotToken(configRef.current, secretStore)) {
         log.info('Telegram channel reloaded');
         return { success: true, message: 'Telegram channel reloaded.' };
       }

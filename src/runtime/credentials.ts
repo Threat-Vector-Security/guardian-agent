@@ -13,6 +13,7 @@ import type {
   LLMConfig,
   WebSearchConfig,
 } from '../config/types.js';
+import type { SecretResolver } from './secret-store.js';
 
 export interface CredentialProvider {
   resolve(ref: string): string | undefined;
@@ -21,19 +22,27 @@ export interface CredentialProvider {
 
 export class ConfigCredentialProvider implements CredentialProvider {
   private readonly refs: Record<string, CredentialRefConfig>;
+  private readonly secretResolver?: SecretResolver;
 
-  constructor(config?: AssistantCredentialsConfig) {
+  constructor(config?: AssistantCredentialsConfig, secretResolver?: SecretResolver) {
     this.refs = { ...(config?.refs ?? {}) };
+    this.secretResolver = secretResolver;
   }
 
   resolve(ref: string): string | undefined {
     const entry = this.refs[ref];
     if (!entry) return undefined;
-    if (entry.source !== 'env') return undefined;
-
-    const value = process.env[entry.env];
-    const trimmed = value?.trim();
-    return trimmed ? trimmed : undefined;
+    if (entry.source === 'env') {
+      const value = process.env[entry.env];
+      const trimmed = value?.trim();
+      return trimmed ? trimmed : undefined;
+    }
+    if (entry.source === 'local') {
+      const value = this.secretResolver?.get(entry.secretId);
+      const trimmed = value?.trim();
+      return trimmed ? trimmed : undefined;
+    }
+    return undefined;
   }
 
   require(ref: string, purpose: string): string {
@@ -44,9 +53,12 @@ export class ConfigCredentialProvider implements CredentialProvider {
 
     const value = this.resolve(ref);
     if (!value) {
+      const location = entry.source === 'env'
+        ? `environment variable '${entry.env}'`
+        : `local secret '${entry.secretId}'`;
       throw new Error(
         `Credential reference '${ref}' for ${purpose} did not resolve to a non-empty value. ` +
-        `Expected environment variable '${entry.env}'.`,
+        `Expected ${location}.`,
       );
     }
 
@@ -216,13 +228,14 @@ export function resolveCloudCredentialConfig(
 
 export function resolveRuntimeCredentialView(
   config: GuardianAgentConfig,
+  secretResolver?: SecretResolver,
 ): {
   credentialProvider: CredentialProvider;
   resolvedLLM: Record<string, LLMConfig>;
   resolvedWebSearch: WebSearchConfig | undefined;
   resolvedCloud: AssistantCloudConfig | undefined;
 } {
-  const credentialProvider = new ConfigCredentialProvider(config.assistant.credentials);
+  const credentialProvider = new ConfigCredentialProvider(config.assistant.credentials, secretResolver);
   return {
     credentialProvider,
     resolvedLLM: resolveLLMCredentialConfig(config.llm, credentialProvider),

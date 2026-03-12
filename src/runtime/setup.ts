@@ -22,7 +22,8 @@ export interface SetupStatus {
 export interface SetupApplyInput {
   llmMode: 'ollama' | 'external';
   providerName?: string;
-  providerType?: 'ollama' | 'openai' | 'anthropic';
+  /** Built-in provider type from the runtime registry (for example ollama/openai/anthropic/groq/mistral/deepseek/together/xai/google). */
+  providerType?: string;
   model?: string;
   apiKey?: string;
   credentialRef?: string;
@@ -91,13 +92,13 @@ export function evaluateSetupStatus(
   });
 
   const telegram = config.channels.telegram;
-  const telegramConfigured = !!(telegram?.enabled && telegram.botToken);
+  const telegramConfigured = !!(telegram?.enabled && (telegram.botToken || telegram.botTokenCredentialRef));
   steps.push({
     id: 'telegram',
     title: 'Telegram Integration',
     status: telegramConfigured ? 'complete' : 'warning',
     detail: telegramConfigured
-      ? 'Telegram bot token is configured.'
+      ? 'Telegram bot credential is configured.'
       : 'Telegram is optional and currently not configured.',
   });
 

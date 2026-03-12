@@ -35,6 +35,18 @@ describe('ConfigCredentialProvider', () => {
       "Credential reference 'llm.openai.primary' for llm.openai did not resolve to a non-empty value. Expected environment variable 'OPENAI_API_KEY'.",
     );
   });
+
+  it('resolves local-secret credential refs through the secret resolver', () => {
+    const secretResolver = { get: vi.fn((secretId: string) => secretId === 'secret-1' ? 'sk-local-openai' : undefined) };
+    const provider = new ConfigCredentialProvider({
+      refs: {
+        'llm.openai.local': { source: 'local', secretId: 'secret-1' },
+      },
+    }, secretResolver);
+
+    expect(provider.resolve('llm.openai.local')).toBe('sk-local-openai');
+    expect(secretResolver.get).toHaveBeenCalledWith('secret-1');
+  });
 });
 
 describe('resolveLLMCredentialConfig', () => {
@@ -112,6 +124,48 @@ describe('resolveRuntimeCredentialView', () => {
     const resolved = resolveRuntimeCredentialView(config);
     expect(resolved.resolvedLLM.primary.apiKey).toBe('sk-runtime-openai');
     expect(resolved.resolvedWebSearch?.braveApiKey).toBe('brave-runtime-key');
+  });
+
+  it('builds a runtime view for local-secret-backed refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        primary: {
+          provider: 'openai',
+          model: 'gpt-4o',
+          credentialRef: 'llm.openai.local',
+        },
+      },
+      defaultProvider: 'primary',
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.openai.local': { source: 'local', secretId: 'secret-openai' },
+            'search.brave.local': { source: 'local', secretId: 'secret-brave' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          webSearch: {
+            provider: 'brave',
+            braveCredentialRef: 'search.brave.local',
+          },
+        },
+      },
+    };
+
+    const secretResolver = {
+      get: vi.fn((secretId: string) => {
+        if (secretId === 'secret-openai') return 'sk-local-openai';
+        if (secretId === 'secret-brave') return 'brave-local-key';
+        return undefined;
+      }),
+    };
+
+    const resolved = resolveRuntimeCredentialView(config, secretResolver);
+    expect(resolved.resolvedLLM.primary.apiKey).toBe('sk-local-openai');
+    expect(resolved.resolvedWebSearch?.braveApiKey).toBe('brave-local-key');
   });
 
   it('resolves cloud profile API tokens from credential refs', () => {

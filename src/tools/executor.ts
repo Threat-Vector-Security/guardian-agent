@@ -123,6 +123,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
+  /** Resolve logical state identity for chat memory/session operations. */
+  resolveStateAgentId?: (agentId?: string) => string | undefined;
   /** Document search service for indexed document collections (hybrid BM25 + vector). */
   docSearch?: import('../search/search-service.js').SearchService;
   /** Google Workspace CLI service for Gmail, Calendar, Drive, Docs, Sheets. */
@@ -9320,9 +9322,11 @@ export class ToolExecutor {
         }
 
         const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 50);
+        const requestAgentId = asString(request.agentId);
+        const stateAgentId = this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId;
         const results = conversationService.searchMessages(query, {
           userId: asString(request.userId),
-          agentId: asString(request.agentId),
+          agentId: stateAgentId,
           limit,
         });
 
@@ -9368,7 +9372,9 @@ export class ToolExecutor {
           return { success: false, error: 'Knowledge base is not enabled.' };
         }
 
-        const targetAgent = asString(args.agentId) || asString(request.agentId) || 'default';
+        const requestAgentId = asString(request.agentId);
+        const stateAgentId = this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId;
+        const targetAgent = asString(args.agentId) || stateAgentId || 'default';
         const content = memoryStore.load(targetAgent);
         const size = memoryStore.size(targetAgent);
 
@@ -9411,7 +9417,8 @@ export class ToolExecutor {
           return { success: false, error: 'Knowledge base is not enabled.' };
         }
 
-        const targetAgent = asString(request.agentId) || 'default';
+        const requestAgentId = asString(request.agentId);
+        const targetAgent = (this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId) || 'default';
         const category = asString(args.category).trim() || undefined;
 
         memoryStore.append(targetAgent, {

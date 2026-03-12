@@ -77,52 +77,52 @@ let currentPanel = null;
 const NETWORK_HELP = {
   overview: {
     'Quick Network Actions': {
-      whatItIs: 'This section provides one-off network actions for discovery, threat checks, and baseline refreshes.',
-      whatSeeing: 'You are seeing immediate buttons for common network tasks plus a live output panel.',
-      whatCanDo: 'Run quick checks without building a workflow, then inspect the output directly below.',
-      howLinks: 'For repeatable or scheduled work, move into Automations. For alert triage, move into Security.',
+      whatItIs: 'This section is the one-click action bar for the most common ad hoc network tasks.',
+      whatSeeing: 'You are seeing immediate buttons for device discovery, threat checks, and baseline refreshes, plus a live output panel underneath.',
+      whatCanDo: 'Run a useful network action immediately without building a workflow first, then inspect the raw result on the same tab.',
+      howLinks: 'For repeatable or scheduled work, move into Automations. For alert triage or incident response, move into Security.',
     },
     'How To Use This Area': {
-      whatItIs: 'This is the orientation note for when to use Network versus other pages.',
-      whatSeeing: 'You are seeing guidance on the division between diagnostics, automations, and security investigation.',
-      whatCanDo: 'Use it to decide whether you need a one-off network action, a repeatable automation, or the unified alert queue.',
-      howLinks: 'It explains the handoff between Network, Automations, and Security.',
+      whatItIs: 'This section explains the role of the Network page relative to Security and Automations.',
+      whatSeeing: 'You are seeing guidance on when to use this page for inventory and ad hoc diagnostics versus when to switch to automations or alert triage.',
+      whatCanDo: 'Use it to decide whether the current task is a one-off network check, an incident requiring Security, or a repeatable workflow that belongs in Automations.',
+      howLinks: 'It clarifies the handoff between Network, Automations, and Security so the same job is not attempted in the wrong page.',
     },
   },
   devices: {
     'Discovered Devices': {
-      whatItIs: 'This is the main inventory table for discovered devices on the network.',
-      whatSeeing: 'You are seeing device identity, trust state, ports, and first/last seen timing.',
-      whatCanDo: 'Refresh discovery, run a new scan, and review what is currently known about each device.',
-      howLinks: 'Device findings inform network investigation here, while active alert handling stays in Security.',
+      whatItIs: 'This is the live inventory table for devices Guardian has discovered on the monitored network.',
+      whatSeeing: 'You are seeing each device\'s identity details, trust state, observed ports, and first-seen or last-seen timing.',
+      whatCanDo: 'Refresh discovery, run another scan, and inspect what Guardian currently knows about each host on the network.',
+      howLinks: 'This tab owns network inventory detail, while active security alert handling still rolls up into Security.',
     },
   },
   history: {
     'Recent Network Runs': {
-      whatItIs: 'This section records recent network-specific playbook and scheduled task runs.',
-      whatSeeing: 'You are seeing recent executions, run status, duration, and expandable step output.',
-      whatCanDo: 'Review recent results, inspect output, and confirm whether network automations ran successfully.',
-      howLinks: 'This is the network-focused history view; full automation ownership and editing stay in Automations.',
+      whatItIs: 'This section records the recent history of network-specific playbooks, scans, and scheduled task runs.',
+      whatSeeing: 'You are seeing recent executions with run status, duration, and expandable output for the steps that actually ran.',
+      whatCanDo: 'Review recent network results, inspect the output, and confirm whether a scheduled or manual network workflow succeeded.',
+      howLinks: 'This is the network-focused history view, while full workflow ownership and editing stay in Automations.',
     },
   },
   diagnostics: {
     Diagnostics: {
-      whatItIs: 'This is the diagnostics workspace for one-off network tool execution.',
-      whatSeeing: 'You are seeing the tool picker and the currently selected network tool runner.',
-      whatCanDo: 'Choose a tool, supply inputs, run it immediately, and inspect or export the output.',
-      howLinks: 'Use this tab for ad hoc checks. Move to Automations when the same sequence should repeat or be scheduled.',
+      whatItIs: 'This is the ad hoc network tool runner for one-off diagnostics and inspection work.',
+      whatSeeing: 'You are seeing the current network tool selection, its input form, and the runner surface used to execute it immediately.',
+      whatCanDo: 'Choose one network tool, supply the inputs it needs, run it now, and inspect or export the result.',
+      howLinks: 'Use this tab for ad hoc checks only. Move to Automations when the same sequence should repeat or be scheduled.',
     },
     'Tool Selector': {
-      whatItIs: 'This section controls which network tool group and individual tool are active below.',
-      whatSeeing: 'You are seeing grouped network tools organized by task type.',
-      whatCanDo: 'Select a category, choose a tool, and switch the runner panel without leaving the page.',
-      howLinks: 'The selector drives the ad hoc runner below and helps separate discovery, diagnostics, identity, and threat tools.',
+      whatItIs: 'This section controls which network tool family and exact tool are active in the runner below.',
+      whatSeeing: 'You are seeing the available network tools grouped by task type such as discovery, diagnostics, identity, and traffic or threat work.',
+      whatCanDo: 'Switch between categories, pick a specific tool, and change the active runner without leaving the Diagnostics tab.',
+      howLinks: 'The selection made here directly determines which input form and output you see below.',
     },
     Result: {
-      whatItIs: 'This is the output area for the currently selected network tool.',
-      whatSeeing: 'You are seeing raw tool output with quick copy and export actions.',
-      whatCanDo: 'Review the result, copy it, or export it as text or HTML.',
-      howLinks: 'Use the output here for immediate inspection, then move to Security if the result indicates something that needs triage.',
+      whatItIs: 'This is the result viewer for the network tool you just ran.',
+      whatSeeing: 'You are seeing the raw output produced by the selected tool together with quick copy and export actions.',
+      whatCanDo: 'Inspect the result immediately, copy it elsewhere, or export it as text or HTML for follow-up work.',
+      howLinks: 'Use the output here for immediate diagnosis, then move to Security if the result reveals something that needs incident triage.',
     },
   },
 };
@@ -134,9 +134,9 @@ export async function renderNetwork(container, options = {}) {
     ${renderGuidancePanel({
       kicker: 'Network Guide',
       title: 'Inventory, diagnostics, and network history',
-      whatItIs: 'Network is the operational home for device visibility, one-off diagnostics, and network-specific run history.',
-      whatSeeing: 'You are seeing tabs for posture overview, device inventory, ad hoc diagnostics, and recent network runs.',
-      whatCanDo: 'Use this page to inspect devices, run targeted checks, and review network-specific results.',
+      whatItIs: 'Network is the operational page for device visibility, manual diagnostics, and network-specific workflow history.',
+      whatSeeing: 'You are seeing tabs for posture overview, discovered-device inventory, ad hoc network tools, and recent network run history.',
+      whatCanDo: 'Inspect devices, run targeted network checks, and review results without leaving the network domain.',
       howLinks: 'Security owns the unified alert queue, while Automations owns repeatable and scheduled workflow configuration.',
     })}
   `;
@@ -1212,10 +1212,10 @@ function humanizeKey(key) {
 
 function createGenericHelpFactory(area) {
   return (title) => ({
-    whatItIs: `${title} is part of ${area}.`,
-    whatSeeing: 'You are seeing the current data, controls, or output for this section.',
-    whatCanDo: 'Review the current state here and use the available controls when you need to act.',
-    howLinks: `This section supports the broader ${area} workflow and hands off to related pages when deeper action is required.`,
+    whatItIs: `${title} is a specific subsection inside ${area} for one part of the network inventory, diagnostics, or history workflow.`,
+    whatSeeing: 'You are seeing the current network data, controls, or output that belong to this subsection.',
+    whatCanDo: 'Use the controls and results here to inspect state or perform the action this subsection is responsible for.',
+    howLinks: `This section supports the broader ${area} workflow and hands off to Security or Automations when deeper action is required.`,
   });
 }
 

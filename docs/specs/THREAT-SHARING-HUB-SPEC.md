@@ -8,17 +8,41 @@
 
 Individual GuardianAgent instances detect threats in isolation. An attacker blocked by one node can freely target others. There is no mechanism for collective defense — each installation starts from zero knowledge.
 
+There is also a local quality problem to solve first: threat-intel collection must produce real, evidence-backed findings before those findings are worth sharing. A hub that distributes weak or placeholder intel would amplify noise faster than it improves defense.
+
 ## Solution
 
-A federated threat intelligence sharing network where GuardianAgent instances report, correlate, and consume threat indicators through a central hub. Verified intelligence flows back to nodes to trigger automated hardening, monitoring, and hunting.
+A local-first threat-intelligence program with a federated sharing layer on top:
+
+1. Each GuardianAgent instance first gains real local collection, evidence capture, triage, and response capabilities.
+2. Mature local findings are normalized into structured indicators and investigation summaries.
+3. An opt-in central hub then allows GuardianAgent instances to report, correlate, discuss, and consume shared intelligence.
+4. Verified intelligence flows back to nodes to trigger monitoring, hunting, and optionally hardening.
 
 ## Design Goals
 
+- **Local-first**: Build high-fidelity local intel collection and investigation before cross-node sharing
 - **Early warning**: Nodes learn about threats before they arrive locally
 - **Poison-resistant**: Malicious submissions cannot trigger false blocks or hide real threats
 - **Privacy-preserving**: Nodes share indicators, never internal data or configs
 - **Graduated response**: Intel trust level determines automation level
 - **Zero inbound**: Nodes connect outbound only; no open ports required
+- **Asynchronous by default**: Hub interaction works as a pollable bulletin board first; real-time push is additive
+- **Structured + readable**: Shared intel uses machine-readable JSON/STIX-style records plus operator-readable summaries
+
+---
+
+## Local-First Prerequisite
+
+Before GuardianAgent participates in a sharing network, the local threat-intel layer should be capable of:
+
+- Running real source connectors rather than simulated source labels
+- Searching for names, aliases, handles, domains, brands, fraud narratives, impersonation terms, and campaign-specific keywords
+- Capturing evidence artifacts and provenance for findings
+- Dedupe, clustering, confidence scoring, and analyst triage
+- Drafting approval-gated actions from evidence-backed findings
+
+The hub should ingest only findings that meet minimum quality and evidence requirements. This keeps the sharing plane downstream of real investigation rather than using the network as a substitute for local verification.
 
 ---
 
@@ -29,7 +53,8 @@ A federated threat intelligence sharing network where GuardianAgent instances re
 │ GuardianAgent │     │ GuardianAgent │     │ GuardianAgent │
 │   Node A      │     │   Node B      │     │   Node C      │
 │               │     │               │     │               │
-│ ThreatShare   │     │ ThreatShare   │     │ ThreatShare   │
+│ Local Intel   │     │ Local Intel   │     │ Local Intel   │
+│ + ThreatShare │     │ + ThreatShare │     │ + ThreatShare │
 │   Agent       │     │   Agent       │     │   Agent       │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
        │ POST /submit       │ POST /submit       │ POST /submit
@@ -49,6 +74,8 @@ A federated threat intelligence sharing network where GuardianAgent instances re
 │  └──────────────┘  └──────────────┘  └───────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
+
+The hub can be hosted as a managed serverless web application or self-hosted. The communication model is asynchronous first: nodes poll feeds and submit signed bulletins; WebSocket push is an optimization, not a requirement.
 
 ---
 
@@ -76,6 +103,15 @@ Intel progresses through trust tiers based on independent corroboration:
 | `CORRELATED` | 3+ independent nodes report same IOC | Add to watchlist, passive monitoring |
 | `CONFIRMED` | 5+ nodes OR 1 high-rep + 2 others | Active monitoring, alert on match |
 | `ACTIONABLE` | Confirmed + remediation steps attached | Auto-harden (if enabled) or queue for approval |
+
+In addition to atomic IOCs, the hub may carry:
+
+- behavior indicators
+- vulnerability bulletins
+- exploit-chain notes
+- operator-authored investigation summaries
+
+These should still normalize into the same trust model rather than creating an unstructured discussion channel outside verification controls.
 
 ### Reputation Scoring
 
@@ -115,7 +151,7 @@ The hub periodically injects unique synthetic IOCs targeted to specific nodes. T
 ```yaml
 indicator:
   id: "uuid-v4"
-  type: ip | domain | hash | url | cve | pattern | behavior
+  type: ip | domain | hash | url | cve | pattern | behavior | vulnerability | advisory
   value: "203.0.113.45"
   context: "Scanning SSH port 22, rotating credentials every 30s"
   category: brute-force | malware | phishing | exfiltration | scanning | exploit
@@ -127,6 +163,7 @@ indicator:
   trust_level: raw      # promoted by hub as corroboration arrives
   reporter_count: 1     # how many independent nodes reported this
   source_signature: "<ed25519 signature over id+type+value+first_seen>"
+  summary: "Operator-readable summary attached to the structured indicator"
 
   # Optional enrichment (added by hub or high-rep nodes)
   remediation:
@@ -331,34 +368,44 @@ assistant:
 
 ## Phased Implementation
 
-### Phase 1: Minimal Viable Network
-- ThreatShareAgent with keypair generation and hub registration
-- Hub: Express/Fastify REST API with SQLite storage
-- Simple submission and feed endpoints
-- Trust = vote count (3+ reporters = correlated)
-- Local action: update ThreatIntelService watchlist on feed pull
-- No auto-hardening, no WebSocket, no reputation scoring
+### Phase 1: Local Threat Intel Foundation
+- Replace simulated local scans with real connectors for web, news, social, forum, and optional dark-web sources
+- Support watch targets for names, aliases, handles, domains, brands, fraud narratives, impersonation terms, and campaign-specific keywords
+- Capture evidence artifacts, source URLs, timestamps, and provenance on findings
+- Add dedupe, clustering, triage workflow, and exportable investigation records
+- Keep response drafts approval-gated and route high-risk findings into local Security
+- No sharing hub yet; this phase establishes high-fidelity local collection
 
-### Phase 2: Trust & Verification
-- Ed25519 signature verification on all submissions
+### Phase 2: Local Investigation Maturity
+- Normalize local findings into a stable indicator and evidence schema
+- Add retroactive hunting against local logs, history, and retained artifacts
+- Add connector quality scoring, confidence scoring, and known-good suppression
+- Introduce local verification playbooks for repeatable investigation and safe reproduction
+- Define the minimum evidence bar required before a finding can be shared outward
+
+### Phase 3: Minimal Viable Hub
+- ThreatShareAgent with keypair generation and hub registration
+- Hub REST API with SQLite/Postgres storage and simple bulletin-board feed semantics
+- Simple submission and feed endpoints with signed payloads
+- Trust = basic corroboration thresholds before full reputation arrives
+- Receive-only mode, submit mode, and manual verification workflows
+- Shared records carry structured fields plus operator-readable summaries
+
+### Phase 4: Trust & Verification Engine
 - Reputation scoring system
 - Known-good allowlist cross-referencing
-- Canary trap injection
-- Sybil resistance via proof-of-work registration
+- Canary trap injection / honeypot auditing
+- Sybil resistance via proof-of-work or equivalent registration gate
+- Organization-specific web-of-trust configuration
+- Deterministic reproduction scripts and verification receipts where applicable
 
-### Phase 3: Real-Time & Automation
+### Phase 5: Real-Time Automation & Federation
 - WebSocket streaming for real-time intel push
-- Retroactive hunting on new IOC arrival
-- Graduated auto-hardening pipeline
-- Effectiveness feedback loop (nodes report back on blocks)
-- Behavior pattern sharing (not just atomic IOCs)
-
-### Phase 4: Federation & Scale
-- Hub-to-hub federation (organizations run private hubs that peer)
-- Gossip protocol for hub redundancy
-- Sector-specific feeds (healthcare, finance, infrastructure)
-- Machine learning on submission patterns to detect coordinated poisoning
-- Web dashboard for network-wide threat visualization
+- Feed-triggered retroactive local hunting on confirmed indicators
+- Graduated hardening pipeline with approval routing
+- Effectiveness feedback loop (nodes report back on detections/blocks)
+- Behavior pattern sharing, vulnerability bulletins, and richer advisory formats
+- Hub-to-hub federation, sector-specific feeds, and network-wide dashboarding
 
 ---
 

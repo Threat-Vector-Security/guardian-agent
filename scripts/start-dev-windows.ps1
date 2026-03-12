@@ -612,11 +612,6 @@ if ($agentExitCode -ne 0) {
     exit $agentExitCode
 }
 
-Write-Host ""
-Write-Host "  GuardianAgent exited immediately with code 0." -ForegroundColor Yellow
-Write-Host "  That usually means startup completed and then nothing kept the process alive." -ForegroundColor Yellow
-Write-Host "  Check the console output above for a fatal startup error or a disabled web channel." -ForegroundColor Yellow
-
 } finally {
     Set-Location $OriginalDir
 }

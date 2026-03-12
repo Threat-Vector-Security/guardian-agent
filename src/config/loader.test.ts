@@ -106,7 +106,7 @@ describe('validateConfig', () => {
     expect(errors).toContain('llm.test.model is required');
   });
 
-  it('should require apiKey for non-ollama providers', () => {
+  it('should require credentialRef for non-ollama providers', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       llm: {
@@ -116,7 +116,21 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain(
-      "llm.anthropic.apiKey or llm.anthropic.credentialRef is required for provider 'anthropic'",
+      "llm.anthropic.credentialRef is required for provider 'anthropic'",
+    );
+  });
+
+  it('should reject inline apiKey for non-ollama providers', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        anthropic: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', apiKey: 'sk-inline' },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain(
+      'llm.anthropic.apiKey is not allowed in config. Use llm.anthropic.credentialRef with assistant.credentials.refs instead.',
     );
   });
 
@@ -138,6 +152,73 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toEqual([]);
+  });
+
+  it('should accept openai-compatible provider families from the runtime registry', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        groqMain: { provider: 'groq', model: 'llama-3.3-70b-versatile', credentialRef: 'llm.groq.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.groq.primary': { source: 'env', env: 'GROQ_API_KEY' },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should accept preferred local and external providers when they match locality', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            local: 'ollama',
+            external: 'claude',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should reject a preferred external provider that points at a local model', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            local: 'ollama',
+            external: 'ollama',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain(
+      "assistant.tools.preferredProviders.external must reference an external provider, got 'ollama'",
+    );
   });
 
   it('should fail when credentialRef points to an unknown ref', () => {
@@ -166,6 +247,27 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain('assistant.credentials.refs.broken.env is required');
+  });
+
+  it('should accept local credential refs with secret ids', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.openai.local': { source: 'local', secretId: 'secret-123' },
+          },
+        },
+      },
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        openaiLocal: { provider: 'openai', model: 'gpt-4o', credentialRef: 'llm.openai.local' },
+      },
+      defaultProvider: 'openaiLocal',
+    };
+
+    expect(validateConfig(config)).toEqual([]);
   });
 
   it('should validate cloud cPanel credential refs', () => {
@@ -346,7 +448,7 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
-  it('should require telegram botToken when enabled', () => {
+  it('should require telegram botTokenCredentialRef when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       channels: {
@@ -356,7 +458,27 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain(
-      'channels.telegram.botToken is required when Telegram is enabled',
+      'channels.telegram.botTokenCredentialRef is required when Telegram is enabled',
+    );
+  });
+
+  it('should reject inline web search API keys', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          webSearch: {
+            provider: 'brave',
+            braveApiKey: 'inline-brave-key',
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain(
+      'assistant.tools.webSearch.braveApiKey is not allowed in config. Use assistant.tools.webSearch.braveCredentialRef with assistant.credentials.refs instead.',
     );
   });
 

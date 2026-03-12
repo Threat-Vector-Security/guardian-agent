@@ -8,6 +8,9 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ToolExecutor } from './executor.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
+import { AgentMemoryStore } from '../runtime/agent-memory-store.js';
+import { ConversationService } from '../runtime/conversation.js';
+import { SHARED_TIER_AGENT_STATE_ID } from '../runtime/agent-state-context.js';
 
 const testDirs: string[] = [];
 const testServers: Server[] = [];
@@ -2720,6 +2723,91 @@ describe('ToolExecutor', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('shares memory recall across tier-routed local and external agents', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const saved = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the user prefers concise status updates.' },
+      origin: 'web',
+      agentId: 'local',
+    });
+    expect(saved.success).toBe(true);
+    expect(memoryStore.load(SHARED_TIER_AGENT_STATE_ID)).toContain('concise status updates');
+
+    const recalled = await executor.runTool({
+      toolName: 'memory_recall',
+      args: {},
+      origin: 'web',
+      agentId: 'external',
+    });
+    expect(recalled.success).toBe(true);
+    const output = recalled.output as { content: string };
+    expect(output.content).toContain('concise status updates');
+  });
+
+  it('searches shared conversation history across tier-routed local and external agents', async () => {
+    const root = createExecutorRoot();
+    const conversations = new ConversationService({
+      enabled: false,
+      sqlitePath: join(root, 'conversation.sqlite'),
+      maxTurns: 10,
+      maxMessageChars: 2000,
+      maxContextChars: 10000,
+      retentionDays: 30,
+    });
+    conversations.recordTurn(
+      { agentId: SHARED_TIER_AGENT_STATE_ID, userId: 'u1', channel: 'web' },
+      'Investigate the ARP conflict on 172.23.21.43',
+      'I will inspect duplicate IP claims and DHCP overlap.',
+    );
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      conversationService: conversations,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const searched = await executor.runTool({
+      toolName: 'memory_search',
+      args: { query: 'ARP conflict' },
+      origin: 'web',
+      agentId: 'external',
+      userId: 'u1',
+      channel: 'web',
+    });
+    expect(searched.success).toBe(true);
+    const output = searched.output as { resultCount: number; results: Array<{ content: string }> };
+    expect(output.resultCount).toBeGreaterThan(0);
+    expect(output.results.some((row) => row.content.includes('ARP conflict'))).toBe(true);
+    conversations.close();
   });
 
   describe('web_search', () => {

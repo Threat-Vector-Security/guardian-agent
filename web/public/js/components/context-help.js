@@ -24,18 +24,6 @@ function buildHelpPayload(title, help = {}) {
   };
 }
 
-function buildNativeTooltip(payload) {
-  return [
-    payload.title,
-    payload.whatItIs ? `What it is: ${payload.whatItIs}` : '',
-    payload.whatSeeing ? `What you're seeing: ${payload.whatSeeing}` : '',
-    payload.whatCanDo ? `What you can do: ${payload.whatCanDo}` : '',
-    payload.howLinks ? `How it links: ${payload.howLinks}` : '',
-    payload.whenToUse ? `When to use it: ${payload.whenToUse}` : '',
-    payload.whereNext ? `Where to go next: ${payload.whereNext}` : '',
-  ].filter(Boolean).join('\n');
-}
-
 export function renderGuidancePanel({
   kicker = 'Guide',
   title = '',
@@ -72,13 +60,11 @@ export function renderGuidancePanel({
 
 export function renderInfoButton(title, help = {}) {
   const payload = buildHelpPayload(title, help);
-  const tooltipText = buildNativeTooltip(payload);
   return `
     <button
       type="button"
       class="section-info-button"
       aria-label="${escAttr(`About ${payload.title}`)}"
-      title="${escAttr(tooltipText)}"
       data-help-title="${escAttr(payload.title)}"
       data-help-what="${escAttr(payload.whatItIs)}"
       data-help-seeing="${escAttr(payload.whatSeeing)}"

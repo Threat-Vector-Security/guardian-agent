@@ -16,22 +16,22 @@ const automationUiState = {
 
 const AUTOMATION_HELP = {
   'Automation Catalog': {
-    whatItIs: 'This is the main catalog of saved automations and schedules.',
-    whatSeeing: 'You are seeing automation definitions, their type, linked tools, schedule state, and available actions.',
-    whatCanDo: 'Create new automations, edit existing ones, run them, or review their scheduling posture.',
-    howLinks: 'This is the canonical home for workflow editing and schedule ownership; filtered entry points from Cloud and Network should land here.',
+    whatItIs: 'This section is the system of record for saved workflows and scheduled task definitions.',
+    whatSeeing: 'You are seeing one row per automation, including its type, linked tools or workflow steps, schedule state, enablement, and the actions available for editing, cloning, running, or deleting it.',
+    whatCanDo: 'Create a new automation, edit an existing one, run it immediately, or review whether it already has a schedule attached.',
+    howLinks: 'Other pages can deep-link here, but this catalog is still the canonical place where workflow definitions and schedule ownership live.',
   },
   'Run History': {
-    whatItIs: 'This section records recent automation and scheduled-task executions.',
-    whatSeeing: 'You are seeing recent runs with status, source, duration, and expandable detail output.',
-    whatCanDo: 'Inspect what happened during a run, including step output and any promoted findings.',
-    howLinks: 'Run output remains visible here even when notifications or Security findings were also generated.',
+    whatItIs: 'This section is the recent execution ledger for automations that were run manually, by schedule, or by another system trigger.',
+    whatSeeing: 'You are seeing run records with timestamp, source, status, duration, and expandable detail output for the run.',
+    whatCanDo: 'Open a run to inspect step output, confirm whether it succeeded, and understand what evidence or findings it produced.',
+    howLinks: 'Even when a run also generated alerts, notifications, or security findings, the detailed execution record remains here.',
   },
   'Engine Settings': {
-    whatItIs: 'This section contains runtime-level automation engine controls.',
-    whatSeeing: 'You are seeing the collapsible engine configuration area rather than a second catalog or history view.',
-    whatCanDo: 'Review or adjust how the automation engine operates without leaving the Automations page.',
-    howLinks: 'These settings affect how catalog items run, but they do not replace per-automation editing above.',
+    whatItIs: 'This section contains the runtime-level controls for the automation engine itself rather than one specific workflow.',
+    whatSeeing: 'You are seeing the collapsible engine configuration area for execution mode, studio behavior, and engine-wide operating settings.',
+    whatCanDo: 'Change how the automation engine behaves globally without editing every automation individually.',
+    howLinks: 'These settings affect how workflows run in general, while the catalog above still owns the definition of each specific automation.',
   },
 };
 
@@ -85,10 +85,10 @@ export async function renderAutomations(container) {
       ${renderGuidancePanel({
         kicker: 'Automation Guide',
         title: 'Workflows, schedules, runs, and output routing',
-        whatItIs: 'Automations is the single home for creating, scheduling, running, and reviewing workflows.',
-        whatSeeing: 'You are seeing the automation catalog, recent run history, engine status, and automation-level controls.',
-        whatCanDo: 'Create or edit workflows, run them manually, review history, and control how findings route into notifications or Security.',
-        howLinks: 'Other pages can launch or filter into automations, but workflow ownership, schedule ownership, and run output all stay here.',
+        whatItIs: 'Automations is the page where Guardian workflows are defined, scheduled, executed, and reviewed.',
+        whatSeeing: 'You are seeing the saved automation catalog, recent run history, engine-level settings, and the controls for creating or updating workflows.',
+        whatCanDo: 'Build new workflows, attach schedules, run them on demand, inspect prior runs, and control how outputs are routed into alerts or Security.',
+        howLinks: 'Other pages can point you here for cloud, network, or threat-intel workflows, but this page remains the owner of workflow definition, schedule state, and run history.',
       })}
 
       <div class="intel-summary-grid">
@@ -212,10 +212,10 @@ function reorderAutomationsForUi(automations) {
 
 function createGenericHelpFactory(area) {
   return (title) => ({
-    whatItIs: `${title} is part of ${area}.`,
-    whatSeeing: 'You are seeing the current workflow data, run detail, or controls for this section.',
-    whatCanDo: 'Review the current state here and use the controls in the section when you need to act.',
-    howLinks: `This section supports the broader ${area} workflow and links to related operational surfaces when needed.`,
+    whatItIs: `${title} is a named section inside ${area} and exists to show or control one specific part of the automation workflow lifecycle.`,
+    whatSeeing: 'You are seeing the live rows, controls, or output that belong to this automation subsection rather than a generic placeholder panel.',
+    whatCanDo: 'Use the controls and records in this section to inspect current automation state or make the change that section is responsible for.',
+    howLinks: `This section supports the broader ${area} workflow, but related incident handling, provider setup, or domain-specific investigation may still live on other owner pages.`,
   });
 }
 
