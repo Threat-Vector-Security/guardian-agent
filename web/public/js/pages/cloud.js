@@ -12,70 +12,70 @@ let currentContainer = null;
 const CLOUD_HELP = {
   overview: {
     'Provider Posture': {
-      whatItIs: 'This section summarizes saved cloud provider posture across all supported providers.',
-      whatSeeing: 'You are seeing counts for profiles, inline secrets, credential refs, endpoint overrides, and notable posture notes.',
-      whatCanDo: 'Use it to spot weak auth patterns or custom endpoint usage before you drill into Connections.',
-      howLinks: 'Overview summarizes connection posture, while Connections is where you actually manage provider profiles.',
+      whatItIs: 'This section summarizes the current cloud-connection posture across every supported provider family configured in Guardian.',
+      whatSeeing: 'You are seeing profile counts, secret-storage posture, endpoint-override usage, TLS exceptions, and other signals that tell you whether cloud setup is clean or risky.',
+      whatCanDo: 'Use it to spot insecure auth patterns, odd endpoint overrides, or connection sprawl before you drill into the provider forms in Connections.',
+      howLinks: 'It is a posture summary only. The actual editing of provider profiles happens in Connections.',
     },
     'How This Area Works': {
-      whatItIs: 'This is the orientation note for how the Cloud hub is organized.',
-      whatSeeing: 'You are seeing a short explanation of where setup, activity review, and automation entry points live.',
-      whatCanDo: 'Use it to decide whether you need connection setup, audit review, or automation creation next.',
-      howLinks: 'It explains the handoff between Connections, Activity, and Automations.',
+      whatItIs: 'This section explains how the Cloud hub is divided between setup, operational review, and workflow handoff.',
+      whatSeeing: 'You are seeing guidance on which tab owns connection editing, which tab shows recent cloud actions, and where repeatable workflows are managed.',
+      whatCanDo: 'Use it when you are deciding whether the next step is connection setup, activity review, or moving into Automations.',
+      howLinks: 'It clarifies the handoff between Connections, Activity, and Automations so you do not edit the wrong place.',
     },
   },
   connections: {
     'Cloud Controls': {
-      whatItIs: 'This section controls whether the cloud runtime is enabled at all.',
-      whatSeeing: 'You are seeing the global runtime toggle that gates whether saved cloud profiles can be used.',
-      whatCanDo: 'Enable or disable cloud tooling before operators or automations try to use saved credentials.',
-      howLinks: 'The provider-specific connection forms below only matter when the overall cloud runtime is enabled.',
+      whatItIs: 'This section controls whether the cloud tooling runtime is enabled globally for the installation.',
+      whatSeeing: 'You are seeing the top-level switch that determines whether saved cloud profiles can actually be used by tools and automations.',
+      whatCanDo: 'Turn cloud tooling on before operators or workflows try to use saved credentials, or disable it entirely when cloud actions should be blocked.',
+      howLinks: 'The provider-specific connection forms below only matter when this overall cloud runtime is enabled.',
     },
     'Connection Model': {
-      whatItIs: 'This section explains how saved cloud profiles are used by the rest of the app.',
-      whatSeeing: 'You are seeing guidance on saved credentials, preserved secrets, and advanced endpoint overrides.',
-      whatCanDo: 'Use it to understand what gets stored here and how those profiles are consumed later.',
-      howLinks: 'Saved connections feed Cloud Activity and cloud-focused automations, while raw editing remains an advanced path only.',
+      whatItIs: 'This section explains the data model for saved cloud profiles, including how credentials and advanced endpoint settings are treated.',
+      whatSeeing: 'You are seeing guidance on stored credentials, preserved secrets, profile reuse, and when advanced endpoint overrides are appropriate.',
+      whatCanDo: 'Use it to understand what this page stores, what it does not store, and how those saved profiles are consumed later by tools and automations.',
+      howLinks: 'Saved connections feed Cloud Activity and cloud-focused automations, while raw config editing remains the advanced path only.',
     },
   },
   activity: {
     'Cloud Approvals': {
-      whatItIs: 'This section lists cloud-related approval requests.',
-      whatSeeing: 'You are seeing approval items for cloud tools that need operator confirmation or review.',
-      whatCanDo: 'Use it to review pending cloud actions and understand the risk and origin of each request.',
-      howLinks: 'Approvals here complement policy and audit information, while connection editing still happens in Connections.',
+      whatItIs: 'This section is the queue of cloud-tool actions that have reached an approval checkpoint.',
+      whatSeeing: 'You are seeing pending cloud requests together with their origin, risk context, and the action that is waiting for operator confirmation.',
+      whatCanDo: 'Review whether a cloud action should proceed and understand why the runtime escalated it for human review.',
+      howLinks: 'This sits alongside policy and audit visibility, while connection editing itself still happens in Connections.',
     },
     'Recent Cloud Tool Jobs': {
-      whatItIs: 'This is the recent execution history for cloud tool jobs.',
-      whatSeeing: 'You are seeing recent cloud job status, origin, creation time, and a short detail preview.',
-      whatCanDo: 'Review recent cloud actions and confirm whether they succeeded or failed.',
-      howLinks: 'This operational history pairs with cloud audit events below and the deeper workflow ownership in Automations.',
+      whatItIs: 'This section is the recent execution history for cloud-specific tool jobs and workflow steps.',
+      whatSeeing: 'You are seeing recent cloud job records with status, origin, creation time, and a short preview of what the job attempted or returned.',
+      whatCanDo: 'Check what just ran, confirm whether it succeeded, and spot failing or noisy cloud actions quickly.',
+      howLinks: 'It pairs with the cloud audit events below and with the deeper workflow ownership that remains in Automations.',
     },
     'Recent Cloud Audit Activity': {
-      whatItIs: 'This section shows recent cloud-related audit events.',
-      whatSeeing: 'You are seeing recent denials, approvals, and cloud action records with severity and reason context.',
-      whatCanDo: 'Use it to investigate what happened recently in the cloud domain without leaving the hub.',
-      howLinks: 'It ties cloud operations back to the shared audit and policy system.',
+      whatItIs: 'This section shows the recent audit trail for cloud-related activity across approvals, denials, and executed actions.',
+      whatSeeing: 'You are seeing cloud audit events with time, severity, reason, and other context needed to understand what happened recently.',
+      whatCanDo: 'Investigate recent cloud behavior without immediately jumping into the full shared audit page.',
+      howLinks: 'It ties cloud operations back to the shared audit and policy system used across the rest of Guardian.',
     },
   },
   automations: {
     'Cloud Automation Entry Points': {
-      whatItIs: 'This section explains how the Cloud hub hands off into Automations.',
-      whatSeeing: 'You are seeing the ownership boundary between cloud setup and repeatable workflows.',
-      whatCanDo: 'Use it to jump into Automations when a cloud task should become repeatable or scheduled.',
-      howLinks: 'Cloud can launch automation creation, but Automations remains the system of record for workflow editing and run history.',
+      whatItIs: 'This section explains when a cloud task should stop being an ad hoc action and become an automation.',
+      whatSeeing: 'You are seeing the ownership boundary between cloud connection setup here and repeatable workflow management in Automations.',
+      whatCanDo: 'Use it as the handoff point when a cloud operation should become repeatable, scheduled, or part of a larger workflow.',
+      howLinks: 'Cloud can launch you into automation work, but Automations remains the system of record for editing, scheduling, and run history.',
     },
     'Cloud Workflows': {
-      whatItIs: 'This section lists workflow definitions that contain cloud steps.',
-      whatSeeing: 'You are seeing enabled or disabled cloud-focused playbooks and the steps they contain.',
-      whatCanDo: 'Review what cloud workflows already exist before creating or editing additional ones in Automations.',
-      howLinks: 'These workflows are displayed here for context, but they are still owned and edited on the Automations page.',
+      whatItIs: 'This section lists existing workflow definitions that already contain cloud-related steps.',
+      whatSeeing: 'You are seeing cloud-focused playbooks, whether they are enabled, and the kinds of steps they contain.',
+      whatCanDo: 'Check what cloud workflows already exist before creating a duplicate or deciding to edit one in Automations.',
+      howLinks: 'These workflows are shown here for context, but their real editing surface is still the Automations page.',
     },
     'Cloud Scheduled Tasks': {
-      whatItIs: 'This section lists scheduled tasks that target cloud tools.',
-      whatSeeing: 'You are seeing cloud-targeted schedules, cron expressions, and current status.',
-      whatCanDo: 'Review what cloud work is already scheduled before creating new automation schedules.',
-      howLinks: 'Scheduling ownership stays in Automations even when the task is cloud-focused.',
+      whatItIs: 'This section lists the scheduled tasks that already target cloud tools or cloud-containing workflows.',
+      whatSeeing: 'You are seeing cloud-focused schedules, their cron expressions or cadence, and whether they are currently enabled.',
+      whatCanDo: 'Review what cloud work is already on a timer before creating new scheduled automations.',
+      howLinks: 'Even when the task is cloud-focused, schedule ownership stays in Automations.',
     },
   },
 };
@@ -184,9 +184,9 @@ export async function renderCloud(container, options = {}) {
       kicker: 'Cloud Guide',
       title: 'Connection setup, posture, and cloud operations',
       whatItIs: 'Cloud is the dedicated hub for provider connections, cloud posture, recent cloud activity, and cloud-focused automation entry points.',
-      whatSeeing: 'You are seeing tabs for summary posture, guided connection forms, cloud activity, and automation handoff.',
-      whatCanDo: 'Use this page to connect providers, review cloud-specific operational activity, and move into automations from saved connections.',
-      howLinks: 'Connection setup lives here, Security receives normalized findings, and Automations owns repeatable workflow configuration and run history.',
+      whatSeeing: 'You are seeing tabs for posture summary, guided connection forms, recent cloud approvals and jobs, and automation handoff for repeatable cloud work.',
+      whatCanDo: 'Connect cloud providers, inspect recent cloud activity, and hand cloud tasks off into Automations when they should become repeatable.',
+      howLinks: 'Connection setup lives here, Security receives normalized security findings, and Automations owns repeatable workflow configuration and run history.',
     })}
   `;
 
@@ -778,10 +778,10 @@ function collectCloudProfile(section, def, profiles) {
 
 function createGenericHelpFactory(area) {
   return (title) => ({
-    whatItIs: `${title} is part of ${area}.`,
-    whatSeeing: 'You are seeing the current cloud settings, posture, or activity for this section.',
-    whatCanDo: 'Review the current state here and use the controls in the section when you need to act.',
-    howLinks: `This section supports the broader ${area} workflow and links to related pages when deeper work is required.`,
+    whatItIs: `${title} is a specific subsection inside ${area} that covers one cloud setup, posture, activity, or handoff concern.`,
+    whatSeeing: 'You are seeing the live cloud data, controls, or records that belong to this subsection rather than a generic placeholder panel.',
+    whatCanDo: 'Use the rows and controls here to inspect the current cloud state or make the change this subsection is responsible for.',
+    howLinks: `This section supports the broader ${area} workflow, while deeper incident handling, scheduling, or policy review may still live on related owner pages.`,
   });
 }
 

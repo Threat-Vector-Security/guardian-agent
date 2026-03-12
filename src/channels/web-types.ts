@@ -44,6 +44,9 @@ export interface DashboardAgentInfo {
   internal?: boolean;
   capabilities: readonly string[];
   provider?: string;
+  providerType?: string;
+  providerModel?: string;
+  providerLocality?: 'local' | 'external';
   schedule?: string;
   lastActivityMs: number;
   consecutiveErrors: number;
@@ -184,13 +187,14 @@ export interface RedactedCloudConfig {
 
 /** Redacted config returned by GET /api/config. */
 export interface RedactedConfig {
-  llm: Record<string, { provider: string; model: string; baseUrl?: string }>;
+  llm: Record<string, { provider: string; model: string; baseUrl?: string; credentialRef?: string }>;
   defaultProvider: string;
   channels: {
     cli?: { enabled: boolean };
     telegram?: {
       enabled: boolean;
       botTokenConfigured?: boolean;
+      botTokenCredentialRef?: string;
       allowedChatIds?: number[];
       defaultAgent?: string;
     };
@@ -258,6 +262,13 @@ export interface RedactedConfig {
     };
     quickActions: {
       enabled: boolean;
+    };
+    credentials: {
+      refs: Record<string, {
+        source: 'env' | 'local';
+        env?: string;
+        description?: string;
+      }>;
     };
     threatIntel: {
       enabled: boolean;
@@ -347,11 +358,18 @@ export interface RedactedConfig {
       allowedPathsCount: number;
       allowedCommandsCount: number;
       allowedDomainsCount: number;
+      preferredProviders?: {
+        local?: string;
+        external?: string;
+      };
       webSearch?: {
         provider: string;
         perplexityConfigured: boolean;
+        perplexityCredentialRef?: string;
         openRouterConfigured: boolean;
+        openRouterCredentialRef?: string;
         braveConfigured: boolean;
+        braveCredentialRef?: string;
       };
       search?: {
         enabled: boolean;
@@ -460,6 +478,22 @@ export interface DashboardProviderInfo {
   availableModels?: string[];
 }
 
+/** Provider types available from the runtime registry. */
+export interface DashboardProviderTypeInfo {
+  name: string;
+  displayName: string;
+  compatible: boolean;
+  locality: 'local' | 'external';
+}
+
+export interface DashboardProviderModelsInput {
+  providerType: string;
+  model?: string;
+  apiKey?: string;
+  credentialRef?: string;
+  baseUrl?: string;
+}
+
 /** Assistant orchestrator snapshot for UI/CLI visibility. */
 export interface DashboardAssistantState {
   orchestrator: AssistantOrchestratorState;
@@ -540,7 +574,9 @@ export interface DashboardCallbacks {
   onBudget?: () => DashboardBudgetInfo;
   onWatchdog?: () => WatchdogResult[];
   onProviders?: () => DashboardProviderInfo[];
+  onProviderTypes?: () => DashboardProviderTypeInfo[];
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
+  onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
   onAssistantState?: () => DashboardAssistantState;
   onSSESubscribe?: (listener: SSEListener) => () => void;
   onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }, routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
@@ -868,12 +904,22 @@ export interface ConfigUpdate {
     telegram?: {
       enabled?: boolean;
       botToken?: string;
+      botTokenCredentialRef?: string;
       allowedChatIds?: number[];
       polling?: boolean;
       defaultAgent?: string;
     };
   };
   assistant?: {
+    credentials?: {
+      refs?: Record<string, {
+        source?: 'env' | 'local';
+        env?: string;
+        secretId?: string;
+        secretValue?: string;
+        description?: string;
+      }>;
+    };
     notifications?: {
       enabled?: boolean;
       minSeverity?: AuditSeverity;
@@ -888,6 +934,10 @@ export interface ConfigUpdate {
       };
     };
     tools?: {
+      preferredProviders?: {
+        local?: string;
+        external?: string;
+      };
       cloud?: {
         enabled?: boolean;
         cpanelProfiles?: Array<{

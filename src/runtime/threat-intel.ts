@@ -41,6 +41,22 @@ export interface ThreatIntelFinding {
   url?: string;
   status: IntelStatus;
   labels: string[];
+  provenance?: ThreatIntelFindingProvenance;
+  evidence?: ThreatIntelFindingEvidence[];
+}
+
+export interface ThreatIntelFindingProvenance {
+  provider: string;
+  query: string;
+  title?: string;
+  snippet?: string;
+}
+
+export interface ThreatIntelFindingEvidence {
+  kind: 'search_result' | 'page_excerpt' | 'provider_answer';
+  content: string;
+  title?: string;
+  url?: string;
 }
 
 export interface ThreatIntelAction {
@@ -87,12 +103,44 @@ export interface ThreatIntelScanInput {
   sources?: IntelSourceType[];
 }
 
+export interface ThreatIntelSourceScanInput {
+  targets: string[];
+  includeDarkWeb: boolean;
+  now: number;
+}
+
+export interface ThreatIntelSourceFinding {
+  target: string;
+  sourceType: IntelSourceType;
+  contentType: IntelContentType;
+  severity: IntelSeverity;
+  confidence: number;
+  summary: string;
+  url?: string;
+  labels: string[];
+  provenance?: ThreatIntelFindingProvenance;
+  evidence?: ThreatIntelFindingEvidence[];
+}
+
+export interface ThreatIntelSourceScanResult {
+  sourceType: IntelSourceType;
+  scanned: boolean;
+  findings: ThreatIntelSourceFinding[];
+  unavailableReason?: string;
+}
+
+export interface ThreatIntelSourceScanner {
+  readonly sourceType: Exclude<IntelSourceType, 'forum'>;
+  scan(input: ThreatIntelSourceScanInput): Promise<ThreatIntelSourceScanResult>;
+}
+
 export interface ThreatIntelServiceOptions {
   enabled: boolean;
   allowDarkWeb: boolean;
   responseMode: IntelResponseMode;
   watchlist: string[];
   forumConnectors?: ForumConnector[];
+  sourceScanners?: Partial<Record<Exclude<IntelSourceType, 'forum'>, ThreatIntelSourceScanner>>;
   now?: () => number;
 }
 
@@ -156,6 +204,7 @@ export class ThreatIntelService {
   private responseMode: IntelResponseMode;
   private readonly now: () => number;
   private readonly forumConnectors: ForumConnector[];
+  private readonly sourceScanners: Partial<Record<Exclude<IntelSourceType, 'forum'>, ThreatIntelSourceScanner>>;
   private readonly watchlist = new Set<string>();
   private readonly findings: ThreatIntelFinding[] = [];
   private readonly actions: ThreatIntelAction[] = [];
@@ -167,6 +216,7 @@ export class ThreatIntelService {
     this.responseMode = options.responseMode;
     this.now = options.now ?? Date.now;
     this.forumConnectors = options.forumConnectors ?? [];
+    this.sourceScanners = options.sourceScanners ?? {};
     for (const target of options.watchlist) {
       const normalized = normalizeTarget(target);
       if (normalized) this.watchlist.add(normalized);
@@ -255,41 +305,65 @@ export class ThreatIntelService {
 
     const includeDarkWeb = !!input.includeDarkWeb && this.allowDarkWeb;
     const scanSources = buildSources(input.sources, includeDarkWeb);
+    const scanTime = this.now();
     const created: ThreatIntelFinding[] = [];
-    const includeForum = scanSources.includes('forum');
-    const nonForumSources = scanSources.filter((source) => source !== 'forum');
+    const unavailable: string[] = [];
+    let scannedSources = 0;
 
-    for (const target of targets) {
-      for (const sourceType of nonForumSources) {
-        const severity = classifySeverity(target, sourceType);
-        const confidence = classifyConfidence(target, sourceType);
-        const finding: ThreatIntelFinding = {
-          id: randomUUID(),
-          createdAt: this.now(),
-          target,
-          sourceType,
-          contentType: inferContentType(target),
-          severity,
-          confidence,
-          summary: buildSummary(target, sourceType, severity),
-          status: 'new',
-          labels: buildLabels(target, sourceType),
-        };
-        this.findings.unshift(finding);
-        created.push(finding);
+    for (const sourceType of scanSources) {
+      if (sourceType === 'forum') {
+        const forumResult = await this.scanForumSources(targets, scanTime);
+        if (forumResult.scanned) scannedSources += 1;
+        if (forumResult.unavailableReason) {
+          unavailable.push(`forum (${forumResult.unavailableReason})`);
+        }
+        if (forumResult.findings.length > 0) {
+          this.findings.unshift(...forumResult.findings);
+          created.push(...forumResult.findings);
+        }
+        continue;
       }
+
+      const scanner = this.sourceScanners[sourceType];
+      if (!scanner) {
+        unavailable.push(`${sourceType} (No local connector configured.)`);
+        continue;
+      }
+
+      const result = await scanner.scan({
+        targets,
+        includeDarkWeb,
+        now: scanTime,
+      });
+      if (result.scanned) scannedSources += 1;
+      if (result.unavailableReason) {
+        unavailable.push(`${sourceType} (${result.unavailableReason})`);
+      }
+      if (result.findings.length === 0) continue;
+
+      const stored = result.findings.map((finding) => this.createFindingRecord(finding, scanTime));
+      this.findings.unshift(...stored);
+      created.push(...stored);
     }
 
-    if (includeForum) {
-      const forumFindings = await this.scanForumSources(targets);
-      this.findings.unshift(...forumFindings);
-      created.push(...forumFindings);
+    this.lastScanAt = scanTime;
+    if (scannedSources === 0) {
+      const unavailableText = unavailable.length > 0
+        ? ` ${unavailable.join(' ')}`
+        : '';
+      return {
+        success: false,
+        message: `No local threat-intel sources were available for this scan.${unavailableText}`.trim(),
+        findings: [],
+      };
     }
 
-    this.lastScanAt = this.now();
+    const unavailableText = unavailable.length > 0
+      ? ` ${unavailable.length} source(s) unavailable: ${unavailable.join('; ')}.`
+      : '';
     return {
       success: true,
-      message: `Scan completed across ${scanSources.length} source(s) for ${targets.length} target(s).`,
+      message: `Scan completed across ${scannedSources} source(s) for ${targets.length} target(s) and produced ${created.length} finding(s).${unavailableText}`,
       findings: created,
     };
   }
@@ -352,63 +426,85 @@ export class ThreatIntelService {
     return this.actions.slice(0, Math.max(1, limit));
   }
 
-  private async scanForumSources(targets: string[]): Promise<ThreatIntelFinding[]> {
+  private createFindingRecord(sourceFinding: ThreatIntelSourceFinding, createdAt: number): ThreatIntelFinding {
+    return {
+      id: randomUUID(),
+      createdAt,
+      target: sourceFinding.target,
+      sourceType: sourceFinding.sourceType,
+      contentType: sourceFinding.contentType,
+      severity: sourceFinding.severity,
+      confidence: sourceFinding.confidence,
+      summary: sourceFinding.summary,
+      url: sourceFinding.url,
+      status: 'new',
+      labels: sourceFinding.labels,
+      provenance: sourceFinding.provenance,
+      evidence: sourceFinding.evidence,
+    };
+  }
+
+  private async scanForumSources(targets: string[], createdAt: number): Promise<{
+    scanned: boolean;
+    findings: ThreatIntelFinding[];
+    unavailableReason?: string;
+  }> {
     if (this.forumConnectors.length === 0) {
-      const fallback: ThreatIntelFinding[] = [];
-      for (const target of targets) {
-        const severity = classifySeverity(target, 'forum');
-        fallback.push({
-          id: randomUUID(),
-          createdAt: this.now(),
-          target,
-          sourceType: 'forum',
-          contentType: inferContentType(target),
-          severity,
-          confidence: classifyConfidence(target, 'forum'),
-          summary: buildSummary(target, 'forum', severity),
-          status: 'new',
-          labels: buildLabels(target, 'forum'),
-        });
-      }
-      return fallback;
+      return {
+        scanned: false,
+        findings: [],
+        unavailableReason: 'No forum connectors configured.',
+      };
     }
 
     const created: ThreatIntelFinding[] = [];
     const dedupe = new Set<string>();
+    const errors: string[] = [];
+    let scanned = false;
 
     for (const connector of this.forumConnectors) {
-      const findings = await connector.scan(targets);
-      for (const connectorFinding of findings) {
-        const target = normalizeTarget(connectorFinding.target);
-        const severity = connectorFinding.severity ?? classifySeverity(target, 'forum');
-        const confidence = connectorFinding.confidence ?? classifyConfidence(target, 'forum');
-        const key = `${target}|${connectorFinding.url ?? ''}|${connectorFinding.summary}`;
-        if (dedupe.has(key)) continue;
-        dedupe.add(key);
+      try {
+        const findings = await connector.scan(targets);
+        scanned = true;
+        for (const connectorFinding of findings) {
+          const target = normalizeTarget(connectorFinding.target);
+          const severity = connectorFinding.severity ?? classifySeverity(target, 'forum');
+          const confidence = connectorFinding.confidence ?? classifyConfidence(target, 'forum');
+          const key = `${target}|${connectorFinding.url ?? ''}|${connectorFinding.summary}`;
+          if (dedupe.has(key)) continue;
+          dedupe.add(key);
 
-        const labels = new Set<string>([
-          ...buildLabels(target, 'forum'),
-          connector.id,
-          ...(connectorFinding.labels ?? []),
-        ]);
+          const labels = new Set<string>([
+            ...buildLabels(target, 'forum'),
+            connector.id,
+            ...(connectorFinding.labels ?? []),
+          ]);
 
-        created.push({
-          id: randomUUID(),
-          createdAt: this.now(),
-          target,
-          sourceType: 'forum',
-          contentType: connectorFinding.contentType ?? inferContentType(connectorFinding.summary),
-          severity,
-          confidence,
-          summary: connectorFinding.summary,
-          url: connectorFinding.url,
-          status: 'new',
-          labels: [...labels],
-        });
+          created.push({
+            id: randomUUID(),
+            createdAt,
+            target,
+            sourceType: 'forum',
+            contentType: connectorFinding.contentType ?? inferContentType(connectorFinding.summary),
+            severity,
+            confidence,
+            summary: connectorFinding.summary,
+            url: connectorFinding.url,
+            status: 'new',
+            labels: [...labels],
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${connector.id}: ${message}`);
       }
     }
 
-    return created;
+    return {
+      scanned,
+      findings: created,
+      unavailableReason: !scanned && errors.length > 0 ? errors.join('; ') : undefined,
+    };
   }
 }
 
@@ -451,10 +547,6 @@ function classifyConfidence(target: string, source: IntelSourceType): number {
   if (source === 'darkweb') score -= 0.1;
   if (target.includes('deepfake') || target.includes('impersonation')) score += 0.2;
   return Math.max(0.1, Math.min(0.99, Number(score.toFixed(2))));
-}
-
-function buildSummary(target: string, source: IntelSourceType, severity: IntelSeverity): string {
-  return `Potential ${severity} risk signal for '${target}' detected from ${source} source.`;
 }
 
 function buildLabels(target: string, source: IntelSourceType): string[] {

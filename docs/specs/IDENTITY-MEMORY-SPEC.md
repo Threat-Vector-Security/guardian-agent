@@ -17,6 +17,10 @@ Unify user identity across channels and persist conversation memory with session
   - `active_conversations`
 - Retention policy:
   - `assistant.memory.retentionDays`
+- Tier-routing behavior:
+  - built-in `local` and `external` chat agents share one logical conversation/memory state key
+  - switching between `auto`, `local-only`, and `external-only` must not fork chat history or knowledge-base memory
+  - distinct configured agents still retain separate conversation state unless deliberately unified
 
 ## SQLite Protection & Monitoring
 - Directory permissions are hardened toward `0700`
@@ -26,7 +30,7 @@ Unify user identity across channels and persist conversation memory with session
 - Security events emitted to runtime audit + analytics channels
 
 ## Session Controls
-- Active session per `(agentId, userId, channel)`
+- Active session per logical `(agentStateId, userId, channel)`
 - Support:
   - Rotate/reset active session
   - List sessions for a user/channel/agent

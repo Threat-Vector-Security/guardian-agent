@@ -14,170 +14,187 @@ let sharedConfig = null;
 let sharedProviders = null;
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
-const COMMON_PROVIDER_TYPES = ['ollama', 'openai', 'anthropic', 'openrouter', 'lmstudio', 'llamacpp', 'generic_json'];
+let sharedProviderTypes = null;
+const configUiState = {
+  selectedProviderProfiles: {
+    local: null,
+    external: null,
+  },
+};
+const FALLBACK_PROVIDER_TYPES = [
+  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local' },
+  { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external' },
+  { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external' },
+  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external' },
+  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external' },
+  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external' },
+  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external' },
+  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external' },
+  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external' },
+];
 const CONFIG_HELP = {
   aiSearch: {
     'AI Provider Configuration': {
-      whatItIs: 'This is the main setup surface for local and external AI providers.',
-      whatSeeing: 'You are seeing provider groups, profile selectors, model controls, and save/test actions.',
-      whatCanDo: 'Configure providers, test connectivity, and choose which profiles back the assistant.',
-      howLinks: 'These settings power assistant behavior throughout the app, while runtime operations happen on the owner pages.',
+      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local runtimes such as Ollama and hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
+      whatSeeing: 'You are seeing separate local and external provider editors, saved provider-profile buttons, provider-type selectors, model controls, credential fields, endpoint overrides, and test/save actions.',
+      whatCanDo: 'Add a new provider, edit an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profile exists for routing and fallback.',
+      howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here.',
     },
     'Configured Providers': {
-      whatItIs: 'This section lists the currently configured and detected provider profiles.',
-      whatSeeing: 'You are seeing provider status, locality, connectivity, and model context.',
-      whatCanDo: 'Use it to review what providers exist before editing or troubleshooting them.',
-      howLinks: 'It complements the provider editor above and supports setup validation for the rest of the product.',
+      whatItIs: 'This section is the runtime-facing inventory of provider profiles that Guardian currently knows about and can attempt to use.',
+      whatSeeing: 'You are seeing each configured provider name, provider family, locality, active model, connection status, base URL, and any live model metadata returned by the runtime.',
+      whatCanDo: 'Use it to confirm that saved config became a usable runtime provider, compare configured profiles, and troubleshoot why a provider is offline, mispointed, or missing.',
+      howLinks: 'It validates whether the setup work done in AI Provider Configuration has actually produced a provider the rest of the system can call.',
     },
     'Web Search & Model Fallback': {
-      whatItIs: 'This section controls search availability and fallback model behavior.',
-      whatSeeing: 'You are seeing the main toggles and settings that govern search-backed retrieval and model fallback.',
-      whatCanDo: 'Enable or tune search behavior and fallback strategy for the assistant.',
-      howLinks: 'These settings affect retrieval behavior used across conversations and automations.',
+      whatItIs: 'This section controls how Guardian reaches out beyond the base model when it needs web results, external search providers, or a secondary model path after a provider failure.',
+      whatSeeing: 'You are seeing web-search provider settings, search enablement, fallback-model controls, credential-ref inputs for search APIs, and retrieval behavior options.',
+      whatCanDo: 'Turn external search on or off, configure Brave/Perplexity/OpenRouter-style search credentials, and decide what model or provider path should be used when the primary path cannot answer cleanly.',
+      howLinks: 'These settings directly affect research, threat-intel scanning, retrieval-backed answers, and resilience when the main model path fails.',
     },
     'Document Sources': {
-      whatItIs: 'This section manages the source collections used for document search.',
-      whatSeeing: 'You are seeing the source-management toolbar and current search-source state.',
-      whatCanDo: 'Enable search, refresh status, reindex sources, and start adding new collections.',
-      howLinks: 'Configured sources support AI retrieval and search-backed workflows elsewhere in the app.',
+      whatItIs: 'This section controls the local and remote document collections Guardian can index for retrieval-augmented answers.',
+      whatSeeing: 'You are seeing source-management controls, current indexing/search state, add-source entry points, and actions for refreshing or rebuilding source indexes.',
+      whatCanDo: 'Enable document search, register new source collections, refresh index status, and trigger reindexing when source content changes.',
+      howLinks: 'These sources feed the retrieval layer used by the assistant, research tasks, and any workflow that needs grounded answers from your own material.',
     },
     'Add Source': {
-      whatItIs: 'This is the guided form for adding a new search source.',
-      whatSeeing: 'You are seeing the source metadata and path or URL details required to register a document collection.',
-      whatCanDo: 'Create a new searchable source without editing raw configuration manually.',
-      howLinks: 'New sources appear in Configured Sources and then become available to AI & Search features.',
+      whatItIs: 'This is the source-registration form for adding a new folder, file set, or supported remote content location into Guardian\'s searchable document corpus.',
+      whatSeeing: 'You are seeing the fields needed to name the source, identify its type, and tell Guardian where the underlying files or URLs live.',
+      whatCanDo: 'Create a new indexed source without hand-editing config, then immediately bring that source into the retrieval pipeline.',
+      howLinks: 'Anything added here becomes part of Configured Sources and can then be searched or retrieved by AI and automation features.',
     },
     'Configured Sources': {
-      whatItIs: 'This section lists the document sources currently registered for search.',
-      whatSeeing: 'You are seeing the current source inventory and related management actions.',
-      whatCanDo: 'Review, filter, reindex, and manage existing search sources.',
-      howLinks: 'These sources feed retrieval quality for assistant and automation use cases.',
+      whatItIs: 'This section is the live registry of document collections already attached to Guardian\'s retrieval system.',
+      whatSeeing: 'You are seeing source names, types, paths or origins, indexing state, and the actions available to refresh, reindex, or remove each source.',
+      whatCanDo: 'Audit which sources are active, identify stale or broken indexes, and manage the source set that contributes to retrieval answers.',
+      howLinks: 'It is the operational counterpart to Add Source and determines what private material the assistant can ground answers against.',
     },
   },
   toolsPolicy: {
     'Sandbox Status': {
-      whatItIs: 'This section reports the current sandbox backend and enforcement posture.',
-      whatSeeing: 'You are seeing sandbox availability, backend details, and whether strict mode is reducing tool access.',
-      whatCanDo: 'Use it to understand why some tools may be unavailable or restricted.',
-      howLinks: 'It complements Sandbox Enforcement and explains the runtime effect of policy decisions.',
+      whatItIs: 'This section reports the exact isolation and enforcement backend currently protecting tool execution.',
+      whatSeeing: 'You are seeing whether a sandbox is active, what backend is in use, whether strict mode is on, and whether policy is currently constraining tool access.',
+      whatCanDo: 'Use it to explain why a tool can or cannot run before you start loosening allowlists or changing approvals.',
+      howLinks: 'It is the runtime reality check for the policy choices made elsewhere in Tools & Policy.',
     },
     'Runtime Notices': {
-      whatItIs: 'This section surfaces warnings or notices from the tool runtime.',
-      whatSeeing: 'You are seeing messages about current runtime conditions that may affect tool execution.',
-      whatCanDo: 'Review current warnings before changing tool settings or approvals.',
-      howLinks: 'These notices provide context for the status and controls elsewhere in Tools & Policy.',
+      whatItIs: 'This section surfaces active warnings emitted by the tool runtime itself, not just saved configuration.',
+      whatSeeing: 'You are seeing notices about degraded providers, disabled tool classes, missing prerequisites, or runtime conditions that can change tool behavior.',
+      whatCanDo: 'Read these notices before troubleshooting because they often explain failures without needing to inspect logs.',
+      howLinks: 'They provide immediate context for approvals, routing, allowlists, and tool failures elsewhere on this tab.',
     },
     'Execution Mode': {
-      whatItIs: 'This section controls global tool execution behavior.',
-      whatSeeing: 'You are seeing high-level toggles such as dry-run mode and smart provider routing.',
-      whatCanDo: 'Change how tool execution behaves without editing every tool individually.',
-      howLinks: 'These modes affect tool behavior across the app and influence the more detailed routing sections below.',
+      whatItIs: 'This section sets the global execution posture for the tool layer before per-tool overrides are considered.',
+      whatSeeing: 'You are seeing the top-level switches for dry-run behavior, automatic routing, and other system-wide execution defaults.',
+      whatCanDo: 'Change the overall risk and autonomy posture for tools without editing every category and tool individually.',
+      howLinks: 'These settings become the baseline that the category, catalog, approval, and policy sections build on.',
     },
     'Tool Categories': {
-      whatItIs: 'This section groups tools by category for broad enablement and routing control.',
-      whatSeeing: 'You are seeing category-level counts, status toggles, and provider routing choices.',
-      whatCanDo: 'Enable or disable whole categories and steer their default LLM routing.',
-      howLinks: 'Category routing acts as a higher-level default for the per-tool catalog beneath it.',
+      whatItIs: 'This section groups the registered tool catalog into broad families such as file, web, shell, browser, and cloud operations.',
+      whatSeeing: 'You are seeing category-level enablement, counts, and routing defaults that apply to all tools in that family unless a tool-level override exists.',
+      whatCanDo: 'Disable risky families wholesale, or steer an entire category toward the local or external reasoning path.',
+      howLinks: 'These category settings act as the default policy layer beneath global execution mode and above the individual tool catalog.',
     },
     'Tool Catalog': {
-      whatItIs: 'This is the detailed catalog of registered tools.',
-      whatSeeing: 'You are seeing each tool, its risk class, routing state, and description.',
-      whatCanDo: 'Review tool availability and override routing at the individual-tool level.',
-      howLinks: 'These settings influence how tools are invoked by operators, agents, and automations.',
+      whatItIs: 'This is the per-tool control plane for every registered tool Guardian can expose to operators, agents, and automations.',
+      whatSeeing: 'You are seeing individual tool names, categories, risk levels, enabled state, and any routing or execution overrides applied at the tool level.',
+      whatCanDo: 'Inspect exactly what a tool can do and override category defaults when one tool needs tighter or looser handling than its peers.',
+      howLinks: 'This is the last configuration layer before a tool is actually invoked by chat, automations, or manual runs.',
     },
     'Pending Approvals': {
-      whatItIs: 'This section lists tool actions waiting for approval.',
-      whatSeeing: 'You are seeing approval requests across channels with their risk and origin.',
-      whatCanDo: 'Approve or deny pending tool actions from the central queue.',
-      howLinks: 'This queue ties runtime execution back to policy and operator decisions.',
+      whatItIs: 'This section is the live queue of tool actions that reached a human-approval checkpoint.',
+      whatSeeing: 'You are seeing approval requests with origin channel, requested action, risk context, and the decision controls to allow or deny them.',
+      whatCanDo: 'Act as the human control point for risky operations that the runtime refused to execute autonomously.',
+      howLinks: 'It is where policy, risk scoring, and operator judgment meet before a blocked action can continue.',
     },
     'Recent Tool Jobs': {
-      whatItIs: 'This section shows recent tool execution history.',
-      whatSeeing: 'You are seeing job status, origin, duration, and a brief result or error summary.',
-      whatCanDo: 'Review what ran recently and whether it succeeded.',
-      howLinks: 'It complements approvals and routing by showing the execution outcome.',
+      whatItIs: 'This section is the recent execution log for tool runs that were attempted by users, agents, or automations.',
+      whatSeeing: 'You are seeing job records with status, origin, duration, and a compact success or failure summary.',
+      whatCanDo: 'Trace what just happened, confirm whether a run finished, and quickly identify failing or noisy tools.',
+      howLinks: 'It closes the loop after approvals and routing by showing what actually executed and how it ended.',
     },
     'Allowed Paths': {
-      whatItIs: 'This is the allowlist for filesystem paths available to the sandbox.',
-      whatSeeing: 'You are seeing currently allowed path entries and controls to add or remove them.',
-      whatCanDo: 'Manage which filesystem roots tools may access.',
-      howLinks: 'These allowlist entries influence sandbox policy enforcement for filesystem-capable tools.',
+      whatItIs: 'This section defines which filesystem roots sandboxed tools are allowed to read from or write to.',
+      whatSeeing: 'You are seeing the current path allowlist and the controls to add, review, or remove approved directory roots.',
+      whatCanDo: 'Constrain file access tightly enough that tool mistakes or hostile prompts cannot wander across the whole machine.',
+      howLinks: 'These paths are one of the hard boundaries the sandbox uses when file-capable tools run.',
     },
     'Allowed Commands': {
-      whatItIs: 'This is the allowlist for shell commands available to the sandbox.',
-      whatSeeing: 'You are seeing currently allowed command prefixes and controls to manage them.',
-      whatCanDo: 'Add or remove shell command prefixes that are permitted for execution.',
-      howLinks: 'These entries affect shell-safe execution policy across operator and agent workflows.',
+      whatItIs: 'This section defines which shell command prefixes Guardian is allowed to execute when shell tools are enabled.',
+      whatSeeing: 'You are seeing the approved command-prefix list and the controls used to grant or revoke command patterns.',
+      whatCanDo: 'Allow only the exact command families you trust instead of giving shell access a broad blank check.',
+      howLinks: 'These prefixes are enforced when shell jobs are approved or executed through tool workflows.',
     },
     'Allowed Domains': {
-      whatItIs: 'This is the allowlist for outbound network destinations.',
-      whatSeeing: 'You are seeing domains currently permitted for network and browser-related tools.',
-      whatCanDo: 'Manage which external destinations tools may contact.',
-      howLinks: 'These entries shape network policy enforcement for tool and browser activity.',
+      whatItIs: 'This section defines the outbound network destinations tools and browser automation are allowed to contact.',
+      whatSeeing: 'You are seeing the domain allowlist used for network requests, browser visits, and other outbound-capable tools.',
+      whatCanDo: 'Restrict external access to the services you actually need and cut down SSRF, exfiltration, and accidental browsing risk.',
+      howLinks: 'This allowlist is one of the main network-policy controls enforced by the tool runtime.',
     },
   },
   integrations: {
     'Telegram Channel': {
-      whatItIs: 'This section configures Telegram as an operator-facing integration channel.',
-      whatSeeing: 'You are seeing bot enablement, token, and allowed chat controls.',
-      whatCanDo: 'Connect or update Telegram so approved users can interact with GuardianAgent there.',
-      howLinks: 'Telegram can receive notifications and operate the assistant once configured here.',
+      whatItIs: 'This section configures Telegram as a real operator channel for commands, alerts, and assistant interaction outside the web UI.',
+      whatSeeing: 'You are seeing the controls for bot enablement, bot token or token ref, allowed chat IDs, and the current Telegram channel state.',
+      whatCanDo: 'Connect a bot, restrict which Telegram chats may use it, and decide whether Telegram is available as an operator surface at all.',
+      howLinks: 'Once enabled, Telegram becomes another place to receive notifications and run approved Guardian workflows.',
     },
     'Browser Automation': {
-      whatItIs: 'This section configures the browser automation tool runtime.',
-      whatSeeing: 'You are seeing browser enablement, allowed domains, concurrency, and idle timeout.',
-      whatCanDo: 'Tune whether and how browser-based automation is allowed to run.',
-      howLinks: 'These controls affect browser-backed tools and any workflows that depend on them.',
+      whatItIs: 'This section controls the browser-automation runtime used by tools that need to open sites, click through pages, or inspect rendered content.',
+      whatSeeing: 'You are seeing browser enablement, domain restrictions, concurrency limits, and runtime timeout controls.',
+      whatCanDo: 'Decide whether browser automation is allowed, where it is allowed to go, and how much parallel browser activity the system can sustain.',
+      howLinks: 'These limits affect any workflow that depends on rendered-page automation rather than plain HTTP requests.',
     },
     'Google Workspace': {
-      whatItIs: 'This section configures the Google Workspace integration path.',
-      whatSeeing: 'You are seeing install, authentication, enablement, and connectivity guidance for Google services.',
-      whatCanDo: 'Set up or validate Google Workspace access before assistant tools use it.',
-      howLinks: 'Once configured here, Google Workspace capabilities become available to the assistant and tool layer.',
+      whatItIs: 'This section handles setup for the Google Workspace integration layer, including authentication and service availability.',
+      whatSeeing: 'You are seeing installation status, authentication guidance, enablement controls, and connectivity checks for Google-backed capabilities.',
+      whatCanDo: 'Connect Guardian to Google services before enabling Gmail, Drive, Calendar, or related tool actions.',
+      howLinks: 'Successful setup here unlocks Google Workspace tools for use by the assistant and automation layer.',
     },
   },
   system: {
     'Web Authentication': {
-      whatItIs: 'This section controls bearer-token access to the Web UI and API.',
-      whatSeeing: 'You are seeing auth mode, token source, TTL, and token management controls.',
-      whatCanDo: 'Save a token, rotate it, reveal it temporarily, and manage session timing.',
-      howLinks: 'These settings gate access to the whole web surface and API endpoints.',
+      whatItIs: 'This section controls how access to the dashboard and API is authenticated, including the current bearer-token posture.',
+      whatSeeing: 'You are seeing auth mode, token source, session timing, and the controls to rotate or reveal the active token.',
+      whatCanDo: 'Rotate web access credentials, verify where the current token came from, and tune how long browser sessions should remain valid.',
+      howLinks: 'These settings govern entry into the whole web surface, so every other dashboard feature depends on them being correct.',
     },
     'Security Alerts': {
-      whatItIs: 'This section configures notification delivery for security events.',
-      whatSeeing: 'You are seeing severity thresholds, event-type filters, cooldowns, and destination toggles.',
-      whatCanDo: 'Tune what generates notifications and where those notifications are delivered.',
-      howLinks: 'These settings control how alerts from Security and promoted automation findings are delivered outward.',
+      whatItIs: 'This section decides which security events should create outbound notifications and where those notifications should go.',
+      whatSeeing: 'You are seeing the threshold, event filters, cooldowns, and delivery-channel controls that shape the alert stream.',
+      whatCanDo: 'Reduce noisy alerting, route important events to the right channels, and define which classes of incidents deserve active delivery.',
+      howLinks: 'These settings control the delivery path for alerts generated by Security, Sentinel, and promoted automation findings.',
     },
     'Guardian Agent': {
-      whatItIs: 'This section configures the Guardian agent evaluation layer.',
-      whatSeeing: 'You are seeing enablement, provider choice, fail mode, and timeout controls.',
-      whatCanDo: 'Adjust how pre-execution action evaluation behaves.',
-      howLinks: 'This affects how risky actions are judged before tools actually execute.',
+      whatItIs: 'This section configures the Guardian evaluation layer that reviews risky actions before they are allowed to execute.',
+      whatSeeing: 'You are seeing controls for enablement, provider selection, failure handling, and evaluation timeout.',
+      whatCanDo: 'Tune how aggressively Guardian reviews actions, what model path performs those reviews, and what should happen if the evaluator is unavailable.',
+      howLinks: 'This directly affects pre-execution safety checks for tools, approvals, and autonomous workflows.',
     },
     'Policy-as-Code Engine': {
-      whatItIs: 'This section controls the declarative policy engine.',
-      whatSeeing: 'You are seeing enablement, mode, per-family overrides, and shadow statistics.',
-      whatCanDo: 'Tune the policy engine and reload rules when policy configuration changes.',
-      howLinks: 'These settings influence enforcement and comparison behavior across tool and event decisions.',
+      whatItIs: 'This section controls the rule-based policy engine that can enforce or shadow-test declarative rules alongside the rest of the runtime.',
+      whatSeeing: 'You are seeing engine enablement, enforcement mode, per-family overrides, and shadow-run statistics.',
+      whatCanDo: 'Turn policy-as-code on or off, decide whether it enforces or only observes, and reload rules when the policy set changes.',
+      howLinks: 'It shapes how decisions are made for tools, events, and system behavior when rule-based governance is enabled.',
     },
     'Sentinel Audit': {
-      whatItIs: 'This section controls retrospective anomaly analysis over audit logs.',
-      whatSeeing: 'You are seeing a run-on-demand surface for Sentinel and any resulting findings.',
-      whatCanDo: 'Trigger an audit analysis pass and review any anomalies or recommendations.',
-      howLinks: 'Sentinel works against the shared audit record and complements live security monitoring.',
+      whatItIs: 'This section exposes Sentinel as a retrospective audit-analysis tool over the system\'s existing event and action history.',
+      whatSeeing: 'You are seeing a manual run surface and the findings or recommendations produced by the last Sentinel pass.',
+      whatCanDo: 'Trigger anomaly analysis on demand and review whether Sentinel sees suspicious patterns in prior activity.',
+      howLinks: 'It complements real-time monitoring by looking backward across the audit trail for patterns that were not obvious live.',
     },
     'Trust Preset': {
-      whatItIs: 'This section applies coarse-grained trust posture presets.',
-      whatSeeing: 'You are seeing the current preset and the available predefined posture choices.',
-      whatCanDo: 'Apply a baseline security posture without editing every individual control.',
-      howLinks: 'The preset influences capabilities, limits, and tool-policy defaults across the system.',
+      whatItIs: 'This section applies a bundled trust posture that adjusts multiple security and autonomy settings at once.',
+      whatSeeing: 'You are seeing the currently active preset and the predefined posture choices available for the system.',
+      whatCanDo: 'Move the whole system toward a stricter or looser default stance without manually touching every policy control.',
+      howLinks: 'The selected preset influences the defaults that other security, tool, and approval settings inherit from.',
     },
     'Danger Zone': {
-      whatItIs: 'This section contains destructive reset operations.',
-      whatSeeing: 'You are seeing data and config reset actions with their scope and consequence.',
-      whatCanDo: 'Clear data, reset configuration, or wipe everything when you intentionally need a reset.',
-      howLinks: 'These actions affect the entire product and should only be used when recovery or reinitialization is intended.',
+      whatItIs: 'This section contains the destructive reset actions for config, stored state, and other persistent Guardian data.',
+      whatSeeing: 'You are seeing wipe and reset controls together with the scope and consequence of each destructive action.',
+      whatCanDo: 'Use it only when you intentionally want to reinitialize the product, clear stored data, or recover from a broken setup by starting over.',
+      howLinks: 'These controls affect the entire installation, not just one page or feature, so they sit apart from normal configuration actions.',
     },
   },
   appearance: {},
@@ -188,11 +205,12 @@ export async function renderConfig(container, options = {}) {
   container.innerHTML = '<h2 class="page-title">Configuration</h2><div class="loading">Loading...</div>';
 
   try {
-    [sharedConfig, sharedProviders, sharedSetupStatus, sharedAuthStatus] = await Promise.all([
+    [sharedConfig, sharedProviders, sharedSetupStatus, sharedAuthStatus, sharedProviderTypes] = await Promise.all([
       api.config(),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
       api.setupStatus().catch(() => null),
       api.authStatus().catch(() => null),
+      api.providerTypes().catch(() => FALLBACK_PROVIDER_TYPES),
     ]);
 
     container.innerHTML = `
@@ -250,6 +268,7 @@ function renderAiSearchTab(panel) {
   panel.appendChild(providersPanel);
 
   panel.appendChild(createWebSearchPanel(sharedConfig, panel));
+  panel.appendChild(createCredentialRefsPanel(panel));
 
   const sourcesPanel = document.createElement('div');
   renderSearchSourcesTab(sourcesPanel);
@@ -340,6 +359,13 @@ function renderProvidersTab(panel) {
 function createProviderPanel(config, providers, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
+  const providerTypes = getProviderTypeCatalog();
+  const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
+  const credentialRefOptions = renderCredentialRefOptions(
+    config?.assistant?.credentials?.refs || {},
+    (meta) => meta?.source === 'env',
+  );
+  const externalDefaultKeyPlaceholder = 'Paste once to store securely';
 
   const providerMap = Object.entries(config.llm || {}).reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
@@ -354,67 +380,111 @@ function createProviderPanel(config, providers, panel) {
 
   const localNames = Object.keys(providerMap).filter(name => providerMap[name].locality === 'local');
   const externalNames = Object.keys(providerMap).filter(name => providerMap[name].locality !== 'local');
-  const providerTypeOptions = COMMON_PROVIDER_TYPES.map((type) => `<option value="${escAttr(type)}"></option>`).join('');
+  const localProviderTypeOptions = providerTypes
+    .filter((type) => type.locality === 'local')
+    .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
+    .join('');
+  const externalProviderTypeOptions = providerTypes
+    .filter((type) => type.locality !== 'local')
+    .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
+    .join('');
 
   section.innerHTML = `
-    <div class="table-header">
-      <h3>AI Provider Configuration</h3>
-      <span class="cfg-header-note">Configured providers are grouped by detected locality, not just provider type</span>
-    </div>
-    <div class="cfg-center-body">
-      <datalist id="cfg-provider-type-options">${providerTypeOptions}</datalist>
-      <div class="cfg-provider-panels">
-        <details class="cfg-provider-accordion" id="cfg-local-panel">
-          <summary class="cfg-provider-summary">
-            <span class="cfg-provider-summary-title">Local Providers</span>
-            <span class="cfg-provider-summary-note">Ollama / on-device models</span>
-          </summary>
-          <div class="cfg-center-body">
-            <div class="cfg-form-grid">
-              <div class="cfg-field"><label>Profile</label><select id="cfg-local-profile"></select></div>
-              <div class="cfg-field"><label>Provider Name</label><input id="cfg-local-name" type="text" placeholder="ollama"></div>
-              <div class="cfg-field"><label>Provider Type</label><input id="cfg-local-type" type="text" list="cfg-provider-type-options" placeholder="ollama"></div>
-              <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
-              <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
-            </div>
-            <div class="cfg-actions">
-              <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
-              <button class="btn btn-primary" id="cfg-local-save" type="button">Save</button>
-              <span id="cfg-local-status" class="cfg-save-status"></span>
-            </div>
-          </div>
-        </details>
+    <details class="cfg-provider-accordion" id="cfg-provider-panel" open>
+      <summary class="cfg-provider-summary">
+        <span class="cfg-provider-summary-title">AI Provider Configuration</span>
+        <span class="cfg-provider-summary-note">Local and external providers live here. Hosted providers support both simple paste-once keys and advanced env-backed credential refs.</span>
+      </summary>
+      <div class="cfg-center-body">
+        <datalist id="cfg-credential-ref-options">${credentialRefOptions}</datalist>
 
-        <details class="cfg-provider-accordion" id="cfg-ext-panel">
-          <summary class="cfg-provider-summary">
-            <span class="cfg-provider-summary-title">External Providers</span>
-            <span class="cfg-provider-summary-note">Hosted APIs and custom endpoints</span>
-          </summary>
-          <div class="cfg-center-body">
-            <div class="cfg-form-grid">
-              <div class="cfg-field"><label>Profile</label><select id="cfg-ext-profile"></select></div>
-              <div class="cfg-field"><label>Provider Name</label><input id="cfg-ext-name" type="text" placeholder="claude"></div>
-              <div class="cfg-field"><label>Provider Type</label><input id="cfg-ext-type" type="text" list="cfg-provider-type-options" placeholder="openai"></div>
-              <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
-              <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="Leave blank to keep existing"></div>
-              <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
+        <div style="display: grid; grid-template-columns: 240px 1fr; gap: 1.5rem; align-items: start;">
+          <!-- Left Side: List of Providers -->
+          <div style="display: flex; flex-direction: column; gap: 1.25rem; border-right: 1px solid var(--border); padding-right: 1.5rem;">
+            <!-- Local Providers -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Local</h4>
+                <button class="btn btn-secondary" id="cfg-local-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">+ Add</button>
+              </div>
+              <div id="cfg-local-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
             </div>
-            <div class="cfg-actions">
-              <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
-              <button class="btn btn-primary" id="cfg-ext-save" type="button">Save</button>
-              <span id="cfg-ext-status" class="cfg-save-status"></span>
+            
+            <!-- External Providers -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">External</h4>
+                <button class="btn btn-secondary" id="cfg-ext-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">+ Add</button>
+              </div>
+              <div id="cfg-ext-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
             </div>
           </div>
-        </details>
+
+          <!-- Right Side: Editor form -->
+          <div style="min-height: 300px;">
+            <div id="cfg-provider-placeholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 3rem; color: var(--text-muted); text-align: center;">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; opacity: 0.5;">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+              </svg>
+              <div>Select a provider from the left or create a new one to edit configuration.</div>
+            </div>
+
+            <div id="cfg-local-panel" style="display: none;">
+              <div class="table-header" style="padding-left:0;padding-right:0;">
+                <h3>Local Provider Settings</h3>
+                <span class="cfg-header-note">On-device runtimes registered as local</span>
+              </div>
+              <div id="cfg-local-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
+              <div class="cfg-form-grid">
+                <div class="cfg-field"><label>Provider Name</label><input id="cfg-local-name" type="text" placeholder="ollama"></div>
+                <div class="cfg-field"><label>Provider Type</label><select id="cfg-local-type">${localProviderTypeOptions}</select></div>
+                <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
+                <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
+              </div>
+              <div class="cfg-actions" style="margin-top: 1.5rem;">
+                <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
+                <button class="btn btn-primary" id="cfg-local-save" type="button">Save Config</button>
+                <span id="cfg-local-status" class="cfg-save-status"></span>
+              </div>
+            </div>
+
+            <div id="cfg-ext-panel" style="display: none;">
+              <div class="table-header" style="padding-left:0;padding-right:0;">
+                <h3>External Provider Settings</h3>
+                <span class="cfg-header-note">Hosted APIs and OpenAI-compatible provider families</span>
+              </div>
+              <div id="cfg-ext-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
+              <div class="cfg-form-grid">
+                <div class="cfg-field"><label>Provider Name</label><input id="cfg-ext-name" type="text" placeholder="claude"></div>
+                <div class="cfg-field"><label>Provider Type</label><select id="cfg-ext-type">${externalProviderTypeOptions}</select></div>
+                <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
+                <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="${externalDefaultKeyPlaceholder}"></div>
+                <div class="cfg-field"><label>Credential Ref (Advanced)</label><input id="cfg-ext-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.openai.primary"></div>
+                <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
+              </div>
+              <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                Simple mode: paste a key once and Guardian stores it in the encrypted local secret store. Advanced mode: leave API Key blank and use an environment-backed Credential Ref. App-managed local secrets stay automatic and do not show up in the advanced field.
+              </div>
+              <div id="cfg-ext-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
+              <div class="cfg-actions" style="margin-top: 1.5rem;">
+                <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
+                <button class="btn btn-primary" id="cfg-ext-save" type="button">Save Config</button>
+                <span id="cfg-ext-status" class="cfg-save-status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    </details>
   `;
 
   function getSuggestedName(side, type) {
     const normalizedType = String(type || '').trim().toLowerCase();
     let base = side === 'local' ? 'ollama' : 'openai';
     if (normalizedType === 'anthropic') base = 'claude';
-    else if (normalizedType === 'openrouter') base = 'openrouter';
+    else if (normalizedType === 'google') base = 'gemini';
     else if (normalizedType && normalizedType !== 'openai' && normalizedType !== 'ollama') base = normalizedType.replace(/[^a-z0-9]+/g, '-') || base;
     if (!providerMap[base]) return base;
     let i = 2;
@@ -426,8 +496,20 @@ function createProviderPanel(config, providers, panel) {
     const normalizedType = String(type || '').trim().toLowerCase();
     if (normalizedType === 'ollama') return 'llama3.2';
     if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
-    if (normalizedType === 'openai' || normalizedType === 'openrouter') return 'gpt-4o';
+    if (normalizedType === 'openai') return 'gpt-4o';
+    if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
+    if (normalizedType === 'mistral') return 'mistral-large-latest';
+    if (normalizedType === 'deepseek') return 'deepseek-chat';
+    if (normalizedType === 'together') return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
+    if (normalizedType === 'xai') return 'grok-2-latest';
+    if (normalizedType === 'google') return 'gemini-2.0-flash';
     return side === 'local' ? 'local-model' : 'provider-model';
+  }
+
+  function isKnownProviderType(side, type) {
+    const normalizedType = String(type || '').trim().toLowerCase();
+    const expectedLocality = side === 'local' ? 'local' : 'external';
+    return providerTypes.some((candidate) => candidate.name === normalizedType && candidate.locality === expectedLocality);
   }
 
   function wirePanel(side) {
@@ -435,7 +517,10 @@ function createProviderPanel(config, providers, panel) {
     const prefix = isLocal ? 'cfg-local' : 'cfg-ext';
     const names = isLocal ? localNames : externalNames;
 
-    const profileEl = section.querySelector(`#${prefix}-profile`);
+    const profilesEl = section.querySelector(`#${prefix}-profiles`);
+    const newBtnEl = section.querySelector(`#${prefix}-new`);
+    const activeNoteEl = section.querySelector(`#${prefix}-active-note`);
+    const secretNoteEl = isLocal ? null : section.querySelector('#cfg-ext-secret-note');
     const nameEl = section.querySelector(`#${prefix}-name`);
     const modelInputEl = section.querySelector(`#${prefix}-model`);
     const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
@@ -443,6 +528,12 @@ function createProviderPanel(config, providers, panel) {
     const statusEl = section.querySelector(`#${prefix}-status`);
     const typeEl = section.querySelector(`#${prefix}-type`);
     const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
+    const credentialRefEl = isLocal ? null : section.querySelector('#cfg-ext-credential-ref');
+    let selectedProfile = names.includes(configUiState.selectedProviderProfiles[side])
+      ? configUiState.selectedProviderProfiles[side]
+      : names.includes(config.defaultProvider)
+      ? config.defaultProvider
+      : (names[0] || null);
 
     // Model accessor — reads from whichever element is visible
     const modelEl = {
@@ -466,49 +557,267 @@ function createProviderPanel(config, providers, panel) {
       }
     }
 
-    function renderProfiles() {
-      const options = ['__new__', ...names];
-      profileEl.innerHTML = options.map(name => {
-        if (name === '__new__') return '<option value="__new__">Create new profile...</option>';
-        const info = providerMap[name];
-        const st = info.connected === false ? 'offline' : 'online';
-        return `<option value="${esc(name)}">${esc(name)} (${esc(info.provider)}, ${st})</option>`;
-      }).join('');
+    function getSelectedEntry() {
+      return selectedProfile ? providerMap[selectedProfile] : null;
+    }
 
-      const firstConfigured = options.find(n => n !== '__new__') || '__new__';
-      const defaultInSide = names.includes(config.defaultProvider) ? config.defaultProvider : firstConfigured;
-      profileEl.value = defaultInSide;
-      applyProfile(defaultInSide);
+    function isProviderTypeChanged(nextProviderType = typeEl?.value) {
+      if (isLocal || !selectedProfile) return false;
+      const entry = getSelectedEntry();
+      if (!entry?.provider) return false;
+      return entry.provider.trim().toLowerCase() !== String(nextProviderType || '').trim().toLowerCase();
+    }
+
+    function getEffectiveCredentialRef(nextProviderType = typeEl?.value) {
+      if (isLocal) return undefined;
+      const explicitRef = credentialRefEl?.value.trim();
+      if (explicitRef) return explicitRef;
+      if (!selectedProfile || isProviderTypeChanged(nextProviderType)) return undefined;
+      return getSelectedEntry()?.credentialRef?.trim() || undefined;
+    }
+
+    function refreshSecretNote(nextProviderType = typeEl?.value) {
+      if (!secretNoteEl) return;
+      const explicitRef = credentialRefEl?.value.trim();
+      if (keyEl?.value.trim()) {
+        secretNoteEl.textContent = 'A newly pasted key will be stored in Guardian\'s encrypted local secret store when you save.';
+        return;
+      }
+      if (explicitRef) {
+        const ref = getCredentialRefMeta(explicitRef);
+        const envLabel = ref?.env ? ` (${ref.env})` : '';
+        secretNoteEl.textContent = `This provider will use the env-backed credential ref ${explicitRef}${envLabel}.`;
+        return;
+      }
+      const entry = getSelectedEntry();
+      const existingRef = entry?.credentialRef?.trim();
+      const existingMeta = getCredentialRefMeta(existingRef);
+      if (!entry || !existingRef) {
+        secretNoteEl.textContent = 'No credential is configured yet. Paste an API key for the simple path or choose an env-backed credential ref for the advanced path.';
+        return;
+      }
+      if (isProviderTypeChanged(nextProviderType)) {
+        secretNoteEl.textContent = 'Provider type changed. Re-enter credentials before saving so Guardian does not guess which key should apply to the new provider family.';
+        return;
+      }
+      if (existingMeta?.source === 'local') {
+        secretNoteEl.textContent = 'This profile already has a key stored in Guardian\'s encrypted local secret store. Leave API Key blank to keep it, or paste a new key to replace it.';
+        return;
+      }
+      if (existingMeta?.source === 'env') {
+        const envLabel = existingMeta.env ? ` (${existingMeta.env})` : '';
+        secretNoteEl.textContent = `This profile already uses the env-backed credential ref ${existingRef}${envLabel}.`;
+        return;
+      }
+      secretNoteEl.textContent = 'This profile already has a credential ref configured.';
+    }
+
+    async function refreshLiveModels(options = {}) {
+      const providerType = typeEl?.value.trim().toLowerCase() || (isLocal ? 'ollama' : 'openai');
+      const currentModel = options.currentModel || modelEl.value.trim() || getDefaultModel(side, providerType);
+      if (!providerType || !isKnownProviderType(side, providerType)) {
+        updateModelSelector([], currentModel);
+        if (!modelEl.value.trim()) modelEl.value = currentModel;
+        return;
+      }
+
+      const effectiveCredentialRef = getEffectiveCredentialRef(providerType);
+      if (!isLocal && !keyEl?.value.trim() && !effectiveCredentialRef) {
+        updateModelSelector([], currentModel);
+        modelInputEl.value = currentModel;
+        activeNoteEl.textContent = 'Select a provider type, then paste an API key or choose an env-backed credential ref to load the live model list.';
+        return;
+      }
+
+      try {
+        activeNoteEl.textContent = `Loading ${providerType} models...`;
+        const result = await api.providerModels({
+          providerType,
+          model: currentModel,
+          apiKey: keyEl?.value.trim() || undefined,
+          credentialRef: effectiveCredentialRef,
+          baseUrl: urlEl.value.trim() || undefined,
+        });
+        const models = Array.isArray(result?.models) ? result.models.filter(Boolean) : [];
+        if (models.length > 0) {
+          updateModelSelector(models, currentModel);
+          if (!currentModel || !models.includes(currentModel)) {
+            modelEl.value = models[0];
+          }
+          activeNoteEl.textContent = `${providerType} models loaded.`;
+        } else {
+          updateModelSelector([], currentModel);
+          modelInputEl.value = currentModel;
+          activeNoteEl.textContent = `${providerType} did not return any models. You can still enter a model ID manually.`;
+        }
+      } catch (err) {
+        updateModelSelector([], currentModel);
+        modelInputEl.value = currentModel;
+        const reason = err instanceof Error ? err.message : String(err);
+        activeNoteEl.textContent = `Could not load ${providerType} models yet: ${reason}`;
+      }
+    }
+
+    function renderProfiles() {
+      const buttons = names.map(name => {
+        const info = providerMap[name];
+        const isActive = selectedProfile === name;
+        const tone = info.connected === false ? 'badge-errored' : 'badge-idle';
+        const roleBadges = [];
+        if (name === config.defaultProvider) roleBadges.push('global');
+        if (info.locality === 'local' && preferredProviders.local === name) roleBadges.push('local');
+        if (info.locality === 'external' && preferredProviders.external === name) roleBadges.push('external');
+        const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
+        return `
+          <div
+            style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius: 6px; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
+            data-provider-profile="${escAttr(name)}"
+            title="${escAttr(`${name} (${info.provider}${badgeLabel})`)}"
+          >
+            <div style="display:flex; flex-direction:column; overflow:hidden;">
+              <span style="font-size: 0.85rem; font-weight: ${isActive ? '600' : '500'}; color: ${isActive ? 'var(--text-primary)' : 'var(--text-secondary)'}; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${esc(name)}</span>
+              <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
+            </div>
+            <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${info.connected === false ? 'offline' : 'online'}</span>
+          </div>
+        `;
+      }).join('');
+      profilesEl.innerHTML = buttons || '<span class="text-muted" style="font-size:0.78rem;">No configured providers yet.</span>';
+      profilesEl.querySelectorAll('[data-provider-profile]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          // Deselect the other side explicitly via DOM state
+          const otherSide = isLocal ? 'external' : 'local';
+          configUiState.selectedProviderProfiles[otherSide] = null;
+          const otherPrefix = isLocal ? 'cfg-ext' : 'cfg-local';
+          const otherProfilesEl = section.querySelector(`#${otherPrefix}-profiles`);
+          if (otherProfilesEl) {
+            otherProfilesEl.querySelectorAll('[data-provider-profile]').forEach(el => {
+              el.style.background = 'transparent';
+              el.style.border = '1px solid transparent';
+              const spans = el.querySelectorAll('span');
+              if (spans.length > 0) spans[0].style.fontWeight = '500';
+              if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+            });
+          }
+
+          selectedProfile = btn.getAttribute('data-provider-profile');
+          configUiState.selectedProviderProfiles[side] = selectedProfile;
+          applyProfile(selectedProfile);
+          renderProfiles();
+        });
+      });
     }
 
     function applyProfile(name) {
-      if (name === '__new__') {
-        const pt = typeEl?.value?.trim() || (isLocal ? 'ollama' : 'openai');
-        if (typeEl && !typeEl.value.trim()) typeEl.value = pt;
+      const placeholder = section.querySelector('#cfg-provider-placeholder');
+      const localPanel = section.querySelector('#cfg-local-panel');
+      const extPanel = section.querySelector('#cfg-ext-panel');
+      const titleEl = isLocal ? localPanel?.querySelector('h3') : extPanel?.querySelector('h3');
+      const saveBtnEl = isLocal ? section.querySelector('#cfg-local-save') : section.querySelector('#cfg-ext-save');
+
+      if (placeholder) placeholder.style.display = 'none';
+      if (localPanel) localPanel.style.display = isLocal ? 'block' : 'none';
+      if (extPanel) extPanel.style.display = isLocal ? 'none' : 'block';
+
+      // Clear selection from other side
+      const otherSide = isLocal ? 'external' : 'local';
+      configUiState.selectedProviderProfiles[otherSide] = null;
+      const otherPrefix = isLocal ? 'cfg-ext' : 'cfg-local';
+      const otherProfilesEl = section.querySelector(`#${otherPrefix}-profiles`);
+      if (otherProfilesEl) {
+        otherProfilesEl.querySelectorAll('[data-provider-profile]').forEach(el => {
+          el.style.background = 'transparent';
+          el.style.border = '1px solid transparent';
+          const spans = el.querySelectorAll('span');
+          if (spans.length > 0) spans[0].style.fontWeight = '500';
+          if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+        });
+      }
+
+      if (!name) {
+        if (titleEl) titleEl.textContent = isLocal ? 'Add New Local Provider' : 'Add New External Provider';
+        if (saveBtnEl) saveBtnEl.textContent = 'Create Provider';
+        if (typeEl) typeEl.disabled = false;
+        if (nameEl) nameEl.disabled = false;
+        const pt = isLocal ? 'ollama' : 'openai';
+        if (typeEl) typeEl.value = pt;
         nameEl.value = getSuggestedName(side, pt);
         const defaultModel = getDefaultModel(side, pt);
         updateModelSelector([], null);
         modelInputEl.value = defaultModel;
         urlEl.value = isLocal && pt === 'ollama' ? 'http://127.0.0.1:11434' : '';
-        if (keyEl) keyEl.value = '';
+        if (keyEl) {
+          keyEl.value = '';
+          keyEl.placeholder = externalDefaultKeyPlaceholder;
+        }
+        if (credentialRefEl) credentialRefEl.value = '';
+        configUiState.selectedProviderProfiles[side] = null;
+        activeNoteEl.textContent = isLocal
+          ? 'Creating a new local provider. Choose the provider type from the dropdown, then set its name and model.'
+          : 'Creating a new external provider. All supported hosted provider families are listed in the Provider Type dropdown.';
+        refreshSecretNote(pt);
+        void refreshLiveModels({ currentModel: defaultModel });
         return;
       }
       const entry = providerMap[name];
       if (!entry) return;
+      if (titleEl) titleEl.textContent = `Edit ${name}`;
+      if (saveBtnEl) saveBtnEl.textContent = 'Save Config';
+      if (typeEl) typeEl.disabled = true;
+      if (nameEl) nameEl.disabled = true;
       nameEl.value = name;
       if (typeEl) typeEl.value = entry.provider || '';
       updateModelSelector(entry.availableModels, entry.model || '');
       if (!entry.availableModels?.length) modelInputEl.value = entry.model || '';
       urlEl.value = entry.baseUrl || '';
-      if (keyEl) keyEl.value = '';
+      if (keyEl) {
+        keyEl.value = '';
+        keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, externalDefaultKeyPlaceholder);
+      }
+      if (credentialRefEl) credentialRefEl.value = getEditableCredentialRef(entry.credentialRef);
+      configUiState.selectedProviderProfiles[side] = name;
+      activeNoteEl.textContent = `Editing ${name}. Provider type is shown explicitly in the dropdown; use New ${isLocal ? 'Local' : 'External'} Provider to start a fresh one.`;
+      refreshSecretNote(entry.provider || '');
+      void refreshLiveModels({ currentModel: entry.model || '' });
     }
 
-    profileEl.addEventListener('change', () => applyProfile(profileEl.value));
+    newBtnEl?.addEventListener('click', () => {
+      selectedProfile = null;
+      configUiState.selectedProviderProfiles[side] = null;
+      applyProfile(null);
+      renderProfiles();
+    });
 
     typeEl?.addEventListener('change', () => {
-      if (profileEl.value === '__new__' && !modelEl.value.trim()) {
-        modelEl.value = getDefaultModel(side, typeEl.value);
+      if (!isLocal && isProviderTypeChanged(typeEl.value)) {
+        if (credentialRefEl) credentialRefEl.value = '';
+        if (keyEl) keyEl.value = '';
       }
+      if (!selectedProfile) {
+        const lastSuggestedName = nameEl.dataset.lastSuggestedName || '';
+        if (!nameEl.value.trim() || nameEl.value === lastSuggestedName) {
+          nameEl.value = getSuggestedName(side, typeEl.value);
+        }
+        if (!modelEl.value.trim()) {
+          modelEl.value = getDefaultModel(side, typeEl.value);
+        }
+        nameEl.dataset.lastSuggestedType = typeEl.value;
+        nameEl.dataset.lastSuggestedName = nameEl.value;
+      }
+      refreshSecretNote(typeEl.value);
+      void refreshLiveModels({ currentModel: modelEl.value.trim() || getDefaultModel(side, typeEl.value) });
+    });
+
+    urlEl.addEventListener('change', () => {
+      void refreshLiveModels({ currentModel: modelEl.value.trim() });
+    });
+    credentialRefEl?.addEventListener('change', () => {
+      refreshSecretNote(typeEl?.value);
+      void refreshLiveModels({ currentModel: modelEl.value.trim() });
+    });
+    keyEl?.addEventListener('change', () => {
+      refreshSecretNote(typeEl?.value);
+      void refreshLiveModels({ currentModel: modelEl.value.trim() });
     });
 
     section.querySelector(`#${prefix}-test`).addEventListener('click', async () => {
@@ -539,17 +848,28 @@ function createProviderPanel(config, providers, panel) {
       const providerName = nameEl.value.trim();
       const model = modelEl.value.trim();
       const baseUrl = urlEl.value.trim();
-      const providerType = typeEl?.value.trim() || (isLocal ? 'ollama' : 'openai');
+      const providerType = typeEl?.value.trim().toLowerCase() || (isLocal ? 'ollama' : 'openai');
 
       if (!providerName) { statusEl.textContent = 'Provider name is required.'; statusEl.style.color = 'var(--error)'; return; }
       if (!providerType) { statusEl.textContent = 'Provider type is required.'; statusEl.style.color = 'var(--error)'; return; }
+      if (!isKnownProviderType(side, providerType)) {
+        statusEl.textContent = `Unknown ${side} provider type '${providerType}'.`;
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
       if (!model) { statusEl.textContent = 'Model is required.'; statusEl.style.color = 'var(--error)'; return; }
+      if (!isLocal && isProviderTypeChanged(providerType) && !keyEl?.value.trim() && !credentialRefEl?.value.trim()) {
+        statusEl.textContent = 'Provider type changed. Paste a new API key or choose an env-backed credential ref before saving.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
 
       const payload = {
         llmMode: isLocal ? 'ollama' : 'external',
         providerName, providerType, model,
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
+        credentialRef: credentialRefEl ? credentialRefEl.value.trim() : undefined,
         setupCompleted: true,
       };
 
@@ -559,10 +879,16 @@ function createProviderPanel(config, providers, panel) {
         const result = await api.applyConfig(payload);
         statusEl.textContent = result.message;
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        if (result.success) {
+          await updateConfig();
+        }
       } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }
     });
 
     renderProfiles();
+    if (selectedProfile) {
+      applyProfile(selectedProfile);
+    }
   }
 
   wirePanel('local');
@@ -571,9 +897,221 @@ function createProviderPanel(config, providers, panel) {
   return section;
 }
 
+function getProviderTypeCatalog() {
+  if (Array.isArray(sharedProviderTypes) && sharedProviderTypes.length > 0) {
+    return sharedProviderTypes;
+  }
+  return FALLBACK_PROVIDER_TYPES;
+}
+
+function getCredentialRefRegistry(config = sharedConfig) {
+  return config?.assistant?.credentials?.refs || {};
+}
+
+function getCredentialRefMeta(refName, config = sharedConfig) {
+  if (!refName) return undefined;
+  return getCredentialRefRegistry(config)[refName];
+}
+
+function getSecretFieldPlaceholder(refName, fallback) {
+  const ref = getCredentialRefMeta(refName);
+  if (ref?.source === 'local') {
+    return 'Configured in secure local storage. Paste to replace.';
+  }
+  if (ref?.source === 'env') {
+    return `Managed by ${ref.env || 'an environment variable'}. Paste to switch to local storage.`;
+  }
+  return fallback;
+}
+
+function getEditableCredentialRef(refName, config = sharedConfig) {
+  const ref = getCredentialRefMeta(refName, config);
+  return ref?.source === 'env' ? refName : '';
+}
+
+function renderCredentialRefOptions(refs, filterFn = null) {
+  return Object.keys(refs || {})
+    .filter((name) => (typeof filterFn === 'function' ? filterFn(refs[name], name) : true))
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => `<option value="${escAttr(name)}">${esc(name)}</option>`)
+    .join('');
+}
+
+function createCredentialRefsPanel(settingsPanel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const refs = { ...getCredentialRefRegistry() };
+  const selectedNames = Object.keys(refs).sort((a, b) => a.localeCompare(b));
+  const selectedDefault = selectedNames[0] || '__new__';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Credential Refs</h3>
+      <span class="cfg-header-note">Advanced path for environment-backed refs. Local secure-store refs are created automatically when you paste keys elsewhere in Config.</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Ref</label>
+          <select id="cfg-cred-ref-select">
+            <option value="__new__">Create new ref...</option>
+            ${selectedNames.map((name) => `<option value="${escAttr(name)}">${esc(name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Source</label>
+          <input id="cfg-cred-ref-source" type="text" value="Environment Variable" readonly>
+        </div>
+        <div class="cfg-field"><label>Ref Name</label><input id="cfg-cred-ref-name" type="text" placeholder="llm.openai.primary"></div>
+        <div class="cfg-field"><label id="cfg-cred-ref-target-label">Environment Variable</label><input id="cfg-cred-ref-env" type="text" placeholder="OPENAI_API_KEY"></div>
+        <div class="cfg-field"><label>Description (optional)</label><input id="cfg-cred-ref-description" type="text" placeholder="Primary OpenAI key for hosted fallback"></div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Average-user path: paste keys directly into provider, search, or Telegram settings and Guardian stores them in the encrypted local secret store. Advanced path: create an env-backed ref here, then point a provider or integration at that ref.
+      </div>
+      <div id="cfg-cred-ref-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="cfg-cred-ref-save" type="button">Save Env Ref</button>
+        <button class="btn btn-secondary" id="cfg-cred-ref-delete" type="button">Delete Ref</button>
+        <span id="cfg-cred-ref-status" class="cfg-save-status"></span>
+      </div>
+      <div class="cfg-divider"></div>
+      <table>
+        <thead><tr><th>Ref</th><th>Source</th><th>Target</th><th>Description</th></tr></thead>
+        <tbody>
+          ${selectedNames.length === 0
+            ? '<tr><td colspan="4">No credential refs configured.</td></tr>'
+            : selectedNames.map((name) => `
+              <tr>
+                <td>${esc(name)}</td>
+                <td>${esc(refs[name]?.source || 'env')}</td>
+                <td>${esc(refs[name]?.source === 'local' ? 'encrypted local secret store' : (refs[name]?.env || ''))}</td>
+                <td>${esc(refs[name]?.description || '-')}</td>
+              </tr>
+            `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const selectEl = section.querySelector('#cfg-cred-ref-select');
+  const nameEl = section.querySelector('#cfg-cred-ref-name');
+  const envEl = section.querySelector('#cfg-cred-ref-env');
+  const descriptionEl = section.querySelector('#cfg-cred-ref-description');
+  const noteEl = section.querySelector('#cfg-cred-ref-note');
+  const statusEl = section.querySelector('#cfg-cred-ref-status');
+  const saveBtn = section.querySelector('#cfg-cred-ref-save');
+
+  function applySelection(value) {
+    if (value === '__new__') {
+      nameEl.value = '';
+      envEl.value = '';
+      descriptionEl.value = '';
+      nameEl.disabled = false;
+      envEl.disabled = false;
+      descriptionEl.disabled = false;
+      saveBtn.disabled = false;
+      noteEl.textContent = 'Create an env-backed credential ref here. Local refs are managed automatically by the key fields in other configuration panels.';
+      return;
+    }
+    const ref = refs[value];
+    if (!ref) return;
+    nameEl.value = value;
+    envEl.value = ref.source === 'env' ? (ref.env || '') : '';
+    descriptionEl.value = ref.description || '';
+    const managedLocal = ref.source === 'local';
+    nameEl.disabled = managedLocal;
+    envEl.disabled = managedLocal;
+    descriptionEl.disabled = managedLocal;
+    saveBtn.disabled = managedLocal;
+    noteEl.textContent = managedLocal
+      ? 'This ref points at the encrypted local secret store and is managed by the paste-once fields in provider, search, or Telegram settings. Use Delete here only if you want to remove the mapping.'
+      : 'This ref is backed by an environment variable. Set the secret in the host environment, then use this ref name in provider or integration settings.';
+  }
+
+  selectEl.value = selectedDefault;
+  applySelection(selectedDefault);
+  selectEl.addEventListener('change', () => applySelection(selectEl.value));
+
+  section.querySelector('#cfg-cred-ref-save')?.addEventListener('click', async () => {
+    const refName = nameEl.value.trim();
+    const env = envEl.value.trim();
+    const description = descriptionEl.value.trim();
+    if (!refName || !env) {
+      statusEl.textContent = 'Ref name and environment variable are required.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+
+    const nextRefs = {
+      ...(sharedConfig?.assistant?.credentials?.refs || {}),
+      [refName]: {
+        source: 'env',
+        env,
+        description: description || undefined,
+      },
+    };
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          credentials: {
+            refs: nextRefs,
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await updateConfig();
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  section.querySelector('#cfg-cred-ref-delete')?.addEventListener('click', async () => {
+    const refName = selectEl.value === '__new__' ? nameEl.value.trim() : selectEl.value;
+    if (!refName || !refs[refName]) {
+      statusEl.textContent = 'Select an existing ref to delete.';
+      statusEl.style.color = 'var(--warning)';
+      return;
+    }
+    const nextRefs = { ...(sharedConfig?.assistant?.credentials?.refs || {}) };
+    delete nextRefs[refName];
+
+    statusEl.textContent = 'Removing...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          credentials: {
+            refs: nextRefs,
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await updateConfig();
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
 function createProviderStatusTable(config, providers, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
+  const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
   const providerEntries = Object.entries(config.llm || {});
   const rows = providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
@@ -582,11 +1120,25 @@ function createProviderStatusTable(config, providers, panel) {
     const statusBadge = '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
     const isDefault = name === config.defaultProvider;
-    const defaultBadge = isDefault ? ' <span class="badge badge-idle">default</span>' : '';
-    const actionBtn = isDefault
-      ? '<span class="text-muted" style="font-size:0.75rem">Current default</span>'
-      : '<button class="btn btn-sm set-default-provider-btn" data-provider="' + esc(name) + '">Set as Default</button>';
-    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadge + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td>' + actionBtn + '</td></tr>';
+    const isLocalDefault = locality === 'local' && preferredProviders.local === name;
+    const isExternalDefault = locality === 'external' && preferredProviders.external === name;
+    const defaultBadges = [
+      isDefault ? ' <span class="badge badge-idle">global default</span>' : '',
+      isLocalDefault ? ' <span class="badge badge-running">local default</span>' : '',
+      isExternalDefault ? ' <span class="badge badge-running">external default</span>' : '',
+    ].join('');
+    const globalActionBtn = isDefault
+      ? '<span class="text-muted" style="font-size:0.75rem" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the preferred local or external routed provider.">Current default</span>'
+      : '<button class="btn btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the preferred local or external routed provider.">Set as Default</button>';
+    const localityLabel = locality === 'local' ? 'Local' : 'External';
+    const preferredActionBtn = (locality === 'local' ? isLocalDefault : isExternalDefault)
+      ? '<span class="text-muted" style="font-size:0.75rem" title="' + escAttr(locality === 'local'
+        ? 'Preferred provider when Guardian routes work to the local tier. This does not change the global default provider.'
+        : 'Preferred provider when Guardian routes work to the external tier. This does not change the global default provider.') + '">Current ' + localityLabel.toLowerCase() + ' default</span>'
+      : '<button class="btn btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-locality="' + esc(locality) + '" title="' + escAttr(locality === 'local'
+        ? 'Set the preferred provider used when Guardian routes work to the local tier. This does not change the global default provider.'
+        : 'Set the preferred provider used when Guardian routes work to the external tier. This does not change the global default provider.') + '">Set as ' + localityLabel + ' Default</button>';
+    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td style="display:flex;gap:0.5rem;flex-wrap:wrap;">' + globalActionBtn + preferredActionBtn + '</td></tr>';
   }).join('');
 
   section.innerHTML = `
@@ -609,6 +1161,42 @@ function createProviderStatusTable(config, providers, panel) {
           if (panel) renderProvidersTab(panel);
         } else {
           alert('Failed to set default provider: ' + (result.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+      btn.disabled = false;
+    });
+  });
+
+  section.querySelectorAll('.set-preferred-provider-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const providerName = btn.dataset.provider;
+      const locality = btn.dataset.locality;
+      if (!providerName || (locality !== 'local' && locality !== 'external')) return;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const result = await api.updateConfig({
+          assistant: {
+            tools: {
+              preferredProviders: {
+                ...(sharedConfig?.assistant?.tools?.preferredProviders || {}),
+                [locality]: providerName,
+              },
+            },
+          },
+        });
+        if (result.success) {
+          sharedConfig.assistant = sharedConfig.assistant || {};
+          sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+          sharedConfig.assistant.tools.preferredProviders = {
+            ...(sharedConfig.assistant.tools.preferredProviders || {}),
+            [locality]: providerName,
+          };
+          if (panel) renderProvidersTab(panel);
+        } else {
+          alert('Failed to set ' + locality + ' default provider: ' + (result.message || 'Unknown error'));
         }
       } catch (err) {
         alert('Error: ' + err.message);
@@ -2115,8 +2703,13 @@ function createTelegramPanel(config, settingsPanel) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const telegram = config.channels?.telegram || {};
+  const credentialRefOptions = renderCredentialRefOptions(config?.assistant?.credentials?.refs || {});
   const enabled = !!telegram.enabled;
   const tokenConfigured = !!telegram.botTokenConfigured;
+  const credentialRef = telegram.botTokenCredentialRef || '';
+  const tokenPlaceholder = tokenConfigured
+    ? getSecretFieldPlaceholder(credentialRef, 'Configured. Paste to replace.')
+    : 'Paste once to store securely';
   const chatIdPreview = Array.isArray(telegram.allowedChatIds) && telegram.allowedChatIds.length > 0
     ? telegram.allowedChatIds.join(', ')
     : '';
@@ -2124,9 +2717,10 @@ function createTelegramPanel(config, settingsPanel) {
   section.innerHTML = `
     <div class="table-header">
       <h3>Telegram Channel</h3>
-      <span class="cfg-header-note">Configure bot token and chat allowlist</span>
+      <span class="cfg-header-note">Paste the bot token once for secure local storage, or use an advanced env-backed credential ref.</span>
     </div>
     <div class="cfg-center-body">
+      <datalist id="cfg-telegram-credential-ref-options">${credentialRefOptions}</datalist>
       <div class="cfg-form-grid">
         <div class="cfg-field">
           <label>Enable Telegram</label>
@@ -2136,8 +2730,12 @@ function createTelegramPanel(config, settingsPanel) {
           </select>
         </div>
         <div class="cfg-field">
-          <label>Telegram Bot Token</label>
-          <input id="cfg-telegram-token" type="password" placeholder="${tokenConfigured ? 'Configured — leave blank to keep existing token' : '123456789:AA...'}">
+          <label>Bot Token</label>
+          <input id="cfg-telegram-token" type="password" placeholder="${escAttr(tokenPlaceholder)}">
+        </div>
+        <div class="cfg-field">
+          <label>Credential Ref</label>
+          <input id="cfg-telegram-credential-ref" type="text" list="cfg-telegram-credential-ref-options" value="${escAttr(credentialRef)}" placeholder="telegram.bot.primary">
         </div>
         <div class="cfg-field">
           <label>Allowed Chat IDs</label>
@@ -2145,9 +2743,9 @@ function createTelegramPanel(config, settingsPanel) {
         </div>
       </div>
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Setup: create bot with @BotFather, send one message to the bot, then run <code>getUpdates</code> to find <code>message.chat.id</code>.
-        Leave token/chat IDs blank to keep current values. Restart required after Telegram channel changes.
+        Simple mode: paste the BotFather token here and Guardian stores it in the encrypted local secret store. Advanced mode: leave Bot Token blank, create an env-backed ref in Credential Refs, and enter that ref name here. Send one message to the bot, then run <code>getUpdates</code> to find <code>message.chat.id</code>.
       </div>
+      <div style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);">Telegram changes hot-reload when the token/ref and allowlist are valid.</div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="cfg-telegram-save" type="button">Save Telegram Settings</button>
         <span id="cfg-telegram-status" class="cfg-save-status"></span>
@@ -2158,7 +2756,8 @@ function createTelegramPanel(config, settingsPanel) {
   const statusEl = section.querySelector('#cfg-telegram-status');
   section.querySelector('#cfg-telegram-save')?.addEventListener('click', async () => {
     const enabledVal = section.querySelector('#cfg-telegram-enabled')?.value === 'true';
-    const token = section.querySelector('#cfg-telegram-token')?.value.trim() || '';
+    const token = section.querySelector('#cfg-telegram-token')?.value.trim() || undefined;
+    const botTokenCredentialRef = section.querySelector('#cfg-telegram-credential-ref')?.value.trim() || undefined;
     const chatIdsRaw = section.querySelector('#cfg-telegram-chatids')?.value || '';
 
     statusEl.textContent = 'Saving...';
@@ -2169,17 +2768,14 @@ function createTelegramPanel(config, settingsPanel) {
         channels: {
           telegram: {
             enabled: enabledVal,
-            botToken: token || undefined,
+            botToken: token,
+            botTokenCredentialRef,
             allowedChatIds: parseChatIdsOrUndefined(chatIdsRaw),
           },
         },
       });
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-      if (result.success && token) {
-        const tokenInput = section.querySelector('#cfg-telegram-token');
-        if (tokenInput) tokenInput.value = '';
-      }
       if (result.success) {
         await refreshSettingsOverview(settingsPanel);
       }
@@ -2345,13 +2941,15 @@ function createWebSearchPanel(config, panel) {
   const ws = config.assistant?.tools?.webSearch || {};
   const fallbacks = config.fallbacks || [];
   const providerNames = Object.keys(config.llm || {});
+  const credentialRefOptions = renderCredentialRefOptions(config?.assistant?.credentials?.refs || {});
 
   section.innerHTML = `
     <div class="table-header">
       <h3>Web Search &amp; Model Fallback</h3>
-      <span class="cfg-header-note">Search API keys and LLM fallback chain</span>
+      <span class="cfg-header-note">Search keys can be pasted once into secure local storage or provided via advanced credential refs.</span>
     </div>
     <div class="cfg-center-body">
+      <datalist id="ws-credential-ref-options">${credentialRefOptions}</datalist>
       <div class="cfg-form-grid">
         <div class="cfg-field">
           <label>Search Provider</label>
@@ -2363,16 +2961,28 @@ function createWebSearchPanel(config, panel) {
           </select>
         </div>
         <div class="cfg-field">
-          <label>Brave Search API Key${ws.braveConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-brave-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
-          <input id="ws-brave-key" type="password" placeholder="${ws.braveConfigured ? 'Configured — leave blank to keep' : 'BSA...'}">
+          <label>Brave API Key</label>
+          <input id="ws-brave-key" type="password" placeholder="${escAttr(ws.braveConfigured ? getSecretFieldPlaceholder(ws.braveCredentialRef, 'Configured. Paste to replace.') : 'BSA...')}">
         </div>
         <div class="cfg-field">
-          <label>Perplexity API Key${ws.perplexityConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-perplexity-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
-          <input id="ws-perplexity-key" type="password" placeholder="${ws.perplexityConfigured ? 'Configured — leave blank to keep' : 'pplx-...'}">
+          <label>Brave Credential Ref</label>
+          <input id="ws-brave-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.braveCredentialRef || '')}" placeholder="search.brave.primary">
         </div>
         <div class="cfg-field">
-          <label>OpenRouter API Key${ws.openRouterConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-openrouter-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
-          <input id="ws-openrouter-key" type="password" placeholder="${ws.openRouterConfigured ? 'Configured — leave blank to keep' : 'sk-or-...'}">
+          <label>Perplexity API Key</label>
+          <input id="ws-perplexity-key" type="password" placeholder="${escAttr(ws.perplexityConfigured ? getSecretFieldPlaceholder(ws.perplexityCredentialRef, 'Configured. Paste to replace.') : 'pplx-...')}">
+        </div>
+        <div class="cfg-field">
+          <label>Perplexity Credential Ref</label>
+          <input id="ws-perplexity-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.perplexityCredentialRef || '')}" placeholder="search.perplexity.primary">
+        </div>
+        <div class="cfg-field">
+          <label>OpenRouter API Key</label>
+          <input id="ws-openrouter-key" type="password" placeholder="${escAttr(ws.openRouterConfigured ? getSecretFieldPlaceholder(ws.openRouterCredentialRef, 'Configured. Paste to replace.') : 'sk-or-...')}">
+        </div>
+        <div class="cfg-field">
+          <label>OpenRouter Credential Ref</label>
+          <input id="ws-openrouter-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.openRouterCredentialRef || '')}" placeholder="search.openrouter.primary">
         </div>
       </div>
       <div class="cfg-divider"></div>
@@ -2386,7 +2996,7 @@ function createWebSearchPanel(config, panel) {
           <input type="text" readonly value="${esc(providerNames.join(', '))}" style="opacity:0.7;">
         </div>
       </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">Auto selects best search provider: Brave &gt; Perplexity &gt; DuckDuckGo.</div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">Auto selects best search provider: Brave &gt; Perplexity &gt; DuckDuckGo. Paste-once keys go to the encrypted local secret store; credential refs are the advanced environment-backed option.</div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="ws-save" type="button">Save Search &amp; Fallback</button>
         <span id="ws-save-status" class="cfg-save-status"></span>
@@ -2395,21 +3005,6 @@ function createWebSearchPanel(config, panel) {
   `;
 
   const statusEl = section.querySelector('#ws-save-status');
-  const cleared = new Set();
-  section.querySelectorAll('.ws-clear-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetId = btn.dataset.target;
-      const input = section.querySelector(`#${targetId}`);
-      if (input) { input.value = ''; input.placeholder = 'Key will be removed on save'; input.style.borderColor = 'var(--warning)'; cleared.add(targetId); }
-    });
-  });
-
-  function resolveKey(fieldId, wasConfigured) {
-    const value = section.querySelector(`#${fieldId}`).value.trim();
-    if (value) return value;
-    if (cleared.has(fieldId)) return '';
-    return undefined;
-  }
 
   section.querySelector('#ws-save')?.addEventListener('click', async () => {
     const provider = section.querySelector('#ws-provider').value;
@@ -2420,9 +3015,12 @@ function createWebSearchPanel(config, panel) {
     try {
       const result = await api.saveSearchConfig({
         webSearchProvider: provider,
-        perplexityApiKey: resolveKey('ws-perplexity-key', ws.perplexityConfigured),
-        openRouterApiKey: resolveKey('ws-openrouter-key', ws.openRouterConfigured),
-        braveApiKey: resolveKey('ws-brave-key', ws.braveConfigured),
+        perplexityApiKey: section.querySelector('#ws-perplexity-key').value.trim() || undefined,
+        perplexityCredentialRef: section.querySelector('#ws-perplexity-credential-ref').value.trim() || '',
+        openRouterApiKey: section.querySelector('#ws-openrouter-key').value.trim() || undefined,
+        openRouterCredentialRef: section.querySelector('#ws-openrouter-credential-ref').value.trim() || '',
+        braveApiKey: section.querySelector('#ws-brave-key').value.trim() || undefined,
+        braveCredentialRef: section.querySelector('#ws-brave-credential-ref').value.trim() || '',
         fallbacks: fallbackList,
       });
       statusEl.textContent = result.message;
@@ -3250,7 +3848,9 @@ function createAuthPanel(config, authStatus, panel) {
         <div class="cfg-field"><label>Token Source</label><input id="auth-token-source" type="text" value="${esc(tokenSource)}" readonly></div>
         <div class="cfg-field"><label>Session TTL Minutes</label><input id="auth-ttl" type="number" min="1" placeholder="120" value="${esc(String(ttl))}"></div>
         <div class="cfg-field"><label>Current Token</label><input id="auth-token-preview" type="text" readonly value="${tokenConfigured ? esc(authStatus?.tokenPreview || 'configured') : 'not configured'}"></div>
-        <div class="cfg-field"><label>Set/New Token</label><input id="auth-token-input-new" type="password" placeholder="Leave empty to keep existing"></div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Rotated tokens are runtime-ephemeral and are not written back to local config.
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="auth-save" type="button">Save Auth Settings</button>
@@ -3262,7 +3862,6 @@ function createAuthPanel(config, authStatus, panel) {
   `;
 
   const ttlEl = section.querySelector('#auth-ttl');
-  const tokenInputEl = section.querySelector('#auth-token-input-new');
   const tokenPreviewEl = section.querySelector('#auth-token-preview');
   const statusEl = section.querySelector('#auth-save-status');
   const setStatus = (text, color) => { statusEl.textContent = text; statusEl.style.color = color; };
@@ -3270,7 +3869,6 @@ function createAuthPanel(config, authStatus, panel) {
   section.querySelector('#auth-save')?.addEventListener('click', async () => {
     const payload = {
       mode: 'bearer_required',
-      token: tokenInputEl.value.trim() || undefined,
       sessionTtlMinutes: ttlEl.value ? Number(ttlEl.value) : undefined,
     };
     setStatus('Saving...', 'var(--text-muted)');
@@ -3278,7 +3876,6 @@ function createAuthPanel(config, authStatus, panel) {
       const result = await api.updateAuth(payload);
       setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
       if (result.status?.tokenPreview) tokenPreviewEl.value = result.status.tokenPreview;
-      if (result.success) tokenInputEl.value = '';
     } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
   });
 
@@ -3287,7 +3884,7 @@ function createAuthPanel(config, authStatus, panel) {
     try {
       const result = await api.rotateAuthToken();
       if (result.token) tokenPreviewEl.value = `${result.token.slice(0, 4)}...${result.token.slice(-4)}`;
-      setStatus(result.message || 'Token rotated.', result.success ? 'var(--success)' : 'var(--warning)');
+      setStatus(result.message || 'Ephemeral token rotated.', result.success ? 'var(--success)' : 'var(--warning)');
     } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
   });
 
@@ -3540,9 +4137,9 @@ function renderAppearanceTab(panel) {
 
 function createGenericHelpFactory(area) {
   return (title) => ({
-    whatItIs: `${title} is part of ${area}.`,
-    whatSeeing: 'You are seeing the current settings, status, or management controls for this section.',
-    whatCanDo: 'Review the current state here and use the controls in the section to make changes when needed.',
+    whatItIs: `${title} is a specific subsection inside ${area} for one part of setup, policy, integration, or system control.`,
+    whatSeeing: 'You are seeing the live settings, status indicators, or management controls that belong to this subsection.',
+    whatCanDo: 'Use the controls here to inspect or change the part of configuration this subsection owns.',
     howLinks: `This section supports the broader ${area} workflow and affects related operational behavior elsewhere in the app.`,
   });
 }

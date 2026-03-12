@@ -570,6 +570,7 @@ tr:hover td {
 
 .badge-idle, .badge-ready { background: rgba(76,175,80,0.15); color: var(--success); }
 .badge-running { background: rgba(33,150,243,0.15); color: var(--info); }
+.badge-queued { background: rgba(255,152,0,0.15); color: var(--warning); }
 .badge-errored { background: rgba(244,67,54,0.15); color: var(--error); }
 .badge-stalled { background: rgba(255,152,0,0.15); color: var(--warning); }
 .badge-dead { background: rgba(90,100,120,0.15); color: var(--text-muted); }

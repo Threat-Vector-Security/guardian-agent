@@ -32,7 +32,7 @@
 - **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
 - **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools, inferred trust levels, optional per-server rate limits, and full Guardian admission on every call
 - **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
-- **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, and automatic memory flush
+- **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, automatic memory flush, and shared memory/session state across tier-routed local/external chat backends
 - **Native document search** — hybrid BM25 keyword + vector similarity search over directories, git repos, URLs, and files
 - **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, inspectable step output, and EventBus integration
 - **Security monitoring** — network threat posture plus host monitoring, host firewall drift, gateway firewall drift, active alerts, audit log integrity, and SQLite DB hardening
@@ -256,6 +256,7 @@ Local operations (file reads, shell commands, network scans) are fast and don't 
 - Web authentication control plane in web Config Center and CLI (`/auth`)
 - Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
 - SQLite-persisted conversation memory with sessions
+- Tier-routed chat keeps one shared assistant conversation and knowledge base when switching between `auto`, `local-only`, and `external-only`
 - SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
 - Tools control plane in web (Configuration > Tools tab) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
 - Interactive sandbox allowlist editor in web (Configuration > Policy tab) for paths, commands, and domains

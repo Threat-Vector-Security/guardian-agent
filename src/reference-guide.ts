@@ -73,7 +73,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Normal Chat Flow',
                 items: [
                   'Choose an agent in the web chat panel or with CLI `/chat <agentId>` when you want to pin work to one agent.',
-                  'Conversation memory is scoped per user, channel, and agent unless identity mode intentionally shares it.',
+                  'Conversation memory is scoped per user, channel, and logical assistant. The built-in tier-routed local/external assistant shares one memory and session history across mode switches.',
                   'Use the web New Conversation control, CLI `/reset [agentId]`, or Telegram `/reset [agentId]` to clear context.',
                 ],
               },
@@ -181,9 +181,18 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'External Provider Setup',
                 items: [
-                  'In Configuration > Providers choose External API, then select the provider (OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini), model, and API key.',
+                  'In Configuration > AI & Search choose External Providers, then select the provider family (OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini), model, and either paste the API key once or point the profile at a credential ref.',
                   'CLI equivalent: `/config add <name> <provider> <model> <apiKey>` where provider is openai, anthropic, groq, mistral, deepseek, together, xai, or google.',
                   'Set the default provider from the Providers tab or with `/config set default <name>`.',
+                ],
+              },
+              {
+                title: 'Built-In Provider Families',
+                items: [
+                  'Local provider family: Ollama.',
+                  'External native provider families: OpenAI and Anthropic.',
+                  'External OpenAI-compatible provider families: Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini.',
+                  'The web provider picker is driven from the runtime registry, so new built-in families appear there without a separate static UI list.',
                 ],
               },
               {
@@ -192,6 +201,38 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Tools can route to local or external providers by category when smart provider routing is enabled.',
                   'You can disable smart routing or override specific tool or category behavior in Configuration > Tools.',
                   'Provider changes propagate to the running web UI immediately.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'credential-storage',
+            title: 'Credential Storage Options',
+            summary: 'Guardian supports a simple paste-once path for most users and an environment-backed ref path for advanced operators.',
+            sections: [
+              {
+                title: 'Simple Paste-Once Mode',
+                items: [
+                  'Paste provider, search, or Telegram secrets directly into the web configuration forms when you want the easiest setup path.',
+                  'Guardian stores those secrets in the encrypted local secret store and keeps them out of the main `config.yaml` file.',
+                  'When a secret is already configured, the UI shows it as configured and lets you paste a replacement without revealing the current value.',
+                ],
+                note: 'The local secret store is primarily meant to keep secrets out of plain-text config. On shared servers or managed environments, prefer env-backed refs.',
+              },
+              {
+                title: 'Advanced Env-Backed Refs',
+                items: [
+                  'Set the real secret in the host environment, for example `OPENAI_API_KEY` or `BRAVE_API_KEY`.',
+                  'Open Configuration > AI & Search > Credential Refs and create a stable ref name such as `llm.openai.primary` that maps to that environment variable.',
+                  'In provider, search, or Telegram settings, leave the secret field blank and enter that credential ref instead.',
+                ],
+              },
+              {
+                title: 'Which Path To Use',
+                items: [
+                  'Use paste-once local storage for laptops, desktops, and straightforward single-host deployments.',
+                  'Use env-backed refs when the app is deployed through service managers, containers, CI, or any environment where operators already manage secrets outside the app.',
+                  'Both paths resolve through the same credential-ref layer at runtime, so providers and tools behave the same once configured.',
                 ],
               },
             ],
@@ -230,7 +271,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Bot Setup',
                 items: [
                   'Create the bot through `@BotFather` using `/newbot`, then copy the returned token.',
-                  'Enable Telegram in Configuration > Integrations, paste the token, and save.',
+                  'Enable Telegram in Configuration > Integrations, then either paste the token once for secure local storage or leave the token field blank and provide an env-backed credential ref.',
                   'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
                   'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
                 ],
@@ -253,7 +294,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Web Search',
                 items: [
                   'Built-in web search and fetch tools can run through the configured search provider path without leaving Guardian controls.',
-                  'Use Configuration > Search Sources to set provider options and credentials for premium search providers.',
+                  'Use Configuration > Search Sources to set provider options and either paste premium search keys once or assign env-backed credential refs.',
                   'Search config changes apply immediately and invalidate the web UI so the current state stays visible.',
                 ],
               },
@@ -358,11 +399,28 @@ export function getReferenceGuide(): ReferenceGuide {
             summary: 'Run watchlist scans, triage findings, draft responses, and use approval-gated outreach workflows.',
             sections: [
               {
-                title: 'Threat Intel',
+                title: 'Threat Intel Operator Surfaces',
                 items: [
-                  'Use the web Threat Intel tab, CLI `/intel ...`, or Telegram `/intel ...` for summary, scans, watchlists, and findings.',
+                  'Use Security > Threat Intel in the web UI to manage watch targets, change response mode, run manual scans, and review findings in one place.',
+                  'CLI `/intel ...` is the full operator surface for threat intel: status, plan, watchlist management, scans, findings, finding status changes, drafted actions, and response mode changes.',
+                  'Telegram currently exposes the three quick intel operators: `/intel status`, `/intel scan <query> [--darkweb]`, and `/intel findings`.',
+                  'Threat-intel results stay visible in Security, and high-risk scan results are also promoted into the wider security signal path.',
+                ],
+              },
+              {
+                title: 'Threat Intel Commands And Tools',
+                items: [
+                  'CLI operators: `/intel [status]`, `/intel plan`, `/intel watch [list|add|remove] <target>`, `/intel scan [query] [--darkweb] [--sources=web,news,social,forum]`, `/intel findings [limit] [status]`, `/intel finding <id> status <new|triaged|actioned|dismissed>`, `/intel actions [limit]`, `/intel action draft <findingId> <report|request_takedown|draft_response|publish_response>`, and `/intel mode <manual|assisted|autonomous>`.',
+                  'Built-in threat-intel tools exposed to the assistant and automations are `intel_summary`, `intel_watch_add`, `intel_watch_remove`, `intel_scan`, `intel_findings`, and `intel_draft_action`.',
+                  'The built-in scheduled example is `threat-intel-scan`, which runs `intel_scan` on a recurring schedule from Operations.',
+                ],
+              },
+              {
+                title: 'Threat Intel Operating Notes',
+                items: [
                   'Response mode can be manual, assisted, or autonomous depending on your tolerance for automatic action.',
                   'Dark-web scanning is opt-in and disabled by default unless explicitly enabled.',
+                  'Use watchlist entries for people, handles, brands, domains, and fraud or impersonation phrases you want monitored over time.',
                   'Moltbook connectors should be treated as hostile integrations and kept behind strict allowlists and approval gates.',
                 ],
               },
@@ -425,6 +483,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Memory Behavior',
                 items: [
                   'Conversation memory is stored in SQLite when available, with retention settings exposed through configuration.',
+                  'Switching between `auto`, `local-only`, and `external-only` changes which backend answers, but the built-in tier assistant keeps one shared chat history and knowledge base.',
                   'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
                   'Assistant memory, analytics, and search-oriented history should be reviewed together when debugging stale context.',
                 ],

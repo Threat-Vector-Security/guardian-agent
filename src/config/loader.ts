@@ -12,6 +12,24 @@ import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
+import { ProviderRegistry } from '../llm/provider-registry.js';
+
+const SUPPORTED_LLM_PROVIDERS = new Set(new ProviderRegistry().listProviderNames());
+const SUPPORTED_LLM_PROVIDER_LIST = [...SUPPORTED_LLM_PROVIDERS].join(', ');
+
+function isLocalLLMConfig(provider: string | undefined, baseUrl: string | undefined): boolean {
+  if ((provider ?? '').trim().toLowerCase() === 'ollama') return true;
+  if (!baseUrl?.trim()) return false;
+  try {
+    const host = new URL(baseUrl).hostname.trim().toLowerCase();
+    return host === 'localhost'
+      || host === '127.0.0.1'
+      || host === '::1'
+      || host.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
 
 /** Default config file path. */
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yaml');
@@ -104,20 +122,47 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     if (!llm.provider) {
       errors.push(`llm.${name}.provider is required`);
     }
-    if (!['ollama', 'anthropic', 'openai'].includes(llm.provider)) {
-      errors.push(`llm.${name}.provider must be 'ollama', 'anthropic', or 'openai'`);
+    if (!SUPPORTED_LLM_PROVIDERS.has(llm.provider)) {
+      errors.push(`llm.${name}.provider must be one of: ${SUPPORTED_LLM_PROVIDER_LIST}`);
     }
     if (!llm.model) {
       errors.push(`llm.${name}.model is required`);
     }
+    if (llm.apiKey?.trim()) {
+      errors.push(`llm.${name}.apiKey is not allowed in config. Use llm.${name}.credentialRef with assistant.credentials.refs instead.`);
+    }
     assertCredentialRef(llm.credentialRef, `llm.${name}.credentialRef`);
-    if (llm.provider !== 'ollama' && !llm.apiKey && !llm.credentialRef) {
-      errors.push(`llm.${name}.apiKey or llm.${name}.credentialRef is required for provider '${llm.provider}'`);
+    if (llm.provider !== 'ollama' && !llm.credentialRef) {
+      errors.push(`llm.${name}.credentialRef is required for provider '${llm.provider}'`);
     }
   }
 
-  if (config.channels.telegram?.enabled && !config.channels.telegram.botToken) {
-    errors.push('channels.telegram.botToken is required when Telegram is enabled');
+  const preferredProviders = config.assistant.tools.preferredProviders;
+  if (preferredProviders?.local?.trim()) {
+    const providerName = preferredProviders.local.trim();
+    const provider = config.llm[providerName];
+    if (!provider) {
+      errors.push(`assistant.tools.preferredProviders.local references unknown provider '${providerName}'`);
+    } else if (!isLocalLLMConfig(provider.provider, provider.baseUrl)) {
+      errors.push(`assistant.tools.preferredProviders.local must reference a local provider, got '${providerName}'`);
+    }
+  }
+  if (preferredProviders?.external?.trim()) {
+    const providerName = preferredProviders.external.trim();
+    const provider = config.llm[providerName];
+    if (!provider) {
+      errors.push(`assistant.tools.preferredProviders.external references unknown provider '${providerName}'`);
+    } else if (isLocalLLMConfig(provider.provider, provider.baseUrl)) {
+      errors.push(`assistant.tools.preferredProviders.external must reference an external provider, got '${providerName}'`);
+    }
+  }
+
+  if (config.channels.telegram?.botToken?.trim()) {
+    errors.push('channels.telegram.botToken is not allowed in config. Use channels.telegram.botTokenCredentialRef with assistant.credentials.refs instead.');
+  }
+  assertCredentialRef(config.channels.telegram?.botTokenCredentialRef, 'channels.telegram.botTokenCredentialRef');
+  if (config.channels.telegram?.enabled && !config.channels.telegram.botTokenCredentialRef) {
+    errors.push('channels.telegram.botTokenCredentialRef is required when Telegram is enabled');
   }
 
   if (!['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'].includes(config.runtime.logLevel)) {
@@ -166,11 +211,14 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     if (!name.trim()) {
       errors.push('assistant.credentials.refs keys must be non-empty');
     }
-    if (ref.source !== 'env') {
-      errors.push(`assistant.credentials.refs.${name}.source must be 'env'`);
+    if (!['env', 'local'].includes(ref.source)) {
+      errors.push(`assistant.credentials.refs.${name}.source must be 'env' or 'local'`);
     }
-    if (!ref.env?.trim()) {
+    if (ref.source === 'env' && !ref.env?.trim()) {
       errors.push(`assistant.credentials.refs.${name}.env is required`);
+    }
+    if (ref.source === 'local' && !ref.secretId?.trim()) {
+      errors.push(`assistant.credentials.refs.${name}.secretId is required`);
     }
   }
   if (!assistant.identity.primaryUserId?.trim()) {
@@ -337,6 +385,15 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   assertCredentialRef(assistant.tools.webSearch?.braveCredentialRef, 'assistant.tools.webSearch.braveCredentialRef');
   assertCredentialRef(assistant.tools.webSearch?.perplexityCredentialRef, 'assistant.tools.webSearch.perplexityCredentialRef');
   assertCredentialRef(assistant.tools.webSearch?.openRouterCredentialRef, 'assistant.tools.webSearch.openRouterCredentialRef');
+  if (assistant.tools.webSearch?.braveApiKey?.trim()) {
+    errors.push('assistant.tools.webSearch.braveApiKey is not allowed in config. Use assistant.tools.webSearch.braveCredentialRef with assistant.credentials.refs instead.');
+  }
+  if (assistant.tools.webSearch?.perplexityApiKey?.trim()) {
+    errors.push('assistant.tools.webSearch.perplexityApiKey is not allowed in config. Use assistant.tools.webSearch.perplexityCredentialRef with assistant.credentials.refs instead.');
+  }
+  if (assistant.tools.webSearch?.openRouterApiKey?.trim()) {
+    errors.push('assistant.tools.webSearch.openRouterApiKey is not allowed in config. Use assistant.tools.webSearch.openRouterCredentialRef with assistant.credentials.refs instead.');
+  }
   const cloud = assistant.tools.cloud;
   if (cloud) {
     const seenProfileIds = new Set<string>();

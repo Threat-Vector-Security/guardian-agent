@@ -167,7 +167,12 @@ export const api = {
     body: JSON.stringify({ mode }),
   }),
   providers:    () => request('/api/providers'),
+  providerTypes: () => request('/api/providers/types'),
   providersStatus: () => request('/api/providers/status'),
+  providerModels: (payload) => request('/api/providers/models', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   setDefaultProvider: (name) => request('/api/providers/default', {
     method: 'POST',
     body: JSON.stringify({ name }),
