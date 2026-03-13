@@ -54,21 +54,71 @@
 
 ## Screenshots
 
-### Web Dashboard
-![Web Dashboard](docs/images/web-dashboard.png)
-*Real-time status cards, LLM provider table, agent monitoring, assistant state, session queue, scheduled cron jobs, and integrated chat panel.*
+### Dashboard
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="GuardianAgent dashboard" width="100%"/>
+</p>
 
-### Security Monitoring
-![Security Monitoring](docs/images/security-monitoring.png)
-*Network, host, and gateway security posture with active alerts, self-policing signals, and security event tracking.*
+<p align="center">
+  <em>Real-time system summary, alert queue, agent runtime health, and the integrated Guardian Assistant panel.</em>
+</p>
 
-### Network Connectors
-![Network Connectors](docs/images/network-connectors.png)
-*Playbook management with Run/Dry Run/Delete actions, recent execution history, inspectable step output, and chat panel.*
+<details>
+  <summary>Open the full application gallery</summary>
 
-### Automations
-![Automations](docs/images/operations.png)
-*Unified automation catalog — simple edit flow for common changes, advanced configuration for power users, centered pipeline disclosure, examples, clone, live-updating run history, and per-step output inspection.*
+  <p><em>Ordered the same way the app is navigated: Security, Network, Cloud, Automations, Configuration, and Reference Guide.</em></p>
+
+  <table>
+    <tr>
+      <td align="center" width="50%">
+        <a href="docs/images/security.png">
+          <img src="docs/images/security.png" alt="GuardianAgent security view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Security</strong>
+      </td>
+      <td align="center" width="50%">
+        <a href="docs/images/network.png">
+          <img src="docs/images/network.png" alt="GuardianAgent network view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Network</strong>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" width="50%">
+        <a href="docs/images/cloud.png">
+          <img src="docs/images/cloud.png" alt="GuardianAgent cloud view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Cloud</strong>
+      </td>
+      <td align="center" width="50%">
+        <a href="docs/images/automations.png">
+          <img src="docs/images/automations.png" alt="GuardianAgent automations view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Automations</strong>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" width="50%">
+        <a href="docs/images/configuration.png">
+          <img src="docs/images/configuration.png" alt="GuardianAgent configuration view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Configuration</strong>
+      </td>
+      <td align="center" width="50%">
+        <a href="docs/images/reference-guide.png">
+          <img src="docs/images/reference-guide.png" alt="GuardianAgent reference guide view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Reference Guide</strong>
+      </td>
+    </tr>
+  </table>
+</details>
 
 ## What This Is
 
