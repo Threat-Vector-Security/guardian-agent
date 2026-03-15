@@ -6,7 +6,7 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian).
 
-Fifteen scripts are provided:
+Sixteen scripts are provided:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -15,6 +15,7 @@ Fifteen scripts are provided:
 | **`scripts/test-tools.ps1`** | Tool exercise + approval flow tests (PowerShell) | ~50+ |
 | **`scripts/test-approvals.ps1`** | Approval UX: contextual prompts, multi-approval, policy modes (PowerShell) | ~45+ |
 | **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
+| **`scripts/test-m365.mjs`** | Microsoft 365 tool registration, approval gating, schema, API routes (Node.js) | ~34 |
 | **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
 | **`scripts/test-search.ps1`** | Document search + approval tests (PowerShell) | ~12 |
 | **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |

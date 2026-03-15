@@ -1,0 +1,19 @@
+{
+  "id": "microsoft-365",
+  "name": "Microsoft 365",
+  "version": "0.2.0",
+  "description": "Expert guidance for Outlook Mail, Calendar, OneDrive, and Contacts using the native Microsoft 365 tools via Microsoft Graph API.",
+  "role": "domain",
+  "tags": ["outlook", "email", "calendar", "microsoft 365", "onedrive", "contacts", "microsoft", "office365"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["outlook", "microsoft", "office 365", "m365", "onedrive", "one drive", "microsoft calendar", "outlook mail", "outlook email", "send outlook", "draft outlook", "my email", "check email", "check my email", "list files", "my files", "my calendar", "my contacts", "my schedule"]
+  },
+  "tools": ["m365", "m365_schema", "outlook_draft", "outlook_send"],
+  "requiredManagedProvider": "m365",
+  "risk": "operational"
+}

@@ -1,6 +1,6 @@
 # Microsoft 365 Integration Specification
 
-**Status:** Proposal
+**Status:** Implemented (Phase 1)
 **Author:** Claude (research) + Alex (review)
 **Date:** 2026-03-15
 **Depends on:** ToolExecutor, Guardian admission pipeline, Skills layer, Channel adapters
@@ -121,7 +121,7 @@ Follows the exact same flow as `GoogleAuth`:
 
 ### Account Types
 
-The app registration should use **"Accounts in any organizational directory and personal Microsoft accounts"** (`common` tenant) for broadest compatibility. Users with personal Outlook.com/Hotmail accounts get mail, calendar, contacts, and OneDrive. Organizational accounts additionally get Teams, SharePoint, etc.
+The app registration should use **"Any Entra ID directory + personal Microsoft accounts"** (`common` tenant) for broadest compatibility. Users with personal Outlook.com/Hotmail accounts get mail, calendar, contacts, and OneDrive. Organizational accounts additionally get Teams, SharePoint, etc.
 
 ### Scopes
 

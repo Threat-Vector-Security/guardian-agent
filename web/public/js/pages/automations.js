@@ -691,8 +691,6 @@ function renderPipelineView(auto, toolLookup, packs) {
   }
 
   // Config panel
-  const usedPackIds = [...new Set(steps.map((s) => s.packId).filter(Boolean))];
-  const usedPacks = (packs || []).filter((p) => usedPackIds.includes(p.id));
   const stepConfigs = steps.map((step, i) => {
     const tool = findTool(step.toolName);
     const cat = tool?.category || '';
@@ -707,7 +705,7 @@ function renderPipelineView(auto, toolLookup, packs) {
         </div>
         <div class="wf-config-step-body">
           <div class="wf-config-step-fields">
-            <div class="cfg-field"><label>Tool Access</label><input type="text" value="${escAttr(formatStepAccess(step.packId, packs))}" readonly style="opacity:0.7;cursor:default"></div>
+            <div class="cfg-field"><label title="Which security boundary this step runs under. 'Built-in tools' means normal Guardian rules. An access profile adds extra host/path/command restrictions.">Access</label><input type="text" value="${escAttr(formatStepAccess(step.packId, packs))}" readonly style="opacity:0.7;cursor:default" title="Change via raw definition JSON editor below"></div>
             <div class="cfg-field"><label>Timeout (ms)</label><input type="text" value="${escAttr(step.timeoutMs ? String(step.timeoutMs) : 'default')}" readonly style="opacity:0.7;cursor:default"></div>
             <div class="cfg-field"><label>Continue on Error</label><input type="text" value="${step.continueOnError ? 'yes' : 'no'}" readonly style="opacity:0.7;cursor:default"></div>
           </div>
@@ -716,17 +714,6 @@ function renderPipelineView(auto, toolLookup, packs) {
       </div>
     `;
   }).join('');
-
-  const packInfo = usedPacks.length > 0 ? usedPacks.map((pack) => `
-    <div class="wf-config-pack">
-      <div class="wf-config-pack-name">${esc(pack.name)} <span style="color:var(--text-muted);font-size:0.65rem">${esc(pack.id)}</span></div>
-      <div class="wf-config-pack-caps">Capabilities: ${esc((pack.allowedCapabilities || []).join(', ') || 'unrestricted')}</div>
-      ${(pack.allowedHosts || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed hosts: ${esc(pack.allowedHosts.join(', '))}</div>` : '<div class="wf-config-pack-detail">Hosts: unrestricted</div>'}
-      ${(pack.allowedPaths || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed paths: ${esc(pack.allowedPaths.join(', '))}</div>` : '<div class="wf-config-pack-detail">Paths: unrestricted</div>'}
-      ${(pack.allowedCommands || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed commands: ${esc(pack.allowedCommands.join(', '))}</div>` : '<div class="wf-config-pack-detail">Commands: none allowed</div>'}
-      ${pack.requireHumanApprovalForWrites ? '<div class="wf-config-pack-detail" style="color:var(--warning)">Requires human approval for writes</div>' : ''}
-    </div>
-  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">Using built-in tool access</div>';
 
   const playbookData = auto._playbook || { id: auto.id, name: auto.name, mode: auto.mode, steps, enabled: auto.enabled, description: auto.description };
   const configPanel = `
@@ -739,10 +726,6 @@ function renderPipelineView(auto, toolLookup, packs) {
         <div class="wf-config-section">
           <div class="wf-config-section-title">Step Configuration</div>
           <div class="wf-config-steps">${stepConfigs}</div>
-        </div>
-        <div class="wf-config-section">
-          <div class="wf-config-section-title">Permission Policies</div>
-          ${packInfo}
         </div>
         <div class="wf-config-section">
           <div class="wf-config-section-title">Raw Definition JSON</div>
@@ -825,13 +808,7 @@ function renderCreateForm(tools, packs, agents) {
           <option value="assistant">Scheduled Assistant</option>
         </select>
       </div>
-      <div class="cfg-field" id="auto-pack-field">
-        <label>Tool Access</label>
-        <select id="auto-create-pack" title="Built-in tools use the normal Guardian rules. Access profiles add extra host, path, and command limits.">
-          <option value="">Built-in tools</option>
-          ${packs.map((p) => `<option value="${escAttr(p.id)}">${esc(p.name)}</option>`).join('')}
-        </select>
-      </div>
+      <input type="hidden" id="auto-create-pack" value="">
     </div>
     <div class="cfg-field" style="margin-top:0.5rem;">
       <label>Description</label>
@@ -1163,34 +1140,43 @@ function renderEngineSettings(summary, workflowConfig, studio, packs) {
         <span id="auto-engine-status" class="cfg-save-status"></span>
       </div>
 
-      <h4 style="margin-top:1.25rem;margin-bottom:0.25rem">Permission Policies</h4>
-      <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.6rem">Each policy restricts what an automation can access.</div>
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Allowed Capabilities</th><th>Actions</th></tr></thead>
-        <tbody>
-          ${packs.length === 0
-            ? '<tr><td colspan="4">No permission policies defined.</td></tr>'
-            : packs.map((pack) => `
-              <tr>
-                <td>${esc(pack.id)}</td>
-                <td>${esc(pack.name)}</td>
-                <td>${esc((pack.allowedCapabilities || []).join(', ') || '-')}</td>
-                <td>
-                  <button class="btn btn-secondary btn-sm auto-pack-edit" data-pack-id="${escAttr(pack.id)}">Edit</button>
-                  <button class="btn btn-secondary btn-sm auto-pack-delete" data-pack-id="${escAttr(pack.id)}">Delete</button>
-                </td>
-              </tr>
-            `).join('')}
-        </tbody>
-      </table>
-      <div class="cfg-field" style="margin-top:0.75rem">
-        <label>Policy JSON (upsert)</label>
-        <textarea id="auto-pack-json" rows="4" placeholder='{"id":"...","name":"...","enabled":true,"allowedCapabilities":["network.read"]}'></textarea>
-      </div>
-      <div class="cfg-actions">
-        <button class="btn btn-primary" id="auto-pack-upsert">Save Policy</button>
-        <span id="auto-pack-status" class="cfg-save-status"></span>
-      </div>
+      <details style="margin-top:1.25rem">
+        <summary style="cursor:pointer;font-weight:600;font-size:0.85rem;color:var(--text-primary);">Access Profiles (Advanced)</summary>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin:0.5rem 0 0.6rem">
+          Access profiles let you assign <strong>tighter security boundaries</strong> to specific automation steps.
+          By default, all steps run with your normal Guardian rules (allowed paths, domains, commands, approval policy).
+          An access profile adds extra restrictions on top — for example, limiting a monitoring automation to only reach specific hosts.
+          <br><br>
+          Most users do not need access profiles. If you do, create one here and then assign it to individual steps via the raw definition JSON editor on each automation.
+        </div>
+        <table>
+          <thead><tr><th>ID</th><th>Name</th><th>Allowed Capabilities</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${packs.length === 0
+              ? '<tr><td colspan="4" style="color:var(--text-muted)">No access profiles defined. Automations use normal Guardian security rules.</td></tr>'
+              : packs.map((pack) => `
+                <tr>
+                  <td>${esc(pack.id)}</td>
+                  <td>${esc(pack.name)}</td>
+                  <td>${esc((pack.allowedCapabilities || []).join(', ') || '-')}</td>
+                  <td>
+                    <button class="btn btn-secondary btn-sm auto-pack-edit" data-pack-id="${escAttr(pack.id)}" title="Load this profile into the editor below">Edit</button>
+                    <button class="btn btn-secondary btn-sm auto-pack-delete" data-pack-id="${escAttr(pack.id)}" title="Permanently delete this access profile">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+          </tbody>
+        </table>
+        <div class="cfg-field" style="margin-top:0.75rem">
+          <label>Profile JSON <span style="color:var(--text-muted);font-weight:normal">(create or update an access profile)</span></label>
+          <textarea id="auto-pack-json" rows="4" placeholder='{"id":"prod-only","name":"Production Servers","enabled":true,"allowedCapabilities":["network.read"],"allowedHosts":["prod-api.internal"]}'></textarea>
+        </div>
+        <div class="cfg-actions">
+          <button class="btn btn-primary" id="auto-pack-upsert">Save Profile</button>
+          <span id="auto-pack-status" class="cfg-save-status"></span>
+        </div>
+      </details>
+
     </div>
   `;
 }
@@ -1461,12 +1447,10 @@ function bindCreateForm(container, { tools, packs, agents }) {
   const saveButton = container.querySelector('#auto-create-save');
   const statusEl = container.querySelector('#auto-create-status');
   const idField = container.querySelector('#auto-id-field');
-  const packField = container.querySelector('#auto-pack-field');
   const idInput = container.querySelector('#auto-create-id');
   const nameInput = container.querySelector('#auto-create-name');
   const descriptionInput = container.querySelector('#auto-create-description');
   const modeSelect = container.querySelector('#auto-create-mode');
-  const packSelect = container.querySelector('#auto-create-pack');
   const enabledSelect = container.querySelector('#auto-create-enabled');
   const singleToolSelect = container.querySelector('#auto-single-tool-select');
   const scheduleCheck = container.querySelector('#auto-schedule-enabled');
@@ -1560,13 +1544,11 @@ function bindCreateForm(container, { tools, packs, agents }) {
     setFormMode('Create Automation', 'Build a one-off tool automation or a multi-step pipeline.');
     setIdReadOnly(false);
     modeSelect.disabled = false;
-    packSelect.disabled = false;
     scheduleCheck.disabled = false;
     nameInput.value = '';
     idInput.value = '';
     descriptionInput.value = '';
     enabledSelect.value = 'false';
-    packSelect.value = '';
     singleToolSelect.value = '';
     argsInput.value = '';
     eventInput.value = '';
@@ -1642,7 +1624,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     pipelineSection.style.display = mode !== 'single' && !isAssistant ? '' : 'none';
     if (assistantSection) assistantSection.style.display = isAssistant ? '' : 'none';
     if (idField) idField.style.display = isAssistant ? 'none' : '';
-    if (packField) packField.style.display = isAssistant ? 'none' : '';
     if (argsField) argsField.style.display = isAssistant ? 'none' : '';
     if (isAssistant) {
       scheduleCheck.checked = true;
@@ -1756,7 +1737,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
 
   container.querySelector('#auto-step-add')?.addEventListener('click', () => {
     const stepType = stepTypeSelect?.value || 'tool';
-    const packId = packSelect?.value || '';
 
     if (stepType === 'instruction') {
       const instruction = stepInstructionInput?.value?.trim();
@@ -1773,7 +1753,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
     } else {
       const toolName = stepToolSelect.value;
       if (!toolName) return;
-      wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId, toolName, args: {} });
+      wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId: '', toolName, args: {} });
       stepToolSelect.value = '';
     }
     renderStepList();
@@ -1790,7 +1770,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     const isAssistant = mode === 'assistant';
     const enabled = enabledSelect.value === 'true';
     const description = descriptionInput.value.trim();
-    const packId = packSelect?.value || '';
     const scheduleEnabled = scheduleCheck.checked;
     const runOnce = runOnceCheck?.checked === true;
 
@@ -1847,7 +1826,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
           return;
         }
       }
-      steps = [{ id: `${id}-step-1`, name: toolName, packId, toolName, args: args || {} }];
+      steps = [{ id: `${id}-step-1`, name: toolName, packId: '', toolName, args: args || {} }];
     } else {
       if (wfSteps.length === 0) {
         statusEl.textContent = 'Add at least one step.';
@@ -1856,10 +1835,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
       }
       steps = wfSteps.map((step, i) => {
         const base = { ...step, id: `${id}-step-${i + 1}` };
-        if (step.type === 'instruction') {
-          return { ...base, packId: '', toolName: '' };
-        }
-        return { ...base, packId: packId || step.packId };
+        return { ...base, packId: '' };
       });
     }
 
@@ -1988,7 +1964,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     const isStandaloneTask = auto._source === 'task' && !auto._playbook && auto._task;
     const isAgentTask = auto._task?.type === 'agent';
     const firstStep = auto.steps?.[0] || null;
-    const uniformPackId = auto.steps?.every((step) => step.packId === auto.steps?.[0]?.packId) ? (auto.steps?.[0]?.packId || '') : '';
 
     if (!attachFormInline(auto)) return;
 
@@ -2010,7 +1985,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     outputNotifySelect.value = auto.outputHandling?.notify || 'off';
     outputSecuritySelect.value = auto.outputHandling?.sendToSecurity || 'off';
     outputArtifactsSelect.value = auto.outputHandling?.persistArtifacts || 'run_history_only';
-    packSelect.value = uniformPackId;
     if (runOnceCheck) runOnceCheck.checked = auto.runOnce === true;
 
     wfSteps.splice(0, wfSteps.length, ...(auto.steps || []).map((step) => ({
@@ -2021,8 +1995,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     if (isAgentTask) {
       modeSelect.value = 'assistant';
       modeSelect.disabled = false;
-      packSelect.value = '';
-      packSelect.disabled = true;
       if (agentSelect) agentSelect.value = auto._task.target || 'default';
       if (agentChannelSelect) agentChannelSelect.value = auto._task.channel || 'scheduled';
       if (agentPromptInput) agentPromptInput.value = auto._task.prompt || auto.agentPrompt || '';
@@ -2036,8 +2008,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
     } else if (isStandaloneTask) {
       modeSelect.value = 'single';
       modeSelect.disabled = true;
-      packSelect.value = '';
-      packSelect.disabled = true;
       singleToolSelect.value = auto._task.target || '';
       argsInput.value = auto._task.args ? JSON.stringify(auto._task.args, null, 2) : '';
       scheduleCheck.checked = true;
@@ -2047,7 +2017,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
       setIdReadOnly(true);
     } else {
       modeSelect.disabled = false;
-      packSelect.disabled = false;
       modeSelect.value = auto.kind === 'pipeline' ? auto.mode : 'single';
       singleToolSelect.value = firstStep?.toolName || '';
       argsInput.value = auto.kind === 'single' && firstStep?.args ? JSON.stringify(firstStep.args, null, 2) : '';
@@ -2113,7 +2082,7 @@ function bindEngineSettings(container, ctx) {
     }
   });
 
-  // Pack upsert
+  // Access profile upsert
   container.querySelector('#auto-pack-upsert')?.addEventListener('click', async () => {
     const statusEl = container.querySelector('#auto-pack-status');
     statusEl.textContent = 'Saving...';
@@ -2129,26 +2098,26 @@ function bindEngineSettings(container, ctx) {
     }
   });
 
-  // Pack delete
+  // Access profile delete
   container.querySelectorAll('.auto-pack-delete').forEach((button) => {
     button.addEventListener('click', async () => {
       const packId = button.getAttribute('data-pack-id');
-      if (!packId || !confirm(`Delete policy '${packId}'?`)) return;
+      if (!packId || !confirm(`Delete access profile '${packId}'?`)) return;
       await api.deleteConnectorPack(packId);
       await renderAutomations(container);
     });
   });
 
-  // Pack edit
+  // Access profile edit (load into textarea)
   container.querySelectorAll('.auto-pack-edit').forEach((button) => {
     button.addEventListener('click', () => {
       const packId = button.getAttribute('data-pack-id');
       const pack = packs.find((p) => p.id === packId);
       if (!pack) return;
       container.querySelector('#auto-pack-json').value = JSON.stringify(pack, null, 2);
-      container.querySelector('#auto-engine-panel').style.display = '';
     });
   });
+
 }
 
 // ─── Schedule helpers (ported from operations.js) ───────
@@ -2387,14 +2356,6 @@ function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
 }
 
-function formatStepAccess(packId, packs) {
-  const normalized = (packId || '').trim();
-  if (!normalized || normalized.toLowerCase() === 'default') {
-    return 'Built-in tools';
-  }
-  const pack = (packs || []).find((candidate) => candidate.id === normalized);
-  return pack ? `${pack.name} (${pack.id})` : normalized;
-}
 
 // Global click handler for step output toggles
 if (typeof document !== 'undefined') {
@@ -2411,4 +2372,13 @@ if (typeof document !== 'undefined') {
     output.style.display = visible ? 'none' : '';
     button.textContent = visible ? 'Output' : 'Hide';
   });
+}
+
+function formatStepAccess(packId, packs) {
+  const normalized = (packId || '').trim();
+  if (!normalized || normalized.toLowerCase() === 'default') {
+    return 'Built-in tools';
+  }
+  const pack = (packs || []).find((candidate) => candidate.id === normalized);
+  return pack ? `${pack.name} (${pack.id})` : normalized;
 }

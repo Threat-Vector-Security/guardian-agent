@@ -105,6 +105,13 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - Both backends share the same `gws` / `gws_schema` tool names. ToolExecutor routes to native first, CLI fallback.
 - Spec: `docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md`
 
+### Microsoft 365 (`src/microsoft/`)
+- **Native mode:** `MicrosoftAuth` (OAuth 2.0 PKCE, encrypted token storage) + `MicrosoftService` (direct Graph REST API calls). Config: `assistant.tools.microsoft` (enabled, services, oauthCallbackPort, clientId, tenantId).
+- No MSAL, no Graph SDK, no `@azure/identity` — hand-rolled PKCE + direct `fetch()` to `graph.microsoft.com/v1.0`.
+- Tools: `m365` (generic Graph API), `m365_schema` (curated endpoint reference), `outlook_draft`, `outlook_send` (convenience email tools).
+- 3-step setup: register app in Entra → enter client ID → connect via OAuth.
+- Spec: `docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md`
+
 ### Browser Automation (MCP-based)
 - **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing 55+ browser automation tools via real Chromium/Firefox/WebKit. Registered as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`
 - **Lightpanda** (`@lightpanda/browser`) — optional lightweight MCP server for fast page reads (7 tools: goto, markdown, links, evaluate, semantic_tree, interactiveElements, structuredData). Registered as `mcp-lightpanda-*` tools. Config: `assistant.tools.browser.lightpandaEnabled` (default: false)
@@ -181,6 +188,8 @@ src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer,
                       RateLimiter, audit log/persistence, Guardian admission pipeline
 src/channels/       — CLI, Telegram, Web channel adapters
 src/policy/         — Policy-as-Code engine (types, matcher, compiler, engine, rules, shadow mode)
+src/google/         — Native Google Workspace integration (GoogleAuth, GoogleService)
+src/microsoft/      — Native Microsoft 365 integration (MicrosoftAuth, MicrosoftService)
 src/tools/          — ToolExecutor, MCP client (MCPClient, MCPClientManager), approvals
 src/broker/         — BrokerServer/Client, capability tokens, provenance — JSON-RPC 2.0 bridge
                       between supervisor and worker (tool calls, approvals, LLM chat proxy)

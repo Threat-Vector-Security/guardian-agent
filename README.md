@@ -117,6 +117,7 @@
 - Native skills layer with Guardian manifests plus frontmatter-compatible reviewed imports for reusable workflow guidance
 - Connector and playbook framework with allowlists, bounded execution, and dry-run mode
 - Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) — native googleapis SDK (default) or gws CLI
+- Microsoft 365 integration (Outlook Mail, Calendar, OneDrive, Contacts) — native Graph REST API with OAuth 2.0 PKCE
 - Tool governance — approval workflows, per-tool policy overrides, risk-tiered tool classes
 
 **Channels & Dashboard**
@@ -302,6 +303,7 @@ For detailed configuration documentation:
 - [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
 - [Native Skills](docs/specs/SKILLS-SPEC.md)
 - [Google Workspace](docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md)
+- [Microsoft 365](docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md)
 - [Evaluation Framework](docs/specs/EVAL-FRAMEWORK-SPEC.md)
 - [Policy-as-Code](docs/specs/POLICY-AS-CODE-SPEC.md)
 - [Tools Control Plane](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
@@ -322,6 +324,7 @@ For detailed configuration documentation:
 - [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
 - [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
 - [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
+- [Microsoft 365 Integration](docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md)
 
 </details>
 

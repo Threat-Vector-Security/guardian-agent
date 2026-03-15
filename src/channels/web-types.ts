@@ -859,6 +859,25 @@ export interface DashboardCallbacks {
   onGoogleCredentials?: (credentials: string) => Promise<{ success: boolean; message: string }>;
   /** Disconnect native Google integration. */
   onGoogleDisconnect?: () => Promise<{ success: boolean; message: string }>;
+  /** Native Microsoft 365 status. */
+  onMicrosoftStatus?: () => Promise<{
+    authenticated: boolean;
+    tokenExpiry?: number;
+    services: string[];
+    clientId?: string;
+    tenantId?: string;
+  }>;
+  /** Start native Microsoft OAuth flow. */
+  onMicrosoftAuthStart?: (services: string[]) => Promise<{
+    success: boolean;
+    authUrl?: string;
+    state?: string;
+    message?: string;
+  }>;
+  /** Save Microsoft client ID / tenant ID config. */
+  onMicrosoftConfig?: (config: { clientId: string; tenantId?: string }) => Promise<{ success: boolean; message: string }>;
+  /** Disconnect native Microsoft integration. */
+  onMicrosoftDisconnect?: () => Promise<{ success: boolean; message: string }>;
   /** Guardian Agent inline evaluation config and status. */
   onGuardianAgentStatus?: () => {
     enabled: boolean;
