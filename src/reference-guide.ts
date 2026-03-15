@@ -263,6 +263,39 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'microsoft-365',
+            title: 'Microsoft 365',
+            summary: 'Enable Outlook Mail, Calendar, OneDrive, and Contacts via native Microsoft Graph integration.',
+            sections: [
+              {
+                title: 'Integration',
+                items: [
+                  'Native integration: GuardianAgent calls the Microsoft Graph REST API directly. No MSAL, no Graph SDK — hand-rolled OAuth 2.0 PKCE with encrypted token storage.',
+                  'Uses the `m365` (generic Graph API), `m365_schema` (endpoint reference), `outlook_draft`, and `outlook_send` tool names.',
+                  'Single base URL: graph.microsoft.com/v1.0. Consistent OData query parameters ($filter, $select, $top, $orderby).',
+                ],
+              },
+              {
+                title: 'Setup (3 Steps)',
+                items: [
+                  'Step 1 — Register app: Go to the Microsoft Entra admin center (entra.microsoft.com). Click "New registration". Name it anything (e.g. "Guardian Agent"). Set supported account types to "Any Entra ID directory + personal Microsoft accounts". Under Redirect URI, select "Mobile and desktop applications" and enter http://localhost:18433/callback. Click Register. Then go to Authentication > Settings, enable "Allow public client flows", and click Save. Copy the Application (client) ID from the Overview page.',
+                  'Step 2 — Enter Client ID: In Guardian Agent, go to Cloud > Connections > Microsoft 365. Paste the Application (client) ID. Optionally set a Tenant ID (defaults to "common" for broadest compatibility).',
+                  'Step 3 — Connect: Select the services you want (Mail, Calendar, OneDrive, Contacts). Click "Connect Microsoft". A browser window opens for consent. Approve access, and the connection is live immediately.',
+                ],
+              },
+              {
+                title: 'Available Services',
+                items: [
+                  'Mail — read, search, draft, send, folders, attachments via Outlook.',
+                  'Calendar — list events, calendar view with recurring expansion, create/update/delete events.',
+                  'OneDrive — list files, search, get metadata, storage quota.',
+                  'Contacts — list, create, update, delete contacts.',
+                  'User — get current user profile (display name, email address).',
+                ],
+              },
+            ],
+          },
+          {
             id: 'telegram',
             title: 'Telegram Channel',
             summary: 'Bring the assistant into Telegram with BotFather setup and allowed chat IDs.',

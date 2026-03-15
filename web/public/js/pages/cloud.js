@@ -1312,11 +1312,11 @@ function createMicrosoft365Panel() {
               Go to the <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" style="color:var(--accent);">Microsoft Entra admin center</a>.
               Click <strong>New registration</strong>.
               <br>Name it anything (e.g. "Guardian Agent").
-              Set <strong>Supported account types</strong> to <strong style="color:var(--text-primary);">"Accounts in any organizational directory and personal Microsoft accounts"</strong>.
+              Set <strong>Supported account types</strong> to <strong style="color:var(--text-primary);">"Any Entra ID directory + personal Microsoft accounts"</strong>.
               <br>Under <strong>Redirect URI</strong>, select <strong>Mobile and desktop applications</strong>
               and enter <code style="${inlineCode}">http://localhost:18433/callback</code>.
-              <br>Click <strong>Register</strong>. Then go to <strong>Authentication</strong> and enable
-              <strong style="color:var(--text-primary);">"Allow public client flows"</strong>.
+              <br>Click <strong>Register</strong>. Then go to <strong>Authentication &gt; Settings</strong>, enable
+              <strong style="color:var(--text-primary);">"Allow public client flows"</strong>, and click <strong>Save</strong>.
               <br>Copy the <strong>Application (client) ID</strong> from the Overview page.
             </li>
             <li style="margin-bottom:0.3rem;">
@@ -1347,19 +1347,159 @@ function createMicrosoft365Panel() {
               `).join('')}
             </div>
           </div>
-          <div id="m365-status" style="margin-bottom:0.5rem;font-size:0.8rem;">
-            <div style="color:var(--text-muted);">Not yet implemented. See <code style="${inlineCode}">docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md</code> for the implementation plan.</div>
-          </div>
+          <div id="m365-status" style="margin-bottom:0.5rem;font-size:0.8rem;"></div>
           <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-            <button class="btn btn-primary" id="m365-connect" disabled>Connect Microsoft</button>
-            <button class="btn btn-secondary" id="m365-test" disabled>Test Connection</button>
+            <button class="btn btn-primary" id="m365-connect">Connect Microsoft</button>
+            <button class="btn btn-secondary" id="m365-test">Test Connection</button>
             <button class="btn btn-secondary" id="m365-disconnect" style="display:none;">Disconnect</button>
-            <span id="m365-status-badge" style="font-size:0.8rem;color:var(--text-muted);">Coming soon</span>
+            <span id="m365-status-badge" style="font-size:0.8rem;"></span>
           </div>
         </div>
       </div>
     </div>
   `;
+
+  async function refreshMicrosoftStatus() {
+    try {
+      const status = await api.microsoftStatus();
+      const badge = section.querySelector('#m365-status-badge');
+      const disconnectBtn = section.querySelector('#m365-disconnect');
+      const statusText = section.querySelector('#m365-status');
+
+      // Pre-populate saved Client ID / Tenant ID so user doesn't have to re-enter
+      const clientIdInput = section.querySelector('#m365-client-id');
+      const tenantIdInput = section.querySelector('#m365-tenant-id');
+      if (status.clientId && clientIdInput && !clientIdInput.value) {
+        clientIdInput.value = status.clientId;
+      }
+      if (status.tenantId && tenantIdInput && !tenantIdInput.value) {
+        tenantIdInput.value = status.tenantId;
+      }
+
+      if (status.authenticated) {
+        if (badge) {
+          badge.textContent = 'Connected';
+          badge.className = 'badge badge-running';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = '';
+        if (statusText) {
+          const expiry = status.tokenExpiry ? new Date(status.tokenExpiry).toLocaleString() : 'unknown';
+          statusText.innerHTML = `
+            <div style="color:var(--success);margin-bottom:0.25rem;">✓ Authenticated successfully.</div>
+            <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
+          `;
+        }
+      } else {
+        if (badge) {
+          badge.textContent = 'Not connected';
+          badge.className = 'badge badge-dead';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Please connect your Microsoft account.</div>';
+      }
+    } catch (err) {
+      console.warn('Failed to refresh Microsoft status:', err);
+    }
+  }
+
+  section.querySelector('#m365-connect')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#m365-connect');
+    const clientIdInput = section.querySelector('#m365-client-id');
+    const tenantIdInput = section.querySelector('#m365-tenant-id');
+    const checks = section.querySelectorAll('#m365-service-checks input:checked');
+    const services = Array.from(checks).map(c => c.value);
+    const statusText = section.querySelector('#m365-status');
+    const clientId = clientIdInput?.value?.trim();
+    const tenantId = tenantIdInput?.value?.trim() || 'common';
+
+    if (!clientId) {
+      if (statusText) statusText.innerHTML = '<div style="color:var(--warning);">Please enter the Application (Client) ID.</div>';
+      return;
+    }
+
+    if (services.length === 0) {
+      if (statusText) statusText.innerHTML = '<div style="color:var(--warning);">Please select at least one service.</div>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Starting Auth...';
+
+    try {
+      // Save client ID / tenant ID config first
+      await api.microsoftConfig(clientId, tenantId);
+
+      // Start OAuth flow
+      const { authUrl } = await api.microsoftAuthStart(services);
+      window.open(authUrl, '_blank', 'width=600,height=700');
+
+      if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Microsoft login in a new window. Please complete the flow there.</div>';
+
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        const status = await api.microsoftStatus();
+        if (status.authenticated || attempts > 60) {
+          clearInterval(poll);
+          btn.disabled = false;
+          btn.textContent = 'Connect Microsoft';
+          refreshMicrosoftStatus();
+          if (status.authenticated) {
+            await api.updateConfig({ assistant: { tools: { microsoft: { enabled: true, services, clientId, tenantId } } } });
+          }
+        }
+      }, 2000);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Connect Microsoft';
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Microsoft auth.'}</div>`;
+    }
+  });
+
+  section.querySelector('#m365-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect from Microsoft 365? This will clear the stored tokens.')) return;
+
+    try {
+      await api.microsoftDisconnect();
+      refreshMicrosoftStatus();
+    } catch (err) {
+      console.error('Failed to disconnect:', err);
+    }
+  });
+
+  section.querySelector('#m365-test')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#m365-test');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    const statusText = section.querySelector('#m365-status');
+
+    try {
+      const result = await api.runTool({
+        toolName: 'm365',
+        args: {
+          service: 'mail',
+          resource: 'me/messages',
+          method: 'list',
+          params: { $top: 1 }
+        }
+      });
+
+      if (result.success) {
+         if (statusText) statusText.innerHTML = '<div style="color:var(--success);">✓ Connection verified! Microsoft Graph API is reachable.</div>';
+      } else {
+         if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${result.error || 'Connection failed.'}</div>`;
+      }
+    } catch (err) {
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Test failed.'}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Test Connection';
+    }
+  });
+
+  refreshMicrosoftStatus();
 
   return section;
 }

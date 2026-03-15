@@ -126,6 +126,8 @@ export interface ToolExecutorOptions {
   docSearch?: import('../search/search-service.js').SearchService;
   /** Native Google Workspace service (googleapis SDK, replaces gws CLI). */
   googleService?: import('../google/google-service.js').GoogleService;
+  /** Native Microsoft 365 service (Graph REST API). */
+  microsoftService?: import('../microsoft/microsoft-service.js').MicrosoftService;
   /** Device inventory for network intelligence/baseline tools. */
   deviceInventory?: DeviceInventoryService;
   /** Network baseline and anomaly service. */
@@ -382,6 +384,12 @@ export class ToolExecutor {
         if (def) definitions.push(def);
       }
     }
+    if (this.options.microsoftService) {
+      for (const toolName of ['m365', 'm365_schema', 'outlook_draft']) {
+        const def = this.registry.get(toolName)?.definition;
+        if (def) definitions.push(def);
+      }
+    }
 
     return uniqueBy(definitions, (def) => def.name).filter(
       (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
@@ -401,6 +409,10 @@ export class ToolExecutor {
 
   setGoogleService(googleService: import('../google/google-service.js').GoogleService | undefined): void {
     this.options.googleService = googleService;
+  }
+
+  setMicrosoftService(microsoftService: import('../microsoft/microsoft-service.js').MicrosoftService | undefined): void {
+    this.options.microsoftService = microsoftService;
   }
 
   setCloudConfig(cloudConfig: AssistantCloudConfig | undefined): void {
@@ -1022,6 +1034,11 @@ export class ToolExecutor {
       return gwsDecision;
     }
 
+    const m365Decision = this.decideM365Tool(definition.name, args);
+    if (m365Decision) {
+      return m365Decision;
+    }
+
     const cloudDecision = this.decideCloudTool(definition.name, args);
     if (cloudDecision) {
       return cloudDecision;
@@ -1081,6 +1098,25 @@ export class ToolExecutor {
 
     // All other GWS write operations: approval-gated in non-autonomous modes
     // Covers calendar, drive, docs, sheets, and any future services (fail-closed)
+    return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+  }
+
+  private decideM365Tool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
+    if (toolName !== 'm365') return null;
+
+    const service = asString(args.service).trim().toLowerCase();
+    const method = asString(args.method).trim().toLowerCase();
+    const isWrite = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i.test(method);
+
+    // Reads for all services pass through to default policy (network → allow)
+    if (!isWrite) return null;
+
+    // Outlook send is always approval-gated regardless of policy mode
+    if (service === 'mail' && method === 'send') {
+      return 'require_approval';
+    }
+
+    // All other M365 write operations: approval-gated in non-autonomous modes
     return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
   }
 
@@ -9713,6 +9749,281 @@ export class ToolExecutor {
 
         // Native GoogleService schema lookup (uses Discovery API).
         const result = await googleSvc.schema(schemaPath);
+        return {
+          success: result.success,
+          output: result.data,
+          error: result.error,
+        };
+      },
+    );
+
+    // ── Microsoft 365 (Graph API) tools ─────────────────────
+
+    this.registry.register(
+      {
+        name: 'outlook_draft',
+        description: 'Create one plain-text Outlook draft using the configured Microsoft 365 connection. Authentication is automatic. Mutating — requires approval outside autonomous mode. Requires draft_email capability.',
+        shortDescription: 'Create one Outlook draft with automatic Microsoft auth.',
+        risk: 'mutating',
+        category: 'email',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            to: { type: 'string' },
+            subject: { type: 'string' },
+            body: { type: 'string' },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+      async (args, request) => {
+        const to = requireString(args.to, 'to');
+        const subject = requireString(args.subject, 'subject');
+        const body = requireString(args.body, 'body');
+        const msService = this.options.microsoftService;
+        if (!msService) {
+          return { success: false, error: 'Microsoft 365 is not enabled. Enable it in Settings > Microsoft 365.' };
+        }
+
+        this.guardAction(request, 'draft_email', { to, subject, provider: 'outlook' });
+
+        const drafted = await msService.createOutlookDraft({ to, subject, body });
+        return {
+          success: drafted.success,
+          output: drafted.data,
+          error: drafted.error,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'outlook_send',
+        description: 'Send one email via the configured Microsoft 365 Outlook connection. Authentication is automatic. Security: graph.microsoft.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
+        shortDescription: 'Send one email through Outlook with automatic Microsoft auth.',
+        risk: 'external_post',
+        category: 'email',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            to: { type: 'string' },
+            subject: { type: 'string' },
+            body: { type: 'string' },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+      async (args, request) => {
+        const to = requireString(args.to, 'to');
+        const subject = requireString(args.subject, 'subject');
+        const body = requireString(args.body, 'body');
+        const msService = this.options.microsoftService;
+        if (!msService) {
+          return { success: false, error: 'Microsoft 365 is not enabled. Enable it in Settings > Microsoft 365.' };
+        }
+
+        this.guardAction(request, 'send_email', { to, subject, provider: 'outlook' });
+
+        const sent = await msService.sendOutlookMessage({ to, subject, body });
+        return {
+          success: sent.success,
+          output: sent.data,
+          error: sent.error,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'm365',
+        description:
+          'Execute a Microsoft Graph API call (Outlook Mail, Calendar, OneDrive, Contacts). ' +
+          'Uses direct REST calls with OAuth 2.0 PKCE. ' +
+          'AUTHENTICATION IS AUTOMATIC. Do NOT ask the user for an access token or credentials. ' +
+          'IMPORTANT: resource paths use forward slashes (e.g. me/messages, me/events). ' +
+          'Common calls:\n' +
+          '  List emails:    service="mail", resource="me/messages", method="list", params={"$top":10,"$select":"subject,from,receivedDateTime"}\n' +
+          '  Read email:     service="mail", resource="me/messages", method="get", id="MESSAGE_ID"\n' +
+          '  Send email:     service="mail", resource="me/sendMail", method="create", json={"message":{"subject":"Hi","body":{"contentType":"Text","content":"Hello"},"toRecipients":[{"emailAddress":{"address":"user@example.com"}}]}}\n' +
+          '  List events:    service="calendar", resource="me/events", method="list", params={"$top":10}\n' +
+          '  Create event:   service="calendar", resource="me/events", method="create", json={"subject":"Meeting","start":{"dateTime":"...","timeZone":"UTC"},"end":{"dateTime":"...","timeZone":"UTC"}}\n' +
+          '  List files:     service="onedrive", resource="me/drive/root/children", method="list"\n' +
+          '  Search files:   service="onedrive", resource="me/drive/root/search(q=\'report\')", method="list"\n' +
+          '  List contacts:  service="contacts", resource="me/contacts", method="list", params={"$top":10}\n' +
+          'CRITICAL: Resource IDs go in the id parameter, NOT in the resource path. ' +
+          'OData query params ($filter, $select, $top, $orderby) go in params. ' +
+          'Request bodies go in json. ' +
+          'Use m365_schema to discover available endpoints and parameters.',
+        shortDescription: 'Execute a Microsoft Graph API call (Outlook, Calendar, OneDrive, etc.).',
+        risk: 'network',
+        category: 'workspace',
+        deferLoading: true,
+        examples: [
+          { input: { service: 'mail', method: 'list', resource: 'me/messages', params: { $top: 10, $orderby: 'receivedDateTime desc' } }, description: 'List recent emails' },
+          { input: { service: 'calendar', method: 'list', resource: 'me/events', params: { $top: 10, $select: 'subject,start,end' } }, description: 'List upcoming calendar events' },
+          { input: { service: 'onedrive', method: 'list', resource: 'me/drive/root/children' }, description: 'List files in OneDrive root' },
+          { input: { service: 'calendar', method: 'create', resource: 'me/events', json: { subject: 'Meeting', start: { dateTime: '2026-03-20T10:00:00', timeZone: 'UTC' }, end: { dateTime: '2026-03-20T10:30:00', timeZone: 'UTC' } } }, description: 'Create a calendar event' },
+          { input: { service: 'contacts', method: 'list', resource: 'me/contacts', params: { $top: 10, $select: 'displayName,emailAddresses' } }, description: 'List contacts' },
+        ],
+        parameters: {
+          type: 'object',
+          properties: {
+            service: { type: 'string', description: 'Microsoft 365 service: mail, calendar, onedrive, contacts.' },
+            resource: { type: 'string', description: 'Graph resource path with slashes. Mail: "me/messages", "me/sendMail", "me/mailFolders". Calendar: "me/events", "me/calendarView". OneDrive: "me/drive/root/children", "me/drive/items". Contacts: "me/contacts".' },
+            method: { type: 'string', description: 'API method: list, get, create, update, delete, send.' },
+            id: { type: 'string', description: 'Resource ID (inserted into path after resource). Use for get/update/delete/send of a specific item.' },
+            params: { type: 'object', description: 'OData query parameters: $filter, $select, $top, $skip, $orderby, $search, $count, etc.' },
+            json: { type: 'object', description: 'Request body as JSON (for create/update/send methods). Contains the data to create or modify.' },
+            format: { type: 'string', enum: ['json', 'table', 'yaml', 'csv'], description: 'Output format. Default: json.' },
+            pageAll: { type: 'boolean', description: 'Auto-paginate all results.' },
+            pageLimit: { type: 'number', description: 'Max pages when using pageAll.' },
+          },
+          required: ['service', 'resource', 'method'],
+        },
+      },
+      async (args, request) => {
+        const service = requireString(args.service, 'service').toLowerCase();
+        const resource = requireString(args.resource, 'resource');
+        const method = requireString(args.method, 'method');
+
+        // Map to appropriate Guardian action types
+        const isWrite = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i.test(method);
+        const actionType = service === 'mail' && /send/i.test(method)
+          ? 'send_email'
+          : service === 'mail'
+            ? (isWrite ? 'draft_email' : 'read_email')
+            : service === 'calendar'
+              ? (isWrite ? 'write_calendar' : 'read_calendar')
+              : service === 'onedrive'
+                ? (isWrite ? 'write_drive' : 'read_drive')
+                : service === 'contacts'
+                  ? (isWrite ? 'write_contacts' : 'read_contacts')
+                  : 'mcp_tool';
+
+        const msService = this.options.microsoftService;
+
+        this.guardAction(request, actionType, {
+          service,
+          resource,
+          method,
+          provider: 'microsoft-native',
+        });
+
+        if (!msService?.isServiceEnabled(service) && service !== 'user') {
+          return {
+            success: false,
+            error: 'Microsoft 365 is not enabled or not connected. Enable it in Settings > Microsoft 365.',
+          };
+        }
+
+        // ── Normalize params vs json ────────────────────────────
+        // LLMs frequently put body fields into params instead of json, and vice versa.
+        let params = args.params as Record<string, unknown> | undefined;
+        let json = (args.json ?? args.body) as Record<string, unknown> | undefined;
+        let id = args.id ? asString(args.id) : undefined;
+
+        const ODATA_PARAM_KEYS = new Set([
+          '$filter', '$select', '$top', '$skip', '$orderby', '$count', '$search', '$expand',
+          'startDateTime', 'endDateTime',
+        ]);
+        const BODY_FIELD_KEYS = new Set([
+          'subject', 'body', 'toRecipients', 'ccRecipients', 'bccRecipients',
+          'message', 'saveToSentItems', 'importance', 'categories', 'isRead',
+          'start', 'end', 'location', 'attendees', 'recurrence', 'isAllDay',
+          'isOnlineMeeting', 'givenName', 'surname', 'emailAddresses',
+          'businessPhones', 'companyName', 'jobTitle', 'contentType', 'content',
+          'name', 'description', 'displayName',
+        ]);
+
+        // Move body fields from params to json for mutating methods
+        if (params && /\b(create|update|patch|send|forward|reply)\b/i.test(method)) {
+          const misplaced: Record<string, unknown> = {};
+          for (const [key, val] of Object.entries(params)) {
+            if (BODY_FIELD_KEYS.has(key) && !ODATA_PARAM_KEYS.has(key)) {
+              misplaced[key] = val;
+            }
+          }
+          if (Object.keys(misplaced).length > 0) {
+            json = { ...(json ?? {}), ...misplaced };
+            params = { ...params };
+            for (const key of Object.keys(misplaced)) delete params[key];
+            if (Object.keys(params).length === 0) params = undefined;
+          }
+        }
+
+        // Move IDs from json to the id parameter
+        if (json && !id) {
+          for (const key of ['id', 'messageId', 'eventId', 'itemId']) {
+            if (typeof json[key] === 'string') {
+              id = json[key] as string;
+              json = { ...json };
+              delete json[key];
+              if (Object.keys(json).length === 0) json = undefined;
+              break;
+            }
+          }
+        }
+
+        const execParams = {
+          service,
+          resource,
+          method,
+          id,
+          params,
+          json,
+          format: args.format as 'json' | 'table' | 'yaml' | 'csv' | undefined,
+          pageAll: args.pageAll === true,
+          pageLimit: args.pageLimit ? asNumber(args.pageLimit, 10) : undefined,
+        };
+
+        const result = await msService!.execute(execParams);
+
+        return {
+          success: result.success,
+          output: result.data,
+          error: result.error,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'm365_schema',
+        description:
+          'Look up the API schema for a Microsoft Graph endpoint. ' +
+          'Returns available parameters, request body fields, and descriptions. ' +
+          'Use this to discover how to call a specific API. ' +
+          'Schema path format: service.resource.method (e.g. "mail.messages.list", "calendar.events.create", "onedrive.root.children").',
+        shortDescription: 'Look up API schema for a Microsoft Graph endpoint.',
+        risk: 'read_only',
+        category: 'workspace',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            schemaPath: {
+              type: 'string',
+              description: 'Dotted schema path: service.resource.method (e.g. "mail.messages.list", "calendar.events.create").',
+            },
+          },
+          required: ['schemaPath'],
+        },
+      },
+      async (args, request) => {
+        const schemaPath = requireString(args.schemaPath, 'schemaPath');
+        this.guardAction(request, 'read_docs', { path: `m365:schema:${schemaPath}` });
+
+        const msService = this.options.microsoftService;
+        if (!msService) {
+          return {
+            success: false,
+            error: 'Microsoft 365 is not enabled. Enable it in Settings > Microsoft 365.',
+          };
+        }
+
+        const result = msService.schema(schemaPath);
         return {
           success: result.success,
           output: result.data,

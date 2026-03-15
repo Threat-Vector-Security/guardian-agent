@@ -381,6 +381,18 @@ export const api = {
   }),
   googleDisconnect: () => request('/api/google/disconnect', { method: 'POST' }),
 
+  // Native Microsoft 365 integration
+  microsoftStatus: () => request('/api/microsoft/status'),
+  microsoftAuthStart: (services) => request('/api/microsoft/auth/start', {
+    method: 'POST',
+    body: JSON.stringify({ services }),
+  }),
+  microsoftConfig: (clientId, tenantId) => request('/api/microsoft/config', {
+    method: 'POST',
+    body: JSON.stringify({ clientId, tenantId }),
+  }),
+  microsoftDisconnect: () => request('/api/microsoft/disconnect', { method: 'POST' }),
+
   // Policy-as-Code Engine
   policyStatus: () => request('/api/policy/status'),
   updatePolicy: (payload) => request('/api/policy/config', {

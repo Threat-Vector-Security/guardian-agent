@@ -893,6 +893,25 @@ export interface GoogleConfig {
   timeoutMs?: number;
 }
 
+/**
+ * Native Microsoft 365 integration.
+ * Uses direct Graph REST API calls with OAuth 2.0 PKCE and encrypted token storage.
+ */
+export interface MicrosoftConfig {
+  /** Enable native Microsoft integration. Default: false. */
+  enabled: boolean;
+  /** Enabled Microsoft 365 services (controls OAuth scope grants). */
+  services: string[];
+  /** Localhost port for OAuth callback server. Default: 18433. */
+  oauthCallbackPort: number;
+  /** Application (client) ID from Microsoft Entra app registration. */
+  clientId: string;
+  /** Tenant ID. Default: 'common' (multi-tenant + personal accounts). */
+  tenantId?: string;
+  /** Request timeout in ms. */
+  timeoutMs?: number;
+}
+
 /** Browser automation configuration (Playwright MCP + Lightpanda MCP). */
 export interface BrowserConfig {
   /** Master switch for all browser tooling. Default: true */
@@ -1154,6 +1173,8 @@ export interface AssistantToolsConfig {
   browser?: BrowserConfig;
   /** Native Google Workspace integration (googleapis SDK). Alternative to gws CLI via MCP managed providers. */
   google?: GoogleConfig;
+  /** Native Microsoft 365 integration (Graph REST API). Uses OAuth 2.0 PKCE, no SDK dependencies. */
+  microsoft?: MicrosoftConfig;
   /** Cloud and hosting provider integrations. */
   cloud?: AssistantCloudConfig;
   /** Native document search engine. Indexes local document collections for BM25 + vector hybrid search. */
@@ -1556,6 +1577,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'googleapis.com',
         'management.azure.com',
         'login.microsoftonline.com',
+        'graph.microsoft.com',
         'blob.core.windows.net',
         'html.duckduckgo.com',
         'api.search.brave.com',

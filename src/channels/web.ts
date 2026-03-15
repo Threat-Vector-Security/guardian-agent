@@ -3000,6 +3000,55 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // ── Native Microsoft 365 integration routes ─────────────
+      // GET /api/microsoft/status — Native Microsoft auth status
+      if (req.method === 'GET' && url.pathname === '/api/microsoft/status') {
+        if (!this.dashboard.onMicrosoftStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onMicrosoftStatus());
+        return;
+      }
+
+      // POST /api/microsoft/auth/start — Start native Microsoft OAuth flow
+      if (req.method === 'POST' && url.pathname === '/api/microsoft/auth/start') {
+        if (!this.dashboard.onMicrosoftAuthStart) {
+          sendJSON(res, 404, { error: 'Native Microsoft integration not enabled' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { services?: string[] };
+        sendJSON(res, 200, await this.dashboard.onMicrosoftAuthStart(parsed.services ?? []));
+        return;
+      }
+
+      // POST /api/microsoft/config — Save client ID / tenant ID
+      if (req.method === 'POST' && url.pathname === '/api/microsoft/config') {
+        if (!this.dashboard.onMicrosoftConfig) {
+          sendJSON(res, 404, { error: 'Native Microsoft integration not enabled' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { clientId?: string; tenantId?: string };
+        if (!parsed.clientId) {
+          sendJSON(res, 400, { success: false, message: 'Missing clientId field.' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onMicrosoftConfig({ clientId: parsed.clientId, tenantId: parsed.tenantId }));
+        return;
+      }
+
+      // POST /api/microsoft/disconnect — Clear tokens
+      if (req.method === 'POST' && url.pathname === '/api/microsoft/disconnect') {
+        if (!this.dashboard.onMicrosoftDisconnect) {
+          sendJSON(res, 404, { error: 'Native Microsoft integration not enabled' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onMicrosoftDisconnect());
+        return;
+      }
+
       // GET /api/guardian-agent/status — Guardian Agent inline evaluation status
       if (req.method === 'GET' && url.pathname === '/api/guardian-agent/status') {
         if (!this.dashboard.onGuardianAgentStatus) {

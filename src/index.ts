@@ -3239,6 +3239,9 @@ function buildDashboardCallbacks(
   policyState: PolicyState,
   googleAuthRef: { current: import('./google/google-auth.js').GoogleAuth | null },
   googleServiceRef: { current: import('./google/google-service.js').GoogleService | null },
+  microsoftAuthRef: { current: import('./microsoft/microsoft-auth.js').MicrosoftAuth | null },
+  microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
+  toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
 ): DashboardCallbacks & {
   telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
   reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
@@ -5864,6 +5867,100 @@ function buildDashboardCallbacks(
         return { success: false, message: err instanceof Error ? err.message : String(err) };
       }
     },
+    onMicrosoftStatus: async () => {
+      const auth = microsoftAuthRef.current;
+      const svc = microsoftServiceRef.current;
+      const msConfig = configRef.current.assistant.tools.microsoft;
+      if (!auth) return { authenticated: false, services: [], clientId: msConfig?.clientId, tenantId: msConfig?.tenantId };
+      return {
+        authenticated: auth.isAuthenticated(),
+        tokenExpiry: auth.getTokenExpiry(),
+        services: svc?.getEnabledServices() ?? [],
+        clientId: msConfig?.clientId,
+        tenantId: msConfig?.tenantId,
+      };
+    },
+    onMicrosoftAuthStart: async (services: string[]) => {
+      const auth = microsoftAuthRef.current;
+      if (!auth) return { success: false, message: 'Microsoft auth not initialized. Enter a Client ID and restart, or save config first.' };
+      try {
+        // Auto-enable native Microsoft in config when user clicks Connect.
+        const rawConfig = loadRawConfig();
+        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
+        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
+        const existingMs = (rawTools.microsoft as Record<string, unknown>) ?? {};
+        rawTools.microsoft = {
+          ...existingMs,
+          enabled: true,
+          services: services.length ? services : ['mail', 'calendar', 'onedrive', 'contacts'],
+        };
+        rawAssistant.tools = rawTools;
+        rawConfig.assistant = rawAssistant;
+        persistAndApplyConfig(rawConfig, { reason: 'Enable native Microsoft 365 integration' });
+
+        enabledManagedProviders.add('m365');
+        const { authUrl, state } = await auth.startAuth();
+        return { success: true, authUrl, state };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    onMicrosoftConfig: async (config: { clientId: string; tenantId?: string }) => {
+      try {
+        const rawConfig = loadRawConfig();
+        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
+        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
+        const existingMs = (rawTools.microsoft as Record<string, unknown>) ?? {};
+        rawTools.microsoft = {
+          ...existingMs,
+          clientId: config.clientId,
+          tenantId: config.tenantId || 'common',
+        };
+        rawAssistant.tools = rawTools;
+        rawConfig.assistant = rawAssistant;
+        persistAndApplyConfig(rawConfig, { reason: 'Save Microsoft 365 client configuration' });
+
+        // Re-initialize auth with new client ID if not already set up.
+        if (!microsoftAuthRef.current || microsoftAuthRef.current === null) {
+          try {
+            const { MicrosoftAuth, MicrosoftService, MICROSOFT_SERVICE_SCOPES } = await import('./microsoft/index.js');
+            const msConfig = configRef.current.assistant.tools.microsoft;
+            const services = msConfig?.services?.length ? msConfig.services : ['mail', 'calendar', 'onedrive', 'contacts'];
+            const scopes = services
+              .flatMap((s: string) => MICROSOFT_SERVICE_SCOPES[s.toLowerCase()] ?? []);
+
+            const auth = new MicrosoftAuth({
+              clientId: config.clientId,
+              tenantId: config.tenantId || 'common',
+              callbackPort: msConfig?.oauthCallbackPort ?? 18433,
+              scopes,
+            });
+            await auth.loadStoredTokens();
+            const svc = new MicrosoftService(auth, { services, timeoutMs: msConfig?.timeoutMs });
+            microsoftAuthRef.current = auth;
+            microsoftServiceRef.current = svc;
+            // Wire the new service into the running ToolExecutor so tools work immediately.
+            toolExecutorRef.current?.setMicrosoftService(svc);
+          } catch (initErr) {
+            return { success: false, message: `Config saved but auth init failed: ${initErr instanceof Error ? initErr.message : String(initErr)}` };
+          }
+        }
+
+        return { success: true, message: 'Microsoft configuration saved.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    onMicrosoftDisconnect: async () => {
+      const auth = microsoftAuthRef.current;
+      if (!auth) return { success: false, message: 'Native Microsoft integration is not enabled.' };
+      try {
+        await auth.disconnect();
+        return { success: true, message: 'Disconnected.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
     onGuardianAgentStatus: () => {
       const cfg = guardianAgentService.getConfig();
       return {
@@ -6506,6 +6603,52 @@ async function main(): Promise<void> {
     }
   }
 
+  // ─── Native Microsoft 365 Service ───────────────────────
+  // Always initialize MicrosoftAuth/MicrosoftService so the web UI can trigger
+  // the OAuth flow even when native mode isn't explicitly enabled yet.
+  const microsoftAuthRef: { current: import('./microsoft/microsoft-auth.js').MicrosoftAuth | null } = { current: null };
+  const microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null } = { current: null };
+  let microsoftService: import('./microsoft/microsoft-service.js').MicrosoftService | undefined;
+  let microsoftAuth: import('./microsoft/microsoft-auth.js').MicrosoftAuth | undefined;
+  const microsoftConfig = config.assistant.tools.microsoft;
+  if (microsoftConfig?.clientId) {
+    try {
+      const { MicrosoftAuth, MicrosoftService, MICROSOFT_SERVICE_SCOPES } = await import('./microsoft/index.js');
+      const services = microsoftConfig?.services?.length ? microsoftConfig.services : ['mail', 'calendar', 'onedrive', 'contacts'];
+      const scopes = services
+        .flatMap((s: string) => MICROSOFT_SERVICE_SCOPES[s.toLowerCase()] ?? []);
+
+      microsoftAuth = new MicrosoftAuth({
+        clientId: microsoftConfig.clientId,
+        tenantId: microsoftConfig.tenantId || 'common',
+        callbackPort: microsoftConfig?.oauthCallbackPort ?? 18433,
+        scopes,
+      });
+
+      await microsoftAuth.loadStoredTokens();
+      microsoftService = new MicrosoftService(microsoftAuth, {
+        services,
+        timeoutMs: microsoftConfig?.timeoutMs,
+      });
+
+      // Populate refs for dashboard callback closures.
+      microsoftAuthRef.current = microsoftAuth;
+      microsoftServiceRef.current = microsoftService;
+
+      // Enable tool routing to native backend if configured.
+      if (microsoftConfig?.enabled || microsoftAuth.isAuthenticated()) {
+        enabledManagedProviders.add('m365');
+        if (microsoftAuth.isAuthenticated()) {
+          console.log(`  Microsoft 365: connected (services: ${services.join(', ')})`);
+        } else {
+          console.log('  Microsoft 365: ready — connect via web UI.');
+        }
+      }
+    } catch (err) {
+      console.log(`  Microsoft 365 (native): failed to initialize — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Device inventory — tracks discovered network devices from playbook runs
   const deviceInventory = new DeviceInventoryService();
   await deviceInventory.load().catch(() => {});
@@ -6877,6 +7020,7 @@ async function main(): Promise<void> {
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
     googleService,
+    microsoftService,
     deviceInventory,
     networkBaseline,
     networkTraffic,
@@ -7721,6 +7865,9 @@ async function main(): Promise<void> {
     policyState,
     googleAuthRef,
     googleServiceRef,
+    microsoftAuthRef,
+    microsoftServiceRef,
+    { current: toolExecutor },
   );
 
   const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
