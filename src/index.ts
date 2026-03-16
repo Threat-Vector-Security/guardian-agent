@@ -67,6 +67,7 @@ import {
   parseScheduledEmailAutomationIntent,
   parseScheduledEmailScheduleIntent,
 } from './runtime/email-automation-intent.js';
+import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
@@ -97,7 +98,17 @@ import { formatAvailableSkillsPrompt } from './skills/prompt.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
-import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from './runtime/pending-approval-copy.js';
+import {
+  formatPendingApprovalMessage,
+  isPhantomPendingApprovalMessage,
+  shouldUseStructuredPendingApprovalMessage,
+} from './runtime/pending-approval-copy.js';
+import {
+  buildLocalModelTooComplicatedMessage,
+  getProviderLocalityFromName,
+  isLocalToolCallParseError,
+  type ResponseSourceMetadata,
+} from './runtime/model-routing-ux.js';
 import { shouldAllowImplicitMemorySave as _shouldAllowImplicitMemorySave } from './util/memory-intent.js';
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { compactMessagesIfOverBudget as _compactMessagesIfOverBudget } from './util/context-budget.js';
@@ -381,6 +392,13 @@ interface ApprovalFollowUpCopy {
   denied?: string;
 }
 
+interface AutomationApprovalContinuation {
+  originalMessage: UserMessage;
+  ctx: AgentContext;
+  pendingApprovalIds: string[];
+  expiresAt: number;
+}
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
@@ -395,6 +413,8 @@ class ChatAgent extends BaseAgent {
   private suspendedSessions = new Map<string, SuspendedSession>();
   /** Direct-tool approval follow-ups that should not go back through the LLM. */
   private approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
+  /** Native automation requests waiting for remediation approvals before they can be retried. */
+  private automationApprovalContinuations = new Map<string, AutomationApprovalContinuation>();
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
@@ -533,6 +553,78 @@ class ChatAgent extends BaseAgent {
     }
   }
 
+  private async chatWithRoutingMetadata(
+    ctx: AgentContext,
+    messages: ChatMessage[],
+    options?: import('./llm/types.js').ChatOptions,
+  ): Promise<{
+    response: import('./llm/types.js').ChatResponse;
+    providerName: string;
+    providerLocality: 'local' | 'external';
+    usedFallback: boolean;
+    notice?: string;
+  }> {
+    const primaryProviderName = ctx.llm?.name ?? 'unknown';
+    const primaryProviderLocality = getProviderLocalityFromName(primaryProviderName);
+
+    if (!this.fallbackChain) {
+      try {
+        return {
+          response: await ctx.llm!.chat(messages, options),
+          providerName: primaryProviderName,
+          providerLocality: primaryProviderLocality,
+          usedFallback: false,
+        };
+      } catch (primaryError) {
+        if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
+          throw new Error(buildLocalModelTooComplicatedMessage());
+        }
+        throw primaryError;
+      }
+    }
+
+    try {
+      return {
+        response: await ctx.llm!.chat(messages, options),
+        providerName: primaryProviderName,
+        providerLocality: primaryProviderLocality,
+        usedFallback: false,
+      };
+    } catch (primaryError) {
+      log.warn(
+        { agent: this.id, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
+        'Primary LLM failed, trying fallback chain',
+      );
+
+      if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
+        try {
+          const result = await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
+          return {
+            response: result.response,
+            providerName: result.providerName,
+            providerLocality: getProviderLocalityFromName(result.providerName),
+            usedFallback: true,
+            notice: 'Retried with an alternate model after the local model failed to format a tool call.',
+          };
+        } catch (fallbackError) {
+          log.warn(
+            { agent: this.id, error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError) },
+            'No alternate model available after local tool-call parsing failure',
+          );
+          throw new Error(buildLocalModelTooComplicatedMessage());
+        }
+      }
+
+      const result = await this.fallbackChain.chatWithFallback(messages, options);
+      return {
+        response: result.response,
+        providerName: result.providerName,
+        providerLocality: getProviderLocalityFromName(result.providerName),
+        usedFallback: result.usedFallback || result.providerName !== primaryProviderName,
+      };
+    }
+  }
+
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
     const stateAgentId = this.stateAgentId;
     if (workerManager) {
@@ -587,16 +679,16 @@ class ChatAgent extends BaseAgent {
     this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
 
     // Check if user is approving a pending tool action (text-based: CLI / Telegram)
-    const approvalResult = await this.tryHandleApproval(message, userKey);
+    const approvalResult = await this.tryHandleApproval(message, userKey, ctx);
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
           { agentId: stateAgentId, userId: message.userId, channel: message.channel },
           message.content,
-          approvalResult,
+          approvalResult.content,
         );
       }
-      return { content: approvalResult };
+      return approvalResult;
     }
 
     const directToolReport = this.tryDirectRecentToolReport(message);
@@ -693,6 +785,7 @@ class ChatAgent extends BaseAgent {
     let pendingApprovalMeta: Array<{ id: string; toolName: string; argsPreview: string }> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
+    let responseSource: ResponseSourceMetadata | undefined;
     
     if (!skipDirectTools) {
       const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
@@ -724,6 +817,25 @@ class ChatAgent extends BaseAgent {
         return {
           content: finalContent,
           metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
+        };
+      }
+
+      const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(message, ctx, userKey);
+      if (directAutomationAuthoring) {
+        finalContent = directAutomationAuthoring.content;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: {
+            ...this.buildImmediateResponseMetadata(activeSkills, userKey),
+            ...directAutomationAuthoring.metadata,
+          },
         };
       }
 
@@ -819,14 +931,32 @@ class ChatAgent extends BaseAgent {
     let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
       if (gwsProvider) {
         try {
+          responseSource = {
+            locality: 'external',
+            providerName: gwsProvider.name,
+          };
           return await gwsProvider.chat(msgs, opts);
         } catch (err) {
           log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
             'GWS provider failed, falling back to default');
-          return this.chatWithFallback(ctx, msgs, opts);
+          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+          responseSource = {
+            locality: fallback.providerLocality,
+            providerName: fallback.providerName,
+            usedFallback: fallback.usedFallback,
+            notice: fallback.notice,
+          };
+          return fallback.response;
         }
       }
-      return this.chatWithFallback(ctx, msgs, opts);
+      const routed = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+      responseSource = {
+        locality: routed.providerLocality,
+        providerName: routed.providerName,
+        usedFallback: routed.usedFallback,
+        notice: routed.notice,
+      };
+      return routed.response;
     };
     let toolResultProviderKind = gwsProvider
       ? 'external'
@@ -842,7 +972,15 @@ class ChatAgent extends BaseAgent {
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
           const fb = await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
-          if (fb.response.content?.trim()) finalContent = fb.response.content;
+          if (fb.response.content?.trim()) {
+            finalContent = fb.response.content;
+            responseSource = {
+              locality: getProviderLocalityFromName(fb.providerName),
+              providerName: fb.providerName,
+              usedFallback: true,
+              notice: 'Retried with an alternate model after a weak local response.',
+            };
+          }
         } catch { /* fallback also failed, keep original */ }
       }
     } else {
@@ -854,6 +992,8 @@ class ChatAgent extends BaseAgent {
       const pendingIds: string[] = [];
       const contextBudget = this.contextBudget;
       let forcedPolicyRetryUsed = false;
+      let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
+      const currentTaintReasons = new Set<string>();
       while (rounds < this.maxToolRounds) {
         // Context window awareness: if approaching budget, summarize oldest tool results
         compactMessagesIfOverBudget(llmMessages, contextBudget);
@@ -942,8 +1082,13 @@ class ChatAgent extends BaseAgent {
           origin: 'assistant' as const,
           agentId: this.id,
           userId: message.userId,
+          principalId: message.principalId ?? message.userId,
+          principalRole: message.principalRole ?? 'owner',
           channel: message.channel,
           requestId: message.id,
+          contentTrustLevel: currentContextTrustLevel,
+          taintReasons: [...currentTaintReasons],
+          derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
           agentContext: { checkAction: ctx.checkAction },
         };
 
@@ -983,6 +1128,14 @@ class ChatAgent extends BaseAgent {
               resultForLlm,
               toolResultProviderKind,
             );
+            if (scannedToolResult.trustLevel === 'quarantined') {
+              currentContextTrustLevel = 'quarantined';
+            } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
+              currentContextTrustLevel = 'low_trust';
+            }
+            for (const reason of scannedToolResult.taintReasons) {
+              currentTaintReasons.add(reason);
+            }
 
             llmMessages.push({
               role: 'tool',
@@ -1074,11 +1227,22 @@ class ChatAgent extends BaseAgent {
             const { provider: routedProvider, locality: routedLocality } = routed;
             chatFn = async (msgs, opts) => {
               try {
+                responseSource = {
+                  locality: routedLocality,
+                  providerName: routedProvider.name,
+                };
                 return await routedProvider.chat(msgs, opts);
               } catch (err) {
                 log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
                   'Routed provider failed, falling back to default');
-                return this.chatWithFallback(ctx, msgs, opts);
+                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+                responseSource = {
+                  locality: fallback.providerLocality,
+                  providerName: fallback.providerName,
+                  usedFallback: true,
+                  notice: fallback.notice,
+                };
+                return fallback.response;
               }
             };
             toolResultProviderKind = routedLocality;
@@ -1102,6 +1266,12 @@ class ChatAgent extends BaseAgent {
           const fbMessages = [...llmMessages];
           const fallbackResult = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
           const fbProvider = fallbackResult.providerName;
+          responseSource = {
+            locality: getProviderLocalityFromName(fbProvider),
+            providerName: fbProvider,
+            usedFallback: true,
+            notice: 'Retried with an alternate model after a weak local response.',
+          };
 
           // If the fallback LLM returned tool calls, execute them (single round)
           if (fallbackResult.response.toolCalls?.length && this.tools) {
@@ -1216,6 +1386,12 @@ class ChatAgent extends BaseAgent {
                 const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
                 if (finalFb.response.content?.trim()) {
                   finalContent = finalFb.response.content;
+                  responseSource = {
+                    locality: getProviderLocalityFromName(finalFb.providerName),
+                    providerName: finalFb.providerName,
+                    usedFallback: true,
+                    notice: 'Retried with an alternate model after local execution degraded.',
+                  };
                   log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
                 }
               }
@@ -1224,11 +1400,23 @@ class ChatAgent extends BaseAgent {
               const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
               if (finalFb.response.content?.trim()) {
                 finalContent = finalFb.response.content;
+                responseSource = {
+                  locality: getProviderLocalityFromName(finalFb.providerName),
+                  providerName: finalFb.providerName,
+                  usedFallback: true,
+                  notice: 'Retried with an alternate model after local execution degraded.',
+                };
                 log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
               }
             }
           } else if (fallbackResult.response.content?.trim()) {
             finalContent = fallbackResult.response.content;
+            responseSource = {
+              locality: getProviderLocalityFromName(fbProvider),
+              providerName: fbProvider,
+              usedFallback: true,
+              notice: 'Retried with an alternate model after a weak local response.',
+            };
             log.info({ agent: this.id, provider: fbProvider },
               'Fallback provider produced successful response');
           }
@@ -1260,6 +1448,15 @@ class ChatAgent extends BaseAgent {
         finalContent = summarizeToolRoundFallback(lastToolRoundResults);
       }
 
+      // Local models sometimes emit generic approval copy without ever producing
+      // a real pending approval object. Never show approval text unless the
+      // runtime actually has pending approval metadata to back it.
+      if (!pendingApprovalMeta?.length && isPhantomPendingApprovalMessage(finalContent)) {
+        finalContent = lastToolRoundResults.length > 0
+          ? summarizeToolRoundFallback(lastToolRoundResults)
+          : 'I did not create a real approval request for that action. Please try again.';
+      }
+
       if (!finalContent) {
         finalContent = 'I could not generate a final response for that request.';
       }
@@ -1276,6 +1473,7 @@ class ChatAgent extends BaseAgent {
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
     if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
+    if (responseSource) metadata.responseSource = responseSource;
 
     return {
       content: finalContent,
@@ -1381,15 +1579,38 @@ class ChatAgent extends BaseAgent {
     toolName: string,
     result: unknown,
     providerKind: 'local' | 'external',
-  ): { sanitized: unknown; threats: string[] } {
+  ): {
+    sanitized: unknown;
+    threats: string[];
+    trustLevel: import('./tools/types.js').ContentTrustLevel;
+    taintReasons: string[];
+    allowPlannerRawContent: boolean;
+    allowMemoryWrite: boolean;
+    allowDownstreamDispatch: boolean;
+  } {
     if (!this.outputGuardian) {
-      return { sanitized: result, threats: [] };
+      return {
+        sanitized: result,
+        threats: [],
+        trustLevel: providerKind === 'local' ? 'trusted' : 'low_trust',
+        taintReasons: providerKind === 'local' ? [] : ['remote_content'],
+        allowPlannerRawContent: true,
+        allowMemoryWrite: providerKind === 'local',
+        allowDownstreamDispatch: true,
+      };
     }
 
     const scan = this.outputGuardian.scanToolResult(toolName, result, { providerKind });
     return {
-      sanitized: scan.sanitized,
+      sanitized: scan.allowPlannerRawContent
+        ? scan.sanitized
+        : compactQuarantinedToolResult(toolName, scan.sanitized, scan.taintReasons),
       threats: scan.threats,
+      trustLevel: scan.trustLevel,
+      taintReasons: scan.taintReasons,
+      allowPlannerRawContent: scan.allowPlannerRawContent,
+      allowMemoryWrite: scan.allowMemoryWrite,
+      allowDownstreamDispatch: scan.allowDownstreamDispatch,
     };
   }
 
@@ -1397,7 +1618,11 @@ class ChatAgent extends BaseAgent {
    * Check if the user's message is an approval decision for pending tool actions.
    * If so, execute approval/denial and return a summary.
    */
-  private async tryHandleApproval(message: UserMessage, userKey: string): Promise<string | null> {
+  private async tryHandleApproval(
+    message: UserMessage,
+    userKey: string,
+    ctx: AgentContext,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     const pending = this.getPendingApprovals(userKey);
@@ -1414,30 +1639,41 @@ class ChatAgent extends BaseAgent {
       const selected = this.resolveApprovalTargets(input, pending.ids);
       if (selected.errors.length > 0) {
         const summaries = this.tools?.getApprovalSummaries(pending.ids);
-        return [
-          selected.errors.join('\n'),
-          '',
-          this.formatPendingApprovalPrompt(pending.ids, summaries),
-        ].join('\n');
+        return {
+          content: [
+            selected.errors.join('\n'),
+            '',
+            this.formatPendingApprovalPrompt(pending.ids, summaries),
+          ].join('\n'),
+        };
       }
       targetIds = selected.ids;
     }
 
     if (targetIds.length === 0) {
       const summaries = this.tools?.getApprovalSummaries(pending.ids);
-      return this.formatPendingApprovalPrompt(pending.ids, summaries);
+      return { content: this.formatPendingApprovalPrompt(pending.ids, summaries) };
     }
 
     const remaining = pending.ids.filter((id) => !targetIds.includes(id));
     this.setPendingApprovals(userKey, remaining);
     const results: string[] = [];
+    const approvedIds = new Set<string>();
+    const failedIds = new Set<string>();
     for (const approvalId of targetIds) {
       try {
-        const result = await this.tools.decideApproval(approvalId, decision, message.userId);
+        const result = await this.tools.decideApproval(
+          approvalId,
+          decision,
+          message.principalId ?? message.userId,
+          message.principalRole ?? 'owner',
+        );
         if (result.success) {
+          if (decision === 'approved') approvedIds.add(approvalId);
           const followUp = this.takeApprovalFollowUp(approvalId, decision);
           results.push(followUp ?? result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
         } else {
+          failedIds.add(approvalId);
           this.clearApprovalFollowUp(approvalId);
           const failure = result.message ?? `${decision === 'approved' ? 'Approval' : 'Denial'} failed (${approvalId}).`;
           results.push(
@@ -1447,16 +1683,75 @@ class ChatAgent extends BaseAgent {
           );
         }
       } catch (err) {
+        failedIds.add(approvalId);
         this.clearApprovalFollowUp(approvalId);
         results.push(`Error processing ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    const continuation = this.getAutomationApprovalContinuation(userKey);
+    if (continuation) {
+      const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
+      if (decision === 'approved' && affected.length > 0) {
+        const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
+        if (stillPending.length === 0) {
+          this.clearAutomationApprovalContinuation(userKey);
+          const retry = await this.tryDirectAutomationAuthoring(continuation.originalMessage, ctx, userKey);
+          if (retry) {
+            results.push('');
+            results.push(retry.content);
+            return {
+              content: results.join('\n'),
+              metadata: retry.metadata,
+            };
+          }
+        } else {
+          this.setAutomationApprovalContinuation(userKey, continuation.originalMessage, continuation.ctx, stillPending, continuation.expiresAt);
+        }
+      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
+        this.clearAutomationApprovalContinuation(userKey);
+      }
+    }
+
+    const fallbackContinuation = this.getAutomationApprovalContinuation(userKey);
+    if (decision === 'approved' && fallbackContinuation && approvedIds.size > 0) {
+      const livePendingIds = new Set(this.tools.listPendingApprovalIdsForUser(
+        message.userId,
+        message.channel,
+        {
+          includeUnscoped: message.channel === 'web',
+          principalId: message.principalId ?? message.userId,
+        },
+      ));
+      const stillPending = fallbackContinuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
+      if (stillPending.length === 0) {
+        this.clearAutomationApprovalContinuation(userKey);
+        const retry = await this.tryDirectAutomationAuthoring(fallbackContinuation.originalMessage, ctx, userKey);
+        if (retry) {
+          results.push('');
+          results.push(retry.content);
+          return {
+            content: results.join('\n'),
+            metadata: retry.metadata,
+          };
+        }
+      } else if (stillPending.length !== fallbackContinuation.pendingApprovalIds.length) {
+        this.setAutomationApprovalContinuation(
+          userKey,
+          fallbackContinuation.originalMessage,
+          fallbackContinuation.ctx,
+          stillPending,
+          fallbackContinuation.expiresAt,
+        );
+      }
+    }
+
     if (remaining.length > 0) {
       const summaries = this.tools?.getApprovalSummaries(remaining);
       results.push('');
       results.push(this.formatPendingApprovalPrompt(remaining, summaries));
     }
-    return results.join('\n');
+    return { content: results.join('\n') };
   }
 
   private getPendingApprovals(userKey: string, nowMs: number = Date.now()): PendingApprovalState | null {
@@ -1493,6 +1788,43 @@ class ChatAgent extends BaseAgent {
     this.approvalFollowUps.delete(approvalId.trim());
   }
 
+  private getAutomationApprovalContinuation(
+    userKey: string,
+    nowMs: number = Date.now(),
+  ): AutomationApprovalContinuation | null {
+    const state = this.automationApprovalContinuations.get(userKey);
+    if (!state) return null;
+    if (state.expiresAt <= nowMs) {
+      this.automationApprovalContinuations.delete(userKey);
+      return null;
+    }
+    return state;
+  }
+
+  private setAutomationApprovalContinuation(
+    userKey: string,
+    originalMessage: UserMessage,
+    ctx: AgentContext,
+    pendingApprovalIds: string[],
+    expiresAt: number = Date.now() + PENDING_APPROVAL_TTL_MS,
+  ): void {
+    const uniqueIds = [...new Set(pendingApprovalIds.filter((id) => id.trim().length > 0))];
+    if (uniqueIds.length === 0) {
+      this.automationApprovalContinuations.delete(userKey);
+      return;
+    }
+    this.automationApprovalContinuations.set(userKey, {
+      originalMessage,
+      ctx,
+      pendingApprovalIds: uniqueIds,
+      expiresAt,
+    });
+  }
+
+  private clearAutomationApprovalContinuation(userKey: string): void {
+    this.automationApprovalContinuations.delete(userKey);
+  }
+
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null {
     const normalizedId = approvalId.trim();
     if (!normalizedId) return null;
@@ -1513,6 +1845,41 @@ class ChatAgent extends BaseAgent {
       }
     }
     return false;
+  }
+
+  hasAutomationApprovalContinuation(approvalId: string): boolean {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return false;
+    for (const continuation of this.automationApprovalContinuations.values()) {
+      if (continuation.pendingApprovalIds.includes(normalizedId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async continueAutomationAfterApproval(
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return null;
+
+    for (const [userKey, continuation] of this.automationApprovalContinuations.entries()) {
+      if (!continuation.pendingApprovalIds.includes(normalizedId)) continue;
+      if (decision !== 'approved') {
+        this.clearAutomationApprovalContinuation(userKey);
+        return null;
+      }
+      const stillPending = continuation.pendingApprovalIds.filter((id) => id !== normalizedId);
+      if (stillPending.length > 0) {
+        this.setAutomationApprovalContinuation(userKey, continuation.originalMessage, continuation.ctx, stillPending, continuation.expiresAt);
+        return null;
+      }
+      this.clearAutomationApprovalContinuation(userKey);
+      return this.tryDirectAutomationAuthoring(continuation.originalMessage, continuation.ctx, userKey);
+    }
+    return null;
   }
 
   private syncPendingApprovalsFromExecutor(userKey: string, userId: string, channel: string): void {
@@ -1733,6 +2100,65 @@ class ChatAgent extends BaseAgent {
     return intent.mode === 'send'
       ? `I sent the Gmail message to ${to} with subject "${subject}".`
       : `I drafted a Gmail message to ${to} with subject "${subject}".`;
+  }
+
+  private async tryDirectAutomationAuthoring(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    options?: { allowRemediation?: boolean },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    const allowedPaths = this.tools.getPolicy().sandbox.allowedPaths;
+    const trackedPendingApprovalIds: string[] = [];
+    const result = await tryAutomationPreRoute({
+      agentId: this.id,
+      message,
+      checkAction: ctx.checkAction,
+      preflightTools: (requests) => this.tools!.preflightTools(requests),
+      workspaceRoot: allowedPaths[0] || process.cwd(),
+      allowedPaths,
+      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
+      trackPendingApproval: (approvalId) => {
+        trackedPendingApprovalIds.push(approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+      },
+      onPendingApproval: ({ approvalId, toolName, automationName, verb }) => {
+        this.setApprovalFollowUp(approvalId, {
+          approved: toolName === 'workflow_upsert'
+            ? `I ${verb} the workflow '${automationName}'.`
+            : `I ${verb} the scheduled assistant task '${automationName}'.`,
+          denied: toolName === 'workflow_upsert'
+            ? `I did not ${verb === 'updated' ? 'update' : 'create'} the workflow '${automationName}'.`
+            : `I did not ${verb === 'updated' ? 'update' : 'create'} the scheduled assistant task '${automationName}'.`,
+        });
+      },
+      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const summaries = this.tools?.getApprovalSummaries(ids);
+        if (!summaries) return fallback;
+        return ids.map((id) => {
+          const summary = summaries.get(id);
+          const fallbackItem = fallback.find((item) => item.id === id);
+          return {
+            id,
+            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
+            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+          };
+        });
+      },
+    }, options);
+    if (!result) {
+      this.clearAutomationApprovalContinuation(userKey);
+      return null;
+    }
+    if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
+      this.setAutomationApprovalContinuation(userKey, message, ctx, trackedPendingApprovalIds);
+    } else {
+      this.clearAutomationApprovalContinuation(userKey);
+    }
+    return result;
   }
 
   private async tryDirectScheduledEmailAutomation(
@@ -2408,6 +2834,21 @@ function formatToolResultForLLM(toolName: string, toolResult: unknown, threats: 
     serialized,
     '</tool_result>',
   ].filter(Boolean).join('\n');
+}
+
+function compactQuarantinedToolResult(toolName: string, toolResult: unknown, taintReasons: string[]): Record<string, unknown> {
+  const result = toolResult && typeof toolResult === 'object'
+    ? toolResult as Record<string, unknown>
+    : {};
+  return {
+    success: result.success === true,
+    status: toString(result.status) || 'quarantined',
+    message: truncateText(toString(result.message), 300) || `Raw ${toolName} content was quarantined before planner reinjection.`,
+    outputPreview: truncateText(safeJsonStringify(compactToolOutputForLLM(toolName, result.output)), 600),
+    trustLevel: 'quarantined',
+    taintReasons,
+    rawContentAvailable: false,
+  };
 }
 
 function serializeToolResultForLLM(toolName: string, toolResult: unknown, maxChars: number): string {
@@ -3878,10 +4319,11 @@ function buildDashboardCallbacks(
       categoryDefaults: computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>),
     }),
 
-    onToolsPendingApprovals: ({ userId, channel, limit }) => {
+    onToolsPendingApprovals: ({ userId, channel, principalId, limit }) => {
       const ids = toolExecutor.listPendingApprovalIdsForUser(userId, channel, {
         limit: limit ?? 20,
         includeUnscoped: channel === 'web',
+        principalId,
       });
       const summaries = toolExecutor.getApprovalSummaries(ids);
       return ids.map((id) => {
@@ -3964,6 +4406,12 @@ function buildDashboardCallbacks(
         origin: input.origin ?? 'web',
         agentId: input.agentId ?? (configRef.current.channels.web?.defaultAgent ?? configRef.current.channels.cli?.defaultAgent),
         userId: input.userId,
+        principalId: input.principalId ?? input.userId,
+        principalRole: input.principalRole ?? 'owner',
+        contentTrustLevel: input.contentTrustLevel,
+        taintReasons: input.taintReasons,
+        derivedFromTaintedContent: input.derivedFromTaintedContent,
+        scheduleId: input.scheduleId,
         channel: input.channel,
       });
       analytics.track({
@@ -4077,11 +4525,25 @@ function buildDashboardCallbacks(
         input.approvalId,
         input.decision,
         input.actor,
+        input.actorRole ?? 'owner',
         input.reason,
       );
       const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId));
+      let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
+      if (result.success) {
+        continuedResponse = await runtime.workerManager?.continueAutomationAfterApproval(input.approvalId, input.decision) ?? undefined;
+        if (!continuedResponse) {
+          for (const agent of chatAgents.values()) {
+            const followUp = await agent.continueAutomationAfterApproval(input.approvalId, input.decision);
+            if (followUp) {
+              continuedResponse = followUp;
+              break;
+            }
+          }
+        }
+      }
       let displayMessage: string | undefined;
-      if (!continueConversation) {
+      if (!continueConversation && !continuedResponse) {
         for (const agent of chatAgents.values()) {
           const followUp = agent.takeApprovalFollowUp(input.approvalId, input.decision);
           if (followUp) {
@@ -4109,6 +4571,7 @@ function buildDashboardCallbacks(
         message: result.message,
         continueConversation,
         displayMessage,
+        ...(continuedResponse ? { continuedResponse } : {}),
       };
     },
 
@@ -4511,6 +4974,8 @@ function buildDashboardCallbacks(
           const message: UserMessage = {
             id: randomUUID(),
             userId: canonicalUserId,
+            principalId: msg.principalId ?? canonicalUserId,
+            principalRole: msg.principalRole ?? 'owner',
             channel,
             content: msg.content,
             timestamp: Date.now(),
@@ -4530,7 +4995,23 @@ function buildDashboardCallbacks(
               channelUserId,
               agentId,
             });
-            return response;
+            const mergedMetadata = {
+              ...(response.metadata ?? {}),
+              ...(routeDecision?.tier
+                ? {
+                    responseSource: {
+                      ...((response.metadata?.responseSource && typeof response.metadata.responseSource === 'object')
+                        ? response.metadata.responseSource as Record<string, unknown>
+                        : {}),
+                      tier: routeDecision.tier,
+                    },
+                  }
+                : {}),
+            };
+            return {
+              ...response,
+              metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
+            };
           } catch (err) {
             // ── Tier fallback: retry with the opposite-tier agent ──
             const routingCfg = configRef.current.routing;
@@ -4564,7 +5045,21 @@ function buildDashboardCallbacks(
                   agentId: fallbackId,
                   metadata: { fallback: 'true' },
                 });
-                return { ...fallbackResponse, metadata: { ...fallbackResponse.metadata, fallback: true } };
+                const mergedMetadata = {
+                  ...(fallbackResponse.metadata ?? {}),
+                  fallback: true,
+                  responseSource: {
+                    ...((fallbackResponse.metadata?.responseSource && typeof fallbackResponse.metadata.responseSource === 'object')
+                      ? fallbackResponse.metadata.responseSource as Record<string, unknown>
+                      : {}),
+                    tier: 'external',
+                    usedFallback: true,
+                  },
+                };
+                return {
+                  ...fallbackResponse,
+                  metadata: mergedMetadata,
+                };
               } catch (fallbackErr) {
                 log.error(
                   { fallbackAgent: fallbackId, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
@@ -5596,6 +6091,7 @@ function buildDashboardCallbacks(
             if (typeof agentPolicyUpdatesUpdate.allowedPaths === 'boolean') rawAPU.allowedPaths = agentPolicyUpdatesUpdate.allowedPaths;
             if (typeof agentPolicyUpdatesUpdate.allowedCommands === 'boolean') rawAPU.allowedCommands = agentPolicyUpdatesUpdate.allowedCommands;
             if (typeof agentPolicyUpdatesUpdate.allowedDomains === 'boolean') rawAPU.allowedDomains = agentPolicyUpdatesUpdate.allowedDomains;
+            if (typeof agentPolicyUpdatesUpdate.toolPolicies === 'boolean') rawAPU.toolPolicies = agentPolicyUpdatesUpdate.toolPolicies;
           }
 
           // MCP + GWS managed provider updates
@@ -8272,7 +8768,13 @@ async function main(): Promise<void> {
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
           decision.agentId,
-          { content: msg.content, userId: msg.userId, channel: msg.channel },
+          {
+            content: msg.content,
+            userId: msg.userId,
+            principalId: msg.principalId,
+            principalRole: msg.principalRole,
+            channel: msg.channel,
+          },
           decision,
         );
       }
@@ -8518,7 +9020,13 @@ async function main(): Promise<void> {
           }
           return dashboardCallbacks.onDispatch(
             resolvedAgentId,
-            { content: input.prompt, userId, channel },
+            {
+              content: input.prompt,
+              userId,
+              principalId: input.principalId ?? userId,
+              principalRole: input.principalRole ?? 'owner',
+              channel,
+            },
             undefined,
             { priority: 'normal', requestType: 'scheduled_task' },
           );

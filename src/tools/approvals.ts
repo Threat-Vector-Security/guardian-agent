@@ -13,6 +13,8 @@ export class ToolApprovalStore {
     job: ToolJobRecord,
     args: Record<string, unknown>,
     argsHash: string | undefined,
+    requestedByPrincipal: string | undefined,
+    requestedByRole: ToolApprovalRequest['requestedByRole'],
     now: () => number = Date.now,
   ): ToolApprovalRequest {
     // Dedup: if an identical pending approval already exists (same tool + argsHash), return it
@@ -29,6 +31,10 @@ export class ToolApprovalStore {
       toolName: job.toolName,
       risk: job.risk,
       origin: job.origin,
+      requestedByPrincipal,
+      requestedByRole,
+      approvableByPrincipals: requestedByPrincipal ? [requestedByPrincipal] : undefined,
+      approvableByRoles: requestedByRole === 'approver' ? ['approver'] : ['owner', 'approver'],
       argsHash,
       args,
       createdAt: now(),
@@ -54,14 +60,24 @@ export class ToolApprovalStore {
     id: string,
     decision: 'approved' | 'denied',
     decidedBy: string,
+    decisionRole: ToolApprovalRequest['requestedByRole'],
     reason: string | undefined,
     now: () => number = Date.now,
   ): ToolApprovalRequest | null {
     const request = this.indexById.get(id);
     if (!request) return null;
     if (request.status !== 'pending') return request;
+    const allowedPrincipal = !request.approvableByPrincipals?.length
+      || request.approvableByPrincipals.includes(decidedBy);
+    const allowedRole = !request.approvableByRoles?.length
+      || (!!decisionRole && request.approvableByRoles.includes(decisionRole));
+    if (!allowedPrincipal && !allowedRole) {
+      request.reason = 'Approval denied: actor is not authorized for this request.';
+      return request;
+    }
     request.status = decision;
     request.decidedBy = decidedBy;
+    request.decisionRole = decisionRole;
     request.decidedAt = now();
     if (reason?.trim()) request.reason = reason.trim();
     return request;

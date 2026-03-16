@@ -46,6 +46,11 @@ describe('interpolateEnvVars', () => {
   it('should return strings without vars unchanged', () => {
     expect(interpolateEnvVars('no vars here')).toBe('no vars here');
   });
+
+  it('preserves dotted automation placeholders', () => {
+    expect(interpolateEnvVars('${step2.output}')).toBe('${step2.output}');
+    expect(interpolateEnvVars('Body: ${step2.output}')).toBe('Body: ${step2.output}');
+  });
 });
 
 describe('deepMerge', () => {

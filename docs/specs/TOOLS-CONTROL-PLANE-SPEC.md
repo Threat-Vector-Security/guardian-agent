@@ -27,9 +27,9 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - External interaction: `forum_post` (restricted by policy)
 - Network: `net_ping`, `net_arp_scan`, `net_port_check`, `net_interfaces`, `net_connections`, `net_dns_lookup`, `net_traceroute`, `net_oui_lookup`, `net_classify`, `net_banner_grab`, `net_fingerprint`, `net_wifi_scan`, `net_wifi_clients`, `net_connection_profiles`, `net_baseline`, `net_anomaly_check`, `net_threat_summary`, `net_traffic_baseline`, `net_threat_check`
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
-- Memory: `memory_search`, `memory_get`, `memory_save`
+- Memory: `memory_search`, `memory_recall`, `memory_save`
 - Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
-- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat (the assistant can create automations conversationally via these tools)
+- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat through the automation authoring compiler
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
@@ -104,20 +104,26 @@ assistant:
 
 ## Conversational Automation Creation
 
-The assistant can create automations (playbooks + scheduled tasks, including scheduled assistant turns) conversationally via the automation tools. The system prompt guides the assistant to:
+Conversational automation creation is no longer treated as a pure prompt-following problem.
 
-1. **Detect intent**: When the user asks to "create an automation", "schedule a scan", "set up a recurring task", etc., the assistant calls `find_tools` with keyword "automation" to load the 8 automation tools.
-2. **Gather requirements**: The assistant asks for (a) what to automate (which tool or sequence), (b) tool arguments, (c) whether to schedule and how often. It asks for missing critical details but uses sensible defaults for the rest.
-3. **Create the playbook when deterministic steps are needed**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
-   Built-in tool steps can omit an access profile by using `packId: ""` or `packId: "default"`. That runs through the normal Guardian tool path without extra access-profile allowlists.
-   Steps support three types: `tool` (default, executes a tool), `instruction` (invokes LLM for text synthesis), and `delay` (pauses the pipeline for `delayMs` milliseconds — useful for rate-limiting or cooldown between steps). The `workflow_upsert` step schema accepts `type`, `delayMs`, `instruction`, and `llmProvider` fields.
-4. **Schedule the right task type**:
-   - Deterministic pipeline: `task_create` with type "workflow", target set to the playbook id, and a cron expression.
-   - Single recurring tool: `task_create` with type "tool" and target set to the tool name.
-   - Scheduled assistant check/report: `task_create` with type "agent", target set to an agent id (or `default`), `prompt`, and optionally `channel` / `deliver`.
-5. **Verify**: Calls `workflow_list` / `task_list` to confirm creation, and can `workflow_run` with `dryRun: true` to preview.
+Guardian now uses a native automation authoring compiler before the generic tool-calling loop:
 
-The automation tools include `examples` arrays with concrete parameter patterns (single-tool, sequential pipeline, parallel pipeline, various cron expressions) so the LLM can construct valid payloads.
+```text
+user request
+  -> compiler detects automation intent
+  -> extracts schedule + hard constraints
+  -> chooses workflow vs scheduled agent task
+  -> executes workflow_upsert / task_create / task_update through ToolExecutor
+```
+
+Compiler rules:
+1. **Native automation first**: requests for Guardian workflows, automations, or scheduled tasks resolve to automation tools, not to `fs_write`, `code_create`, or `shell_safe`, unless the user explicitly asked for code.
+2. **Open-ended work defaults to `task_create(type="agent")`**: inbox review, research, triage, recurring reports, and similar runtime-adaptive tasks compile into scheduled assistant turns.
+3. **Deterministic graphs use `workflow_upsert`**: only fixed built-in tool graphs compile into workflows.
+4. **Task duplication is avoided**: scheduled agent tasks check `task_list` first so clear re-creates become updates rather than duplicates.
+5. **Creation stays inside the control plane**: approvals, verification, audit, principal binding, and bounded schedule authority still run through `ToolExecutor`.
+
+The automation tools remain available to the LLM, but they are no longer the only authoring path. The compiler is the authoritative path for clear conversational automation requests.
 
 ### Web UI Parity
 
@@ -146,11 +152,21 @@ assistant:
 - Per-tool overrides:
   - `auto`, `policy`, `manual`, `deny`
 
+Contextual additions now enforced at runtime:
+- `principalId` / `principalRole`
+- `contentTrustLevel`
+- `taintReasons`
+- `derivedFromTaintedContent`
+- `scheduleId`
+
+These inputs are consumed by `ToolExecutor` to block quarantined-context mutation, approval-gate tainted mutation, and bind approvals to the originating principal.
+
 ## Approval Workflow
 - Tool run can return:
   - `succeeded`
   - `failed`
   - `pending_approval` with `approvalId`
+- approvals now carry requesting principal/role metadata and reject decisions from unauthorized principals or roles
 - **Suspended Execution (Continuation Interception)**:
   - When an LLM tool call requires approval, `ChatAgent` suspends the internal tool loop by caching the entire message context (`suspendedSessions`) and returning a `pending_approval` state to the client.
   - The UI prompts the user and hits the `/api/tools/approvals/decision` REST endpoint.
@@ -160,9 +176,33 @@ assistant:
   - When a user approves an action via the REST API or UI, `ToolExecutor.decideApproval` executes the tool handler immediately in the backend, rather than waiting for the LLM to reissue the command.
 - **Retry Caching (Loop Prevention)**:
   - If the LLM generates a duplicate tool call for an action that was approved and executed within the last 5 minutes (matching `toolName` and `argsHash`), `ToolExecutor` bypasses the policy check and instantly returns the cached execution result (success or error) instead of requesting a new approval.
+- **Runaway/Overspend Guards**:
+  - `ToolExecutor` caps total calls and non-read-only calls per execution chain (`requestId` / `scheduleId`).
+  - Repeated identical failed calls are blocked after a small number of attempts.
+  - These guards exist to stop broken tools or broken planner loops from overspending before higher-level budgets are exhausted.
 - **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally.
 - **Dedup**: identical pending approvals (same `toolName` + `argsHash`) are deduplicated in `ToolApprovalStore.create()`.
 - Decision history is attached to job records for auditability.
+
+### Verification Status
+
+Tool results and job records can also carry:
+- `verificationStatus`: `verified` | `unverified` | `failed`
+- `verificationEvidence`
+
+This is used for operations such as `memory_save`, `task_create`, and `task_update` so the runtime can distinguish "reported success" from "state confirmed."
+
+### Direct Tool API
+
+`POST /api/tools/run` now accepts contextual execution inputs in addition to normal tool arguments:
+- `principalId`
+- `principalRole`
+- `contentTrustLevel`
+- `taintReasons`
+- `derivedFromTaintedContent`
+- `scheduleId`
+
+This keeps direct API execution aligned with the brokered and planner-driven execution paths and allows black-box security harnesses to validate contextual gating behavior.
 
 ### Structured Approval UX (all channels)
 

@@ -202,6 +202,20 @@ export async function initChatPanel(container) {
     const immediateMessages = approvalResponses
       .map((result) => result.displayMessage)
       .filter((value) => typeof value === 'string' && value.trim().length > 0);
+    const continuedResponses = approvalResponses
+      .map((result) => result.continuedResponse)
+      .filter((value) => value && typeof value.content === 'string');
+
+    if (continuedResponses.length > 0) {
+      if (immediateMessages.length > 0) {
+        addAgentMessage(immediateMessages.join('\n'));
+      }
+      for (const response of continuedResponses) {
+        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
+      }
+      history.scrollTop = history.scrollHeight;
+      return;
+    }
 
     // Only continue when the backend confirms there is suspended chat context to resume.
     if (decision === 'approved' && approvalResponses.some((result) => result.continueConversation !== false)) {
@@ -215,7 +229,7 @@ export async function initChatPanel(container) {
         const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`;
         const response = await api.sendMessage(msg, getAgentId(), webUserId, 'web');
         thinkingEl.remove();
-        addAgentMessage(response.content, response.metadata?.pendingApprovals);
+        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
       } catch (err) {
         thinkingEl.remove();
         history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
@@ -240,10 +254,10 @@ export async function initChatPanel(container) {
    * Append an agent message to the chat, with approval buttons when the
    * response includes structured pending approval data.
    */
-  const addAgentMessage = (content, pendingApprovals) => {
+  const addAgentMessage = (content, pendingApprovals, responseSource) => {
     const chatHistory = getHistory(hasInternalOnly ? '__guardian__' : (select?.value || ''));
-    chatHistory.push({ role: 'agent', content });
-    history.appendChild(createMessageEl('agent', content, { pendingApprovals, onApproval: handleApproval }));
+    chatHistory.push({ role: 'agent', content, responseSource, pendingApprovals });
+    history.appendChild(createMessageEl('agent', content, { pendingApprovals, responseSource, onApproval: handleApproval }));
   };
 
   // ── Send logic ──────────────────────────────────────────────
@@ -322,14 +336,15 @@ export async function initChatPanel(container) {
                 liveEl.classList.remove('streaming');
                 const replacement = createMessageEl('agent', finalContent, {
                   pendingApprovals: data.metadata?.pendingApprovals,
+                  responseSource: data.metadata?.responseSource,
                   onApproval: handleApproval,
                 });
                 liveEl.replaceWith(replacement);
               } else {
                 thinkingEl.remove();
-                addAgentMessage(finalContent, data.metadata?.pendingApprovals);
+                addAgentMessage(finalContent, data.metadata?.pendingApprovals, data.metadata?.responseSource);
               }
-              chatHistory.push({ role: 'agent', content: finalContent });
+              chatHistory.push({ role: 'agent', content: finalContent, responseSource: data.metadata?.responseSource, pendingApprovals: data.metadata?.pendingApprovals });
             };
 
             const onError = (data) => {
@@ -356,23 +371,23 @@ export async function initChatPanel(container) {
             if (streamResult.content) {
               cleanup();
               thinkingEl.remove();
-              addAgentMessage(streamResult.content, streamResult.metadata?.pendingApprovals);
+              addAgentMessage(streamResult.content, streamResult.metadata?.pendingApprovals, streamResult.metadata?.responseSource);
             }
           } else {
             // No requestId — treat as regular response
             thinkingEl.remove();
-            addAgentMessage(streamResult.content || '', streamResult.metadata?.pendingApprovals);
+            addAgentMessage(streamResult.content || '', streamResult.metadata?.pendingApprovals, streamResult.metadata?.responseSource);
           }
         } catch {
           // Streaming failed — fall back to regular send
           const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
           thinkingEl.remove();
-          addAgentMessage(response.content, response.metadata?.pendingApprovals);
+          addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
         }
       } else {
         const response = await api.sendMessage(contextPrefix + text, getAgentId(), webUserId, 'web');
         thinkingEl.remove();
-        addAgentMessage(response.content, response.metadata?.pendingApprovals);
+        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
       }
     } catch (err) {
       thinkingEl.remove();
@@ -434,7 +449,10 @@ function renderHistory(historyEl, agentId) {
   if (!agentId) return;
   const chatHistory = getHistory(agentId);
   for (const msg of chatHistory) {
-    historyEl.appendChild(createMessageEl(msg.role, msg.content));
+    historyEl.appendChild(createMessageEl(msg.role, msg.content, {
+      pendingApprovals: msg.pendingApprovals,
+      responseSource: msg.responseSource,
+    }));
   }
   historyEl.scrollTop = historyEl.scrollHeight;
 }
@@ -465,6 +483,10 @@ function createMessageEl(role, content, opts) {
   contentEl.className = 'chat-msg-content';
   contentEl.style.whiteSpace = 'pre-wrap';
   contentEl.textContent = content;
+  const sourceEl = buildSourceBadge(opts?.responseSource);
+  if (sourceEl) {
+    body.appendChild(sourceEl);
+  }
   body.appendChild(contentEl);
 
   // Render approval buttons from structured metadata (not text parsing)
@@ -477,6 +499,22 @@ function createMessageEl(role, content, opts) {
   return msg;
 }
 
+function buildSourceBadge(responseSource) {
+  if (!responseSource || !responseSource.locality) return null;
+  const badge = document.createElement('div');
+  badge.className = 'chat-msg-source';
+  badge.style.cssText = 'display:inline-flex;align-items:center;gap:0.35rem;margin-bottom:0.35rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:999px;background:var(--bg-secondary);font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
+  let label = responseSource.locality;
+  if (responseSource.usedFallback) {
+    label += ' fallback';
+  }
+  badge.textContent = label;
+  if (responseSource.notice) {
+    badge.title = responseSource.notice;
+  }
+  return badge;
+}
+
 /**
  * Build the approval button row for one or more pending actions.
  */
@@ -484,13 +522,24 @@ function buildApprovalButtons(approvals, onApproval) {
   const container = document.createElement('div');
   container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);';
 
-  // Summary of what needs approval
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-bottom:0.4rem;';
   summary.textContent = approvals.length === 1
-    ? `Approve: ${approvals[0].toolName}${approvals[0].argsPreview ? ' \u2014 ' + approvals[0].argsPreview : ''}`
-    : `${approvals.length} actions need approval`;
+    ? 'Approval required for this action:'
+    : `Approval required for these ${approvals.length} actions:`;
   container.appendChild(summary);
+
+  const detailList = document.createElement('div');
+  detailList.style.cssText = 'display:flex;flex-direction:column;gap:0.25rem;margin-bottom:0.45rem;';
+  approvals.forEach((approval) => {
+    const item = document.createElement('div');
+    item.style.cssText = 'font-size:0.72rem;color:var(--text-primary);line-height:1.35;';
+    item.textContent = approvals.length === 1
+      ? describeApprovalAction(approval)
+      : `• ${describeApprovalAction(approval)}`;
+    detailList.appendChild(item);
+  });
+  container.appendChild(detailList);
 
   const btnRow = document.createElement('div');
   btnRow.style.cssText = 'display:flex;gap:0.5rem;align-items:center;';
@@ -534,6 +583,73 @@ function buildApprovalButtons(approvals, onApproval) {
   btnRow.append(approveBtn, denyBtn, statusEl);
   container.appendChild(btnRow);
   return container;
+}
+
+function normalizeApprovalPreview(preview) {
+  return String(preview || '').replace(/\s+/g, ' ').trim();
+}
+
+function parseApprovalPreview(preview) {
+  const normalized = normalizeApprovalPreview(preview);
+  if (!normalized.startsWith('{') || !normalized.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(normalized);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function describePolicyApproval(preview) {
+  const parsed = parseApprovalPreview(preview);
+  if (!parsed) return null;
+  const action = String(parsed.action || '').trim();
+  const value = String(parsed.value || '').trim();
+  if (!action || !value) return null;
+  switch (action) {
+    case 'add_path':
+      return `Add ${value} to allowed paths`;
+    case 'remove_path':
+      return `Remove ${value} from allowed paths`;
+    case 'add_domain':
+      return `Add ${value} to allowed domains`;
+    case 'remove_domain':
+      return `Remove ${value} from allowed domains`;
+    case 'add_command':
+      return `Allow command ${value}`;
+    case 'remove_command':
+      return `Remove allowed command ${value}`;
+    case 'set_tool_policy_auto':
+      return `Auto-approve tool ${value}`;
+    case 'set_tool_policy_manual':
+      return `Require manual approval for tool ${value}`;
+    case 'set_tool_policy_deny':
+      return `Deny tool ${value}`;
+    default:
+      return null;
+  }
+}
+
+function describeApprovalAction(approval) {
+  const toolName = String(approval?.toolName || '').trim();
+  const preview = normalizeApprovalPreview(approval?.argsPreview);
+
+  if (toolName === 'update_tool_policy') {
+    return describePolicyApproval(preview) || 'Apply policy update';
+  }
+  if (toolName === 'task_create') {
+    return preview ? `Create ${preview}` : 'Create scheduled automation';
+  }
+  if (toolName === 'task_update') {
+    return preview ? `Update ${preview}` : 'Update scheduled automation';
+  }
+  if (toolName === 'workflow_upsert') {
+    return preview ? `Save ${preview}` : 'Save workflow';
+  }
+  if (preview) {
+    return `${toolName}: ${preview}`;
+  }
+  return `Run ${toolName}`;
 }
 
 function esc(str) {

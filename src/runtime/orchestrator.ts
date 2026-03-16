@@ -62,7 +62,7 @@ export interface AssistantTraceStep {
 export interface WorkflowTraceNode {
   id: string;
   parentId?: string;
-  kind: 'agent_dispatch' | 'tool_call' | 'approval' | 'provider_call';
+  kind: 'agent_dispatch' | 'tool_call' | 'approval' | 'provider_call' | 'compile' | 'validate' | 'resume' | 'handoff' | 'verification';
   name: string;
   startedAt: number;
   completedAt?: number;
@@ -72,6 +72,9 @@ export interface WorkflowTraceNode {
 
 export interface AssistantDispatchTrace {
   requestId: string;
+  runId: string;
+  groupId: string;
+  parentRunId?: string;
   sessionId: string;
   agentId: string;
   userId: string;
@@ -228,6 +231,8 @@ export class AssistantOrchestrator {
 
     const trace: AssistantDispatchTrace = {
       requestId,
+      runId: requestId,
+      groupId: session.sessionId,
       sessionId: session.sessionId,
       agentId: input.agentId,
       userId: input.userId,

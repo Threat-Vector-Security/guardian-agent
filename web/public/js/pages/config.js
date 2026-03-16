@@ -219,17 +219,18 @@ export async function renderConfig(container, options = {}) {
         kicker: 'Configuration Guide',
         title: 'Product setup and policy ownership',
         whatItIs: 'Configuration is the home for product setup, tool policy, integrations, system controls, and appearance.',
-        whatSeeing: 'You are seeing tabs that separate AI/search setup, tool policy, integrations, system controls, and visual preferences.',
+        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, tools, policy, integration-system controls, and visual preferences.',
         whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
         howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
       })}
     `;
 
     createTabs(container, [
-      { id: 'ai-search', label: 'AI & Search', render: renderAiSearchTab },
-      { id: 'tools-policy', label: 'Tools & Policy', render: renderToolsPolicyTab },
-      { id: 'integrations', label: 'Integrations', render: renderIntegrationsTab },
-      { id: 'system', label: 'System', render: renderSystemTab },
+      { id: 'ai-providers', label: 'AI Providers', render: renderAiProvidersTab },
+      { id: 'search-providers', label: 'Search Providers', render: renderSearchProvidersTab },
+      { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
+      { id: 'policy', label: 'Policy', render: renderPolicyOnlyTab },
+      { id: 'integration-system', label: 'Integration System', render: renderIntegrationSystemTab },
       { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
     ], normalizeConfigTab(options?.tab));
   } catch (err) {
@@ -245,11 +246,157 @@ export async function updateConfig() {
 }
 
 function normalizeConfigTab(tab) {
-  if (!tab) return 'ai-search';
-  if (tab === 'providers' || tab === 'search-sources' || tab === 'cloud') return 'ai-search';
-  if (tab === 'tools' || tab === 'policy') return 'tools-policy';
-  if (tab === 'settings') return 'system';
+  if (!tab) return 'ai-providers';
+  if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
+  if (tab === 'search-sources') return 'search-providers';
+  if (tab === 'tools-policy') return 'tools';
+  if (tab === 'integrations' || tab === 'system' || tab === 'settings' || tab === 'cloud') return 'integration-system';
   return tab;
+}
+
+function pickHelpSections(source, keys) {
+  return keys.reduce((acc, key) => {
+    if (source?.[key]) acc[key] = source[key];
+    return acc;
+  }, {});
+}
+
+function renderAiProvidersTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'AI Providers',
+    compact: true,
+    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing.',
+    whatSeeing: 'You are seeing provider editors, configured provider status, and shared credential-reference management.',
+    whatCanDo: 'Add local or hosted providers, test connectivity, choose models, and manage the credential refs those providers can use.',
+    howLinks: 'These provider profiles drive the model paths used across the rest of the product.',
+  }));
+
+  const providersPanel = document.createElement('div');
+  renderProvidersTab(providersPanel);
+  panel.appendChild(providersPanel);
+  panel.appendChild(createCredentialRefsPanel(panel));
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(
+    panel,
+    {
+      ...pickHelpSections(CONFIG_HELP.aiSearch, ['AI Provider Configuration', 'Configured Providers']),
+      'Credential Refs': createGenericHelpFactory('Configuration AI Providers')('Credential Refs'),
+    },
+    createGenericHelpFactory('Configuration AI Providers'),
+  );
+  activateContextHelp(panel);
+}
+
+function renderSearchProvidersTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Search Providers',
+    compact: true,
+    whatItIs: 'This tab configures external search behavior, model fallback for search-heavy work, and document retrieval sources.',
+    whatSeeing: 'You are seeing search-provider controls, fallback settings, and document-source management.',
+    whatCanDo: 'Tune web search behavior, configure search credentials, and manage indexed sources for retrieval-backed answers.',
+    howLinks: 'These settings shape research, retrieval, and grounded-answer behavior across chat and automations.',
+  }));
+
+  panel.appendChild(createWebSearchPanel(sharedConfig, panel));
+
+  const sourcesPanel = document.createElement('div');
+  renderSearchSourcesTab(sourcesPanel);
+  panel.appendChild(sourcesPanel);
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(
+    panel,
+    pickHelpSections(CONFIG_HELP.aiSearch, [
+      'Web Search & Model Fallback',
+      'Document Sources',
+      'Add Source',
+      'Configured Sources',
+    ]),
+    createGenericHelpFactory('Configuration Search Providers'),
+  );
+  activateContextHelp(panel);
+}
+
+function renderToolsOnlyTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Tools',
+    compact: true,
+    whatItIs: 'This tab focuses on the live tool runtime, tool catalog, approvals, and recent execution activity.',
+    whatSeeing: 'You are seeing runtime health, tool categories, tool routing, pending approvals, and recent jobs.',
+    whatCanDo: 'Inspect what tools exist, how they are routed, and what tool actions are currently waiting or failing.',
+    howLinks: 'This is the operational control plane for tools themselves, separate from the deeper policy configuration.',
+  }));
+
+  const toolsPanel = document.createElement('div');
+  panel.appendChild(toolsPanel);
+  void renderToolsTab(toolsPanel);
+}
+
+function renderPolicyOnlyTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Policy',
+    compact: true,
+    whatItIs: 'This tab contains the policy and enforcement surfaces that constrain what Guardian and its tools are allowed to do.',
+    whatSeeing: 'You are seeing sandbox mode, allowlists, Guardian evaluation, policy-engine controls, and trust posture settings.',
+    whatCanDo: 'Adjust boundaries, enforcement layers, and approval-related policy without mixing them into the live tools catalog.',
+    howLinks: 'These controls decide whether requested actions are allowed, blocked, or routed into approval.',
+  }));
+
+  panel.appendChild(createSandboxPanel(sharedConfig));
+  const policyPanel = document.createElement('div');
+  panel.appendChild(policyPanel);
+  void renderPolicyTab(policyPanel);
+  panel.appendChild(createGuardianAgentPanel());
+  panel.appendChild(createPolicyEnginePanel());
+  panel.appendChild(createTrustPresetPanel(sharedConfig));
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(
+    panel,
+    {
+      ...pickHelpSections(CONFIG_HELP.toolsPolicy, ['Allowed Paths', 'Allowed Commands', 'Allowed Domains']),
+      ...pickHelpSections(CONFIG_HELP.system, ['Guardian Agent', 'Policy-as-Code Engine', 'Trust Preset']),
+      'Sandbox Status': CONFIG_HELP.toolsPolicy['Sandbox Status'],
+    },
+    createGenericHelpFactory('Configuration Policy'),
+  );
+  activateContextHelp(panel);
+}
+
+function renderIntegrationSystemTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Integration System',
+    compact: true,
+    whatItIs: 'This tab groups the product-level integration and system controls that sit outside the model, search, tool, and policy tabs.',
+    whatSeeing: 'You are seeing auth, notifications, operator-channel integrations, browser integration, audit analysis, and reset controls.',
+    whatCanDo: 'Configure how Guardian connects outward, authenticates access, notifies operators, and exposes system-level controls.',
+    howLinks: 'These settings affect how the product is operated and integrated, rather than how model or tool execution is authored.',
+  }));
+
+  panel.appendChild(createOverview(sharedConfig, sharedProviders, sharedSetupStatus));
+  panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
+  panel.appendChild(createNotificationsPanel(sharedConfig, panel));
+  panel.appendChild(createTelegramPanel(sharedConfig, panel));
+  panel.appendChild(createBrowserPanel(sharedConfig, panel));
+  panel.appendChild(createSentinelAuditPanel());
+  panel.appendChild(createDangerZonePanel());
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(
+    panel,
+    {
+      ...pickHelpSections(CONFIG_HELP.integrations, ['Telegram Channel', 'Browser Automation']),
+      ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication', 'Security Alerts', 'Sentinel Audit', 'Danger Zone']),
+    },
+    createGenericHelpFactory('Configuration Integration System'),
+  );
+  activateContextHelp(panel);
 }
 
 function renderAiSearchTab(panel) {

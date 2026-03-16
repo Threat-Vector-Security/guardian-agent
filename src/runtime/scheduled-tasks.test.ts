@@ -116,7 +116,9 @@ describe('ScheduledTaskService', () => {
       expect(result.task!.target).toBe('net_arp_scan');
       expect(result.task!.cron).toBe('*/30 * * * *');
       expect(result.task!.enabled).toBe(true);
-      expect(result.task!.preApproved).toBe(true);
+      expect(result.task!.approvedByPrincipal).toBe('scheduled-system');
+      expect(result.task!.approvalExpiresAt).toBeGreaterThan(result.task!.createdAt);
+      expect(result.task!.scopeHash).toBeTruthy();
       expect(result.task!.runCount).toBe(0);
     });
 
@@ -145,6 +147,7 @@ describe('ScheduledTaskService', () => {
     it('should create an agent task with prompt metadata', () => {
       const result = service.create({
         name: 'Morning Briefing',
+        description: 'Summarize my morning priorities and blockers.',
         type: 'agent',
         target: 'default',
         prompt: 'Summarize my morning priorities.',
@@ -154,6 +157,7 @@ describe('ScheduledTaskService', () => {
       });
       expect(result.success).toBe(true);
       expect(result.task).toMatchObject({
+        description: 'Summarize my morning priorities and blockers.',
         type: 'agent',
         target: 'default',
         prompt: 'Summarize my morning priorities.',
@@ -220,6 +224,24 @@ describe('ScheduledTaskService', () => {
       expect(service.get(task!.id)!.name).toBe('Updated');
     });
 
+    it('should update task description without changing scope authority', () => {
+      const { task } = service.create({
+        name: 'Morning Briefing',
+        description: 'First summary',
+        type: 'agent',
+        target: 'default',
+        prompt: 'Summarize my morning priorities.',
+        cron: '0 8 * * *',
+      });
+      const originalScopeHash = task!.scopeHash;
+
+      const result = service.update(task!.id, { description: 'Updated summary' });
+
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)!.description).toBe('Updated summary');
+      expect(service.get(task!.id)!.scopeHash).toBe(originalScopeHash);
+    });
+
     it('should update task type and target', () => {
       const { task } = service.create(validInput);
       const result = service.update(task!.id, { type: 'playbook', target: 'home-network' });
@@ -267,6 +289,20 @@ describe('ScheduledTaskService', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('prompt');
     });
+
+    it('refreshes approval metadata when task scope changes', () => {
+      const { task } = service.create({ ...validInput, principalId: 'principal-a' });
+      const originalScopeHash = task!.scopeHash;
+      const originalApprovalExpiresAt = task!.approvalExpiresAt;
+
+      const result = service.update(task!.id, { args: { host: '192.168.1.5' } });
+
+      expect(result.success).toBe(true);
+      const updated = service.get(task!.id)!;
+      expect(updated.scopeHash).not.toBe(originalScopeHash);
+      expect(updated.approvalExpiresAt).toBeGreaterThanOrEqual(originalApprovalExpiresAt!);
+      expect(updated.approvedByPrincipal).toBe('principal-a');
+    });
   });
 
   describe('delete', () => {
@@ -304,14 +340,14 @@ describe('ScheduledTaskService', () => {
     });
 
     it('should execute a playbook task immediately', async () => {
-      const { task } = service.create({ ...validInput, type: 'playbook', target: 'home-network' });
+      const { task } = service.create({ ...validInput, type: 'playbook', target: 'home-network', principalId: 'principal-a' });
       const result = await service.runNow(task!.id);
       expect(result.success).toBe(true);
       expect(deps.playbookExecutor.runPlaybook).toHaveBeenCalledWith(
         expect.objectContaining({
           playbookId: 'home-network',
           origin: 'web',
-          requestedBy: 'scheduled-tasks',
+          requestedBy: 'principal-a',
           bypassApprovals: true,
         }),
       );
@@ -430,6 +466,62 @@ describe('ScheduledTaskService', () => {
       const result = await localService.runNow(task!.id);
       expect(result.success).toBe(false);
       expect(result.message).toContain('Boom');
+    });
+
+    it('blocks execution when approval has expired', async () => {
+      const { task } = service.create({ ...validInput, approvalExpiresAt: 999999 });
+      const result = await service.runNow(task!.id);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('approval has expired');
+      expect(deps.toolExecutor.runTool).not.toHaveBeenCalled();
+    });
+
+    it('auto-pauses after repeated failures', async () => {
+      const toolExecutor = createMockToolExecutor();
+      toolExecutor.runTool.mockResolvedValue({
+        success: false,
+        status: 'failed',
+        message: 'Nope',
+      });
+      const localService = new ScheduledTaskService(createDeps({ toolExecutor }));
+      const { task } = localService.create(validInput);
+
+      await localService.runNow(task!.id);
+      await localService.runNow(task!.id);
+      const third = await localService.runNow(task!.id);
+
+      expect(third.success).toBe(false);
+      expect(localService.get(task!.id)?.enabled).toBe(false);
+      expect(localService.get(task!.id)?.autoPausedReason).toContain('Consecutive failure threshold');
+    });
+
+    it('blocks overlapping runs for the same scheduled task', async () => {
+      let resolveRun: ((value: unknown) => void) | undefined;
+      const toolExecutor = {
+        runTool: vi.fn().mockImplementation(() => new Promise((resolve) => {
+          resolveRun = resolve;
+        })),
+      };
+      const localService = new ScheduledTaskService(createDeps({
+        toolExecutor: toolExecutor as unknown as ScheduledTaskServiceDeps['toolExecutor'],
+      }));
+      const { task } = localService.create(validInput);
+
+      const firstRun = localService.runNow(task!.id);
+      await Promise.resolve();
+      const secondRun = await localService.runNow(task!.id);
+
+      expect(secondRun.success).toBe(false);
+      expect(secondRun.message).toContain('active run in progress');
+
+      resolveRun?.({
+        success: true,
+        status: 'completed',
+        message: 'Tool executed',
+        output: { result: 'ok' },
+      });
+      await firstRun;
     });
 
     it('should return error for unknown id', async () => {

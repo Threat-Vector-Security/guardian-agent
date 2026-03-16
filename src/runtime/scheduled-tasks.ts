@@ -6,7 +6,7 @@
  * Definitions are persisted to ~/.guardianagent/scheduled-tasks.json.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -18,6 +18,7 @@ import type { CronScheduler } from './scheduler.js';
 import type { EventBus, AgentEvent } from '../queue/event-bus.js';
 import type { DeviceInventoryService } from './device-inventory.js';
 import { promoteAutomationFindings, type AutomationPromotedFindingRef } from './automation-output.js';
+import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
 const log = createLogger('scheduled-tasks');
 
 // ─── Types ────────────────────────────────────────────────
@@ -28,6 +29,7 @@ export type ScheduledTaskType = 'tool' | 'playbook' | 'agent';
 export interface ScheduledTaskDefinition {
   id: string;
   name: string;
+  description?: string;
   type: ScheduledTaskType;
   target: string;
   presetId?: string;
@@ -35,12 +37,23 @@ export interface ScheduledTaskDefinition {
   prompt?: string;
   channel?: string;
   userId?: string;
+  principalId?: string;
+  principalRole?: import('../tools/types.js').PrincipalRole;
   deliver?: boolean;
   runOnce?: boolean;
-  preApproved?: boolean;
   cron: string;
   enabled: boolean;
   createdAt: number;
+  approvalExpiresAt?: number;
+  lastApprovedAt?: number;
+  approvedByPrincipal?: string;
+  scopeHash: string;
+  maxRunsPerWindow: number;
+  dailySpendCap: number;
+  providerSpendCap: number;
+  consecutiveFailureCount: number;
+  consecutiveDeniedCount: number;
+  autoPausedReason?: string;
   lastRunAt?: number;
   lastRunStatus?: ScheduledTaskStatus;
   lastRunMessage?: string;
@@ -51,6 +64,7 @@ export interface ScheduledTaskDefinition {
 
 export interface ScheduledTaskCreateInput {
   name: string;
+  description?: string;
   type: ScheduledTaskType;
   target: string;
   presetId?: string;
@@ -58,31 +72,45 @@ export interface ScheduledTaskCreateInput {
   prompt?: string;
   channel?: string;
   userId?: string;
+  principalId?: string;
+  principalRole?: import('../tools/types.js').PrincipalRole;
   deliver?: boolean;
   runOnce?: boolean;
   cron: string;
   enabled?: boolean;
+  approvalExpiresAt?: number;
+  maxRunsPerWindow?: number;
+  dailySpendCap?: number;
+  providerSpendCap?: number;
   emitEvent?: string;
   outputHandling?: AutomationOutputHandlingConfig;
 }
 
 export interface ScheduledTaskUpdateInput {
   name?: string;
+  description?: string;
   type?: ScheduledTaskType;
   target?: string;
   args?: Record<string, unknown>;
   prompt?: string;
   channel?: string;
   userId?: string;
+  principalId?: string;
+  principalRole?: import('../tools/types.js').PrincipalRole;
   deliver?: boolean;
   runOnce?: boolean;
   cron?: string;
   enabled?: boolean;
+  approvalExpiresAt?: number;
+  maxRunsPerWindow?: number;
+  dailySpendCap?: number;
+  providerSpendCap?: number;
   emitEvent?: string;
   outputHandling?: AutomationOutputHandlingConfig;
 }
 
 export interface ScheduledTaskRunResult {
+  runId?: string;
   success: boolean;
   status: ScheduledTaskStatus;
   message: string;
@@ -98,6 +126,7 @@ export interface ScheduledTaskRunResult {
     durationMs: number;
     output?: unknown;
   }>;
+  events?: OrchestrationRunEvent[];
 }
 
 export interface ScheduledTaskPreset {
@@ -124,8 +153,13 @@ export interface ScheduledTaskToolExecutor {
     args: Record<string, unknown>;
     origin: 'assistant' | 'cli' | 'web';
     agentId?: string;
+    userId?: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
+    channel?: string;
+    scheduleId?: string;
     bypassApprovals?: boolean;
-  }): Promise<{ success: boolean; status: string; message: string; output?: unknown }>;
+  }): Promise<{ success: boolean; status: string; jobId?: string; approvalId?: string; message: string; output?: unknown }>;
 }
 
 /** Playbook executor interface — matches ConnectorPlaybookService.runPlaybook signature. */
@@ -134,12 +168,17 @@ export interface ScheduledTaskPlaybookExecutor {
     playbookId: string;
     origin: 'assistant' | 'cli' | 'web';
     requestedBy?: string;
+    principalId?: string;
+    scheduleId?: string;
     bypassApprovals?: boolean;
   }): Promise<{
     success: boolean;
     status: string;
     message: string;
     run: {
+      runId?: string;
+      graphId?: string;
+      events?: OrchestrationRunEvent[];
       outputHandling?: AutomationOutputHandlingConfig;
       promotedFindings?: AutomationPromotedFindingRef[];
       steps: Array<{
@@ -161,6 +200,8 @@ export interface ScheduledTaskAgentExecutor {
     taskId: string;
     taskName: string;
     userId?: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
     channel?: string;
     deliver?: boolean;
   }): Promise<{
@@ -426,6 +467,14 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
 // ─── Service ──────────────────────────────────────────────
 
 const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'scheduled-tasks.json');
+const DEFAULT_APPROVAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_RUNS_PER_WINDOW = 288;
+const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_DAILY_SPEND_CAP = 250_000;
+const DEFAULT_PROVIDER_SPEND_CAP = 125_000;
+const AUTO_PAUSE_FAILURE_THRESHOLD = 3;
+const AUTO_PAUSE_DENIAL_THRESHOLD = 3;
+const MAX_CHAIN_HOPS = 1;
 
 export interface ScheduledTaskServiceDeps {
   scheduler: CronScheduler;
@@ -446,8 +495,16 @@ export interface ScheduledTaskServiceDeps {
   now?: () => number;
 }
 
+interface ScheduledTaskBudgetRecord {
+  taskId: string;
+  providerKey: string;
+  timestamp: number;
+  totalTokens: number;
+}
+
 export interface ScheduledTaskHistoryEntry {
   id: string;
+  runId?: string;
   taskId: string;
   taskName: string;
   taskType: ScheduledTaskType;
@@ -460,6 +517,7 @@ export interface ScheduledTaskHistoryEntry {
   outputHandling?: AutomationOutputHandlingConfig;
   promotedFindings?: AutomationPromotedFindingRef[];
   steps?: ScheduledTaskRunResult['steps'];
+  events?: OrchestrationRunEvent[];
 }
 
 export class ScheduledTaskService {
@@ -477,6 +535,8 @@ export class ScheduledTaskService {
   private readonly now: () => number;
   /** Run history — kept in memory, most recent first. */
   private readonly history: ScheduledTaskHistoryEntry[] = [];
+  private readonly budgetHistory: ScheduledTaskBudgetRecord[] = [];
+  private readonly activeRuns = new Map<string, string>();
   private readonly maxHistory = 100;
 
   constructor(deps: ScheduledTaskServiceDeps) {
@@ -497,6 +557,198 @@ export class ScheduledTaskService {
     this.agentExecutor = agentExecutor;
   }
 
+  private computeScopeHash(task: Pick<
+    ScheduledTaskDefinition,
+    'type' | 'target' | 'args' | 'prompt' | 'channel' | 'deliver' | 'runOnce' | 'cron' | 'emitEvent'
+  >): string {
+    const normalized = JSON.stringify({
+      type: task.type,
+      target: task.target,
+      args: task.args ?? null,
+      prompt: task.prompt ?? null,
+      channel: task.channel ?? null,
+      deliver: task.deliver ?? false,
+      runOnce: task.runOnce === true,
+      cron: task.cron,
+      emitEvent: task.emitEvent ?? null,
+    });
+    return createHash('sha256').update(normalized).digest('hex');
+  }
+
+  private normalizePersistedTask(task: ScheduledTaskDefinition): ScheduledTaskDefinition {
+    const normalized: ScheduledTaskDefinition = {
+      ...task,
+      description: task.description?.trim() || undefined,
+      principalRole: task.principalRole ?? 'owner',
+      scopeHash: task.scopeHash || this.computeScopeHash(task),
+      maxRunsPerWindow: task.maxRunsPerWindow ?? DEFAULT_MAX_RUNS_PER_WINDOW,
+      dailySpendCap: task.dailySpendCap ?? DEFAULT_DAILY_SPEND_CAP,
+      providerSpendCap: task.providerSpendCap ?? DEFAULT_PROVIDER_SPEND_CAP,
+      consecutiveFailureCount: task.consecutiveFailureCount ?? 0,
+      consecutiveDeniedCount: task.consecutiveDeniedCount ?? 0,
+    };
+
+    if (!normalized.approvalExpiresAt && normalized.lastApprovedAt) {
+      normalized.approvalExpiresAt = normalized.lastApprovedAt + DEFAULT_APPROVAL_TTL_MS;
+    }
+
+    if (!normalized.lastApprovedAt && normalized.approvedByPrincipal) {
+      normalized.lastApprovedAt = normalized.createdAt;
+    }
+
+    return normalized;
+  }
+
+  private applyApproval(task: ScheduledTaskDefinition, principalId?: string, principalRole?: import('../tools/types.js').PrincipalRole, approvalExpiresAt?: number): void {
+    task.principalId = principalId?.trim() || task.principalId;
+    task.principalRole = principalRole ?? task.principalRole ?? 'owner';
+    task.approvedByPrincipal = principalId?.trim() || task.approvedByPrincipal || task.userId || 'scheduled-system';
+    task.lastApprovedAt = this.now();
+    task.approvalExpiresAt = approvalExpiresAt ?? (task.lastApprovedAt + DEFAULT_APPROVAL_TTL_MS);
+    task.scopeHash = this.computeScopeHash(task);
+    task.autoPausedReason = undefined;
+  }
+
+  private pauseTask(task: ScheduledTaskDefinition, reason: string): void {
+    task.enabled = false;
+    task.autoPausedReason = reason;
+    this.unregisterCron(task);
+  }
+
+  private isScopeDrifted(task: ScheduledTaskDefinition): boolean {
+    return task.scopeHash !== this.computeScopeHash(task);
+  }
+
+  private getRunsInWindow(taskId: string, windowMs = DEFAULT_WINDOW_MS): number {
+    const cutoff = this.now() - windowMs;
+    return this.history.filter((entry) => entry.taskId === taskId && entry.timestamp >= cutoff).length;
+  }
+
+  private pruneBudgetHistory(): void {
+    const cutoff = this.now() - DEFAULT_WINDOW_MS;
+    while (this.budgetHistory.length > 0 && this.budgetHistory[this.budgetHistory.length - 1]!.timestamp < cutoff) {
+      this.budgetHistory.pop();
+    }
+  }
+
+  private recordBudgetUsage(taskId: string, providerKey: string, totalTokens: number): void {
+    this.pruneBudgetHistory();
+    this.budgetHistory.unshift({
+      taskId,
+      providerKey,
+      timestamp: this.now(),
+      totalTokens,
+    });
+  }
+
+  private getDailySpend(taskId: string): number {
+    this.pruneBudgetHistory();
+    return this.budgetHistory
+      .filter((entry) => entry.taskId === taskId)
+      .reduce((sum, entry) => sum + entry.totalTokens, 0);
+  }
+
+  private getDailyProviderSpend(taskId: string, providerKey: string): number {
+    this.pruneBudgetHistory();
+    return this.budgetHistory
+      .filter((entry) => entry.taskId === taskId && entry.providerKey === providerKey)
+      .reduce((sum, entry) => sum + entry.totalTokens, 0);
+  }
+
+  private extractUsageTokens(output: unknown): { totalTokens: number; providerKey: string } {
+    const base = { totalTokens: 0, providerKey: 'default' };
+    if (!output || typeof output !== 'object') return base;
+    const record = output as Record<string, unknown>;
+    const usage = typeof record.usage === 'object' && record.usage ? record.usage as Record<string, unknown> : null;
+    const totalTokens = usage && typeof usage.totalTokens === 'number' ? usage.totalTokens : 0;
+    const providerKey = typeof record.provider === 'string' && record.provider.trim()
+      ? record.provider.trim()
+      : typeof record.providerName === 'string' && record.providerName.trim()
+        ? record.providerName.trim()
+        : 'default';
+    return { totalTokens, providerKey };
+  }
+
+  private preflightExecution(task: ScheduledTaskDefinition): { allowed: boolean; result?: ScheduledTaskRunResult } {
+    const activeRunId = this.activeRuns.get(task.id);
+    if (activeRunId) {
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: `Task already has an active run in progress (${activeRunId}).`,
+          durationMs: 0,
+        },
+      };
+    }
+
+    if (task.autoPausedReason) {
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: `Task auto-paused: ${task.autoPausedReason}`,
+          durationMs: 0,
+        },
+      };
+    }
+
+    if (this.isScopeDrifted(task)) {
+      task.approvalExpiresAt = undefined;
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: 'Task scope changed and requires re-approval before it can run again.',
+          durationMs: 0,
+        },
+      };
+    }
+
+    if (!task.approvalExpiresAt || task.approvalExpiresAt <= this.now()) {
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: 'Task approval has expired and must be renewed before execution.',
+          durationMs: 0,
+        },
+      };
+    }
+
+    if (this.getRunsInWindow(task.id) >= task.maxRunsPerWindow) {
+      this.pauseTask(task, `Run window limit exceeded (${task.maxRunsPerWindow} executions per day).`);
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: task.autoPausedReason ?? 'Task paused after exceeding its run budget.',
+          durationMs: 0,
+        },
+      };
+    }
+
+    if (this.getDailySpend(task.id) >= task.dailySpendCap) {
+      this.pauseTask(task, `Daily token budget exceeded (${task.dailySpendCap}).`);
+      return {
+        allowed: false,
+        result: {
+          success: false,
+          status: 'failed',
+          message: task.autoPausedReason ?? 'Task paused after exceeding its daily token budget.',
+          durationMs: 0,
+        },
+      };
+    }
+
+    return { allowed: true };
+  }
+
   // ─── Persistence ──────────────────────────────────────
 
   async load(): Promise<void> {
@@ -506,9 +758,10 @@ export class ScheduledTaskService {
       if (Array.isArray(data)) {
         for (const task of data) {
           if (task.id) {
-            this.tasks.set(task.id, task);
-            if (task.enabled) {
-              this.registerCron(task);
+            const normalized = this.normalizePersistedTask(task);
+            this.tasks.set(normalized.id, normalized);
+            if (normalized.enabled) {
+              this.registerCron(normalized);
             }
           }
         }
@@ -551,6 +804,7 @@ export class ScheduledTaskService {
     const task: ScheduledTaskDefinition = {
       id: randomUUID(),
       name: input.name.trim(),
+      description: input.description?.trim() || undefined,
       type: input.type,
       target: input.target.trim(),
       presetId: input.presetId?.trim() || undefined,
@@ -558,12 +812,20 @@ export class ScheduledTaskService {
       prompt: input.prompt?.trim() || undefined,
       channel: input.channel?.trim() || undefined,
       userId: input.userId?.trim() || undefined,
+      principalId: input.principalId?.trim() || input.userId?.trim() || undefined,
+      principalRole: input.principalRole ?? 'owner',
       deliver: input.deliver,
       runOnce: input.runOnce === true,
-      preApproved: true,
       cron: input.cron.trim(),
       enabled: input.enabled !== false,
       createdAt: this.now(),
+      approvalExpiresAt: input.approvalExpiresAt,
+      scopeHash: '',
+      maxRunsPerWindow: input.maxRunsPerWindow ?? DEFAULT_MAX_RUNS_PER_WINDOW,
+      dailySpendCap: input.dailySpendCap ?? DEFAULT_DAILY_SPEND_CAP,
+      providerSpendCap: input.providerSpendCap ?? DEFAULT_PROVIDER_SPEND_CAP,
+      consecutiveFailureCount: 0,
+      consecutiveDeniedCount: 0,
       runCount: 0,
       emitEvent: input.emitEvent?.trim() || undefined,
       outputHandling: this.resolveOutputHandling(input),
@@ -575,6 +837,8 @@ export class ScheduledTaskService {
         task.presetId = undefined;
       }
     }
+
+    this.applyApproval(task, task.principalId, task.principalRole, input.approvalExpiresAt);
 
     this.tasks.set(task.id, task);
 
@@ -598,6 +862,7 @@ export class ScheduledTaskService {
       return { success: false, message: 'Task not found' };
     }
 
+    const previousScopeHash = task.scopeHash;
     const cronChanged = input.cron !== undefined && input.cron !== task.cron;
     const enableChanged = input.enabled !== undefined && input.enabled !== task.enabled;
 
@@ -605,6 +870,7 @@ export class ScheduledTaskService {
       if (!input.name.trim()) return { success: false, message: 'name is required' };
       task.name = input.name.trim();
     }
+    if (input.description !== undefined) task.description = input.description?.trim() || undefined;
     if (input.type !== undefined) {
       if (!isScheduledTaskType(input.type)) {
         return { success: false, message: "type must be 'tool', 'playbook', or 'agent'" };
@@ -619,10 +885,15 @@ export class ScheduledTaskService {
     if (input.prompt !== undefined) task.prompt = input.prompt?.trim() || undefined;
     if (input.channel !== undefined) task.channel = input.channel?.trim() || undefined;
     if (input.userId !== undefined) task.userId = input.userId?.trim() || undefined;
+    if (input.principalId !== undefined) task.principalId = input.principalId?.trim() || undefined;
+    if (input.principalRole !== undefined) task.principalRole = input.principalRole;
     if (input.deliver !== undefined) task.deliver = input.deliver;
     if (input.runOnce !== undefined) task.runOnce = input.runOnce === true;
     if (input.cron !== undefined) task.cron = input.cron.trim();
     if (input.enabled !== undefined) task.enabled = input.enabled;
+    if (input.maxRunsPerWindow !== undefined) task.maxRunsPerWindow = Math.max(1, input.maxRunsPerWindow);
+    if (input.dailySpendCap !== undefined) task.dailySpendCap = Math.max(0, input.dailySpendCap);
+    if (input.providerSpendCap !== undefined) task.providerSpendCap = Math.max(0, input.providerSpendCap);
     if (input.emitEvent !== undefined) task.emitEvent = input.emitEvent?.trim() || undefined;
     if (input.outputHandling !== undefined) task.outputHandling = input.outputHandling;
 
@@ -643,6 +914,12 @@ export class ScheduledTaskService {
       }
     }
 
+    const nextScopeHash = this.computeScopeHash(task);
+    const scopeChanged = nextScopeHash !== previousScopeHash;
+    if (scopeChanged || input.approvalExpiresAt !== undefined) {
+      this.applyApproval(task, task.principalId, task.principalRole, input.approvalExpiresAt);
+    }
+
     // Re-register cron if expression changed or enabled state changed
     if (cronChanged || enableChanged) {
       this.unregisterCron(task);
@@ -653,6 +930,10 @@ export class ScheduledTaskService {
           return { success: false, message: `Invalid cron expression: ${err instanceof Error ? err.message : String(err)}` };
         }
       }
+    }
+
+    if (!task.enabled) {
+      task.autoPausedReason = task.autoPausedReason ?? undefined;
     }
 
     this.persist().catch(() => {});
@@ -700,15 +981,42 @@ export class ScheduledTaskService {
 
   private async executeTask(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
     const start = this.now();
+    const runId = randomUUID();
+    const events: OrchestrationRunEvent[] = [
+      createRunEvent(runId, 'run_created', start, {
+        message: `Scheduled task '${task.name}' started.`,
+        metadata: { taskId: task.id, taskType: task.type, target: task.target },
+      }),
+    ];
     let result: ScheduledTaskRunResult;
+
+    const preflight = this.preflightExecution(task);
+    if (!preflight.allowed) {
+      result = preflight.result!;
+      result.runId = runId;
+      result.events = [
+        ...events,
+        createRunEvent(runId, 'run_failed', this.now(), {
+          message: result.message,
+          metadata: { preflightBlocked: true },
+        }),
+      ];
+      task.lastRunAt = this.now();
+      task.lastRunStatus = result.status;
+      task.lastRunMessage = result.message;
+      this.persist().catch(() => {});
+      return result;
+    }
+
+    this.activeRuns.set(task.id, runId);
 
     try {
       if (task.type === 'tool') {
-        result = await this.executeTool(task);
+        result = await this.executeTool(task, runId, events);
       } else if (task.type === 'playbook') {
-        result = await this.executePlaybook(task);
+        result = await this.executePlaybook(task, runId, events);
       } else {
-        result = await this.executeAgent(task);
+        result = await this.executeAgent(task, runId, events);
       }
     } catch (err) {
       const durationMs = this.now() - start;
@@ -721,14 +1029,51 @@ export class ScheduledTaskService {
     }
 
     result.durationMs = this.now() - start;
+    result.runId = result.runId ?? runId;
+    result.events = result.events ?? [
+      ...events,
+      createRunEvent(runId, result.success ? 'run_completed' : result.status === 'pending_approval' ? 'run_interrupted' : 'run_failed', this.now(), {
+        message: result.message,
+      }),
+    ];
 
     // Update task state
     task.lastRunAt = this.now();
     task.lastRunStatus = result.status;
     task.lastRunMessage = result.message;
     task.runCount++;
+    if (result.status === 'pending_approval') {
+      task.consecutiveDeniedCount++;
+      task.consecutiveFailureCount = 0;
+    } else if (result.success) {
+      task.consecutiveFailureCount = 0;
+      task.consecutiveDeniedCount = 0;
+    } else {
+      task.consecutiveFailureCount++;
+      task.consecutiveDeniedCount = 0;
+    }
     result.outputHandling = result.outputHandling ?? task.outputHandling;
     result.promotedFindings = this.promoteRunFindings(task, result);
+
+    const usage = this.extractUsageTokens(result.output);
+    if (usage.totalTokens > 0) {
+      this.recordBudgetUsage(task.id, usage.providerKey, usage.totalTokens);
+      if (this.getDailyProviderSpend(task.id, usage.providerKey) > task.providerSpendCap) {
+        this.pauseTask(task, `Provider token budget exceeded for ${usage.providerKey} (${task.providerSpendCap}).`);
+        task.lastRunMessage = `${result.message}${result.message.endsWith('.') ? '' : '.'} ${task.autoPausedReason}`;
+        result.message = task.lastRunMessage;
+      }
+    }
+
+    if (task.consecutiveFailureCount >= AUTO_PAUSE_FAILURE_THRESHOLD) {
+      this.pauseTask(task, `Consecutive failure threshold reached (${task.consecutiveFailureCount}).`);
+      task.lastRunMessage = `${result.message}${result.message.endsWith('.') ? '' : '.'} ${task.autoPausedReason}`;
+      result.message = task.lastRunMessage;
+    } else if (task.consecutiveDeniedCount >= AUTO_PAUSE_DENIAL_THRESHOLD) {
+      this.pauseTask(task, `Consecutive approval denials threshold reached (${task.consecutiveDeniedCount}).`);
+      task.lastRunMessage = `${result.message}${result.message.endsWith('.') ? '' : '.'} ${task.autoPausedReason}`;
+      result.message = task.lastRunMessage;
+    }
 
     if (task.runOnce) {
       task.enabled = false;
@@ -740,6 +1085,7 @@ export class ScheduledTaskService {
     // Record history
     this.history.unshift({
       id: randomUUID(),
+      runId: result.runId,
       taskId: task.id,
       taskName: task.name,
       taskType: task.type,
@@ -752,6 +1098,7 @@ export class ScheduledTaskService {
       outputHandling: result.outputHandling,
       promotedFindings: result.promotedFindings?.map((finding) => ({ ...finding })),
       steps: result.steps?.map((step) => ({ ...step })),
+      events: result.events?.map((event) => ({ ...event })),
     });
     if (this.history.length > this.maxHistory) {
       this.history.length = this.maxHistory;
@@ -761,16 +1108,28 @@ export class ScheduledTaskService {
     this.emitCompletionEvent(task, result);
 
     this.persist().catch(() => {});
+    this.activeRuns.delete(task.id);
     return result;
   }
 
-  private async executeTool(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
+  private async executeTool(task: ScheduledTaskDefinition, runId: string, events: OrchestrationRunEvent[]): Promise<ScheduledTaskRunResult> {
+    const chainId = `sched:${task.id}:${this.now()}`;
+    const nodeId = `${task.id}:tool`;
+    events.push(createRunEvent(runId, 'node_started', this.now(), {
+      nodeId,
+      message: `Executing scheduled tool '${task.target}'.`,
+    }));
     const toolResult = await this.toolExecutor.runTool({
       toolName: task.target,
       args: task.args ?? {},
       origin: 'web',
       agentId: `sched-task:${task.id}`,
-      bypassApprovals: task.preApproved !== false,
+      userId: task.userId,
+      principalId: task.approvedByPrincipal ?? task.principalId,
+      principalRole: task.principalRole,
+      channel: task.channel ?? 'scheduled',
+      scheduleId: chainId,
+      bypassApprovals: true,
     });
 
     const status: ScheduledTaskStatus = toolResult.status === 'pending_approval'
@@ -790,7 +1149,14 @@ export class ScheduledTaskService {
       }
     }
 
+    events.push(createRunEvent(runId, status === 'pending_approval' ? 'approval_requested' : 'node_completed', this.now(), {
+      nodeId,
+      message: toolResult.message,
+      metadata: { status, approvalId: toolResult.approvalId },
+    }));
+
     return {
+      runId,
       success: toolResult.success,
       status,
       message: toolResult.message,
@@ -805,15 +1171,19 @@ export class ScheduledTaskService {
         durationMs: 0,
         output: toolResult.output,
       }],
+      events: events.map((event) => ({ ...event })),
     };
   }
 
-  private async executePlaybook(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
+  private async executePlaybook(task: ScheduledTaskDefinition, runId: string, events: OrchestrationRunEvent[]): Promise<ScheduledTaskRunResult> {
+    const chainId = `sched:${task.id}:${this.now()}`;
     const pbResult = await this.playbookExecutor.runPlaybook({
       playbookId: task.target,
       origin: 'web',
-      requestedBy: 'scheduled-tasks',
-      bypassApprovals: task.preApproved !== false,
+      requestedBy: task.approvedByPrincipal ?? task.principalId ?? 'scheduled-tasks',
+      principalId: task.approvedByPrincipal ?? task.principalId,
+      scheduleId: chainId,
+      bypassApprovals: true,
     });
 
     const status: ScheduledTaskStatus = pbResult.status === 'awaiting_approval'
@@ -834,7 +1204,13 @@ export class ScheduledTaskService {
       }
     }
 
+    events.push(...(pbResult.run.events ?? []).map((event) => ({
+      ...event,
+      parentRunId: event.parentRunId ?? runId,
+    })));
+
     return {
+      runId: pbResult.run.runId || runId,
       success: pbResult.success,
       status,
       message: pbResult.message,
@@ -849,38 +1225,57 @@ export class ScheduledTaskService {
         durationMs: step.durationMs ?? 0,
         output: step.output,
       })),
+      events: events.map((event) => ({ ...event })),
     };
   }
 
-  private async executeAgent(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
+  private async executeAgent(task: ScheduledTaskDefinition, runId: string, events: OrchestrationRunEvent[]): Promise<ScheduledTaskRunResult> {
     if (!this.agentExecutor) {
       return {
+        runId,
         success: false,
         status: 'failed',
         message: 'Agent task execution is not available.',
         durationMs: 0,
+        events: events.map((event) => ({ ...event })),
       };
     }
     if (!task.prompt?.trim()) {
       return {
+        runId,
         success: false,
         status: 'failed',
         message: 'Agent task is missing a prompt.',
         durationMs: 0,
+        events: events.map((event) => ({ ...event })),
       };
     }
 
+    const nodeId = `${task.id}:agent`;
+    events.push(createRunEvent(runId, 'node_started', this.now(), {
+      nodeId,
+      message: `Executing scheduled assistant task '${task.name}'.`,
+    }));
     const agentResult = await this.agentExecutor.runAgentTask({
       agentId: task.target,
       prompt: task.prompt,
       taskId: task.id,
       taskName: task.name,
       userId: task.userId,
+      principalId: task.approvedByPrincipal ?? task.principalId,
+      principalRole: task.principalRole,
       channel: task.channel,
       deliver: task.deliver,
     });
 
+    events.push(createRunEvent(runId, agentResult.status === 'pending_approval' ? 'approval_requested' : 'node_completed', this.now(), {
+      nodeId,
+      message: agentResult.message,
+      metadata: { status: agentResult.status },
+    }));
+
     return {
+      runId,
       success: agentResult.success,
       status: agentResult.status,
       message: agentResult.message,
@@ -895,6 +1290,7 @@ export class ScheduledTaskService {
         durationMs: 0,
         output: agentResult.output,
       }],
+      events: events.map((event) => ({ ...event })),
     };
   }
 
@@ -908,6 +1304,7 @@ export class ScheduledTaskService {
   }
 
   private emitCompletionEvent(task: ScheduledTaskDefinition, result: ScheduledTaskRunResult): void {
+    const chainId = `sched:${task.id}:${task.lastRunAt ?? this.now()}`;
     const baseEvent: AgentEvent = {
       type: 'scheduled_task_completed',
       sourceAgentId: `sched-task:${task.id}`,
@@ -915,12 +1312,17 @@ export class ScheduledTaskService {
       payload: {
         taskId: task.id,
         taskName: task.name,
+        runId: result.runId,
         taskType: task.type,
         target: task.target,
         status: result.status,
         message: result.message,
         durationMs: result.durationMs,
         promotedFindings: result.promotedFindings,
+        causalChainId: chainId,
+        hopCount: MAX_CHAIN_HOPS,
+        approvedByPrincipal: task.approvedByPrincipal,
+        approvalExpiresAt: task.approvalExpiresAt,
       },
       timestamp: this.now(),
     };

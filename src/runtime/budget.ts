@@ -23,6 +23,16 @@ export interface TokenRecord {
   completionTokens: number;
   totalTokens: number;
   timestamp: number;
+  principalId?: string;
+  provider?: string;
+  scheduleId?: string;
+}
+
+export interface TokenUsageScope {
+  agentId?: string;
+  principalId?: string;
+  provider?: string;
+  scheduleId?: string;
 }
 
 export class BudgetTracker {
@@ -93,18 +103,26 @@ export class BudgetTracker {
   }
 
   /** Record token usage for an agent. */
-  recordTokenUsage(agentId: string, promptTokens: number, completionTokens: number): void {
+  recordTokenUsage(
+    agentId: string,
+    promptTokens: number,
+    completionTokens: number,
+    context?: { principalId?: string; provider?: string; scheduleId?: string },
+  ): void {
     this.tokenHistory.push({
       agentId,
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
       timestamp: Date.now(),
+      principalId: context?.principalId,
+      provider: context?.provider,
+      scheduleId: context?.scheduleId,
     });
 
-    // Keep only last hour of records
-    const oneHourAgo = Date.now() - 3_600_000;
-    this.tokenHistory = this.tokenHistory.filter(r => r.timestamp > oneHourAgo);
+    // Keep only last 24 hours of records for budget windows.
+    const oneDayAgo = Date.now() - 86_400_000;
+    this.tokenHistory = this.tokenHistory.filter(r => r.timestamp > oneDayAgo);
   }
 
   /** Get tokens used in the last minute for an agent. */
@@ -113,6 +131,26 @@ export class BudgetTracker {
     return this.tokenHistory
       .filter(r => r.agentId === agentId && r.timestamp > oneMinuteAgo)
       .reduce((sum, r) => sum + r.totalTokens, 0);
+  }
+
+  /** Get tokens used over the last 24 hours for a scoped actor/provider/schedule slice. */
+  getDailyTokenUsage(scope: TokenUsageScope): number {
+    const oneDayAgo = Date.now() - 86_400_000;
+    return this.tokenHistory
+      .filter((record) => {
+        if (record.timestamp <= oneDayAgo) return false;
+        if (scope.agentId && record.agentId !== scope.agentId) return false;
+        if (scope.principalId && record.principalId !== scope.principalId) return false;
+        if (scope.provider && record.provider !== scope.provider) return false;
+        if (scope.scheduleId && record.scheduleId !== scope.scheduleId) return false;
+        return true;
+      })
+      .reduce((sum, record) => sum + record.totalTokens, 0);
+  }
+
+  isDailyCapExceeded(scope: TokenUsageScope, cap: number): boolean {
+    if (cap <= 0) return false;
+    return this.getDailyTokenUsage(scope) >= cap;
   }
 
   /** Get recent budget overruns. */

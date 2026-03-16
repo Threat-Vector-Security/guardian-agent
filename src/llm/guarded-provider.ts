@@ -71,6 +71,7 @@ export class GuardedLLMProvider implements LLMProvider {
         this.agentId,
         response.usage.promptTokens,
         response.usage.completionTokens,
+        { provider: this.name },
       );
     }
 
@@ -121,6 +122,7 @@ export class GuardedLLMProvider implements LLMProvider {
           this.agentId,
           chunk.usage.promptTokens,
           chunk.usage.completionTokens,
+          { provider: this.name },
         );
       }
 

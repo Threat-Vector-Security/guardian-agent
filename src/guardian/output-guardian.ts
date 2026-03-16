@@ -11,6 +11,7 @@ import { detectInjectionSignals, stripInvisibleChars } from './input-sanitizer.j
 import { PiiScanner, type PiiEntityType, type PiiMatch, type PiiRedactionMode } from './pii-scanner.js';
 import { SecretScanner } from './secret-scanner.js';
 import type { SecretMatch } from './secret-scanner.js';
+import type { ContentTrustLevel } from '../tools/types.js';
 
 /** Result of scanning outbound content. */
 export interface ScanResult {
@@ -38,6 +39,12 @@ export interface ToolResultScanResult {
   threats: string[];
   secrets: SecretMatch[];
   pii: PiiMatch[];
+  trustLevel: ContentTrustLevel;
+  origin: 'local' | 'remote';
+  taintReasons: string[];
+  allowPlannerRawContent: boolean;
+  allowMemoryWrite: boolean;
+  allowDownstreamDispatch: boolean;
 }
 
 interface ToolResultScanState {
@@ -45,6 +52,8 @@ interface ToolResultScanState {
   readonly secrets: SecretMatch[];
   readonly pii: PiiMatch[];
   readonly threats: Set<string>;
+  readonly taintReasons: Set<string>;
+  trustLevel: ContentTrustLevel;
 }
 
 const SECRET_PATTERNS_HANDLED_AS_PII = new Set([
@@ -127,6 +136,8 @@ export class OutputGuardian {
       secrets: [],
       pii: [],
       threats: new Set<string>(),
+      taintReasons: new Set(),
+      trustLevel: options?.providerKind === 'local' ? 'trusted' : 'low_trust',
     };
 
     const sanitizedValue = this.scanValue(result, state, 0, new WeakSet<object>());
@@ -144,6 +155,12 @@ export class OutputGuardian {
       threats: [...state.threats],
       secrets: state.secrets,
       pii: state.pii,
+      trustLevel: state.trustLevel,
+      origin: state.providerKind === 'local' ? 'local' : 'remote',
+      taintReasons: [...state.taintReasons],
+      allowPlannerRawContent: state.trustLevel !== 'quarantined',
+      allowMemoryWrite: state.trustLevel === 'trusted',
+      allowDownstreamDispatch: state.trustLevel !== 'quarantined',
     };
   }
 
@@ -194,6 +211,7 @@ export class OutputGuardian {
     const stripped = stripInvisibleChars(sanitized);
     if (stripped !== sanitized) {
       state.threats.add('Stripped invisible Unicode from tool output.');
+      state.taintReasons.add('suspicious_unicode');
       sanitized = stripped;
     }
 
@@ -202,6 +220,10 @@ export class OutputGuardian {
       state.threats.add(
         `Potential prompt injection detected in tool output (score: ${injection.score}, signals: ${injection.signals.join(', ')}).`,
       );
+      state.taintReasons.add('prompt_injection_signals');
+      state.trustLevel = 'quarantined';
+    } else if (state.providerKind !== 'local') {
+      state.taintReasons.add('remote_content');
     }
 
     if (this.shouldRedactPii(state.providerKind)) {
@@ -216,6 +238,7 @@ export class OutputGuardian {
     if (secretResult.matches.length > 0) {
       state.secrets.push(...secretResult.matches);
       sanitized = secretResult.sanitized;
+      state.taintReasons.add('secret_redaction');
     }
 
     return sanitized;

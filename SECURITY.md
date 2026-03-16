@@ -23,8 +23,12 @@ GuardianAgent is an AI agent orchestration system where:
 
 - **Supervisor-side framework code is trusted** — Runtime, orchestration, approvals, and tool execution run in the supervisor process
 - **The built-in chat/planner loop is isolated from the supervisor** — it runs in a brokered worker and reaches tools and approvals through broker RPC
+- **Automation authoring is compiler-mediated** — clear "create a workflow/automation" requests are compiled into native control-plane mutations before the generic planner can drift into script generation
+- **Inter-agent delegation is contract-mediated** — orchestration handoffs are validated in runtime code before downstream agents receive filtered context
 - **LLM output is NOT trusted** — Models can hallucinate, leak secrets, or be prompt-injected
 - **User input is NOT trusted** — External input may contain injection attempts
+- **Remote/tool output is NOT trusted by default** — tool results are classified as `trusted`, `low_trust`, or `quarantined` before they re-enter planning, memory, or delegation
+- **Durable memory is not equivalent to reviewed truth** — memory entries carry trust, provenance, and quarantine state
 
 ### Threats Addressed
 
@@ -43,6 +47,12 @@ GuardianAgent is an AI agent orchestration system where:
 | Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory |
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
 | Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
+| Indirect prompt injection via remote/tool output | OutputGuardian trust classification, quarantined reinjection suppression, taint-aware tool gating |
+| Memory poisoning / durable backdoors | Trust-aware memory store, quarantined entries excluded from default planner context |
+| Broken-tool overspend / runaway retries | Per-chain tool-call budgets, repeated-failure retry suppression, schedule token/run caps, auto-pause |
+| Overlapping scheduled side effects | Per-task active-run locks prevent the same scheduled automation from overlapping itself |
+| Stale automation authority | Schedule approval expiry, scope hashes, principal-bound approval ownership, budget caps |
+| Script drift during automation creation | Native automation authoring compiler prefers `task_create` / `workflow_upsert`, hard-bans script/code-file authoring when the user requested native Guardian automation, and now intercepts those requests before both direct and brokered worker tool loops |
 | Host drift or suspicious local activity | Host monitor baselines processes, persistence, paths, and network; critical findings can block risky actions |
 | Gateway firewall drift | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
 
@@ -148,14 +158,19 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
                         │ ✓ Allowed
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  LAYER 3: Output Guardian (Reactive)                    │
+│  LAYER 3: Output Guardian + Trust Classification        │
 │                                                         │
-│  Scans agent response AFTER execution, BEFORE delivery  │
+│  Scans agent response and tool results after execution, │
+│  before delivery or planner reinjection                 │
 │                                                         │
 │  • 30+ secret patterns (AWS, GCP, Azure, GitHub, etc.)  │
 │  • Redact mode: replace secrets with [REDACTED]         │
 │  • Block mode: return "[Response blocked]" entirely     │
 │  • Event payloads also scanned before inter-agent send  │
+│  • Tool results classified as trusted / low_trust /     │
+│    quarantined                                           │
+│  • Quarantined raw content is suppressed from planner    │
+│    reinjection and replaced with constrained summaries   │
 │                                                         │
 │  GuardedLLMProvider ensures EVERY ctx.llm call is       │
 │  scanned before delivery                                │
@@ -290,6 +305,13 @@ Capabilities are granted per-agent at registration and **frozen** (`Object.freez
 | `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny`; read-only and network tools allowed by default |
 | `autonomous` | Tools execute without approval (still sandboxed) |
 
+Current contextual additions:
+- approvals are bound to the requesting principal and role
+- quarantined content cannot directly drive non-read-only tools
+- tainted-content-driven mutation is approval-gated or denied
+- repeated identical failures in one execution chain are blocked before they can overspend further
+- non-read-only tools are capped per execution chain to reduce broken-tool runaway spend
+
 ### Risk Classification
 
 | Risk Level | Examples |
@@ -318,38 +340,27 @@ The ShellCommandController goes beyond simple string matching:
 - **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
 - **Dry-run mode**: Preview mutating operations without execution
 
-### Policy-as-Code Engine
+### Contextual Policy Enforcement
 
-Declarative JSON rule files replace hard-coded approval logic with an auditable, version-controlled policy engine.
+GuardianAgent now ships contextual enforcement directly in the runtime decision path.
 
-**Architecture:**
-- **Rule files** in `policies/` are loaded at startup and compiled into priority-sorted matcher closures
-- **Canonical PolicyInput** model: `{ family, principal, action, resource, context }` — resource is always the tool; targets go in `resource.attrs`
-- **Deterministic evaluation**: first-match wins, with family defaults as fallback
-- **10 match primitives**: exact, `in`/`notIn`, `gt`/`gte`/`lt`/`lte`, `startsWith`/`endsWith`, `regex`, `exists`
-- **Compound conditions**: `allOf` (implicit default) and `anyOf` for disjunctive logic
+Current enforced inputs include:
+- `principalId`
+- `principalRole`
+- `contentTrustLevel`
+- `taintReasons`
+- `derivedFromTaintedContent`
+- `scheduleId`
+- schedule approval/budget state
 
-**Operating modes:**
+Current enforced behaviors include:
+- deny non-read-only actions from quarantined context
+- require approval for tainted-content-driven mutation
+- quarantine low-trust memory writes by default
+- bind approvals to the requesting principal/role
+- enforce bounded schedule authority via approval expiry, scope hash drift, and token/run budgets
 
-| Mode | Behavior |
-|------|----------|
-| `off` | Engine disabled, legacy `decide()` only |
-| `shadow` | Engine runs alongside legacy; mismatches logged but legacy decision used (default) |
-| `enforce` | Engine's decision is authoritative; legacy path disabled |
-
-**Shadow mode safety:**
-- Mismatches classified as `policy_too_strict`, `policy_too_permissive`, `normalization_bug`, or `legacy_bug`
-- Log throttling after configurable limit (default 1000)
-- Match rate and mismatch-by-class stats available via API
-- 14-day exit criteria: 99%+ match rate, zero `policy_too_permissive` mismatches
-
-**Schema versioning:** Files include `schemaVersion` field; engine rejects files with a newer version than supported, preventing accidental deployment of incompatible rules.
-
-**Fail-safe behavior:**
-- Shadow mode: engine error → log + continue with legacy decision
-- Enforce mode: engine error → fail closed (deny)
-
-See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for the full specification.
+The longer-term declarative rule-engine work remains documented in [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md). That spec is now about consolidating these shipped contextual controls into a shared declarative engine, not about introducing contextual security for the first time.
 
 ---
 
@@ -495,9 +506,20 @@ Email addresses are PII and flagged by default. However, email/calendar/MCP tool
 - GuardedLLMProvider scans every LLM response for secrets automatically
 - Response redaction replaces detected credentials with `[REDACTED]`
 - Inter-agent event payloads are scanned before dispatch
+- Tool results are classified into `trusted`, `low_trust`, or `quarantined`
 - Tool results are wrapped as structured `<tool_result ...>` envelopes before they return to the model
 - Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and PII-redacted before reinjection
+- Quarantined tool output does not re-enter the planner as raw text; the runtime injects a constrained summary instead
+- Low-trust or quarantined content cannot become active memory by default
 - All detections logged to the audit trail
+
+### Trust-Aware Memory
+
+- Per-agent memory now uses readable markdown plus a structured sidecar index
+- Each entry stores source, trust, status, principal, and provenance metadata
+- Status values: `active`, `quarantined`, `expired`, `rejected`
+- Quarantined memory is excluded from normal planner context
+- Remote-derived or tainted memory writes default to quarantine instead of silently becoming active context
 
 ---
 
@@ -685,6 +707,8 @@ Multi-agent orchestration (Sequential, Parallel, Loop, Conditional agents) maint
 - Each sub-agent call passes through the full Guardian admission pipeline
 - Shared state between agents is scoped and cleaned between runs
 - Orchestration agents receive `ctx.dispatch()` — a guarded wrapper, not raw runtime access
+- Scheduled orchestration is bounded by approval expiry, scope drift checks, and runaway budgets rather than indefinite saved approval
+- Scheduled or chained broken-tool retries are capped to reduce overspend amplification
 
 ---
 
@@ -739,7 +763,9 @@ An agent should satisfy **at most two** of:
 - Least-privilege capability model with immutable frozen context
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, risk-tiered classes
+- Contextual security: trust classification, quarantined reinjection suppression, principal-bound approvals, and trust-aware memory
 - Connector + playbook guardrails: host/path/command/capability allowlists, bounded step execution, signed/dry-run controls
+- Automation authority bounds: approval expiry, scope hashes, run/token caps, and auto-pause on repeated failures/denials
 - Secret exfiltration controls: multi-pattern scanning, response redaction/blocking, inter-agent payload blocking
 - Intent hardening via SOUL profile: configurable injection with primary/delegated modes
 - Cryptographic correlation: deterministic SHA-256 hashes of redacted tool args for traceability
@@ -842,5 +868,6 @@ Primary executable harnesses:
 
 - `scripts/test-security-verification.mjs`
 - `scripts/test-brokered-isolation.mjs`
+- `scripts/test-contextual-security-uplifts.mjs`
 - `scripts/test-web-approvals.mjs`
 - `scripts/test-cli-approvals.mjs`

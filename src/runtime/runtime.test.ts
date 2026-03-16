@@ -50,6 +50,56 @@ class FailingAgent extends BaseAgent {
   }
 }
 
+class CaptureAgent extends BaseAgent {
+  receivedMessages: UserMessage[] = [];
+
+  constructor(id: string = 'capture') {
+    super(id, 'Capture Agent', { handleMessages: true });
+  }
+
+  async onMessage(message: UserMessage): Promise<AgentResponse> {
+    this.receivedMessages.push(message);
+    return { content: `Captured: ${message.content}` };
+  }
+}
+
+class RelayAgent extends BaseAgent {
+  constructor(
+    private readonly targetAgentId: string,
+    private readonly requireApproval = false,
+  ) {
+    super('relay', 'Relay Agent', { handleMessages: true });
+  }
+
+  async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
+    if (!ctx.dispatch) {
+      return { content: 'dispatch missing' };
+    }
+    return ctx.dispatch(
+      this.targetAgentId,
+      {
+        ...message,
+        content: `${message.content} with additional context`,
+        metadata: {
+          summary: 'condensed handoff summary',
+          taintReasons: ['remote_html'],
+        },
+      },
+      {
+        handoff: {
+          id: 'relay-handoff',
+          sourceAgentId: this.id,
+          targetAgentId: this.targetAgentId,
+          allowedCapabilities: ['web.read'],
+          contextMode: 'summary_only',
+          preserveTaint: true,
+          requireApproval: this.requireApproval,
+        },
+      },
+    );
+  }
+}
+
 describe('Runtime', () => {
   let runtime: Runtime;
 
@@ -110,6 +160,52 @@ describe('Runtime', () => {
       await expect(runtime.dispatchMessage('nonexistent', message)).rejects.toThrow(
         "Agent 'nonexistent' not found",
       );
+    });
+
+    it('applies validated handoff contracts on agent dispatch', async () => {
+      const relay = new RelayAgent('capture');
+      const capture = new CaptureAgent('capture');
+      runtime.registerAgent(createAgentDefinition({ agent: relay, grantedCapabilities: ['agent.dispatch'] }));
+      runtime.registerAgent(createAgentDefinition({ agent: capture, grantedCapabilities: ['web.read'] }));
+
+      const response = await runtime.dispatchMessage('relay', {
+        id: 'handoff-1',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'research this lead',
+        timestamp: Date.now(),
+      });
+
+      expect(response.content).toBe('Captured: condensed handoff summary');
+      expect(capture.receivedMessages).toHaveLength(1);
+      expect(capture.receivedMessages[0]?.content).toBe('condensed handoff summary');
+      expect(capture.receivedMessages[0]?.metadata).toMatchObject({
+        taintReasons: ['remote_html'],
+        handoff: expect.objectContaining({
+          id: 'relay-handoff',
+          sourceAgentId: 'relay',
+          targetAgentId: 'capture',
+          contextMode: 'summary_only',
+        }),
+      });
+    });
+
+    it('denies approval-gated handoffs during automatic dispatch', async () => {
+      const relay = new RelayAgent('capture', true);
+      const capture = new CaptureAgent('capture');
+      runtime.registerAgent(createAgentDefinition({ agent: relay, grantedCapabilities: ['agent.dispatch'] }));
+      runtime.registerAgent(createAgentDefinition({ agent: capture, grantedCapabilities: ['web.read'] }));
+
+      await expect(runtime.dispatchMessage('relay', {
+        id: 'handoff-2',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'research this lead',
+        timestamp: Date.now(),
+      })).rejects.toThrow('Handoff denied: approval-gated handoffs are not auto-approved in runtime dispatch.');
+
+      const denied = runtime.auditLog.query({ type: 'action_denied', agentId: 'relay' });
+      expect(denied.some((event) => event.controller === 'AgentHandoff')).toBe(true);
     });
   });
 

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { scoreComplexity, type ComplexityResult } from './complexity-scorer.js';
+import { scoreAutomationOrchestration, scoreComplexity, type ComplexityResult } from './complexity-scorer.js';
 
 describe('scoreComplexity', () => {
   // ─── Edge cases ─────────────────────────────────────────────
@@ -191,5 +191,12 @@ describe('scoreComplexity', () => {
     const single = scoreComplexity('Search for something');
     const multi = scoreComplexity('Search for the latest news about weather');
     expect(multi.signals.webSearchIntent).toBeGreaterThanOrEqual(single.signals.webSearchIntent);
+  });
+
+  it('should detect complex automation orchestration requests', () => {
+    const score = scoreAutomationOrchestration(
+      'Build a weekday lead research workflow that reads a CSV of company names from the workspace, researches each company’s website and public presence, scores them against a simple ICP, writes the results to a new CSV in the workspace, and creates a short summary report.',
+    );
+    expect(score).toBeGreaterThanOrEqual(0.75);
   });
 });

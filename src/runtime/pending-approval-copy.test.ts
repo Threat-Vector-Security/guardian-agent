@@ -2,14 +2,22 @@ import { describe, expect, it } from 'vitest';
 import {
   describePendingApproval,
   formatPendingApprovalMessage,
+  isPhantomPendingApprovalMessage,
   shouldUseStructuredPendingApprovalMessage,
 } from './pending-approval-copy.js';
 
 describe('pending approval copy', () => {
   it('recognizes weak approval placeholder text', () => {
     expect(shouldUseStructuredPendingApprovalMessage('I need your approval before proceeding.')).toBe(true);
+    expect(shouldUseStructuredPendingApprovalMessage('This action needs approval before I can continue.')).toBe(true);
     expect(shouldUseStructuredPendingApprovalMessage('The tool is available. Need to call it with correct arguments: action and value.')).toBe(true);
     expect(shouldUseStructuredPendingApprovalMessage('I need to add S:\\Development to allowed paths first, then I can create the file there.')).toBe(false);
+  });
+
+  it('detects phantom approval text that should never be shown without metadata', () => {
+    expect(isPhantomPendingApprovalMessage('This action needs approval before I can continue.')).toBe(true);
+    expect(isPhantomPendingApprovalMessage('This action needs your approval. The approval UI is shown to the user automatically.')).toBe(true);
+    expect(isPhantomPendingApprovalMessage('Waiting for approval to write S:\\Development\\test23.txt.')).toBe(false);
   });
 
   it('describes policy updates without leaking schema jargon', () => {

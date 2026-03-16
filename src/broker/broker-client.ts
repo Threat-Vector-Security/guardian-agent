@@ -81,6 +81,13 @@ export class BrokerClient {
       args: request.args,
       requestId: request.requestId,
       agentId: request.agentId,
+      userId: request.userId,
+      principalId: request.principalId,
+      principalRole: request.principalRole,
+      contentTrustLevel: request.contentTrustLevel,
+      taintReasons: request.taintReasons,
+      derivedFromTaintedContent: request.derivedFromTaintedContent,
+      scheduleId: request.scheduleId,
       allowImplicitMemorySave: request.allowImplicitMemorySave,
     });
     return result;
@@ -127,9 +134,10 @@ export class BrokerClient {
     approvalId: string,
     decision: 'approved' | 'denied',
     actor: string,
+    actorRole?: import('../tools/types.js').PrincipalRole,
     reason?: string,
   ): Promise<{ success: boolean; message: string; status?: string; jobId?: string }> {
-    return this.sendRequest('approval.decide', { approvalId, decision, actor, reason });
+    return this.sendRequest('approval.decide', { approvalId, decision, actor, actorRole, reason });
   }
 
   async getApprovalResult(approvalId: string): Promise<{

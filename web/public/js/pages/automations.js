@@ -297,7 +297,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       automations.push({
         id: task.id,
         name: task.name || task.target,
-        description: task.prompt || 'Scheduled assistant task',
+        description: describeAssistantAutomationTask(task),
         category: 'assistant',
         kind: 'assistant',
         mode: 'assistant',
@@ -478,6 +478,21 @@ function describeStandaloneAutomationTask(task, tool) {
   return tool?.shortDescription || tool?.description || '';
 }
 
+function describeAssistantAutomationTask(task) {
+  const explicit = String(task?.description || '').trim();
+  if (explicit) return explicit;
+
+  const prompt = String(task?.prompt || '').trim();
+  if (!prompt) return 'Scheduled assistant task';
+
+  const operatorRequestMatch = prompt.match(/operator request:\s*([\s\S]+)$/i);
+  let summarySource = operatorRequestMatch?.[1] || prompt;
+  summarySource = summarySource.replace(/^\[Context:[^\]]+\]\s*/i, '').trim();
+  summarySource = summarySource.replace(/\s+/g, ' ').trim();
+  if (!summarySource) return 'Scheduled assistant task';
+  return summarySource;
+}
+
 function summarizeDirectEmailTask(toolName, args) {
   const to = String(args?.to || '').trim();
   const subject = String(args?.subject || '').trim();
@@ -563,7 +578,6 @@ function renderAutomationRow(auto, tools, packs) {
         <div class="wf-catalog-tools">
           <span class="wf-tool-chip"><span class="wf-tool-chip-num">A</span>${esc(auto._task?.target || 'default')}</span>
         </div>
-        <div class="ops-task-sub" style="margin-top:0.35rem">${esc(auto.agentPrompt || auto.description || '')}</div>
         <div class="ops-task-sub">Channel: ${esc(auto.agentChannel || 'scheduled')} · Delivery: ${auto.agentDeliver ? 'on' : 'off'}</div>
       `
     : `
@@ -592,7 +606,7 @@ function renderAutomationRow(auto, tools, packs) {
     <tr class="auto-catalog-row" data-category="${escAttr(auto.category)}" data-auto-id="${escAttr(auto.id)}">
       <td>
         <div class="ops-task-title">${esc(auto.name)}</div>
-        <div class="ops-task-sub">${esc(auto.description || auto.id)}</div>
+        <div class="ops-task-sub" title="${escAttr(auto.description || auto.id)}">${esc(auto.description || auto.id)}</div>
         <span class="wf-category-tag">${esc(auto.category)}</span>
         ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Catalog</span>' : ''}
       </td>
@@ -1443,6 +1457,7 @@ function bindEvents(container, ctx) {
         } else if (auto._task?.type === 'agent') {
           await api.createScheduledTask({
             name: newName,
+            description: auto._task.description || auto.description,
             type: 'agent',
             target: auto._task.target,
             prompt: auto._task.prompt,
@@ -1594,6 +1609,20 @@ function bindCreateForm(container, { tools, packs, agents }) {
     if (displayEl) displayEl.textContent = toolName || 'No tool selected';
   }
 
+  function ensureAssistantModeOption(enabled) {
+    const existing = modeSelect.querySelector('option[value="assistant"]');
+    if (enabled) {
+      if (!existing) {
+        const option = document.createElement('option');
+        option.value = 'assistant';
+        option.textContent = 'Assistant Automation';
+        modeSelect.appendChild(option);
+      }
+      return;
+    }
+    if (existing) existing.remove();
+  }
+
   function setFormMode(mode, subtitle) {
     titleEl.textContent = mode;
     subtitleEl.textContent = subtitle;
@@ -1661,9 +1690,10 @@ function bindCreateForm(container, { tools, packs, agents }) {
     editIdInput.value = '';
     editSourceInput.value = '';
     editTaskIdInput.value = '';
-    setFormMode('Create Automation', 'Build a one-off tool automation or a multi-step pipeline.');
+    setFormMode('Create Automation', 'Build a native workflow, tool automation, or scheduled assistant task.');
     setIdReadOnly(false);
     modeSelect.disabled = false;
+    ensureAssistantModeOption(false);
     scheduleCheck.disabled = false;
     nameInput.value = '';
     idInput.value = '';
@@ -1751,8 +1781,10 @@ function bindCreateForm(container, { tools, packs, agents }) {
 
   function updateModeVisibility() {
     const mode = modeSelect.value;
-    singleSection.style.display = mode === 'single' ? '' : 'none';
-    pipelineSection.style.display = mode !== 'single' ? '' : 'none';
+    const isAgentMode = scheduleCheck.checked && agentModeCheck?.checked;
+    singleSection.style.display = !isAgentMode && mode === 'single' ? '' : 'none';
+    pipelineSection.style.display = !isAgentMode && mode !== 'single' ? '' : 'none';
+    if (argsField) argsField.style.display = !isAgentMode && mode === 'single' ? '' : 'none';
     // Update pipeline label: "Tasks" for parallel, "Steps" for sequential
     const stepLabel = container.querySelector('#auto-pipeline-label');
     if (stepLabel) stepLabel.textContent = mode === 'parallel' ? 'Tasks' : 'Steps';
@@ -1767,11 +1799,13 @@ function bindCreateForm(container, { tools, packs, agents }) {
   // Schedule toggle
   scheduleCheck?.addEventListener('change', () => {
     scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
+    updateModeVisibility();
   });
 
   // Agent mode toggle (inside schedule section)
   agentModeCheck?.addEventListener('change', () => {
     if (assistantFields) assistantFields.style.display = agentModeCheck.checked ? '' : 'none';
+    updateModeVisibility();
   });
 
   // Schedule field visibility
@@ -2278,6 +2312,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
         const llmProv = llmProviderSelect?.value;
         const input = {
           name,
+          description,
           type: 'agent',
           target: agentSelect?.value || 'default',
           prompt,
@@ -2381,9 +2416,11 @@ function bindCreateForm(container, { tools, packs, agents }) {
     if (!attachFormInline(auto)) return;
 
     createToggle.textContent = 'Create Automation';
-    setFormMode('Edit Automation', isStandaloneTask
-      ? 'Editing a scheduled tool automation. Schedule and tool inputs update in place.'
-      : 'Editing an existing automation. Existing step arguments and advanced settings are preserved.');
+    setFormMode('Edit Automation', isAgentTask
+      ? 'Editing a scheduled assistant automation. Schedule and assistant settings update in place.'
+      : isStandaloneTask
+        ? 'Editing a scheduled tool automation. Schedule and tool inputs update in place.'
+        : 'Editing an existing automation. Existing step arguments and advanced settings are preserved.');
     clearStatus();
 
     editIdInput.value = auto.id || '';
@@ -2418,7 +2455,8 @@ function bindCreateForm(container, { tools, packs, agents }) {
     const singlePromptEl = container.querySelector('#auto-single-prompt');
 
     if (isAgentTask) {
-      modeSelect.value = 'single';
+      ensureAssistantModeOption(true);
+      modeSelect.value = 'assistant';
       modeSelect.disabled = false;
       // Check schedule toggle + agent mode toggle
       scheduleCheck.checked = true;
@@ -2429,12 +2467,14 @@ function bindCreateForm(container, { tools, packs, agents }) {
       if (agentChannelSelect) agentChannelSelect.value = auto._task.channel || 'scheduled';
       if (agentPromptInput) agentPromptInput.value = auto._task.prompt || auto.agentPrompt || '';
       if (agentDeliverCheck) agentDeliverCheck.checked = auto._task.deliver !== false;
+      descriptionInput.value = auto._task.description || auto.description || '';
       argsInput.value = '';
       enabledSelect.value = String(auto._task.enabled !== false);
       idInput.value = auto.id || '';
       setIdReadOnly(true);
       if (singlePromptEl) singlePromptEl.value = '';
     } else if (isStandaloneTask) {
+      ensureAssistantModeOption(false);
       modeSelect.value = 'single';
       modeSelect.disabled = true;
       singleToolSelect.value = auto._task.target || '';
@@ -2464,6 +2504,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
       setIdReadOnly(true);
       wfSteps.splice(0, wfSteps.length); // clear pipeline steps for single mode
     } else {
+      ensureAssistantModeOption(false);
       modeSelect.disabled = false;
       modeSelect.value = auto.kind === 'pipeline' ? auto.mode : 'single';
       singleToolSelect.value = firstStep?.toolName || '';

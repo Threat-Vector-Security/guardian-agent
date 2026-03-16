@@ -527,4 +527,78 @@ describe('ConnectorPlaybookService', () => {
     expect(result.run.steps[1].toolName).toBe('_instruction');
     expect(runInstruction).toHaveBeenCalledTimes(1);
   });
+
+  it('resolves prior step placeholders inside later tool args', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.definitions = [
+      {
+        id: 'draft-from-summary',
+        name: 'Draft From Summary',
+        enabled: true,
+        mode: 'sequential',
+        signature: 'signed-v1',
+        steps: [
+          {
+            id: 'list-messages',
+            toolName: 'gmail_list',
+            args: { labelIds: ['INBOX'], maxResults: 5 },
+          },
+          {
+            id: 'summarize',
+            type: 'instruction',
+            instruction: 'Summarize the prior step output into a short email-ready draft.',
+          },
+          {
+            id: 'create-draft',
+            toolName: 'gmail_draft',
+            args: {
+              to: 'me@example.com',
+              subject: 'Daily Inbox Summary',
+              body: '${summarize.output}',
+            },
+          },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (request: ToolExecutionRequest): Promise<ToolRunResponse> => {
+      if (request.toolName === 'gmail_list') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-list',
+          message: 'listed',
+          output: { messages: [{ id: '1', subject: 'Need reply' }] },
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-draft',
+        message: 'drafted',
+      };
+    });
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool,
+      runInstruction: async () => 'Reply to Alice about the contract update.',
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'draft-from-summary',
+      origin: 'web',
+      dryRun: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runTool).toHaveBeenCalledTimes(2);
+    expect(runTool.mock.calls[1]?.[0].toolName).toBe('gmail_draft');
+    expect(runTool.mock.calls[1]?.[0].args).toMatchObject({
+      to: 'me@example.com',
+      subject: 'Daily Inbox Summary',
+      body: 'Reply to Alice about the contract update.',
+    });
+  });
 });

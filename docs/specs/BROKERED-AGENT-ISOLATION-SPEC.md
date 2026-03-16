@@ -180,6 +180,8 @@ Implemented and accurate:
 - LLM API calls are proxied through the broker — the worker has no network access
 - approvals remain supervisor-side
 - final responses are still scanned by `OutputGuardian`
+- tool results returned across the broker now include `trustLevel` and `taintReasons`
+- quarantined tool output is suppressed from raw planner reinjection in the worker loop
 - worker crashes do not crash the supervisor
 - supervisor audit can correlate brokered tool actions via `broker_action`
 - `memory_save` suppression enforced both in the worker loop and at the broker level
@@ -190,7 +192,7 @@ Implemented and accurate:
 
 Not yet guaranteed:
 - streaming responses from worker to channels
-- taint propagation / taint-aware policy
+- a universal persistent taint graph across every subsystem
 - broker-native memory/event/dispatch APIs
 - full isolation of every possible developer-authored agent implementation
 

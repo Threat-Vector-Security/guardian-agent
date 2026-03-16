@@ -260,6 +260,10 @@ Recommended additions:
 - dedicated security CI lane
 - dependency audit policy
 - explicit regression coverage for auth, approvals, sandbox posture, and browser-boundary protections
+- dual harness lanes for agent behavior:
+  - deterministic fake-provider harnesses for stable regression baselines
+  - optional real local-model harnesses against operator-installed Ollama for end-to-end smoke validation
+- WSL/host connectivity guidance for local-model harnesses so Windows-hosted Ollama can be exercised from Linux-side test runners
 
 Key design point:
 
@@ -352,6 +356,7 @@ Success criteria:
 
 - better retrieval quality on long-running workflows
 - stronger evidence for security and reliability claims
+- harnesses can validate both deterministic control-plane behavior and real local-model behavior without conflating the two
 
 ---
 
@@ -374,6 +379,7 @@ GuardianAgent's differentiator is not just that it can act. It is that it can ac
 3. Introduce an auth-provider abstraction with OIDC/Entra as first targets.
 4. Start the browser uplift track using the existing OpenClaw capability analysis.
 5. Define the public adapter contract for external frameworks.
+6. Add optional Ollama-backed harness lanes for automation/orchestration flows and document Windows-host reachability requirements for WSL-based runners.
 
 ---
 

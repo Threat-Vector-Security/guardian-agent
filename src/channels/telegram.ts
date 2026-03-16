@@ -12,6 +12,7 @@ import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('channel:telegram');
 const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
@@ -491,9 +492,12 @@ export class TelegramChannel implements ChannelAdapter {
       | undefined;
     const approvalKey = this.buildApprovalKey(ctx);
 
+    const sourceLabel = formatResponseSourceLabel(response.metadata);
+    const contentWithSource = sourceLabel ? `${sourceLabel} ${response.content}` : response.content;
+
     if (!approvals?.length || !this.onToolsApprovalDecision) {
       this.pendingApprovalsByChat.delete(approvalKey);
-      await this.replyInChunks(ctx, response.content);
+      await this.replyInChunks(ctx, contentWithSource);
       return;
     }
 
@@ -507,7 +511,8 @@ export class TelegramChannel implements ChannelAdapter {
     });
 
     // Telegram owns the approval copy when structured approval metadata exists.
-    await this.replyInChunks(ctx, formatPendingApprovalMessage(approvals));
+    const approvalCopy = formatPendingApprovalMessage(approvals);
+    await this.replyInChunks(ctx, sourceLabel ? `${sourceLabel} ${approvalCopy}` : approvalCopy);
 
     // Build an inline keyboard with approve/deny per approval
     // For simplicity, use a single approve-all / deny-all row when there's one approval,

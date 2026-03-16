@@ -1,7 +1,17 @@
 import type { UserMessage } from '../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
-import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import {
+  formatPendingApprovalMessage,
+  isPhantomPendingApprovalMessage,
+  shouldUseStructuredPendingApprovalMessage,
+} from '../runtime/pending-approval-copy.js';
+import {
+  buildLocalModelTooComplicatedMessage,
+  isLocalToolCallParseError,
+  type ResponseSourceMetadata,
+} from '../runtime/model-routing-ux.js';
+import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { shouldAllowImplicitMemorySave } from '../util/memory-intent.js';
@@ -33,6 +43,12 @@ interface PendingApprovalMetadata {
   id: string;
   toolName: string;
   argsPreview: string;
+}
+
+interface AutomationApprovalContinuation {
+  originalMessage: UserMessage;
+  pendingApprovalIds: string[];
+  expiresAt: number;
 }
 
 export interface WorkerMessageHandleParams {
@@ -127,6 +143,7 @@ export class BrokeredWorkerSession {
   private readonly client: BrokerClient;
   private pendingApprovals: PendingApprovalState | null = null;
   private suspendedSession: SuspendedSession | null = null;
+  private automationContinuation: AutomationApprovalContinuation | null = null;
 
   constructor(client: BrokerClient) {
     this.client = client;
@@ -164,6 +181,11 @@ export class BrokeredWorkerSession {
       return approvalResponse;
     }
 
+    const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(params.message, toolExecutor);
+    if (directAutomationAuthoring) {
+      return directAutomationAuthoring;
+    }
+
     const enrichedSystemPrompt = buildWorkerSystemPrompt(params);
     const llmMessages: ChatMessage[] = [
       { role: 'system', content: enrichedSystemPrompt },
@@ -199,10 +221,19 @@ export class BrokeredWorkerSession {
 
     const results: string[] = [];
     let approvedAny = false;
+    const approvedIds = new Set<string>();
+    const failedIds = new Set<string>();
     for (const approvalId of targetIds) {
-      const decided = await this.client.decideApproval(approvalId, decision, message.userId);
+      const decided = await this.client.decideApproval(
+        approvalId,
+        decision,
+        message.principalId ?? message.userId,
+        message.principalRole ?? 'owner',
+      );
       results.push(decided.message);
       approvedAny ||= decided.success && decision === 'approved';
+      if (decision === 'approved' && decided.success) approvedIds.add(approvalId);
+      if (!decided.success) failedIds.add(approvalId);
     }
 
     if (decision === 'approved' && approvedAny && this.suspendedSession) {
@@ -210,6 +241,32 @@ export class BrokeredWorkerSession {
     }
 
     this.consumePendingApprovals(targetIds);
+    if (this.automationContinuation) {
+      const affected = targetIds.filter((id) => this.automationContinuation?.pendingApprovalIds.includes(id));
+      if (decision === 'approved' && affected.length > 0) {
+        const stillPending = this.automationContinuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
+        if (stillPending.length === 0) {
+          const originalMessage = this.automationContinuation.originalMessage;
+          this.automationContinuation = null;
+          const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor);
+          if (retry) {
+            results.push('');
+            results.push(retry.content);
+            return {
+              content: results.join('\n'),
+              metadata: retry.metadata,
+            };
+          }
+        } else {
+          this.automationContinuation = {
+            ...this.automationContinuation,
+            pendingApprovalIds: stillPending,
+          };
+        }
+      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
+        this.automationContinuation = null;
+      }
+    }
     return { content: results.join('\n') };
   }
 
@@ -244,6 +301,52 @@ export class BrokeredWorkerSession {
     return this.executeLoop(message, resumedMessages, chatFn, toolExecutor, params);
   }
 
+  private async tryDirectAutomationAuthoring(
+    message: UserMessage,
+    toolExecutor: BrokeredToolExecutor,
+    options?: { allowRemediation?: boolean },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const trackedPendingApprovalIds: string[] = [];
+    const result = await tryAutomationPreRoute({
+      agentId: 'brokered-worker',
+      message,
+      executeTool: (toolName, args, request) => toolExecutor.executeModelTool(toolName, args, request),
+      trackPendingApproval: (approvalId) => {
+        trackedPendingApprovalIds.push(approvalId);
+        const existingIds = this.getPendingApprovalIds();
+        this.pendingApprovals = {
+          ids: [...new Set([...existingIds, approvalId])],
+          expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        };
+        this.suspendedSession = null;
+      },
+      formatPendingApprovalPrompt: (ids) => {
+        const meta = toolExecutor.getApprovalMetadata(ids);
+        return shouldUseStructuredPendingApprovalMessage(message.channel)
+          ? formatPendingApprovalMessage(meta)
+          : 'This action needs approval before I can continue.';
+      },
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const resolved = toolExecutor.getApprovalMetadata(ids);
+        return resolved.length > 0 ? resolved : fallback;
+      },
+    }, options);
+    if (!result) {
+      this.automationContinuation = null;
+      return null;
+    }
+    if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
+      this.automationContinuation = {
+        originalMessage: message,
+        pendingApprovalIds: trackedPendingApprovalIds,
+        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+      };
+    } else {
+      this.automationContinuation = null;
+    }
+    return result;
+  }
+
   private async executeLoop(
     message: UserMessage,
     llmMessages: ChatMessage[],
@@ -252,18 +355,39 @@ export class BrokeredWorkerSession {
     params: WorkerMessageHandleParams,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const pendingTools: SuspendedToolCall[] = [];
+    let responseSource: ResponseSourceMetadata | undefined;
 
     // Fallback chat function: proxied through the broker with useFallback flag
     let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>) | undefined;
     if (params.hasFallbackProvider) {
-      fallbackChatFn = (msgs, opts) => this.client.llmChat(msgs, opts, { useFallback: true });
+      fallbackChatFn = async (msgs, opts) => {
+        responseSource = {
+          locality: 'external',
+          usedFallback: true,
+          notice: 'Retried with an alternate model after the local model failed to format a tool call.',
+        };
+        return this.client.llmChat(msgs, opts, { useFallback: true });
+      };
     }
 
     const allowImplicit = shouldAllowImplicitMemorySave(message.content);
 
     const result = await runLlmLoop(
       llmMessages,
-      async (messages, options) => chatFn(messages, options),
+      async (messages, options) => {
+        try {
+          responseSource = responseSource ?? { locality: 'local' };
+          return await chatFn(messages, options);
+        } catch (error) {
+          if (isLocalToolCallParseError(error)) {
+            if (fallbackChatFn) {
+              return fallbackChatFn(messages, options);
+            }
+            throw new Error(buildLocalModelTooComplicatedMessage());
+          }
+          throw error;
+        }
+      },
       {
         listAlwaysLoaded: () => toolExecutor.listAlwaysLoadedDefinitions(),
         searchTools: () => [],
@@ -307,20 +431,29 @@ export class BrokeredWorkerSession {
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0
-          ? { pendingApprovals: pendingApprovalMeta }
+          ? {
+              pendingApprovals: pendingApprovalMeta,
+              ...(responseSource ? { responseSource } : {}),
+            }
           : undefined,
       };
     }
 
     this.pendingApprovals = null;
     this.suspendedSession = null;
-    return { content: result.finalContent };
+    return {
+      content: isPhantomPendingApprovalMessage(result.finalContent)
+        ? 'I did not create a real approval request for that action. Please try again.'
+        : result.finalContent,
+      metadata: responseSource ? { responseSource } : undefined,
+    };
   }
 
   private getPendingApprovalIds(nowMs: number = Date.now()): string[] {
     if (!this.pendingApprovals) return [];
     if (this.pendingApprovals.expiresAt <= nowMs) {
       this.pendingApprovals = null;
+      this.automationContinuation = null;
       return [];
     }
     return [...this.pendingApprovals.ids];

@@ -14,10 +14,12 @@
 import { BaseAgent } from './agent.js';
 import type {
   AgentContext,
+  AgentDispatchOptions,
   AgentResponse,
   UserMessage,
 } from './types.js';
 import { SharedState } from '../runtime/shared-state.js';
+import type { AgentHandoffContract } from '../runtime/handoffs.js';
 import Ajv from 'ajv';
 import { createLogger } from '../util/logging.js';
 
@@ -74,6 +76,10 @@ export interface OrchestrationStep {
   retry?: StepRetryPolicy;
   /** Fail-branch: agent invoked when step fails all retries. */
   onError?: StepFailBranch;
+  /** Optional handoff contract for this step's downstream dispatch. */
+  handoff?: Omit<AgentHandoffContract, 'id' | 'sourceAgentId' | 'targetAgentId'> & {
+    id?: string;
+  };
 }
 
 /** Options for SequentialAgent construction. */
@@ -217,11 +223,17 @@ export function prepareStepInput(
   validationMode: ValidationMode,
 ): UserMessage {
   let inputContent = message.content;
+  const nextMetadata: Record<string, unknown> = { ...(message.metadata ?? {}) };
   if (step.inputKey && state.has(step.inputKey)) {
     const stateValue = state.get<string>(step.inputKey);
     if (typeof stateValue === 'string') {
       inputContent = stateValue;
     }
+    const stateMeta = state.getMetadata(step.inputKey);
+    if (stateMeta?.taintReasons?.length) {
+      nextMetadata.taintReasons = [...stateMeta.taintReasons];
+    }
+    nextMetadata.handoffSourceKey = step.inputKey;
   }
 
   if (step.inputContract) {
@@ -231,7 +243,27 @@ export function prepareStepInput(
     else inputContent = JSON.stringify(check.parsedValue);
   }
 
-  return { ...message, content: inputContent };
+  const summary = typeof inputContent === 'string'
+    ? inputContent.trim().slice(0, 240)
+    : JSON.stringify(inputContent).slice(0, 240);
+  nextMetadata.summary = summary;
+  return { ...message, content: inputContent, metadata: nextMetadata };
+}
+
+function createStepHandoffContract(
+  sourceAgentId: string,
+  step: OrchestrationStep,
+): AgentHandoffContract | undefined {
+  if (!step.handoff) return undefined;
+  return {
+    id: step.handoff.id?.trim() || `${sourceAgentId}->${step.agentId}`,
+    sourceAgentId,
+    targetAgentId: step.agentId,
+    allowedCapabilities: [...step.handoff.allowedCapabilities],
+    contextMode: step.handoff.contextMode,
+    preserveTaint: step.handoff.preserveTaint,
+    requireApproval: step.handoff.requireApproval,
+  };
 }
 
 /** Validate output contract and write step result to SharedState. */
@@ -264,10 +296,11 @@ export function recordStepOutput(
 
 /** Execute a dispatch call with optional retry and exponential backoff. */
 export async function executeWithRetry(
-  dispatch: (agentId: string, message: UserMessage) => Promise<AgentResponse>,
+  dispatch: (agentId: string, message: UserMessage, options?: AgentDispatchOptions) => Promise<AgentResponse>,
   agentId: string,
   message: UserMessage,
   policy: StepRetryPolicy | undefined,
+  options?: AgentDispatchOptions,
 ): Promise<{ response: AgentResponse; attempts: number }> {
   const maxRetries = policy?.maxRetries ?? 0;
   const initialDelay = policy?.initialDelayMs ?? 1000;
@@ -278,7 +311,7 @@ export async function executeWithRetry(
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await dispatch(agentId, message);
+      const response = await dispatch(agentId, message, options);
       return { response, attempts: attempt + 1 };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -329,18 +362,26 @@ export async function runStepsSequentially(
   steps: OrchestrationStep[],
   message: UserMessage,
   state: SharedState,
-  dispatch: (agentId: string, message: UserMessage) => Promise<AgentResponse>,
+  dispatch: (agentId: string, message: UserMessage, options?: AgentDispatchOptions) => Promise<AgentResponse>,
   validationMode: ValidationMode,
   stopOnError: boolean,
+  sourceAgentId = 'orchestrator',
 ): Promise<SequentialRunResult> {
   const stepResults: Array<{ agentId: string; response: AgentResponse }> = [];
   const retriedSteps: RetryRecord[] = [];
 
   for (const step of steps) {
     const stepMessage = prepareStepInput(step, state, message, validationMode);
+    const handoff = createStepHandoffContract(sourceAgentId, step);
 
     try {
-      const { response, attempts } = await executeWithRetry(dispatch, step.agentId, stepMessage, step.retry);
+      const { response, attempts } = await executeWithRetry(
+        dispatch,
+        step.agentId,
+        stepMessage,
+        step.retry,
+        handoff ? { handoff } : undefined,
+      );
       const recorded = recordStepOutput(step, state, response, validationMode);
       stepResults.push({ agentId: step.agentId, response: recorded.response });
       if (attempts > 1) {
@@ -428,7 +469,7 @@ export class SequentialAgent extends BaseAgent {
     state.set('input', message.content);
 
     const result = await runStepsSequentially(
-      this.steps, message, state, ctx.dispatch, this.validationMode, this.stopOnError,
+      this.steps, message, state, ctx.dispatch, this.validationMode, this.stopOnError, this.id,
     );
 
     state.clearTemp();
@@ -506,7 +547,14 @@ export class ParallelAgent extends BaseAgent {
       }
 
       try {
-        const { response, attempts } = await executeWithRetry(ctx.dispatch!, step.agentId, stepMessage, step.retry);
+        const handoff = createStepHandoffContract(this.id, step);
+        const { response, attempts } = await executeWithRetry(
+          ctx.dispatch!,
+          step.agentId,
+          stepMessage,
+          step.retry,
+          handoff ? { handoff } : undefined,
+        );
         const recorded = recordStepOutput(step, state, response, this.validationMode);
         if (attempts > 1) {
           retriedSteps.push({ agentId: step.agentId, attempts, usedFailBranch: false });
@@ -667,9 +715,18 @@ export class LoopAgent extends BaseAgent {
       }
 
       const stepMessage: UserMessage = { ...message, content: inputContent };
+      const handoff = {
+        id: `${this.id}->${this.targetAgentId}`,
+        sourceAgentId: this.id,
+        targetAgentId: this.targetAgentId,
+        allowedCapabilities: ['agent.dispatch'],
+        contextMode: 'full' as const,
+        preserveTaint: true,
+        requireApproval: false,
+      };
 
       try {
-        lastResponse = await ctx.dispatch!(this.targetAgentId, stepMessage);
+        lastResponse = await ctx.dispatch!(this.targetAgentId, stepMessage, { handoff });
         const outputKey = this.outputKey ?? this.targetAgentId;
 
         let outputContent = lastResponse.content;
@@ -761,9 +818,18 @@ export class LoopAgent extends BaseAgent {
 
       const inputContent = JSON.stringify(item);
       const stepMessage: UserMessage = { ...message, content: inputContent };
+      const handoff = {
+        id: `${this.id}->${this.targetAgentId}`,
+        sourceAgentId: this.id,
+        targetAgentId: this.targetAgentId,
+        allowedCapabilities: ['agent.dispatch'],
+        contextMode: 'full' as const,
+        preserveTaint: true,
+        requireApproval: false,
+      };
 
       try {
-        const response = await ctx.dispatch!(this.targetAgentId, stepMessage);
+        const response = await ctx.dispatch!(this.targetAgentId, stepMessage, { handoff });
         return { content: response.content };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);

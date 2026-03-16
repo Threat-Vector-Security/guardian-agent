@@ -30,6 +30,8 @@ import { CronScheduler } from './scheduler.js';
 import { GuardedLLMProvider } from '../llm/guarded-provider.js';
 import { createLogger } from '../util/logging.js';
 import type { WorkerManager } from '../supervisor/worker-manager.js';
+import { applyHandoffContract } from './handoffs.js';
+import { validateHandoffContract } from './handoff-policy.js';
 
 const log = createLogger('runtime');
 
@@ -666,7 +668,138 @@ export class Runtime {
       // Dispatch: allows orchestration agents to invoke sub-agents
       // All sub-agent calls pass through the full Guardian admission pipeline
       dispatch: options?.enableDispatch !== false
-        ? (targetAgentId: string, message: UserMessage) => {
+        ? (targetAgentId: string, message: UserMessage, dispatchOptions) => {
+            let nextMessage = message;
+            if (dispatchOptions?.handoff) {
+              const validation = validateHandoffContract(dispatchOptions.handoff);
+              if (!validation.ok) {
+                this.auditLog.record({
+                  type: 'action_denied',
+                  severity: 'warn',
+                  agentId,
+                  userId: message.userId,
+                  channel: message.channel,
+                  controller: 'AgentHandoff',
+                  details: {
+                    actionType: 'agent_handoff',
+                    targetAgentId,
+                    reason: validation.message,
+                    contractId: dispatchOptions.handoff.id,
+                  },
+                });
+                throw new Error(`Handoff denied: ${validation.message}`);
+              }
+
+              if (dispatchOptions.handoff.targetAgentId !== targetAgentId) {
+                this.auditLog.record({
+                  type: 'action_denied',
+                  severity: 'warn',
+                  agentId,
+                  userId: message.userId,
+                  channel: message.channel,
+                  controller: 'AgentHandoff',
+                  details: {
+                    actionType: 'agent_handoff',
+                    targetAgentId,
+                    reason: 'Handoff contract target does not match dispatch target.',
+                    contractId: dispatchOptions.handoff.id,
+                  },
+                });
+                throw new Error('Handoff denied: contract target does not match dispatch target.');
+              }
+
+              if (dispatchOptions.handoff.requireApproval) {
+                this.auditLog.record({
+                  type: 'action_denied',
+                  severity: 'warn',
+                  agentId,
+                  userId: message.userId,
+                  channel: message.channel,
+                  controller: 'AgentHandoff',
+                  details: {
+                    actionType: 'agent_handoff',
+                    targetAgentId,
+                    reason: 'Handoff requires approval.',
+                    contractId: dispatchOptions.handoff.id,
+                  },
+                });
+                throw new Error('Handoff denied: approval-gated handoffs are not auto-approved in runtime dispatch.');
+              }
+
+              const targetInstance = this.registry.get(targetAgentId);
+              if (!targetInstance) {
+                throw new Error(`Agent '${targetAgentId}' not found`);
+              }
+              const targetCapabilities = new Set(targetInstance.definition.grantedCapabilities);
+              const disallowedCapabilities = dispatchOptions.handoff.allowedCapabilities.filter(
+                (capability) => !targetCapabilities.has(capability),
+              );
+              if (disallowedCapabilities.length > 0) {
+                this.auditLog.record({
+                  type: 'action_denied',
+                  severity: 'warn',
+                  agentId,
+                  userId: message.userId,
+                  channel: message.channel,
+                  controller: 'AgentHandoff',
+                  details: {
+                    actionType: 'agent_handoff',
+                    targetAgentId,
+                    reason: 'Target agent lacks requested handoff capabilities.',
+                    contractId: dispatchOptions.handoff.id,
+                    disallowedCapabilities,
+                  },
+                });
+                throw new Error(`Handoff denied: target agent lacks capabilities ${disallowedCapabilities.join(', ')}`);
+              }
+
+              const currentMetadata = message.metadata ?? {};
+              const taintReasons = Array.isArray(currentMetadata['taintReasons'])
+                ? currentMetadata['taintReasons'].filter((reason): reason is string => typeof reason === 'string')
+                : [];
+              const summary = typeof currentMetadata['summary'] === 'string'
+                ? currentMetadata['summary']
+                : message.content.slice(0, 240);
+              const payload = applyHandoffContract(dispatchOptions.handoff, {
+                content: message.content,
+                summary,
+                taintReasons,
+              });
+              nextMessage = {
+                ...message,
+                content: payload.content,
+                metadata: {
+                  ...currentMetadata,
+                  handoff: {
+                    id: dispatchOptions.handoff.id,
+                    sourceAgentId: dispatchOptions.handoff.sourceAgentId,
+                    targetAgentId: dispatchOptions.handoff.targetAgentId,
+                    contextMode: dispatchOptions.handoff.contextMode,
+                    preserveTaint: dispatchOptions.handoff.preserveTaint,
+                    allowedCapabilities: [...dispatchOptions.handoff.allowedCapabilities],
+                  },
+                  taintReasons: payload.taintReasons,
+                  summary: payload.summary ?? summary,
+                },
+              };
+
+              this.auditLog.record({
+                type: 'action_allowed',
+                severity: 'info',
+                agentId,
+                userId: message.userId,
+                channel: message.channel,
+                controller: 'AgentHandoff',
+                details: {
+                  actionType: 'agent_handoff',
+                  targetAgentId,
+                  contractId: dispatchOptions.handoff.id,
+                  contextMode: dispatchOptions.handoff.contextMode,
+                  preserveTaint: dispatchOptions.handoff.preserveTaint,
+                },
+              });
+            }
+
             const nextLineage: DispatchLineage | undefined = options?.lineage ? {
               rootRequestId: options.lineage.rootRequestId,
               parentInvocationId: options.lineage.invocationId,
@@ -674,7 +807,7 @@ export class Runtime {
               depth: options.lineage.depth + 1,
               path: [...options.lineage.path, targetAgentId],
             } : undefined;
-            return this.dispatchMessage(targetAgentId, message, nextLineage);
+            return this.dispatchMessage(targetAgentId, nextMessage, nextLineage);
           }
         : undefined,
       emit: async (partial) => {

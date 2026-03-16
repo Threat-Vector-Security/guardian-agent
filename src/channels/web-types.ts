@@ -381,6 +381,7 @@ export interface RedactedConfig {
         allowedPaths: boolean;
         allowedCommands: boolean;
         allowedDomains: boolean;
+        toolPolicies: boolean;
       };
     };
   };
@@ -581,7 +582,13 @@ export interface DashboardCallbacks {
   onSSESubscribe?: (listener: SSEListener) => () => void;
   onDispatch?: (
     agentId: string,
-    message: { content: string; userId?: string; channel?: string },
+    message: {
+      content: string;
+      userId?: string;
+      principalId?: string;
+      principalRole?: import('../tools/types.js').PrincipalRole;
+      channel?: string;
+    },
     routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string },
     options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
@@ -657,6 +664,7 @@ export interface DashboardCallbacks {
   onToolsPendingApprovals?: (args: {
     userId: string;
     channel: string;
+    principalId?: string;
     limit?: number;
   }) => Array<{
     id: string;
@@ -674,6 +682,12 @@ export interface DashboardCallbacks {
     origin?: 'assistant' | 'cli' | 'web';
     agentId?: string;
     userId?: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
+    contentTrustLevel?: import('../tools/types.js').ContentTrustLevel;
+    taintReasons?: string[];
+    derivedFromTaintedContent?: boolean;
+    scheduleId?: string;
     channel?: string;
   }) => Promise<ToolRunResponse> | ToolRunResponse;
   onToolsPreflight?: (input: { tools?: string[]; requests?: Array<{ name: string; args?: Record<string, unknown> }> }) => {
@@ -709,6 +723,7 @@ export interface DashboardCallbacks {
     approvalId: string;
     decision: 'approved' | 'denied';
     actor: string;
+    actorRole?: import('../tools/types.js').PrincipalRole;
     reason?: string;
   }) => Promise<{
     success: boolean;
@@ -804,7 +819,13 @@ export interface DashboardCallbacks {
   }) => Promise<ConnectorPlaybookRunResult> | ConnectorPlaybookRunResult;
   onStreamDispatch?: (
     agentId: string,
-    message: { content: string; userId?: string; channel?: string },
+    message: {
+      content: string;
+      userId?: string;
+      principalId?: string;
+      principalRole?: import('../tools/types.js').PrincipalRole;
+      channel?: string;
+    },
     emitSSE: (event: SSEEvent) => void,
   ) => Promise<{ requestId: string; content: string; metadata?: Record<string, unknown> }>;
   onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
@@ -1119,6 +1140,7 @@ export interface ConfigUpdate {
         allowedPaths?: boolean;
         allowedCommands?: boolean;
         allowedDomains?: boolean;
+        toolPolicies?: boolean;
       };
     };
   };

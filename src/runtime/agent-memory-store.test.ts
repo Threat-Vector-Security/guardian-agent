@@ -75,7 +75,23 @@ describe('AgentMemoryStore', () => {
     });
     const content = store.load('agent1');
     expect(content).toContain('Some uncategorized fact');
-    expect(content).not.toContain('##');
+    expect(content).toContain('## General');
+  });
+
+  it('keeps quarantined entries out of active markdown context', () => {
+    const store = makeStore();
+    const entry = store.append('agent1', {
+      content: 'Hostile remote instruction',
+      createdAt: '2025-01-15',
+      sourceType: 'remote_tool',
+      trustLevel: 'untrusted',
+      status: 'quarantined',
+    });
+
+    expect(store.load('agent1')).not.toContain('Hostile remote instruction');
+    expect(store.findEntry('agent1', entry.id)?.status).toBe('quarantined');
+    expect(store.search('agent1', 'Hostile')).toHaveLength(0);
+    expect(store.search('agent1', 'Hostile', { includeInactive: true })[0]).toContain('[quarantined]');
   });
 
   it('should appendRaw for flush summaries', () => {

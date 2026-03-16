@@ -473,6 +473,14 @@ export class WebChannel implements ChannelAdapter {
     return this.rejectAuth(req, res, !!authHeader);
   }
 
+  private resolveRequestPrincipal(req: IncomingMessage): { principalId: string; principalRole: import('../tools/types.js').PrincipalRole } {
+    const sid = this.parseCookie(req, SESSION_COOKIE_NAME);
+    if (sid && this.sessions.has(sid)) {
+      return { principalId: `web-session:${sid}`, principalRole: 'owner' };
+    }
+    return { principalId: 'web-bearer', principalRole: 'owner' };
+  }
+
   /** Check auth for SSE via bearer header (non-browser clients) or session cookie (browser EventSource). */
   private checkAuthForSSE(req: IncomingMessage, _url: URL, res: ServerResponse): boolean {
     if (!this.shouldRequireAuth(req)) return true;
@@ -915,6 +923,10 @@ export class WebChannel implements ChannelAdapter {
           origin?: 'assistant' | 'cli' | 'web';
           agentId?: string;
           userId?: string;
+          contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
+          taintReasons?: string[];
+          derivedFromTaintedContent?: boolean;
+          scheduleId?: string;
           channel?: string;
         };
         try {
@@ -924,6 +936,10 @@ export class WebChannel implements ChannelAdapter {
             origin?: 'assistant' | 'cli' | 'web';
             agentId?: string;
             userId?: string;
+            contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
+            taintReasons?: string[];
+            derivedFromTaintedContent?: boolean;
+            scheduleId?: string;
             channel?: string;
           };
         } catch {
@@ -934,12 +950,27 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'toolName is required' });
           return;
         }
+        const principal = this.resolveRequestPrincipal(req);
         const result = await this.dashboard.onToolsRun({
           toolName: parsed.toolName,
           args: parsed.args ?? {},
           origin: parsed.origin ?? 'web',
           agentId: parsed.agentId,
           userId: parsed.userId ?? 'web-user',
+          principalId: principal.principalId,
+          principalRole: principal.principalRole,
+          contentTrustLevel: parsed.contentTrustLevel === 'quarantined'
+            ? 'quarantined'
+            : parsed.contentTrustLevel === 'low_trust'
+              ? 'low_trust'
+              : parsed.contentTrustLevel === 'trusted'
+                ? 'trusted'
+                : undefined,
+          taintReasons: Array.isArray(parsed.taintReasons)
+            ? parsed.taintReasons.filter((value): value is string => typeof value === 'string')
+            : undefined,
+          derivedFromTaintedContent: parsed.derivedFromTaintedContent === true,
+          scheduleId: typeof parsed.scheduleId === 'string' ? parsed.scheduleId : undefined,
           channel: parsed.channel ?? 'web',
         });
         sendJSON(res, 200, result);
@@ -1034,11 +1065,12 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
+        const principal = this.resolveRequestPrincipal(req);
         const userId = url.searchParams.get('userId') ?? 'web-user';
         const channel = url.searchParams.get('channel') ?? 'web';
         const limitValue = Number(url.searchParams.get('limit') ?? '20');
         const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(100, limitValue)) : 20;
-        sendJSON(res, 200, this.dashboard.onToolsPendingApprovals({ userId, channel, limit }));
+        sendJSON(res, 200, this.dashboard.onToolsPendingApprovals({ userId, channel, principalId: principal.principalId, limit }));
         return;
       }
 
@@ -1077,10 +1109,12 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'approvalId and decision are required' });
           return;
         }
+        const principal = this.resolveRequestPrincipal(req);
         const result = await this.dashboard.onToolsApprovalDecision({
           approvalId: parsed.approvalId,
           decision: parsed.decision,
-          actor: parsed.actor ?? 'web-user',
+          actor: principal.principalId,
+          actorRole: principal.principalRole,
           reason: parsed.reason,
         });
         sendJSON(res, 200, result);
@@ -2416,9 +2450,16 @@ export class WebChannel implements ChannelAdapter {
         };
 
         try {
+          const principal = this.resolveRequestPrincipal(req);
           const result = await this.dashboard.onStreamDispatch(
             parsed.agentId,
-            { content: parsed.content, userId: parsed.userId, channel: parsed.channel ?? 'web' },
+            {
+              content: parsed.content,
+              userId: parsed.userId,
+              principalId: principal.principalId,
+              principalRole: principal.principalRole,
+              channel: parsed.channel ?? 'web',
+            },
             emitSSE,
           );
           sendJSON(res, 200, result);
@@ -2457,9 +2498,12 @@ export class WebChannel implements ChannelAdapter {
         // Agent-targeted dispatch via dashboard callback
         if (parsed.agentId && this.dashboard.onDispatch) {
           try {
+            const principal = this.resolveRequestPrincipal(req);
             const response = await this.dashboard.onDispatch(parsed.agentId, {
               content: parsed.content,
               userId: parsed.userId,
+              principalId: principal.principalId,
+              principalRole: principal.principalRole,
               channel: parsed.channel ?? 'web',
             });
             sendJSON(res, 200, response);
@@ -2478,9 +2522,12 @@ export class WebChannel implements ChannelAdapter {
         }
 
         try {
+          const principal = this.resolveRequestPrincipal(req);
           const response = await this.onMessage({
             id: randomUUID(),
             userId: parsed.userId ?? 'web-user',
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
             channel: 'web',
             content: parsed.content,
             timestamp: Date.now(),
@@ -2749,8 +2796,13 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
+        const principal = this.resolveRequestPrincipal(req);
         const result = this.dashboard.onScheduledTaskCreate(
-          parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskCreate>>[0],
+          {
+            ...parsed,
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
+          } as unknown as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskCreate>>[0],
         );
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.created', url.pathname);
@@ -2783,9 +2835,14 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
+        const principal = this.resolveRequestPrincipal(req);
         const result = this.dashboard.onScheduledTaskUpdate(
           id,
-          parsed as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskUpdate>>[1],
+          {
+            ...parsed,
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
+          } as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskUpdate>>[1],
         );
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.updated', url.pathname);

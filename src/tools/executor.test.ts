@@ -2884,6 +2884,126 @@ describe('ToolExecutor', () => {
     expect(job.argsPreview).not.toContain(raw);
   });
 
+  it('grounds workflow creation success on the saved workflow and linked schedule', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const workflows = [{
+      id: 'daily-inbox-review',
+      name: 'Daily Gmail Inbox Review',
+      enabled: true,
+      mode: 'sequential',
+      steps: [
+        { id: 'step-1', toolName: 'gws' },
+        { id: 'step-2', type: 'instruction' },
+      ],
+    }];
+    const tasks = [{
+      id: 'task-123',
+      name: 'Daily Gmail Inbox Review',
+      type: 'playbook' as const,
+      target: 'daily-inbox-review',
+      cron: '30 7 * * *',
+      enabled: true,
+    }];
+
+    executor.setAutomationControlPlane({
+      listWorkflows: () => workflows,
+      upsertWorkflow: () => ({ success: true, message: "Added playbook 'daily-inbox-review'." }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => tasks,
+      createTask: () => ({ success: true, message: 'ok', task: tasks[0] }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'workflow_upsert',
+      args: {
+        id: 'daily-inbox-review',
+        name: 'Daily Gmail Inbox Review',
+        mode: 'sequential',
+        steps: [{ id: 'step-1', toolName: 'gws' }],
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.message).toContain("Workflow 'Daily Gmail Inbox Review'");
+    expect(run.message).toContain('linked scheduled task');
+    expect(run.verificationStatus).toBe('verified');
+    expect(run.output).toMatchObject({
+      workflow: { id: 'daily-inbox-review', name: 'Daily Gmail Inbox Review' },
+    });
+  });
+
+  it('grounds scheduled workflow task creation on the created task target', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const workflow = {
+      id: 'daily-inbox-review',
+      name: 'Daily Gmail Inbox Review',
+      enabled: true,
+      mode: 'sequential',
+      steps: [],
+    };
+    const task = {
+      id: 'task-123',
+      name: 'Daily Gmail Inbox Review',
+      type: 'playbook' as const,
+      target: 'daily-inbox-review',
+      cron: '30 7 * * *',
+      enabled: true,
+    };
+
+    executor.setAutomationControlPlane({
+      listWorkflows: () => [workflow],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [task],
+      createTask: () => ({ success: true, message: 'ok', task }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'task_create',
+      args: {
+        name: 'Daily Gmail Inbox Review',
+        type: 'workflow',
+        target: 'daily-inbox-review',
+        cron: '30 7 * * *',
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.message).toContain("Scheduled workflow task 'Daily Gmail Inbox Review'");
+    expect(run.message).toContain("daily-inbox-review");
+    expect(run.verificationStatus).toBe('verified');
+    expect(run.output).toMatchObject({
+      task: { id: 'task-123', target: 'daily-inbox-review', type: 'workflow' },
+      workflow: { id: 'daily-inbox-review', name: 'Daily Gmail Inbox Review' },
+    });
+  });
+
   it('lists pending approval IDs scoped to user/channel with optional unscoped fallback', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -2948,6 +3068,82 @@ describe('ToolExecutor', () => {
     expect(run.success).toBe(true);
     expect(run.status).toBe('succeeded');
     expect(run.output).toBeTruthy();
+  });
+
+  it('blocks repeated identical failed tool retries within the same request chain', async () => {
+    const root = createExecutorRoot();
+    const missing = join(root, 'missing.txt');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await executor.runTool({
+        toolName: 'fs_read',
+        args: { path: missing },
+        origin: 'assistant',
+        requestId: 'retry-chain',
+      });
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('failed');
+    }
+
+    const blocked = await executor.runTool({
+      toolName: 'fs_read',
+      args: { path: missing },
+      origin: 'assistant',
+      requestId: 'retry-chain',
+    });
+
+    expect(blocked.success).toBe(false);
+    expect(blocked.status).toBe('denied');
+    expect(blocked.message).toContain('runaway retry');
+  });
+
+  it('blocks excessive non-read-only tool calls within one execution chain', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const result = await executor.runTool({
+        toolName: 'fs_write',
+        args: {
+          path: join(root, `file-${attempt}.txt`),
+          content: `content-${attempt}`,
+          append: false,
+        },
+        origin: 'assistant',
+        requestId: 'mutating-chain',
+      });
+      expect(result.success).toBe(true);
+    }
+
+    const blocked = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: join(root, 'file-9.txt'),
+        content: 'content-9',
+        append: false,
+      },
+      origin: 'assistant',
+      requestId: 'mutating-chain',
+    });
+
+    expect(blocked.success).toBe(false);
+    expect(blocked.status).toBe('denied');
+    expect(blocked.message).toContain('non-read-only tool calls');
   });
 
   it('searches files recursively by name and content', async () => {

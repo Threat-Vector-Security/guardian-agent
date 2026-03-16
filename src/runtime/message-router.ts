@@ -13,7 +13,7 @@
  */
 
 import type { RoutingConfig, RoutingRuleConfig } from '../config/types.js';
-import { scoreComplexity } from './complexity-scorer.js';
+import { scoreAutomationOrchestration, scoreComplexity } from './complexity-scorer.js';
 
 /** Confidence level for a routing decision. */
 export type RouteConfidence = 'high' | 'medium' | 'low';
@@ -177,6 +177,18 @@ export class MessageRouter {
         agentId: agent.id,
         confidence: 'high',
         reason: 'tier mode: external-only',
+        tier: 'external',
+      };
+    }
+
+    const automationScore = scoreAutomationOrchestration(content);
+    if (automationScore >= 0.75 && externalAgent) {
+      return {
+        agentId: externalAgent.id,
+        confidence: 'high',
+        reason: `automation complexity=${automationScore.toFixed(2)} → tier external`,
+        fallbackAgentId: localAgent?.id,
+        complexityScore: automationScore,
         tier: 'external',
       };
     }

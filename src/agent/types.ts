@@ -9,6 +9,7 @@ import type { LLMProvider } from '../llm/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import type { AuditLog } from '../guardian/audit-log.js';
 import type { SharedStateView } from '../runtime/shared-state.js';
+import type { AgentHandoffContract } from '../runtime/handoffs.js';
 
 // ─── Event-Driven Agent Types ─────────────────────────────────
 
@@ -18,6 +19,10 @@ export interface DispatchLineage {
   invocationId: string;
   depth: number;
   path: string[];
+}
+
+export interface AgentDispatchOptions {
+  handoff?: AgentHandoffContract;
 }
 
 /** Context provided to agents on message/event handling. */
@@ -39,7 +44,7 @@ export interface AgentContext {
    * Available in orchestration contexts. All sub-agent calls pass
    * through the full Guardian admission pipeline.
    */
-  dispatch?: (agentId: string, message: UserMessage) => Promise<AgentResponse>;
+  dispatch?: (agentId: string, message: UserMessage, options?: AgentDispatchOptions) => Promise<AgentResponse>;
   /**
    * Read-only view of shared orchestration state.
    * Orchestration agents (Sequential/Parallel/Loop) use this to pass
@@ -62,10 +67,16 @@ export interface UserMessage {
   id: string;
   /** User identifier. */
   userId: string;
+  /** Authenticated principal for authorization-sensitive flows. */
+  principalId?: string;
+  /** Principal role in the current channel/session. */
+  principalRole?: import('../tools/types.js').PrincipalRole;
   /** Channel the message came from. */
   channel: string;
   /** Message content. */
   content: string;
+  /** Optional structured metadata used by orchestration and handoff flows. */
+  metadata?: Record<string, unknown>;
   /** Timestamp. */
   timestamp: number;
 }

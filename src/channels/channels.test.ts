@@ -49,6 +49,30 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('shows response source labels for chat replies', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+
+    await cli.start(async () => ({
+      content: 'Created the workflow.',
+      metadata: {
+        responseSource: {
+          locality: 'external',
+          usedFallback: true,
+        },
+      },
+    }));
+
+    input.write('create it\n');
+    await new Promise(r => setTimeout(r, 50));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[external · fallback] Created the workflow.');
+
+    await cli.stop();
+  });
+
   it('should handle /agents command', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

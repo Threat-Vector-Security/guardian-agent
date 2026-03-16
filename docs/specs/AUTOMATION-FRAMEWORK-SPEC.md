@@ -21,10 +21,14 @@ Automation steps use built-in tools by default. An optional access profile can a
 ### Scheduled Assistant Task
 A scheduled assistant task is a recurring agent turn, not a playbook step. It stores:
 - `target` agent id (or `default`)
+- concise `description` for operator-facing UI summaries
 - `prompt`
 - cron schedule
 - optional `runOnce` flag for a single-shot run that disables itself after the first execution
 - optional `channel` / `deliver` routing for user-facing reports
+- approval metadata (`approvedByPrincipal`, `approvalExpiresAt`)
+- a `scopeHash` over the executable definition
+- runaway controls (`maxRunsPerWindow`, `dailySpendCap`, `providerSpendCap`)
 
 Use this when the automation should decide what to inspect at runtime with the normal assistant stack: skills, memory, tool calling, and Guardian policy.
 
@@ -50,6 +54,13 @@ Execution controls:
 - `requireSignedDefinitions`
 - `requireDryRunOnFirstExecution`
 
+Playbook execution is now graph-backed internally:
+- sequential playbooks compile into linear node graphs
+- parallel playbooks compile into fan-out/fan-in graph nodes
+- each run receives a stable `runId`
+- node completion and approval interrupts emit orchestration run events
+- checkpointed run state is stored after node transitions so deterministic workflows can evolve toward richer resume/replay semantics
+
 ### Studio
 Operator-facing visual mode:
 - `read_only` for observability-only environments
@@ -61,10 +72,32 @@ Operator-facing visual mode:
 ### Mandatory Controls
 1. Connector calls map to Guardian action checks (`read_file`, `write_file`, `http_request`, `execute_command`, etc.).
 2. Existing tool approval model remains authoritative for mutating/external actions.
-3. Creating or updating a scheduled task is the approval checkpoint for that automation definition. Later cron executions of the same saved task do not re-prompt for the identical action.
+3. Creating or updating a scheduled task is the approval checkpoint for that automation definition, but later cron executions are allowed only while the saved authority is still valid.
 4. Access profile boundaries are explicit allowlists (hosts/paths/commands/capabilities) when a step opts into one.
 5. Playbook step budgets enforce bounded execution and reduce runaway workflows.
 6. Playbook metadata and results flow into existing audit + hash-chain persistence.
+7. Scheduled-task execution fails closed on approval expiry, scope drift, or budget exhaustion, auto-pauses after repeated failures or denials, and refuses overlapping self-runs.
+
+### Approval workflow
+
+Guardian uses a two-stage approval model for automations:
+
+1. Creation/update approval
+   - the operator approves the automation definition
+   - Guardian records bounded authority for that saved definition
+   - expected workspace-local outputs can be treated as covered by this approval
+
+2. Later scheduled execution
+   - the automation runs without re-asking for the same pre-approved bounded actions
+   - the saved authority remains valid only while scope, expiry, and budgets are still in bounds
+   - unexpected or higher-risk actions outside that saved scope still require intervention or are blocked
+
+Practical rule:
+- "write these reports into the workspace every weekday" should be covered by save-time approval
+- normal file-output tools such as `fs_write` can create missing parent directories during the run, so save-time validation should not reject those automations solely because the folder does not already exist
+- "send email", "post externally", "write outside allowed paths", or other expanded behavior should still be gated separately
+
+If save-time validation finds a fixable policy blocker, Guardian now stages the required bounded policy updates as approval-backed remediation steps, applies them after approval, and retries automation creation automatically in the same session.
 
 ### Cryptographic and Audit Alignment
 - Connector-triggered operations inherit tool/job argument hashing (`argsHash`).
@@ -118,8 +151,12 @@ Validation guarantees:
 
 ### Phase 4 (Implemented — unified Automations)
 - Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
-- Conversational automation creation: the assistant can create playbooks and schedule tasks via `workflow_upsert` and `task_create` tools, guided by system prompt instructions and tool examples.
+- Conversational automation creation is now compiler-driven: clear authoring requests are first compiled into native `workflow_upsert`, `task_create`, or `task_update` payloads before the generic LLM tool-calling loop runs.
+- Compiler-first routing is authoritative across both the direct runtime path and the brokered worker path. If a request is classified as native automation authoring, it does not fall through to generic exploratory tools first.
+- Open-ended recurring automations default to scheduled `agent` tasks instead of ad hoc scripts or overfit playbooks.
+- Deterministic built-in tool graphs remain playbooks and are upserted via `workflow_upsert`.
 - Scheduled assistant tasks are first-class in the runtime and UI for recurring briefings, monitoring reports, and other open-ended agent activities.
+- The UI renders scheduled assistant task `description` fields instead of exposing the full internal execution prompt in list views.
 - Scheduled tasks can be marked `runOnce: true` for one-shot execution; the runtime disables them after the first run.
 - When a playbook is upserted with a `schedule`, Guardian immediately syncs a linked scheduled task instead of waiting for a restart migration.
 - Clone, example catalog (templates + presets), and merged run history in the unified page.
@@ -135,3 +172,45 @@ Validation guarantees:
 - Distributed multi-node workflow scheduler.
 - Arbitrary user-supplied plugin code execution.
 - Bypass paths outside Guardian Runtime chokepoints.
+
+## Conversational Authoring Model
+
+Guardian no longer relies on prompt wording alone to author automations.
+
+Authoring flow:
+
+```text
+user request
+  -> automation intent detection
+  -> AutomationIR
+  -> IR repair + validation
+  -> schedule parse + constraint extraction
+  -> execution-readiness validation
+  -> compile to native mutation
+  -> ToolExecutor approval + verification
+```
+
+Current shape policy:
+- open-ended investigation, monitoring, reporting, research, drafting, or triage => scheduled `agent` task
+- explicit fixed built-in tool graph => playbook/workflow
+
+Hard authoring constraints:
+- `Guardian workflow`
+- `scheduled task`
+- `using built-in tools only`
+- `not a shell script`
+- `not a code file`
+
+These are treated as compile-time constraints, not style hints for the model.
+
+Runtime consequences:
+- lower malformed tool-call risk on local models
+- fewer duplicate scheduled tasks
+- less drift into generated scripts
+- no worker-path bypass of native automation compilation when agent isolation is enabled
+- no persistence for automations that fail obvious readiness checks (missing inputs, blocked allowlists, predicted runtime approvals for assistant tasks)
+- fixable readiness blockers can now turn into chained remediation approvals instead of forcing the operator to restate the original request
+- clearer approval/success grounding in the UI
+- typed `AutomationIR` becomes the stable authoring contract for future repair/eval work instead of growing heuristic-only compiler logic
+- multi-agent delegation now supports explicit runtime-enforced handoff contracts instead of advisory conventions
+- save-time readiness treats bounded workspace-local file writes as part of the approved automation scope instead of requiring a global `fs_write` auto-approve policy

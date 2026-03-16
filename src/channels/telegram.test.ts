@@ -172,4 +172,23 @@ describe('Telegram approval flow', () => {
     expect(replies[0]?.text).toBe('Waiting for approval to add S:\\Development to allowed paths.');
     expect(replies.map((reply) => reply.text).join('\n')).not.toContain('Please approve this action.');
   });
+
+  it('prefixes source labels on normal Telegram replies', async () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const { ctx, replies } = createFakeCtx();
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: 'Workflow created successfully.',
+      metadata: {
+        responseSource: {
+          locality: 'external',
+          usedFallback: true,
+        },
+      },
+    }, 'default');
+
+    expect(replies[0]?.text).toBe('[external · fallback] Workflow created successfully.');
+  });
 });

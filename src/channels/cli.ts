@@ -20,6 +20,7 @@ import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('channel:cli');
 
@@ -71,7 +72,9 @@ function extractPendingApprovals(response: { content: string; metadata?: Record<
 
 function formatCliResponseContent(response: { content: string; metadata?: Record<string, unknown> }): string {
   const approvals = extractPendingApprovals(response);
-  return approvals.length > 0 ? formatPendingApprovalMessage(approvals) : response.content;
+  const content = approvals.length > 0 ? formatPendingApprovalMessage(approvals) : response.content;
+  const sourceLabel = formatResponseSourceLabel(response.metadata);
+  return sourceLabel ? `${sourceLabel} ${content}` : content;
 }
 
 function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {

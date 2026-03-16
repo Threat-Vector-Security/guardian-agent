@@ -115,7 +115,7 @@ export class ConditionalAgent extends BaseAgent {
     }
 
     const result = await runStepsSequentially(
-      selectedSteps, message, state, ctx.dispatch, this.validationMode, this.stopOnError,
+      selectedSteps, message, state, ctx.dispatch, this.validationMode, this.stopOnError, this.id,
     );
 
     state.clearTemp();

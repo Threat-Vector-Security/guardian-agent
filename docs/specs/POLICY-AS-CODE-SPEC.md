@@ -3,6 +3,16 @@
 ## Status
 Proposed
 
+## Current Runtime Note
+
+GuardianAgent now already ships imperative contextual enforcement in the runtime:
+- principal-bound approvals
+- trust-aware tool gating via `contentTrustLevel`, `taintReasons`, and `derivedFromTaintedContent`
+- trust-aware memory quarantine
+- bounded schedule authority via approval expiry, scope hashes, and budget caps
+
+This spec is therefore no longer about introducing contextual security from scratch. It is about consolidating the shipped behavior into a shared declarative engine.
+
 ## Goal
 Centralize GuardianAgent's scattered security and authorization decisions into a deterministic, auditable policy-as-code framework without rewriting the runtime and without adopting a heavyweight external policy language too early.
 

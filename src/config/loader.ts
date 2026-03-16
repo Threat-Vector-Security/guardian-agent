@@ -39,6 +39,12 @@ export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yam
 /** Interpolate ${ENV_VAR} references in a string. */
 export function interpolateEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_match, varName: string) => {
+    // Preserve runtime template placeholders such as ${step2.output} that are
+    // used inside automation/playbook definitions. Environment variable names
+    // with dots are not portable shell env vars and should not be expanded here.
+    if (varName.includes('.')) {
+      return `\${${varName}}`;
+    }
     const envValue = process.env[varName];
     if (envValue === undefined) {
       throw new Error(`Environment variable '${varName}' is not set`);

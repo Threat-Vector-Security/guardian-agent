@@ -62,6 +62,38 @@ describe('SequentialAgent', () => {
     expect(result.metadata?.completedSteps).toBe(2);
   });
 
+  it('passes handoff contracts into downstream dispatch', async () => {
+    const dispatch = vi.fn<[string, UserMessage, unknown?], Promise<AgentResponse>>()
+      .mockResolvedValueOnce({ content: 'researched' });
+
+    const agent = new SequentialAgent('seq-handoff', 'Sequential', {
+      steps: [
+        {
+          agentId: 'research-agent',
+          handoff: {
+            allowedCapabilities: ['web.read'],
+            contextMode: 'summary_only',
+            preserveTaint: true,
+            requireApproval: false,
+          },
+        },
+      ],
+    });
+
+    const ctx = makeContext({ dispatch });
+    await agent.onMessage(makeMessage('research this account'), ctx);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0][2]).toMatchObject({
+      handoff: {
+        sourceAgentId: 'seq-handoff',
+        targetAgentId: 'research-agent',
+        allowedCapabilities: ['web.read'],
+        contextMode: 'summary_only',
+      },
+    });
+  });
+
   it('stops on error when stopOnError is true', async () => {
     const dispatch = vi.fn<[string, UserMessage], Promise<AgentResponse>>()
       .mockResolvedValueOnce({ content: 'ok' })

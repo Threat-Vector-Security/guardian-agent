@@ -20,6 +20,7 @@ import type {
   ToolDefinition,
   ToolExecutionRequest,
   ToolJobRecord,
+  ToolJobStatus,
   ToolPolicyMode,
   ToolPolicySetting,
   ToolPolicySnapshot,
@@ -64,6 +65,11 @@ const MAX_SEARCH_FILES = 100_000;
 const MAX_SEARCH_FILE_BYTES = 1_000_000;
 const SEARCH_CACHE_TTL_MS = 300_000; // 5 minutes
 const MAX_TOOL_ARG_BYTES = 128_000;
+const TOOL_CHAIN_TTL_MS = 10 * 60_000;
+const MAX_TOOL_CALLS_PER_CHAIN = 24;
+const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
+const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
+const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
 const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
   'ssl',
   'min_tls_version',
@@ -385,6 +391,14 @@ interface PendingApprovalContext {
   args: Record<string, unknown>;
 }
 
+interface ToolChainBudgetState {
+  totalCalls: number;
+  nonReadOnlyCalls: number;
+  signatureCounts: Map<string, number>;
+  signatureFailureCounts: Map<string, number>;
+  lastSeenAt: number;
+}
+
 interface AutomationWorkflowSummary {
   id: string;
   name: string;
@@ -398,6 +412,7 @@ interface AutomationWorkflowSummary {
 interface AutomationTaskSummary {
   id: string;
   name: string;
+  description?: string;
   type: 'tool' | 'playbook' | 'agent';
   target: string;
   cron: string;
@@ -408,6 +423,15 @@ interface AutomationTaskSummary {
   userId?: string;
   deliver?: boolean;
   runOnce?: boolean;
+  approvalExpiresAt?: number;
+  approvedByPrincipal?: string;
+  scopeHash?: string;
+  maxRunsPerWindow?: number;
+  dailySpendCap?: number;
+  providerSpendCap?: number;
+  consecutiveFailureCount?: number;
+  consecutiveDeniedCount?: number;
+  autoPausedReason?: string;
   emitEvent?: string;
 }
 
@@ -436,6 +460,7 @@ export class ToolExecutor {
   private readonly jobs: ToolJobRecord[] = [];
   private readonly jobsById = new Map<string, ToolJobRecord>();
   private readonly pendingApprovalContexts = new Map<string, PendingApprovalContext>();
+  private readonly toolChainBudgets = new Map<string, ToolChainBudgetState>();
   private readonly options: ToolExecutorOptions;
   private automationControlPlane?: AutomationControlPlane;
   private readonly marketingStore: MarketingStore;
@@ -1095,10 +1120,11 @@ export class ToolExecutor {
   listPendingApprovalIdsForUser(
     userId: string | undefined,
     channel: string | undefined,
-    options?: { includeUnscoped?: boolean; limit?: number },
+    options?: { includeUnscoped?: boolean; limit?: number; principalId?: string },
   ): string[] {
     const normalizedUserId = (userId ?? '').trim();
     const normalizedChannel = (channel ?? '').trim();
+    const normalizedPrincipalId = (options?.principalId ?? '').trim();
     const includeUnscoped = options?.includeUnscoped === true;
     const limit = Math.min(MAX_APPROVALS, Math.max(1, options?.limit ?? MAX_APPROVALS));
     const pending = this.approvals.list(limit, 'pending');
@@ -1108,13 +1134,15 @@ export class ToolExecutor {
       const job = this.jobsById.get(approval.jobId);
       if (!job) continue;
       const jobUserId = (job.userId ?? '').trim();
+      const jobPrincipalId = (job.principalId ?? approval.requestedByPrincipal ?? '').trim();
       const jobChannel = (job.channel ?? '').trim();
       const scopedMatch = normalizedUserId.length > 0
         && normalizedChannel.length > 0
         && jobUserId === normalizedUserId
         && jobChannel === normalizedChannel;
+      const principalMatch = normalizedPrincipalId.length > 0 && jobPrincipalId === normalizedPrincipalId;
       const unscopedMatch = includeUnscoped && jobUserId.length === 0 && jobChannel.length === 0;
-      if (scopedMatch || unscopedMatch) {
+      if ((principalMatch && (normalizedChannel.length === 0 || jobChannel === normalizedChannel)) || scopedMatch || unscopedMatch) {
         ids.push(approval.id);
       }
     }
@@ -1191,12 +1219,27 @@ export class ToolExecutor {
     }
 
     const job = this.createJob(entry.definition, request, args);
+    const toolChainBudgetError = this.consumeToolChainBudget(entry.definition, request, job.argsHash);
+    if (toolChainBudgetError) {
+      job.status = 'denied';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(toolChainBudgetError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: toolChainBudgetError,
+      };
+    }
     const argsValidationError = this.validateToolArgs(entry.definition, args);
     if (argsValidationError) {
       job.status = 'failed';
       job.completedAt = this.now();
       job.durationMs = 0;
       job.error = sanitizePreview(argsValidationError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
       return {
         success: false,
         status: job.status,
@@ -1211,6 +1254,7 @@ export class ToolExecutor {
       job.completedAt = this.now();
       job.durationMs = 0;
       job.error = sanitizePreview(preApprovalError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
       return {
         success: false,
         status: job.status,
@@ -1219,12 +1263,13 @@ export class ToolExecutor {
       };
     }
 
-    const decision = this.decide(entry.definition, args);
+    const decision = this.decide(entry.definition, args, request);
     if (decision === 'deny') {
       job.status = 'denied';
       job.completedAt = this.now();
       job.durationMs = 0;
       job.error = 'Blocked by tool policy.';
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
       return {
         success: false,
         status: job.status,
@@ -1276,7 +1321,14 @@ export class ToolExecutor {
 
       const redactedArgs = redactSensitiveValue(args);
       const approvalArgs = isRecord(redactedArgs) ? redactedArgs : {};
-      const approval = this.approvals.create(job, approvalArgs, job.argsHash, this.now);
+      const approval = this.approvals.create(
+        job,
+        approvalArgs,
+        job.argsHash,
+        request.principalId ?? request.userId,
+        request.principalRole ?? 'owner',
+        this.now,
+      );
       job.status = 'pending_approval';
       job.approvalId = approval.id;
       this.pendingApprovalContexts.set(approval.id, { request, args });
@@ -1297,11 +1349,15 @@ export class ToolExecutor {
     approvalId: string,
     decision: 'approved' | 'denied',
     actor: string,
+    actorRole: import('./types.js').PrincipalRole = 'owner',
     reason?: string,
   ): Promise<ToolApprovalDecisionResult> {
-    const approval = this.approvals.decide(approvalId, decision, actor, reason, this.now);
+    const approval = this.approvals.decide(approvalId, decision, actor, actorRole, reason, this.now);
     if (!approval) {
       return { success: false, message: `Approval '${approvalId}' not found.` };
+    }
+    if (approval.status === 'pending') {
+      return { success: false, message: approval.reason ?? `Approval '${approvalId}' is not authorized for actor '${actor}'.` };
     }
 
     const job = this.jobsById.get(approval.jobId);
@@ -1379,6 +1435,8 @@ export class ToolExecutor {
       origin: request.origin,
       agentId: request.agentId,
       userId: request.userId,
+      principalId: request.principalId,
+      principalRole: request.principalRole,
       channel: request.channel,
       requestId: request.requestId,
       argsHash: redactedArgs.hash,
@@ -1399,8 +1457,116 @@ export class ToolExecutor {
     return job;
   }
 
-  private decide(definition: ToolDefinition, args: Record<string, unknown>): ToolDecision {
+  private pruneToolChainBudgets(): void {
+    const cutoff = this.now() - TOOL_CHAIN_TTL_MS;
+    for (const [key, state] of this.toolChainBudgets.entries()) {
+      if (state.lastSeenAt < cutoff) {
+        this.toolChainBudgets.delete(key);
+      }
+    }
+  }
+
+  private resolveToolChainKey(request: Partial<ToolExecutionRequest>): string | null {
+    const requestId = request.requestId?.trim();
+    if (requestId) return `request:${requestId}`;
+    const scheduleId = request.scheduleId?.trim();
+    if (scheduleId) return `schedule:${scheduleId}`;
+    return null;
+  }
+
+  private getToolChainBudget(request: Partial<ToolExecutionRequest>): ToolChainBudgetState | null {
+    const key = this.resolveToolChainKey(request);
+    if (!key) return null;
+    this.pruneToolChainBudgets();
+    const existing = this.toolChainBudgets.get(key);
+    if (existing) {
+      existing.lastSeenAt = this.now();
+      return existing;
+    }
+    const created: ToolChainBudgetState = {
+      totalCalls: 0,
+      nonReadOnlyCalls: 0,
+      signatureCounts: new Map(),
+      signatureFailureCounts: new Map(),
+      lastSeenAt: this.now(),
+    };
+    this.toolChainBudgets.set(key, created);
+    return created;
+  }
+
+  private consumeToolChainBudget(
+    definition: ToolDefinition,
+    request: Partial<ToolExecutionRequest>,
+    argsHash: string | undefined,
+  ): string | null {
+    const budget = this.getToolChainBudget(request);
+    if (!budget) return null;
+
+    const signature = argsHash ? `${definition.name}:${argsHash}` : undefined;
+    if (signature) {
+      const priorFailures = budget.signatureFailureCounts.get(signature) ?? 0;
+      if (priorFailures >= MAX_IDENTICAL_FAILURES_PER_CHAIN) {
+        return `Blocked runaway retry for '${definition.name}': the same action has already failed ${priorFailures} times in this execution chain.`;
+      }
+    }
+
+    budget.totalCalls += 1;
+    if (budget.totalCalls > MAX_TOOL_CALLS_PER_CHAIN) {
+      return `Blocked runaway tool execution: exceeded ${MAX_TOOL_CALLS_PER_CHAIN} tool calls in one execution chain.`;
+    }
+
+    if (definition.risk !== 'read_only') {
+      budget.nonReadOnlyCalls += 1;
+      if (budget.nonReadOnlyCalls > MAX_NON_READ_ONLY_CALLS_PER_CHAIN) {
+        return `Blocked runaway tool execution: exceeded ${MAX_NON_READ_ONLY_CALLS_PER_CHAIN} non-read-only tool calls in one execution chain.`;
+      }
+    }
+
+    if (signature) {
+      const count = (budget.signatureCounts.get(signature) ?? 0) + 1;
+      budget.signatureCounts.set(signature, count);
+      if (count > MAX_IDENTICAL_CALLS_PER_CHAIN) {
+        return `Blocked runaway tool execution: '${definition.name}' was requested more than ${MAX_IDENTICAL_CALLS_PER_CHAIN} times with the same arguments in one execution chain.`;
+      }
+    }
+
+    return null;
+  }
+
+  private recordToolChainOutcome(
+    definition: ToolDefinition,
+    request: Partial<ToolExecutionRequest>,
+    argsHash: string | undefined,
+    status: ToolJobStatus,
+  ): void {
+    const budget = this.getToolChainBudget(request);
+    if (!budget || !argsHash) return;
+    if (status !== 'failed' && status !== 'denied') return;
+    const signature = `${definition.name}:${argsHash}`;
+    budget.signatureFailureCounts.set(signature, (budget.signatureFailureCounts.get(signature) ?? 0) + 1);
+  }
+
+  private decide(
+    definition: ToolDefinition,
+    args: Record<string, unknown>,
+    request: Partial<ToolExecutionRequest> = {},
+  ): ToolDecision {
     if (!this.options.enabled) return 'deny';
+
+    const contentTrustLevel = request.contentTrustLevel ?? 'trusted';
+    const derivedFromTaintedContent = request.derivedFromTaintedContent === true;
+
+    if (contentTrustLevel === 'quarantined' && definition.risk !== 'read_only') {
+      return 'deny';
+    }
+    if (derivedFromTaintedContent) {
+      if (definition.name === 'memory_save') {
+        return contentTrustLevel === 'quarantined' ? 'deny' : 'require_approval';
+      }
+      if (definition.risk !== 'read_only') {
+        return 'require_approval';
+      }
+    }
 
     const explicit = this.policy.toolPolicies[definition.name];
     if (explicit) {
@@ -2392,14 +2558,18 @@ export class ToolExecutor {
           params: args,
           agentId: request.agentId ?? 'assistant-tools',
         });
-        if (!evaluation.allowed) {
-          job.status = 'denied';
-          job.completedAt = this.now();
-          job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
-          job.error = `Blocked by Guardian Agent: ${evaluation.reason ?? 'action deemed too risky'}`;
-          return {
-            success: false,
-            status: job.status,
+      if (!evaluation.allowed) {
+        job.status = 'denied';
+        job.completedAt = this.now();
+        job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
+        job.error = `Blocked by Guardian Agent: ${evaluation.reason ?? 'action deemed too risky'}`;
+        const definition = this.registry.get(job.toolName)?.definition;
+        if (definition) {
+          this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
+        }
+        return {
+          success: false,
+          status: job.status,
             jobId: job.id,
             message: job.error,
           };
@@ -2410,6 +2580,10 @@ export class ToolExecutor {
         job.completedAt = this.now();
         job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
         job.error = `Blocked: Guardian Agent evaluation unavailable — ${err instanceof Error ? err.message : String(err)}`;
+        const definition = this.registry.get(job.toolName)?.definition;
+        if (definition) {
+          this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
+        }
         return {
           success: false,
           status: job.status,
@@ -2427,6 +2601,10 @@ export class ToolExecutor {
         job.error = sanitizePreview(fullError);
         job.completedAt = this.now();
         job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
+        const definition = this.registry.get(job.toolName)?.definition;
+        if (definition) {
+          this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
+        }
         return {
           success: false,
           status: job.status,
@@ -2439,13 +2617,18 @@ export class ToolExecutor {
       job.completedAt = this.now();
       job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
       job.resultPreview = sanitizePreview(JSON.stringify(result.output ?? {}));
+      const verification = await this.verifyExecution(job.toolName, args, result);
+      job.verificationStatus = verification.status;
+      job.verificationEvidence = verification.evidence;
+      const successMessage = extractToolSuccessMessage(job.toolName, result.output, result.message);
       
       const successResponse: ToolRunResponse = {
         success: true,
         status: job.status,
         jobId: job.id,
-        message: `Tool '${job.toolName}' completed.`,
+        message: successMessage,
         output: result.output,
+        verificationStatus: verification.status,
       };
       
       this.options.onToolExecuted?.(
@@ -2468,6 +2651,10 @@ export class ToolExecutor {
       job.error = sanitizePreview(message);
       job.completedAt = this.now();
       job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
+      const definition = this.registry.get(job.toolName)?.definition;
+      if (definition) {
+        this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
+      }
       
       const failedResponse: ToolRunResponse = {
         success: false,
@@ -2491,6 +2678,69 @@ export class ToolExecutor {
       );
       
       return failedResponse;
+    }
+  }
+
+  private async verifyExecution(
+    toolName: string,
+    args: Record<string, unknown>,
+    result: ToolResult,
+  ): Promise<{ status: import('./types.js').VerificationStatus; evidence: string }> {
+    if (result.verificationStatus) {
+      return {
+        status: result.verificationStatus,
+        evidence: result.verificationEvidence ?? 'Tool provided explicit verification state.',
+      };
+    }
+
+    switch (toolName) {
+      case 'memory_save': {
+        const output = isRecord(result.output) ? result.output : {};
+        const memoryStore = this.options.agentMemoryStore;
+        const agentId = typeof output.agentId === 'string' ? output.agentId : '';
+        const entryId = typeof output.entryId === 'string' ? output.entryId : '';
+        if (memoryStore && agentId && entryId) {
+          return memoryStore.isEntryActive(agentId, entryId)
+            ? { status: 'verified', evidence: `Memory entry ${entryId} is active.` }
+            : { status: 'unverified', evidence: `Memory entry ${entryId} is not active.` };
+        }
+        return { status: 'unverified', evidence: 'Memory entry identity missing from tool output.' };
+      }
+      case 'task_create': {
+        const output = isRecord(result.output) ? result.output : {};
+        const task = isRecord(output.task) ? output.task : {};
+        const taskId = typeof task.id === 'string' ? task.id : '';
+        if (taskId && this.automationControlPlane?.listTasks().some((entry) => entry.id === taskId)) {
+          return { status: 'verified', evidence: `Scheduled task ${taskId} exists.` };
+        }
+        return { status: 'unverified', evidence: 'Scheduled task was not found after creation.' };
+      }
+      case 'task_update': {
+        const taskId = typeof args.taskId === 'string' ? args.taskId : '';
+        if (taskId && this.automationControlPlane?.listTasks().some((entry) => entry.id === taskId)) {
+          return { status: 'verified', evidence: `Scheduled task ${taskId} exists after update.` };
+        }
+        return { status: 'unverified', evidence: 'Updated scheduled task was not found.' };
+      }
+      case 'workflow_upsert': {
+        const workflowId = typeof args.id === 'string' ? args.id.trim() : '';
+        const workflow = workflowId
+          ? this.automationControlPlane?.listWorkflows().find((entry) => entry.id === workflowId)
+          : undefined;
+        if (!workflow) {
+          return { status: 'unverified', evidence: 'Workflow was not found after upsert.' };
+        }
+        const linkedTaskCount = this.automationControlPlane?.listTasks()
+          .filter((task) => task.type === 'playbook' && task.target === workflow.id).length ?? 0;
+        return {
+          status: 'verified',
+          evidence: linkedTaskCount > 0
+            ? `Workflow ${workflow.id} exists with ${linkedTaskCount} linked scheduled task${linkedTaskCount === 1 ? '' : 's'}.`
+            : `Workflow ${workflow.id} exists.`,
+        };
+      }
+      default:
+        return { status: 'unverified', evidence: 'No verifier is defined for this tool.' };
     }
   }
 
@@ -10366,21 +10616,40 @@ export class ToolExecutor {
         const requestAgentId = asString(request.agentId);
         const targetAgent = (this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId) || 'default';
         const category = asString(args.category).trim() || undefined;
-
-        memoryStore.append(targetAgent, {
+        const requestTrustLevel = request.contentTrustLevel ?? 'trusted';
+        const trustLevel = requestTrustLevel === 'trusted' ? 'trusted' : 'untrusted';
+        const status = requestTrustLevel === 'trusted' && !request.derivedFromTaintedContent
+          ? 'active'
+          : 'quarantined';
+        const stored = memoryStore.append(targetAgent, {
           content,
           createdAt: new Date().toISOString().slice(0, 10),
           category,
+          sourceType: requestTrustLevel === 'trusted' ? 'user' : 'remote_tool',
+          trustLevel,
+          status,
+          createdByPrincipal: request.principalId ?? request.userId,
+          provenance: {
+            sessionId: request.scheduleId,
+            taintReasons: request.taintReasons,
+          },
         });
 
         return {
           success: true,
           output: {
             agentId: targetAgent,
+            entryId: stored.id,
             saved: content,
             category: category ?? '(uncategorized)',
+            status: stored.status,
+            trustLevel: stored.trustLevel,
             totalSizeChars: memoryStore.size(targetAgent),
           },
+          verificationStatus: memoryStore.isEntryActive(targetAgent, stored.id) ? 'verified' : 'unverified',
+          verificationEvidence: memoryStore.isEntryActive(targetAgent, stored.id)
+            ? `Memory entry ${stored.id} is active in the knowledge base.`
+            : `Memory entry ${stored.id} was persisted as ${stored.status}.`,
         };
       },
     );
@@ -11004,7 +11273,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_upsert',
-        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step needs id and either toolName (tool step), instruction (instruction step), or delayMs (delay step). Set type accordingly: "tool", "instruction", or "delay". For a single-tool automation, provide one step with mode "sequential". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
+        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step needs id and either toolName (tool step), instruction (instruction step), or delayMs (delay step). Set type accordingly: "tool", "instruction", or "delay". For a single-tool automation, provide one step with mode "sequential". In sequential playbooks, later tool args may reference prior step fields with placeholders such as "${summarize.output}" or "${fetch.status}". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
         shortDescription: 'Create or update an automation (playbook).',
         risk: 'mutating',
         category: 'automation',
@@ -11055,7 +11324,7 @@ export class ToolExecutor {
                   type: { type: 'string', description: 'Step type: "tool" (default), "instruction" (LLM), or "delay" (pause pipeline)' },
                   packId: { type: 'string', description: 'Permission policy ID (optional)' },
                   toolName: { type: 'string', description: 'Name of the tool to execute (required for tool steps)' },
-                  args: { type: 'object', description: 'Tool arguments as key-value pairs' },
+                  args: { type: 'object', description: 'Tool arguments as key-value pairs. In sequential playbooks, string values may reference prior step fields with placeholders like "${step-id.output}", "${step-id.message}", or "${step-id.status}".' },
                   instruction: { type: 'string', description: 'LLM prompt text (required for instruction steps). Prior step outputs injected as context.' },
                   delayMs: { type: 'number', description: 'Delay duration in ms (required for delay steps). E.g. 60000 = 1 minute.' },
                   llmProvider: { type: 'string', description: 'LLM provider override for instruction steps (e.g. "anthropic", "ollama")' },
@@ -11073,7 +11342,29 @@ export class ToolExecutor {
           return { success: false, error: 'Workflow control plane is not available.' };
         }
         const result = this.automationControlPlane.upsertWorkflow(args);
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        const workflowId = requireString(args.id, 'id');
+        const workflow = this.automationControlPlane.listWorkflows().find((entry) => entry.id === workflowId);
+        const linkedTasks = workflow
+          ? this.automationControlPlane.listTasks()
+            .filter((task) => task.type === 'playbook' && task.target === workflow.id)
+            .map(normalizeTaskSummary)
+          : [];
+        const stepCount = workflow?.steps?.length ?? (Array.isArray(args.steps) ? args.steps.length : 0);
+        const action = /^updated\b/i.test(result.message) ? 'Updated' : 'Created';
+        const summary = `Workflow '${workflow?.name ?? requireString(args.name, 'name')}' (id: ${workflowId}) ${action.toLowerCase()} with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
+        return {
+          success: true,
+          message: summary,
+          output: {
+            ...result,
+            message: summary,
+            workflow: workflow ? normalizeWorkflowSummary(workflow) : undefined,
+            linkedTasks,
+          },
+        };
       },
     );
 
@@ -11169,7 +11460,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_create',
-        description: 'Schedule a task. Use type "tool" to run a single tool on cron, type "workflow" to run an automation playbook on cron, or type "agent" to trigger a scheduled assistant turn that can use skills, memory, and tools. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule that disables itself after the first execution. Scheduled tasks are considered approved once created, so later cron runs do not pause for the same approval again. Mutating - requires approval.',
+        description: 'Schedule a task with bounded authority. Use type "tool" to run a single tool on cron, type "workflow" to run an automation playbook on cron, or type "agent" to trigger a scheduled assistant turn. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule. Scheduled tasks now carry approval expiry, scope hash, and runaway budgets; later cron runs are allowed only while that authority remains valid. Mutating - requires approval.',
         shortDescription: 'Schedule a tool, workflow, or assistant turn on cron.',
         risk: 'mutating',
         category: 'automation',
@@ -11223,6 +11514,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Human-readable task name' },
+            description: { type: 'string', description: 'Optional concise human summary. Recommended for scheduled assistant tasks so the UI can show a short description without exposing the full prompt.' },
             type: { type: 'string', description: '"tool" (run a single tool), "workflow" (run a playbook), or "agent" (run a scheduled assistant turn)' },
             target: { type: 'string', description: 'Tool name, playbook ID, or agent ID. Use "default" to target the primary assistant.' },
             prompt: { type: 'string', description: 'Required when type="agent". The scheduled instruction for the assistant.' },
@@ -11233,24 +11525,52 @@ export class ToolExecutor {
             runOnce: { type: 'boolean', description: 'Optional. If true, run on the next matching cron time once, then disable the task automatically.' },
             enabled: { type: 'boolean', description: 'Start enabled (default: true)' },
             args: { type: 'object', description: 'Optional tool arguments as key-value pairs' },
+            approvalExpiresAt: { type: 'number', description: 'Optional Unix ms approval expiry. Defaults to a bounded TTL.' },
+            maxRunsPerWindow: { type: 'number', description: 'Optional max executions per 24h window before auto-pause.' },
+            dailySpendCap: { type: 'number', description: 'Optional daily token budget before auto-pause.' },
+            providerSpendCap: { type: 'number', description: 'Optional per-provider daily token budget before auto-pause.' },
             emitEvent: { type: 'string', description: 'Optional event name to emit on completion' },
           },
           required: ['name', 'type', 'target', 'cron'],
         },
       },
-      async (args) => {
+      async (args, request) => {
         if (!this.automationControlPlane) {
           return { success: false, error: 'Task control plane is not available.' };
         }
-        const result = this.automationControlPlane.createTask(normalizeTaskInput(args));
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+        const result = this.automationControlPlane.createTask(normalizeTaskInput(args, request));
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        const task = result.task ? normalizeTaskSummary(result.task) : undefined;
+        const linkedWorkflow = result.task?.type === 'playbook'
+          ? this.automationControlPlane.listWorkflows().find((entry) => entry.id === result.task?.target)
+          : undefined;
+        const typeLabel = result.task?.type === 'playbook'
+          ? 'scheduled workflow task'
+          : result.task?.type === 'agent'
+            ? 'scheduled assistant task'
+            : 'scheduled task';
+        const summary = result.task
+          ? `${capitalizeFirst(typeLabel)} '${result.task.name}' (id: ${result.task.id}) targets '${result.task.target}' on ${result.task.cron}.`
+          : result.message;
+        return {
+          success: true,
+          message: summary,
+          output: {
+            ...result,
+            message: summary,
+            task,
+            workflow: linkedWorkflow ? normalizeWorkflowSummary(linkedWorkflow) : undefined,
+          },
+        };
       },
     );
 
     this.registry.register(
       {
         name: 'task_update',
-        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, args, runOnce behavior, or agent-task prompt/channel settings. Scheduled tasks remain approved for later cron runs after creation/update. Mutating - requires approval.',
+        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, args, runOnce behavior, approval expiry, or budget settings. Scope changes refresh the task authority snapshot and later cron runs fail closed when approval expires or budgets are exhausted. Mutating - requires approval.',
         shortDescription: 'Update a scheduled task (cron, enabled, args).',
         risk: 'mutating',
         category: 'automation',
@@ -11260,6 +11580,7 @@ export class ToolExecutor {
           properties: {
             taskId: { type: 'string' },
             name: { type: 'string' },
+            description: { type: 'string' },
             type: { type: 'string', description: "Use 'tool', 'workflow', or 'agent'." },
             target: { type: 'string' },
             prompt: { type: 'string' },
@@ -11270,19 +11591,23 @@ export class ToolExecutor {
             runOnce: { type: 'boolean', description: 'If true, disable the task automatically after its next execution.' },
             enabled: { type: 'boolean' },
             args: { type: 'object' },
+            approvalExpiresAt: { type: 'number' },
+            maxRunsPerWindow: { type: 'number' },
+            dailySpendCap: { type: 'number' },
+            providerSpendCap: { type: 'number' },
             emitEvent: { type: 'string' },
           },
           required: ['taskId'],
         },
       },
-      async (args) => {
+      async (args, request) => {
         if (!this.automationControlPlane) {
           return { success: false, error: 'Task control plane is not available.' };
         }
         const taskId = requireString(args.taskId, 'taskId');
         const next = { ...args };
         delete next.taskId;
-        const result = this.automationControlPlane.updateTask(taskId, normalizeTaskInput(next));
+        const result = this.automationControlPlane.updateTask(taskId, normalizeTaskInput(next, request));
         return { success: result.success, output: result, error: result.success ? undefined : result.message };
       },
     );
@@ -11323,6 +11648,7 @@ export class ToolExecutor {
       if (policyUpdates.allowedPaths) enabledActions.push('add_path', 'remove_path');
       if (policyUpdates.allowedCommands) enabledActions.push('add_command', 'remove_command');
       if (policyUpdates.allowedDomains) enabledActions.push('add_domain', 'remove_domain');
+      if (policyUpdates.toolPolicies) enabledActions.push('set_tool_policy_auto', 'set_tool_policy_manual', 'set_tool_policy_deny');
 
       this.registry.register(
         {
@@ -11359,7 +11685,7 @@ export class ToolExecutor {
           const current = this.getPolicy();
           let updated: ToolPolicyUpdate;
 
-          switch (action) {
+              switch (action) {
             case 'add_path': {
               if (current.sandbox.allowedPaths.includes(value)) {
                 return { success: true, output: { message: `Path '${value}' is already in the allowlist.`, allowedPaths: current.sandbox.allowedPaths } };
@@ -11408,6 +11734,18 @@ export class ToolExecutor {
                 return { success: false, error: `Domain '${normalizedValue}' is not in the allowlist.` };
               }
               updated = { sandbox: { allowedDomains: filtered } };
+              break;
+            }
+            case 'set_tool_policy_auto': {
+              updated = { toolPolicies: { [value]: 'auto' } };
+              break;
+            }
+            case 'set_tool_policy_manual': {
+              updated = { toolPolicies: { [value]: 'manual' } };
+              break;
+            }
+            case 'set_tool_policy_deny': {
+              updated = { toolPolicies: { [value]: 'deny' } };
               break;
             }
             default:
@@ -13543,11 +13881,16 @@ function normalizeTaskSummary(task: AutomationTaskSummary): Record<string, unkno
     ...task,
     kind: 'task',
     type: task.type === 'playbook' ? 'workflow' : task.type,
+    approvalExpired: typeof task.approvalExpiresAt === 'number' ? task.approvalExpiresAt <= Date.now() : true,
   };
 }
 
-function normalizeTaskInput(input: Record<string, unknown>): Record<string, unknown> {
-  const normalized = { ...input };
+function normalizeTaskInput(input: Record<string, unknown>, request?: ToolExecutionRequest): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    ...input,
+    principalId: request?.principalId ?? request?.userId,
+    principalRole: request?.principalRole ?? 'owner',
+  };
   if (normalized.type === 'workflow') {
     normalized.type = 'playbook';
   }
@@ -13698,4 +14041,57 @@ function extractRawMessageSummary(args: Record<string, unknown>): { to?: string;
   } catch {
     return null;
   }
+}
+
+function extractToolSuccessMessage(
+  toolName: string,
+  output: unknown,
+  explicitMessage?: string,
+): string {
+  const message = explicitMessage?.trim() || extractAutomationSuccessMessage(toolName, output) || extractOutputMessage(output);
+  return message || `Tool '${toolName}' completed.`;
+}
+
+function extractAutomationSuccessMessage(toolName: string, output: unknown): string {
+  if (!isRecord(output)) return '';
+
+  if (toolName === 'workflow_upsert') {
+    const workflow = isRecord(output.workflow) ? output.workflow : {};
+    const linkedTasks = Array.isArray(output.linkedTasks) ? output.linkedTasks : [];
+    const workflowId = asString(workflow.id).trim();
+    const workflowName = asString(workflow.name).trim();
+    const stepCount = Array.isArray(workflow.steps) ? workflow.steps.length : 0;
+    if (workflowId || workflowName) {
+      return `Workflow '${workflowName || workflowId}' (id: ${workflowId || workflowName}) is saved with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
+    }
+  }
+
+  if (toolName === 'task_create') {
+    const task = isRecord(output.task) ? output.task : {};
+    const taskId = asString(task.id).trim();
+    const taskName = asString(task.name).trim();
+    const taskType = asString(task.type).trim();
+    const target = asString(task.target).trim();
+    const cron = asString(task.cron).trim();
+    if (taskId || taskName) {
+      const typeLabel = taskType === 'workflow' || taskType === 'playbook'
+        ? 'scheduled workflow task'
+        : taskType === 'agent'
+          ? 'scheduled assistant task'
+          : 'scheduled task';
+      return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' on ${cron || '(no cron)'}.`;
+    }
+  }
+
+  return '';
+}
+
+function extractOutputMessage(output: unknown): string {
+  if (!isRecord(output)) return '';
+  return asString(output.message).trim();
+}
+
+function capitalizeFirst(value: string): string {
+  if (!value) return value;
+  return value[0].toUpperCase() + value.slice(1);
 }

@@ -1147,6 +1147,8 @@ export interface AgentPolicyUpdatesConfig {
   allowedCommands: boolean;
   /** Allow the assistant to add domains to the allowlist (always requires approval). */
   allowedDomains: boolean;
+  /** Allow the assistant to modify per-tool policy overrides (always requires approval). */
+  toolPolicies: boolean;
 }
 
 /** Assistant tool execution policy and sandbox settings. */
@@ -1601,6 +1603,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         allowedPaths: true,
         allowedCommands: false,
         allowedDomains: true,
+        toolPolicies: true,
       },
       deferredLoading: {
         enabled: true,

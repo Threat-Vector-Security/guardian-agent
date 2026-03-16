@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sandboxedSpawn, detectSandboxHealth, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
@@ -12,8 +12,14 @@ import type { Runtime } from '../runtime/runtime.js';
 import type { AgentIsolationConfig } from '../config/types.js';
 import type { UserMessage } from '../agent/types.js';
 import type { ResolvedSkill } from '../skills/types.js';
+import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
+import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 
 const log = createLogger('worker-manager');
+const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
+const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
+const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
@@ -36,6 +42,8 @@ export interface WorkerProcess {
   id: string;
   sessionId: string;
   agentId: string;
+  authorizedBy: string;
+  grantedCapabilities: string[];
   process: ChildProcess;
   brokerServer: BrokerServer;
   workspacePath: string;
@@ -45,9 +53,17 @@ export interface WorkerProcess {
   pendingMessageReject?: (error: Error) => void;
 }
 
+interface DirectAutomationContinuation {
+  request: WorkerMessageRequest;
+  pendingApprovalIds: string[];
+  expiresAt: number;
+}
+
 export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
+  private readonly directPendingApprovals = new Map<string, { ids: string[]; expiresAt: number }>();
+  private readonly directAutomationContinuations = new Map<string, DirectAutomationContinuation>();
   private readonly tokenManager: CapabilityTokenManager;
   private readonly tools: ToolExecutor;
   private readonly runtime: Runtime;
@@ -70,6 +86,12 @@ export class WorkerManager {
   }
 
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
+    if (approvalResponse) return approvalResponse;
+
+    const directAutomation = await this.tryDirectAutomationAuthoring(input);
+    if (directAutomation) return directAutomation;
+
     const worker = await this.getOrSpawnWorker(input.sessionId, input.agentId, input.userId, input.grantedCapabilities);
 
     // LLM calls are proxied through the broker — the worker no longer needs the provider config.
@@ -96,6 +118,243 @@ export class WorkerManager {
     }
     this.workers.clear();
     this.sessionToWorker.clear();
+    this.directPendingApprovals.clear();
+    this.directAutomationContinuations.clear();
+  }
+
+  private async tryHandleDirectApprovalMessage(
+    input: WorkerMessageRequest,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const pendingIds = this.getDirectPendingApprovalIds(input.sessionId);
+    if (pendingIds.length === 0) return null;
+
+    const trimmed = input.message.content.trim();
+    const decision = APPROVAL_CONFIRM_PATTERN.test(trimmed)
+      ? 'approved'
+      : APPROVAL_DENY_PATTERN.test(trimmed)
+        ? 'denied'
+        : null;
+    if (!decision) return null;
+
+    const explicitIds = trimmed
+      .split(/\s+/g)
+      .map((token) => token.trim())
+      .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
+    const targetIds = explicitIds.length > 0 ? explicitIds : pendingIds;
+
+    const results: string[] = [];
+    const approvedIds = new Set<string>();
+    const failedIds = new Set<string>();
+    for (const approvalId of targetIds) {
+      const decided = await this.tools.decideApproval(
+        approvalId,
+        decision,
+        input.message.principalId ?? input.message.userId,
+        input.message.principalRole ?? 'owner',
+      );
+      if (decision === 'approved' && decided.success) approvedIds.add(approvalId);
+      if (!decided.success) failedIds.add(approvalId);
+      results.push(decided.message);
+    }
+
+    this.consumeDirectPendingApprovals(input.sessionId, targetIds);
+    const continuation = this.getDirectAutomationContinuation(input.sessionId);
+    if (continuation) {
+      const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
+      if (decision === 'approved' && affected.length > 0) {
+        const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
+        if (stillPending.length === 0) {
+          this.directAutomationContinuations.delete(input.sessionId);
+          const retry = await this.tryDirectAutomationAuthoring({
+            ...continuation.request,
+          });
+          if (retry) {
+            results.push('');
+            results.push(retry.content);
+            return {
+              content: results.join('\n'),
+              metadata: retry.metadata,
+            };
+          }
+        } else {
+          this.directAutomationContinuations.set(input.sessionId, {
+            ...continuation,
+            pendingApprovalIds: stillPending,
+          });
+        }
+      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
+        this.directAutomationContinuations.delete(input.sessionId);
+      }
+    }
+    return { content: results.join('\n') };
+  }
+
+  private async tryDirectAutomationAuthoring(
+    input: WorkerMessageRequest,
+    options?: { allowRemediation?: boolean },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const allowedPaths = this.tools.getPolicy?.().sandbox.allowedPaths ?? [process.cwd()];
+    const workspaceRoot = allowedPaths[0] || process.cwd();
+    const preflightTools = this.tools.preflightTools
+      ? (requests: Array<{ name: string; args?: Record<string, unknown> }>) => this.tools.preflightTools(requests)
+      : (requests: Array<{ name: string; args?: Record<string, unknown> }>) => requests.map((request) => ({
+          name: request.name,
+          found: true,
+          decision: 'allow' as const,
+          reason: 'No worker-manager preflight available; allowing direct automation compile fallback.',
+          fixes: [],
+        }));
+    const trackedPendingApprovalIds: string[] = [];
+    const result = await tryAutomationPreRoute({
+      agentId: input.agentId,
+      message: input.message,
+      preflightTools,
+      workspaceRoot,
+      allowedPaths,
+      executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
+      trackPendingApproval: (approvalId) => {
+        trackedPendingApprovalIds.push(approvalId);
+        const existingIds = this.getDirectPendingApprovalIds(input.sessionId);
+        this.directPendingApprovals.set(input.sessionId, {
+          ids: [...new Set([...existingIds, approvalId])],
+          expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        });
+      },
+      formatPendingApprovalPrompt: (ids) => {
+        const meta = this.resolveDirectPendingApprovalMetadata(ids);
+        return shouldUseStructuredPendingApprovalMessage(input.message.channel)
+          ? formatPendingApprovalMessage(meta)
+          : 'This action needs approval before I can continue.';
+      },
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const resolved = this.resolveDirectPendingApprovalMetadata(ids);
+        return resolved.length > 0 ? resolved : fallback;
+      },
+    }, options);
+    if (!result) {
+      this.directAutomationContinuations.delete(input.sessionId);
+      return null;
+    }
+    if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
+      this.directAutomationContinuations.set(input.sessionId, {
+        request: input,
+        pendingApprovalIds: trackedPendingApprovalIds,
+        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+      });
+    } else {
+      this.directAutomationContinuations.delete(input.sessionId);
+    }
+    return result;
+  }
+
+  private resolveDirectPendingApprovalMetadata(ids: string[]): AutomationPendingApprovalMetadata[] {
+    const summaries = this.tools.getApprovalSummaries(ids);
+    return ids.map((id) => {
+      const summary = summaries.get(id);
+      return {
+        id,
+        toolName: summary?.toolName ?? 'unknown',
+        argsPreview: summary?.argsPreview ?? '',
+      };
+    });
+  }
+
+  private getDirectPendingApprovalIds(sessionId: string, nowMs: number = Date.now()): string[] {
+    const pending = this.directPendingApprovals.get(sessionId);
+    if (!pending) return [];
+    if (pending.expiresAt <= nowMs) {
+      this.directPendingApprovals.delete(sessionId);
+      return [];
+    }
+    return [...pending.ids];
+  }
+
+  private consumeDirectPendingApprovals(sessionId: string, consumedIds: string[]): void {
+    const pending = this.directPendingApprovals.get(sessionId);
+    if (!pending) return;
+    const remaining = pending.ids.filter((id) => !consumedIds.includes(id));
+    if (remaining.length === 0) {
+      this.directPendingApprovals.delete(sessionId);
+      return;
+    }
+    this.directPendingApprovals.set(sessionId, {
+      ids: remaining,
+      expiresAt: pending.expiresAt,
+    });
+  }
+
+  private getDirectAutomationContinuation(
+    sessionId: string,
+    nowMs: number = Date.now(),
+  ): DirectAutomationContinuation | null {
+    const continuation = this.directAutomationContinuations.get(sessionId);
+    if (!continuation) return null;
+    if (continuation.expiresAt <= nowMs) {
+      this.directAutomationContinuations.delete(sessionId);
+      return null;
+    }
+    return continuation;
+  }
+
+  hasAutomationApprovalContinuation(approvalId: string): boolean {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return false;
+    for (const continuation of this.directAutomationContinuations.values()) {
+      if (continuation.pendingApprovalIds.includes(normalizedId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async continueAutomationAfterApproval(
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const normalizedId = approvalId.trim();
+    if (!normalizedId) return null;
+    for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
+      if (!continuation.pendingApprovalIds.includes(normalizedId)) continue;
+      if (decision !== 'approved') {
+        this.directAutomationContinuations.delete(sessionId);
+        return null;
+      }
+      const stillPending = continuation.pendingApprovalIds.filter((id) => id !== normalizedId);
+      if (stillPending.length > 0) {
+        this.directAutomationContinuations.set(sessionId, {
+          ...continuation,
+          pendingApprovalIds: stillPending,
+        });
+        return null;
+      }
+      this.directAutomationContinuations.delete(sessionId);
+      return this.tryDirectAutomationAuthoring(continuation.request);
+    }
+
+    if (decision === 'approved') {
+      for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
+        const livePendingIds = new Set(this.tools.listPendingApprovalIdsForUser?.(
+          continuation.request.userId,
+          continuation.request.message.channel,
+          {
+            includeUnscoped: continuation.request.message.channel === 'web',
+            principalId: continuation.request.message.principalId ?? continuation.request.userId,
+          },
+        ) ?? []);
+        const stillPending = continuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
+        if (stillPending.length === 0) {
+          this.directAutomationContinuations.delete(sessionId);
+          return this.tryDirectAutomationAuthoring(continuation.request);
+        }
+        if (stillPending.length !== continuation.pendingApprovalIds.length) {
+          this.directAutomationContinuations.set(sessionId, {
+            ...continuation,
+            pendingApprovalIds: stillPending,
+          });
+        }
+      }
+    }
+    return null;
   }
 
   private async getOrSpawnWorker(
@@ -108,6 +367,10 @@ export class WorkerManager {
     if (existingId) {
       const existing = this.workers.get(existingId);
       if (existing && existing.status === 'ready') {
+        this.refreshWorkerCapabilityToken(existing, agentId, userId, grantedCapabilities);
+        existing.agentId = agentId;
+        existing.authorizedBy = userId;
+        existing.grantedCapabilities = [...grantedCapabilities];
         existing.lastActivityMs = Date.now();
         return existing;
       }
@@ -135,8 +398,11 @@ export class WorkerManager {
       ? 'agent-worker' as const
       : 'workspace-write' as const;
     // Workers are full Node.js processes that need more memory than short-lived tool subprocesses.
-    // Use the configured workerMaxMemoryMb (default 512) but with a floor of 2048MB for V8.
-    const workerMemoryMb = Math.max(this.config.workerMaxMemoryMb, 2048);
+    // On strong sandbox backends we keep a generous floor for V8. On degraded ulimit-only hosts,
+    // a virtual-memory cap is not reliable for long-lived Node workers and can prevent startup.
+    const workerMemoryMb = sandboxHealth.availability === 'strong'
+      ? Math.max(this.config.workerMaxMemoryMb, 2048)
+      : 0;
     const workerSandboxConfig = {
       ...this.sandboxConfig,
       resourceLimits: {
@@ -204,6 +470,8 @@ export class WorkerManager {
       id: workerId,
       sessionId,
       agentId,
+      authorizedBy: userId,
+      grantedCapabilities: [...grantedCapabilities],
       process: child,
       brokerServer,
       workspacePath,
@@ -252,6 +520,28 @@ export class WorkerManager {
     ]);
 
     return worker;
+  }
+
+  private refreshWorkerCapabilityToken(
+    worker: WorkerProcess,
+    agentId: string,
+    userId: string,
+    grantedCapabilities: string[],
+  ): void {
+    this.tokenManager.revokeForWorker(worker.id);
+    const token = this.tokenManager.mint({
+      workerId: worker.id,
+      sessionId: worker.sessionId,
+      agentId,
+      authorizedBy: userId,
+      grantedCapabilities,
+      maxToolCalls: this.config.capabilityTokenMaxToolCalls,
+    });
+    worker.brokerServer.sendNotification('capability.refreshed', {
+      capabilityToken: token.id,
+      agentId,
+      sessionId: worker.sessionId,
+    });
   }
 
   private dispatchToWorker(
@@ -362,9 +652,10 @@ function resolveWorkerLaunch(configuredEntryPoint?: string): { command: string; 
     : resolveDefaultWorkerEntry();
   const extension = extname(resolvedEntry);
   if (extension === '.ts') {
+    const tsxLoaderPath = resolve(workerManagerDir, '..', '..', 'node_modules', 'tsx', 'dist', 'loader.mjs');
     return {
       command: process.execPath,
-      args: ['--import', 'tsx', resolvedEntry],
+      args: ['--import', existsSync(tsxLoaderPath) ? tsxLoaderPath : 'tsx', resolvedEntry],
     };
   }
   return {

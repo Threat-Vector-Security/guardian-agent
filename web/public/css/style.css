@@ -2534,6 +2534,9 @@ tr:hover td {
   margin-top: 0.2rem;
   font-size: 0.73rem;
   color: var(--text-muted);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ops-state-cell {
@@ -2739,6 +2742,16 @@ tr:hover td {
   gap: 0.25rem;
   flex-wrap: wrap;
   max-width: 320px;
+}
+
+.auto-catalog-row td:first-child {
+  min-width: 320px;
+}
+
+.auto-catalog-row .ops-task-title {
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .wf-tool-chip {

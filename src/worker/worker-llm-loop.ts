@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatResponse, ChatOptions } from '../llm/types.js';
 import type { ToolCaller } from '../broker/types.js';
-import type { ToolDefinition } from '../tools/types.js';
+import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { isResponseDegraded } from '../util/response-quality.js';
 
@@ -26,6 +26,8 @@ export async function runLlmLoop(
   let hasPendingApprovals = false;
   let forcedPolicyRetryUsed = false;
   let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
+  let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
+  const currentTaintReasons = new Set<string>();
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
 
@@ -91,13 +93,14 @@ export async function runLlmLoop(
 
         // memory_save suppression: deny unless user explicitly asked to remember
         if (tc.name === 'memory_save' && options?.allowImplicitMemorySave !== true) {
-          const denied = {
+          const denied: ToolRunResponse = {
             success: false,
             status: 'denied',
+            jobId: `denied:${tc.id}`,
             message: 'memory_save is reserved for explicit remember/save requests from the user.',
           };
           if (onToolCalled) {
-            onToolCalled(tc, denied);
+            onToolCalled(tc, denied as unknown as Record<string, unknown>);
           }
           return { toolCall: tc, result: denied };
         }
@@ -106,10 +109,15 @@ export async function runLlmLoop(
           origin: 'assistant',
           toolName: tc.name,
           args: parsedArgs,
+          principalId: 'worker-session',
+          principalRole: 'owner',
+          contentTrustLevel: currentContextTrustLevel,
+          taintReasons: [...currentTaintReasons],
+          derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
         });
 
         if (onToolCalled) {
-          onToolCalled(tc, res as any);
+          onToolCalled(tc, res as unknown as Record<string, unknown>);
         }
 
         return { toolCall: tc, result: res };
@@ -119,7 +127,7 @@ export async function runLlmLoop(
       if (settled.status !== 'fulfilled') return acc;
       acc.push({
         toolName: settled.value.toolCall.name,
-        result: settled.value.result as Record<string, unknown>,
+        result: settled.value.result as unknown as Record<string, unknown>,
       });
       return acc;
     }, []);
@@ -132,6 +140,19 @@ export async function runLlmLoop(
         if (result.status === 'pending_approval') {
           roundHasPending = true;
           hasPendingApprovals = true;
+        }
+
+        const trustLevel = typeof result.trustLevel === 'string' ? result.trustLevel : 'trusted';
+        if (trustLevel === 'quarantined') {
+          currentContextTrustLevel = 'quarantined';
+        } else if (trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
+          currentContextTrustLevel = 'low_trust';
+        }
+        const taintReasons = Array.isArray(result.taintReasons)
+          ? result.taintReasons.filter((value): value is string => typeof value === 'string')
+          : [];
+        for (const reason of taintReasons) {
+          currentTaintReasons.add(reason);
         }
 
         let resultForLlm = result;

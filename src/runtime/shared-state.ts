@@ -15,6 +15,7 @@ export interface SharedStateMetadata {
   timestamp: number;
   schemaId?: string;
   validationStatus?: 'warned' | 'enforced' | 'none' | 'failed';
+  taintReasons?: string[];
 }
 
 /** Read-only view of shared state for sub-agents. */

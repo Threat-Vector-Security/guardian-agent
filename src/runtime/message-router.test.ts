@@ -336,6 +336,18 @@ describe('MessageRouter', () => {
       expect(result.complexityScore!).toBeGreaterThanOrEqual(0.5);
     });
 
+    it('should route complex automation requests to external in auto mode', () => {
+      const result = router.routeWithTier(
+        'Build a weekday lead research workflow that reads a CSV of company names from the workspace, researches each company’s website and public presence, scores them against a simple ICP, writes the results to a new CSV in the workspace, and creates a short summary report.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.reason).toContain('automation complexity');
+      expect(result.fallbackAgentId).toBe('local');
+    });
+
     it('should set fallbackAgentId to opposite tier in auto mode', () => {
       const simple = router.routeWithTier('hi', 'auto', 0.5);
       expect(simple.agentId).toBe('local');

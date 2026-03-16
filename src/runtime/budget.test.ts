@@ -90,5 +90,14 @@ describe('BudgetTracker', () => {
     it('should return 0 for agents with no usage', () => {
       expect(tracker.getTokensPerMinute('agent-1')).toBe(0);
     });
+
+    it('should aggregate daily usage by scope', () => {
+      tracker.recordTokenUsage('agent-1', 100, 50, { principalId: 'principal-a', provider: 'mock' });
+      tracker.recordTokenUsage('agent-2', 10, 5, { principalId: 'principal-b', provider: 'mock' });
+
+      expect(tracker.getDailyTokenUsage({ principalId: 'principal-a' })).toBe(150);
+      expect(tracker.getDailyTokenUsage({ provider: 'mock' })).toBe(165);
+      expect(tracker.isDailyCapExceeded({ principalId: 'principal-a' }, 100)).toBe(true);
+    });
   });
 });

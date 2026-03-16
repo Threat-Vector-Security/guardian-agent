@@ -4,9 +4,9 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 ## Overview
 
-The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian).
+The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).
 
-Sixteen scripts are provided:
+Eighteen scripts are provided:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -26,6 +26,8 @@ Sixteen scripts are provided:
 | **`scripts/test-security-api.ps1`** | Focused security API suite: auth, privileged tickets, approvals, audit, direct tool enforcement (PowerShell) | ~20 |
 | **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
+| **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
+| **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
 
@@ -57,6 +59,14 @@ Unlike unit tests (vitest), these exercise the full stack: config loading, Guard
 ```
 
 These focused suites cover framework-level security controls only. They do not validate the strong OS sandbox backends (`bwrap`, Windows AppContainer helper).
+
+### Contextual Security Harness
+
+```bash
+node scripts/test-contextual-security-uplifts.mjs
+```
+
+This harness is the preferred regression path for the shipped contextual-security uplift. It validates quarantined reinjection suppression, trust-aware memory persistence rules, approval-bound low-trust actions, bounded schedule authority, and runaway/failure auto-pause behavior through real HTTP requests against a spawned backend.
 
 **Important:** Stop any running GuardianAgent instance first — the harness uses port 3000.
 
@@ -111,7 +121,7 @@ The **preferred method** for automated testing and bug reproduction is to write 
 2. **Spawn the backend:** Use `child_process.spawn` to launch `npx tsx src/index.ts` in the background, piping `stdout` and `stderr` to a temporary log file.
 3. **Wait for Health:** Poll the `/health` endpoint until the server is fully ready.
 4. **Setup the Environment:** Make an initial HTTP call (e.g., to `/api/tools/policy`) to configure the necessary state (like `approve_by_policy` and restricted sandbox paths).
-5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload.
+5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload. When validating contextual security or approval ownership, include the same principal-bearing auth path and direct tool API context fields the real UI uses.
 6. **Assert and Cleanup:** Evaluate the API responses programmatically. Regardless of pass or fail, ensure `appProcess.kill()` is called in a `finally` block or `catch` handler so the port is properly released.
 
 For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
@@ -139,12 +149,65 @@ This script exercises the CLI readline approval flow directly and fails if promp
 
 This method is fast, removes dependencies on cross-platform shell quirks, and can be instantly executed via `run_shell_command` natively in WSL.
 
+The contextual-security uplift harness follows this same pattern in `scripts/test-contextual-security-uplifts.mjs`. Use it when validating:
+- quarantined tool-result reinjection behavior
+- trust-aware `memory_save` outcomes
+- principal-bound approval decisions
+- schedule approval expiry, scope drift, and auto-pause
+- tool-chain runaway and overspend suppression
+
+The automation-authoring compiler harness follows the same pattern in `scripts/test-automation-authoring-compiler.mjs`. Use it when validating:
+- conversational automation requests compile into `task_create`, `task_update`, or `workflow_upsert`
+- authoring first passes through a typed `AutomationIR` + repair/validation path before native mutation compile
+- open-ended automations become scheduled `agent` tasks instead of scripts
+- repeat authoring requests update existing native tasks instead of duplicating them
+- deterministic explicit tool graphs still compile into workflows
+- deterministic workflows then execute through the graph-backed playbook runtime with run ids and orchestration events
+- scheduled assistant tasks persist a concise `description` separate from the internal `prompt`, so UI surfaces do not leak the full runtime prompt
+- conversational automation requests are blocked before save when obvious readiness checks fail (missing input files, blocked allowlists, or predicted runtime approvals for assistant tasks)
+- fixable policy blockers on conversational automation requests can be staged as remediation approvals and then retried automatically after approval
+- Windows-style output paths are normalized during authoring/validation, and native file writers such as `fs_write` are treated as capable of creating missing parent directories at runtime
+- brokered/runtime dispatch honors explicit multi-agent handoff contracts instead of silently forwarding raw context
+- scheduled tasks cannot overlap their own active run, so duplicate cron/manual runs fail closed instead of racing
+
+By default, this harness uses an embedded fake Ollama-compatible provider so regressions stay deterministic. It also supports an optional real local-model lane against an operator-installed Ollama instance:
+
+```bash
+HARNESS_USE_REAL_OLLAMA=1 \
+HARNESS_OLLAMA_BASE_URL=http://<windows-host-ip>:11434 \
+HARNESS_OLLAMA_MODEL=<your-model> \
+node scripts/test-automation-authoring-compiler.mjs --use-ollama
+```
+
+WSL note:
+- if Ollama is running on Windows only, `127.0.0.1:11434` inside WSL may not work
+- when `HARNESS_OLLAMA_BASE_URL` is not set, the harness will try a few candidates, including the WSL host IP from `/etc/resolv.conf`
+- if WSL-local Ollama is installed and the selected endpoint is loopback (`127.0.0.1` or `localhost`), the harness will autostart `ollama serve` for the test run and shut it down afterward
+- if none are reachable and no local WSL install can be autostarted, the harness fails fast with a clear connectivity message instead of silently falling back
+
+Recommended usage:
+- default regression lane: run the harness with no extra flags; this uses the embedded fake provider and remains deterministic
+- WSL-local smoke lane: install Ollama in WSL, pull a model once, then run `HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-automation-authoring-compiler.mjs --use-ollama`
+- brokered-worker smoke lane: add `HARNESS_AGENT_ISOLATION=1` so the harness validates the brokered worker path that the web UI uses when agent isolation is enabled
+- Windows-hosted smoke lane: set `HARNESS_OLLAMA_BASE_URL` to the Windows host IP because WSL loopback may not reach the Windows-bound service
+
+The WSL-local smoke lane is intentionally on-demand. The harness will spin up `ollama serve` only when needed and stop it when the test exits, so it does not consume resources between runs.
+
+Use the real-Ollama lane for smoke validation of local-model behavior. Keep the embedded fake-provider lane as the default regression baseline because it is deterministic and less brittle.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HARNESS_PORT` | `3000` | Web channel port to use |
 | `HARNESS_TOKEN` | auto-generated | Bearer auth token |
+| `HARNESS_USE_REAL_OLLAMA` | `0` | When `1`, use a real reachable Ollama endpoint instead of the embedded fake provider |
+| `HARNESS_AGENT_ISOLATION` | `0` | When `1`, run the harness with brokered worker isolation enabled so automation compiler routing is exercised in the worker path |
+| `HARNESS_OLLAMA_BASE_URL` | auto-detect | Base URL for a reachable Ollama instance, for example `http://192.168.x.x:11434` |
+| `HARNESS_OLLAMA_MODEL` | first available model | Specific Ollama model name to use for the real-model harness lane |
+| `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
+| `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when using WSL-local autostart |
+| `HARNESS_AUTOSTART_LOCAL_OLLAMA` | `1` | When `1`, the harness may start and stop a WSL-local `ollama serve` process for loopback real-model runs |
 
 ## What It Tests
 
@@ -166,6 +229,16 @@ This method is fast, removes dependencies on cross-platform shell quirks, and ca
 **Shell Injection Defense** — Sends a command with `&&` control operator. Validates the argument sanitizer rejects it even though the base command might be allowlisted.
 
 **Output Guardian** — Requests a sensitive file read. Validates the agent responds without leaking raw secrets.
+
+### Contextual Security Uplift Harness (`test-contextual-security-uplifts.mjs`, ~20 assertions)
+
+This focused Node harness validates the shipped contextual controls through the same REST surfaces used by the product:
+
+- quarantined remote/tool content is not reinjected raw into the planner
+- low-trust or remote-derived `memory_save` calls do not silently become active memory
+- approvals stay bound to the originating principal context
+- scheduled tasks fail closed on approval expiry or scope drift and auto-pause after repeated failures
+- broken-tool loops are cut off by per-chain budgets before they can continue spending
 
 ### Basic Conversation (4 tests)
 - Greeting response is non-empty
@@ -748,6 +821,23 @@ After ~80K tokens of tool results, compaction should kick in (oldest results sum
 **Connection refused** — Web channel not enabled. Ensure config has `channels.web.enabled: true`.
 
 **Auth tests cause 429 on later tests** — The brute-force test intentionally triggers rate limiting. A 5-second cooldown between sections helps, but if your IP remains blocked (5-minute window), later tests may show SKIP. This is expected behavior — the rate limiter is working correctly.
+
+**Automation request routed incorrectly** — Start with the automation compiler, not the generic agent loop.
+- First inspect `src/runtime/automation-authoring.ts` for intent language, shape selection, and constraint extraction.
+- Then inspect `src/runtime/automation-prerouter.ts` to confirm the request is intercepted before generic tool use.
+- If the failure only appears with brokered isolation or the web UI, inspect `src/supervisor/worker-manager.ts` first and `src/worker/worker-session.ts` second.
+- Only look at `src/runtime/message-router.ts` when the problem is model routing (`local` vs `external`), not automation object selection.
+
+Typical symptoms that should send you to the compiler/pre-router first:
+- the assistant creates a script or code file instead of a native automation
+- the assistant calls `find_tools`, `shell_safe`, `fs_write`, or `code_create` for a request that should become `task_create` or `workflow_upsert`
+- a repeated automation authoring request creates a duplicate task instead of updating the existing one
+- phrases like `built-in tools only` or `do not create scripts/code files` are ignored
+
+When fixing one of these cases:
+- add the exact prompt family to the relevant unit tests
+- rerun `scripts/test-automation-authoring-compiler.mjs`
+- rerun the brokered lane with `HARNESS_AGENT_ISOLATION=1` if the issue appeared in the web UI
 
 ## Test Results
 

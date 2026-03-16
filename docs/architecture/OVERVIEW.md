@@ -6,6 +6,14 @@ GuardianAgent is a **security-first, event-driven AI agent orchestration system*
 
 The Runtime controls every chokepoint where data flows in or out of an agent. The built-in chat/planner LLM loop is isolated into a brokered worker by default. Supervisor-side framework code still owns admission, audit, approvals, and tool execution. Agents cannot bypass the four-layer defense system that protects users from credential leaks, prompt injection, capability escalation, and data exfiltration.
 
+Current runtime hardening also treats content trust and authority as first-class execution inputs. Remote/tool output is classified before reinjection, durable memory carries trust/quarantine state, scheduled automations run with bounded authority, and broken tools are stopped by per-chain runaway budgets before they can overspend.
+
+Conversational automation creation is now compiler-driven. Clear automation requests are turned into a typed `AutomationIR`, repaired and validated, and only then compiled into native Guardian control-plane mutations before the generic chat/tool loop runs. That means "create a Guardian workflow" resolves to `workflow_upsert` / `task_create` instead of drifting into ad hoc scripts or file writes. This compiler-first interception is shared by both the direct runtime path and the brokered worker path, so agent isolation does not change authoring behavior.
+
+Deterministic workflows are also no longer just stored step arrays at execution time. The playbook runtime now compiles them into a graph-backed run model with stable `runId`s, node-level orchestration events, and checkpointed state transitions. This gives Guardian a cleaner foundation for approval interrupts, richer run history, and future replay-safe workflow execution.
+
+Multi-agent delegation is now contract-bound instead of implicit. Orchestration steps can declare handoff contracts, and runtime dispatch validates those contracts, filters context, preserves taint deliberately, and blocks approval-gated or capability-invalid handoffs before the target agent executes. Scheduled/background execution also keeps a per-task active-run lock so the same automation cannot overlap itself and duplicate side effects.
+
 Core principles:
 - **Actively protect users from security mistakes** rather than providing opt-in guardrails
 - **Mandatory enforcement at Runtime chokepoints** — not advisory checks that agents opt into
@@ -77,7 +85,7 @@ Current extensions:
 │  ║  Layer 3: OUTPUT (inline, after agent)                         ║  │
 │  ║  ┌───────────────┐  ┌───────────────┐                         ║  │
 │  ║  │ OutputGuardian │  │ Event Payload │                         ║  │
-│  ║  │ (responses)    │  │ Scanner       │                         ║  │
+│  ║  │ (trust + redact)│ │ Scanner       │                         ║  │
 │  ║  └───────────────┘  └───────────────┘                         ║  │
 │  ║                                                                ║  │
 │  ║  Layer 4: SENTINEL AUDIT (retrospective, scheduled/on-demand)  ║  │
@@ -119,6 +127,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Memory (src/runtime/conversation.ts) — SQLite-backed conversation/session persistence
 ├── Analytics (src/runtime/analytics.ts) — SQLite-backed channel interaction telemetry
 ├── Quick Actions (src/quick-actions.ts) — structured assistant workflows
+├── Automation Authoring Compiler (src/runtime/automation-authoring.ts) — natural-language automation intent -> native task/workflow compile
 ├── Skills (src/skills/)                — native procedural knowledge, templates, and references
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
 │   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
@@ -134,7 +143,7 @@ Runtime (src/runtime/runtime.ts)
 │   ├── shell-validator.ts            — POSIX shell tokenizer + command validation (Layer 1)
 │   ├── shell-command-controller.ts   — shell command admission controller (Layer 1)
 │   ├── ssrf-protection.ts           — centralized SSRF protection + SsrfController (Layer 1)
-│   ├── output-guardian.ts             — response redaction (Layer 3)
+│   ├── output-guardian.ts             — trust classification, quarantined reinjection suppression, and response redaction (Layer 3)
 │   ├── audit-log.ts                   — structured event logging (Layer 2 & 4)
 │   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 4)
 │   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
@@ -152,10 +161,10 @@ Runtime (src/runtime/runtime.ts)
 │   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
 │   └── runner.ts                       — test runner with real Runtime dispatch
 ├── Sentinel (src/agents/sentinel.ts)   — legacy agent (kept for test compat, see src/runtime/sentinel.ts)
-├── Budget (src/runtime/budget.ts)      — compute budget tracking
+├── Budget (src/runtime/budget.ts)      — compute budget tracking, schedule caps, and budget exhaustion decisions
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
 ├── Scheduler (src/runtime/scheduler.ts)— cron scheduling (croner)
-├── ScheduledTasks (src/runtime/scheduled-tasks.ts) — unified CRUD scheduling for tools, playbooks, and scheduled assistant turns
+├── ScheduledTasks (src/runtime/scheduled-tasks.ts) — unified CRUD scheduling with approval expiry, scope drift checks, budgets, and auto-pause
 └── Channels (src/channels/)            — CLI, Telegram, Web adapters
 ```
 
@@ -198,7 +207,7 @@ This gives us:
 - **Natural error handling** via try/catch and the runtime's error pipeline
 - **Budget enforcement** via wall-clock tracking per invocation
 - **Lifecycle management** via explicit state machine
-- **Mandatory security** — the Runtime checks every message before it reaches the agent, scans every LLM response via GuardedLLMProvider, scans every outbound response before it reaches the user, and scans every inter-agent event payload before dispatch
+- **Mandatory security** — the Runtime checks every message before it reaches the agent, scans every LLM response via GuardedLLMProvider, classifies tool output before reinjection, scans every outbound response before it reaches the user, and scans every inter-agent event payload before dispatch
 
 ### Orchestration Agents
 
@@ -366,6 +375,7 @@ The current subprocess sandbox layer now uses an explicit availability model:
 - fail closed for risky tool classes in strict mode
 - surface warnings and disable reasons in CLI, web, and chat paths
 - degraded hosts use `workspace-write` profile (not `full-access`) for brokered workers
+- degraded Linux hosts do not apply a virtual-memory `ulimit` to long-lived brokered Node workers, because that cap destabilizes worker startup without adding meaningful filesystem isolation
 
 Next stage:
 
@@ -441,8 +451,10 @@ User Message
 ┌──────────────────────────────┐
 │ LAYER 3: Output Guardian     │
 │                              │
+│ Classify tool-result trust   │──▶ Trusted / low_trust / quarantined
 │ Scan response for secrets    │──▶ Redact with [REDACTED]
-│ Log to AuditLog              │    (configurable: redact or block)
+│ Suppress raw quarantined     │    reinjection into planner
+│ Log to AuditLog              │    (configurable redact/block paths)
 └──────────┬───────────────────┘
            │
            ▼
@@ -465,9 +477,12 @@ All security enforcement is mandatory. The Runtime controls every path where dat
 - **Message input** — Guardian pipeline runs before the agent sees the message
 - **Chat agent execution** — The built-in chat/planner loop runs in a brokered worker by default; it reaches tools and approvals only through broker RPC
 - **LLM access** — Agents receive a `GuardedLLMProvider`, not the raw provider. Every LLM response is scanned for secrets and tracked for token usage automatically.
-- **Response output** — After the agent responds, the Runtime scans for secrets and redacts before the response reaches anyone
+- **Tool execution** — `ToolExecutor` consumes trust/principal context, blocks quarantined-context mutation, approval-gates tainted mutation, and stops runaway chains before broken tools can overspend
+- **Response output** — After the agent responds, the Runtime scans for secrets, classifies tool-result trust, and redacts before the response reaches anyone
 - **Event emission** — `ctx.emit()` scans payloads for secrets before dispatch
-- **Resource limits** — Concurrent limits, queue depth, token rate limits, and wall-clock budgets enforced before every invocation
+- **Memory persistence** — durable memory stores trust, provenance, and quarantine state; inactive entries stay out of default planner context
+- **Automation execution** — scheduled tasks require still-valid approval authority, matching scope hash, and available budget before each run
+- **Resource limits** — Concurrent limits, queue depth, token rate limits, per-chain tool-call budgets, and wall-clock budgets enforced before every invocation
 - **Context immutability** — Agent contexts are frozen. Agents cannot modify their own capabilities.
 
 There is no default `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), and returning a response (scanned). For built-in chat execution, these interactions occur inside the worker-backed brokered path.

@@ -18,6 +18,26 @@ export interface ComplexityResult {
   tier: 'local' | 'external';
 }
 
+/** Automation/orchestration intent strength, 0-1. Exported for tier-routing overrides. */
+export function scoreAutomationOrchestration(text: string): number {
+  if (!text || !text.trim()) return 0;
+
+  const lower = text.trim().toLowerCase();
+  const markers = [
+    /\b(automation|automate|workflow|playbook|pipeline|scheduled task|schedule|cron)\b/.test(lower),
+    /\b(daily|weekly|weekday|hourly|every day|every weekday|every monday|every \d+ minutes)\b/.test(lower),
+    /\b(csv|spreadsheet|workspace|dashboard|report|markdown|summary report)\b/.test(lower),
+    /\b(research|enrich|score|classify|triage|monitor|draft|summari[sz]e|compare|diff|scan)\b/.test(lower),
+    /\b(read|pull|check|review|write|save|post|create).*\b(csv|report|summary|dashboard|workspace)\b/.test(lower),
+    /\b(high[- ]priority inbox|approval before sending|asks? for approval|pauses? for approval)\b/.test(lower),
+  ].filter(Boolean).length;
+
+  if (markers <= 1) return 0;
+  if (markers === 2) return 0.55;
+  if (markers === 3) return 0.8;
+  return 1.0;
+}
+
 /** Deep-reasoning question words. */
 const DEEP_QUESTIONS = /\b(why|how|explain|compare|analyze|analyse|evaluate|contrast|assess|justify|critique)\b/gi;
 

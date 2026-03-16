@@ -120,6 +120,8 @@ describe('OutputGuardian', () => {
       expect(sanitized.output.content).toContain('[PII:DOB_REDACTED]');
       expect(result.threats.some((threat) => threat.includes('secret match'))).toBe(true);
       expect(result.threats.some((threat) => threat.includes('PII match'))).toBe(true);
+      expect(result.trustLevel).toBe('low_trust');
+      expect(result.allowMemoryWrite).toBe(false);
     });
 
     it('flags prompt injection and strips invisible Unicode', () => {
@@ -134,6 +136,9 @@ describe('OutputGuardian', () => {
       expect(sanitized.content).not.toContain('\u200b');
       expect(result.threats.some((threat) => threat.includes('invisible Unicode'))).toBe(true);
       expect(result.threats.some((threat) => threat.includes('prompt injection'))).toBe(true);
+      expect(result.trustLevel).toBe('quarantined');
+      expect(result.allowPlannerRawContent).toBe(false);
+      expect(result.taintReasons).toContain('prompt_injection_signals');
     });
 
     it('skips PII redaction for local providers when providerScope is external', () => {
@@ -147,6 +152,8 @@ describe('OutputGuardian', () => {
 
       expect((localResult.sanitized as { content: string }).content).toContain('jane@example.com');
       expect((externalResult.sanitized as { content: string }).content).toContain('[PII:EMAIL_REDACTED]');
+      expect(localResult.trustLevel).toBe('trusted');
+      expect(externalResult.trustLevel).toBe('low_trust');
     });
   });
 });

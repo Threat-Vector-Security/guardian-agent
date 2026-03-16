@@ -17,6 +17,10 @@ import type {
 } from '../config/types.js';
 import type { ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import type { AutomationPromotedFindingRef } from './automation-output.js';
+import { GraphRunner } from './graph-runner.js';
+import type { GraphNodeExecutionResult, PlaybookGraphDefinition } from './graph-types.js';
+import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
+import { InMemoryRunStateStore } from './run-state-store.js';
 
 const MAX_RUN_HISTORY = 200;
 
@@ -37,6 +41,8 @@ export interface PlaybookStepRunResult {
 
 export interface PlaybookRunRecord {
   id: string;
+  runId: string;
+  graphId: string;
   playbookId: string;
   playbookName: string;
   createdAt: number;
@@ -51,6 +57,7 @@ export interface PlaybookRunRecord {
   promotedFindings?: AutomationPromotedFindingRef[];
   requestedBy?: string;
   origin: ToolExecutionRequest['origin'];
+  events: OrchestrationRunEvent[];
 }
 
 export interface ConnectorFrameworkState {
@@ -120,6 +127,7 @@ interface ConnectorPlaybookServiceOptions {
   /** Optional output scanner (e.g. OutputGuardian) for instruction step responses. */
   scanOutput?: (text: string) => Promise<string>;
   now?: () => number;
+  runStateStore?: InMemoryRunStateStore<PlaybookStepRunResult>;
 }
 
 export class ConnectorPlaybookService {
@@ -128,6 +136,7 @@ export class ConnectorPlaybookService {
   private readonly runInstruction?: RunInstructionFn;
   private readonly scanOutput?: (text: string) => Promise<string>;
   private readonly now: () => number;
+  private readonly graphRunner: GraphRunner<PlaybookStepRunResult>;
   private readonly runs: PlaybookRunRecord[] = [];
   private readonly dryRunQualified = new Set<string>();
 
@@ -137,6 +146,10 @@ export class ConnectorPlaybookService {
     this.runInstruction = options.runInstruction;
     this.scanOutput = options.scanOutput;
     this.now = options.now ?? Date.now;
+    this.graphRunner = new GraphRunner<PlaybookStepRunResult>({
+      now: this.now,
+      store: options.runStateStore ?? new InMemoryRunStateStore<PlaybookStepRunResult>(),
+    });
   }
 
   getConfig(): AssistantConnectorsConfig {
@@ -167,6 +180,7 @@ export class ConnectorPlaybookService {
       runs: this.runs.slice(0, Math.max(1, limitRuns)).map((run) => ({
         ...run,
         steps: run.steps.map((step) => ({ ...step })),
+        events: run.events.map((event) => ({ ...event })),
       })),
       playbooksConfig: {
         enabled: this.config.playbooks.enabled,
@@ -289,33 +303,49 @@ export class ConnectorPlaybookService {
     }
 
     const startedAt = this.now();
-    const steps = playbook.mode === 'parallel'
-      ? await this.runParallel(playbook.steps, input)
-      : await this.runSequential(playbook.steps, input);
-
-    const hasPending = steps.some((step) => step.status === 'pending_approval');
-    const hasHardFailure = steps.some((step) => {
-      if (step.status !== 'failed') return false;
-      const def = playbook.steps.find((item) => item.id === step.stepId);
-      return !def?.continueOnError;
+    const graph = compilePlaybookToGraph(playbook);
+    const graphResult = await this.graphRunner.run(graph, {
+      executeStep: async (node, priorResults) => {
+        const result = await this.executeStep(node.step, input, priorResults);
+        return {
+          status: result.status,
+          results: [result],
+          message: result.message,
+        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
+      },
+      executeParallel: async (node, priorResults) => {
+        const results = await Promise.all(node.steps.map((step) => this.executeStep(step, input, priorResults)));
+        const hasPending = results.some((result) => result.status === 'pending_approval');
+        const hasHardFailure = results.some((result) => {
+          if (result.status !== 'failed') return false;
+          const def = node.steps.find((item) => item.id === result.stepId);
+          return !def?.continueOnError;
+        });
+        return {
+          status: hasPending ? 'pending_approval' : hasHardFailure ? 'failed' : 'succeeded',
+          results,
+          message: hasPending
+            ? `Playbook '${playbook.id}' paused for approval.`
+            : hasHardFailure
+              ? `Playbook '${playbook.id}' completed with failures.`
+              : `Playbook '${playbook.id}' completed successfully.`,
+        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
+      },
     });
-    const hasFailure = steps.some((step) => step.status === 'failed');
 
-    const status: PlaybookRunStatus = hasPending
+    const steps = graphResult.results;
+    const status: PlaybookRunStatus = graphResult.status === 'awaiting_approval'
       ? 'awaiting_approval'
-      : hasHardFailure || hasFailure
+      : graphResult.status === 'failed'
         ? 'failed'
         : 'succeeded';
-
-    const message = hasPending
-      ? `Playbook '${playbook.id}' paused for approval.`
-      : status === 'failed'
-        ? `Playbook '${playbook.id}' completed with failures.`
-        : `Playbook '${playbook.id}' completed successfully.`;
+    const message = graphResult.message;
 
     const completedAt = this.now();
     const run: PlaybookRunRecord = {
       id: randomUUID(),
+      runId: graphResult.runId,
+      graphId: graphResult.graphId,
       playbookId: playbook.id,
       playbookName: playbook.name,
       createdAt: startedAt,
@@ -329,6 +359,7 @@ export class ConnectorPlaybookService {
       outputHandling: playbook.outputHandling,
       requestedBy: input.requestedBy,
       origin: input.origin,
+      events: graphResult.events.map((event) => ({ ...event })),
     };
     this.recordRun(run);
 
@@ -342,53 +373,6 @@ export class ConnectorPlaybookService {
       message,
       run,
     };
-  }
-
-  private async runSequential(
-    steps: AssistantConnectorPlaybookStepDefinition[],
-    input: ConnectorPlaybookRunInput,
-  ): Promise<PlaybookStepRunResult[]> {
-    const results: PlaybookStepRunResult[] = [];
-    for (const step of steps) {
-      const result = await this.executeStep(step, input, results);
-      results.push(result);
-
-      if (result.status === 'pending_approval') {
-        break;
-      }
-      if (result.status === 'failed' && !step.continueOnError) {
-        break;
-      }
-    }
-    return results;
-  }
-
-  private async runParallel(
-    steps: AssistantConnectorPlaybookStepDefinition[],
-    input: ConnectorPlaybookRunInput,
-  ): Promise<PlaybookStepRunResult[]> {
-    const queue = [...steps];
-    const limit = Math.max(1, this.config.playbooks.maxParallelSteps);
-    const workers: Promise<void>[] = [];
-    const results: PlaybookStepRunResult[] = [];
-
-    for (let i = 0; i < limit; i += 1) {
-      workers.push((async () => {
-        while (queue.length > 0) {
-          const step = queue.shift();
-          if (!step) return;
-          const result = await this.executeStep(step, input);
-          results.push(result);
-        }
-      })());
-    }
-
-    await Promise.all(workers);
-
-    // Return in definition order for deterministic UX.
-    return steps
-      .map((step) => results.find((result) => result.stepId === step.id))
-      .filter((result): result is PlaybookStepRunResult => !!result);
   }
 
   private async executeStep(
@@ -420,7 +404,9 @@ export class ConnectorPlaybookService {
       };
     }
 
-    const args = isRecord(step.args) ? step.args : {};
+    const args = isRecord(step.args)
+      ? resolveStepTemplates(step.args, priorResults ?? [])
+      : {};
     if (pack) {
       const capability = inferCapability(step.toolName);
       if (!capabilityAllowed(capability, pack.allowedCapabilities)) {
@@ -658,10 +644,13 @@ export class ConnectorPlaybookService {
     reason: string,
   ): ConnectorPlaybookRunResult {
     const now = this.now();
+    const runId = randomUUID();
     const run: PlaybookRunRecord = {
       id: randomUUID(),
       playbookId: playbook?.id ?? input.playbookId,
       playbookName: playbook?.name ?? input.playbookId,
+      runId,
+      graphId: playbook?.id ?? input.playbookId,
       createdAt: now,
       startedAt: now,
       completedAt: now,
@@ -673,6 +662,11 @@ export class ConnectorPlaybookService {
       outputHandling: playbook?.outputHandling,
       requestedBy: input.requestedBy,
       origin: input.origin,
+      events: [
+        createRunEvent(runId, 'run_failed', now, {
+          message: reason,
+        }),
+      ],
     };
     this.recordRun(run);
     return { success: false, status: 'failed', message: reason, run };
@@ -684,6 +678,41 @@ export class ConnectorPlaybookService {
       this.runs.pop();
     }
   }
+}
+
+function compilePlaybookToGraph(playbook: AssistantConnectorPlaybookDefinition): PlaybookGraphDefinition {
+  const graphId = `${playbook.id}:v1`;
+  if (playbook.mode === 'parallel') {
+    return {
+      id: graphId,
+      name: playbook.name,
+      playbookId: playbook.id,
+      entryNodeId: 'start',
+      nodes: [
+        { id: 'start', type: 'start', next: 'parallel' },
+        { id: 'parallel', type: 'parallel', steps: playbook.steps.map((step) => ({ ...step })), next: 'end' },
+        { id: 'end', type: 'end' },
+      ],
+    };
+  }
+
+  const nodes: PlaybookGraphDefinition['nodes'] = [{ id: 'start', type: 'start', next: playbook.steps[0]?.id || 'end' }];
+  for (const [index, step] of playbook.steps.entries()) {
+    nodes.push({
+      id: step.id,
+      type: 'step',
+      step: { ...step },
+      next: playbook.steps[index + 1]?.id || 'end',
+    });
+  }
+  nodes.push({ id: 'end', type: 'end' });
+  return {
+    id: graphId,
+    name: playbook.name,
+    playbookId: playbook.id,
+    entryNodeId: 'start',
+    nodes,
+  };
 }
 
 function capabilityAllowed(capability: string, allowedCapabilities: string[]): boolean {
@@ -845,6 +874,55 @@ function cloneStep(step: AssistantConnectorPlaybookStepDefinition): AssistantCon
     ...step,
     args: step.args ? { ...step.args } : undefined,
   };
+}
+
+function resolveStepTemplates(
+  value: Record<string, unknown>,
+  priorResults: PlaybookStepRunResult[],
+): Record<string, unknown> {
+  return resolveTemplateValue(value, priorResults) as Record<string, unknown>;
+}
+
+function resolveTemplateValue(value: unknown, priorResults: PlaybookStepRunResult[]): unknown {
+  if (typeof value === 'string') {
+    return replaceStepPlaceholders(value, priorResults);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveTemplateValue(entry, priorResults));
+  }
+  if (isRecord(value)) {
+    const resolved: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      resolved[key] = resolveTemplateValue(entry, priorResults);
+    }
+    return resolved;
+  }
+  return value;
+}
+
+function replaceStepPlaceholders(template: string, priorResults: PlaybookStepRunResult[]): unknown {
+  const exactMatch = template.match(/^\$\{([^.}]+)\.(output|message|status)\}$/);
+  if (exactMatch) {
+    return resolveStepPlaceholderValue(exactMatch[1], exactMatch[2], priorResults);
+  }
+
+  return template.replace(/\$\{([^.}]+)\.(output|message|status)\}/g, (_match, stepId: string, field: string) => {
+    const resolved = resolveStepPlaceholderValue(stepId, field, priorResults);
+    return typeof resolved === 'string' ? resolved : formatStepOutput(resolved);
+  });
+}
+
+function resolveStepPlaceholderValue(
+  stepId: string,
+  field: string,
+  priorResults: PlaybookStepRunResult[],
+): unknown {
+  const step = priorResults.find((result) => result.stepId === stepId);
+  if (!step) return '';
+  if (field === 'output') return step.output ?? '';
+  if (field === 'message') return step.message;
+  if (field === 'status') return step.status;
+  return '';
 }
 
 function formatStepOutput(output: unknown): string {

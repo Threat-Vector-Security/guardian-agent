@@ -6,6 +6,8 @@ export interface PendingApprovalSummary {
 const WEAK_PENDING_PATTERNS = [
   /^\s*$/i,
   /^i need your approval before proceeding\.?$/i,
+  /^this action needs approval before i can continue\.?$/i,
+  /^this action needs your approval\. the approval ui is shown to the user automatically\.?$/i,
   /\btool is (?:un)?available\b/i,
   /\bcorrect arguments\b/i,
   /\baction and value\b/i,
@@ -54,6 +56,12 @@ function describePolicyUpdate(preview: string): string | null {
       return `allow domain ${value}`;
     case 'remove_domain':
       return `remove domain ${value}`;
+    case 'set_tool_policy_auto':
+      return `set tool policy ${value} to auto-approve`;
+    case 'set_tool_policy_manual':
+      return `set tool policy ${value} to manual approval`;
+    case 'set_tool_policy_deny':
+      return `set tool policy ${value} to deny`;
     default:
       return null;
   }
@@ -132,4 +140,10 @@ export function formatPendingApprovalMessage(approvals: readonly PendingApproval
 export function shouldUseStructuredPendingApprovalMessage(content: string | undefined): boolean {
   const normalized = (content ?? '').trim();
   return WEAK_PENDING_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function isPhantomPendingApprovalMessage(content: string | undefined): boolean {
+  const normalized = (content ?? '').trim();
+  return /^this action needs approval before i can continue\.?$/i.test(normalized)
+    || /^this action needs your approval\. the approval ui is shown to the user automatically\.?$/i.test(normalized);
 }

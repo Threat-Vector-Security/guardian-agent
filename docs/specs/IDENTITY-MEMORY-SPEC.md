@@ -9,6 +9,8 @@ Unify user identity across channels and persist conversation memory with session
   - `channel_user`: identities are isolated by channel user IDs
 - Optional aliases map channel IDs to a canonical ID:
   - `assistant.identity.aliases["telegram:12345"] = "owner"`
+- Authorization-sensitive flows now also carry a separate `principalId` / `principalRole`.
+- Today this is still a single-user-oriented model; multi-user tenancy is future work. The principal surface exists now so approvals, schedules, and tool actions are not forced to trust conversational `userId` alone.
 
 ## Conversation Storage
 - SQLite-backed persistence in `ConversationService`
@@ -21,6 +23,13 @@ Unify user identity across channels and persist conversation memory with session
   - built-in `local` and `external` chat agents share one logical conversation/memory state key
   - switching between `auto`, `local-only`, and `external-only` must not fork chat history or knowledge-base memory
   - distinct configured agents still retain separate conversation state unless deliberately unified
+
+## Knowledge Base Trust Model
+
+- Agent knowledge-base content is stored as active markdown plus a structured sidecar index
+- Each entry stores source, trust level, status, provenance, and creating principal
+- Quarantined/expired/rejected entries do not enter normal planner context
+- Remote-derived memory writes default to quarantine rather than active durable memory
 
 ## SQLite Protection & Monitoring
 - Directory permissions are hardened toward `0700`

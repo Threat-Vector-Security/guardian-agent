@@ -129,14 +129,34 @@ export class BrokerServer {
             toolName,
             args,
             agentId: token.agentId,
-            userId: token.authorizedBy,
+            userId: typeof request.params.userId === 'string' ? request.params.userId : token.authorizedBy,
+            principalId: typeof request.params.principalId === 'string' ? request.params.principalId : token.authorizedBy,
+            principalRole: request.params.principalRole === 'approver'
+              ? 'approver'
+              : request.params.principalRole === 'viewer'
+                ? 'viewer'
+                : request.params.principalRole === 'operator'
+                  ? 'operator'
+                  : 'owner',
             channel: 'broker',
             requestId,
+            contentTrustLevel: request.params.contentTrustLevel === 'quarantined'
+              ? 'quarantined'
+              : request.params.contentTrustLevel === 'low_trust'
+                ? 'low_trust'
+                : 'trusted',
+            taintReasons: Array.isArray(request.params.taintReasons)
+              ? request.params.taintReasons.filter((value): value is string => typeof value === 'string')
+              : undefined,
+            derivedFromTaintedContent: request.params.derivedFromTaintedContent === true,
+            scheduleId: typeof request.params.scheduleId === 'string' ? request.params.scheduleId : undefined,
           };
 
           const toolDefinition = this.tools.getToolDefinition(toolName);
           const runResponse = await this.tools.runTool(executionRequest);
           const provenance = assignProvenance(toolName, toolDefinition?.category);
+          const providerKind = provenance.source === 'remote' ? 'external' : 'local';
+          const scannedOutput = this.runtime.outputGuardian.scanToolResult(toolName, runResponse, { providerKind });
           const approvalSummary = runResponse.approvalId
             ? this.tools.getApprovalSummaries([runResponse.approvalId]).get(runResponse.approvalId)
             : undefined;
@@ -156,7 +176,23 @@ export class BrokerServer {
             },
           });
 
-          result = { ...runResponse, provenance, approvalSummary };
+          result = {
+            ...runResponse,
+            output: scannedOutput.allowPlannerRawContent
+              ? scannedOutput.sanitized
+              : {
+                quarantined: true,
+                trustLevel: scannedOutput.trustLevel,
+                taintReasons: scannedOutput.taintReasons,
+                preview: typeof (runResponse.output as Record<string, unknown> | undefined)?.message === 'string'
+                  ? String((runResponse.output as Record<string, unknown>).message)
+                  : undefined,
+              },
+            provenance,
+            approvalSummary,
+            trustLevel: scannedOutput.trustLevel,
+            taintReasons: scannedOutput.taintReasons,
+          };
           break;
         }
 
@@ -164,8 +200,15 @@ export class BrokerServer {
           const approvalId = String(request.params.approvalId ?? '');
           const decision = request.params.decision === 'denied' ? 'denied' : 'approved';
           const actor = String(request.params.actor ?? token.authorizedBy);
+          const actorRole = request.params.actorRole === 'approver'
+            ? 'approver'
+            : request.params.actorRole === 'viewer'
+              ? 'viewer'
+              : request.params.actorRole === 'operator'
+                ? 'operator'
+                : 'owner';
           const reason = typeof request.params.reason === 'string' ? request.params.reason : undefined;
-          const decided = await this.tools.decideApproval(approvalId, decision, actor, reason);
+          const decided = await this.tools.decideApproval(approvalId, decision, actor, actorRole, reason);
           result = {
             success: decided.success,
             message: decided.message,

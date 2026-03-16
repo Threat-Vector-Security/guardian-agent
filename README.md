@@ -7,7 +7,7 @@
 <h3 align="center">Security-first AI agent orchestration.</h3>
 
 <p align="center">
-  An event-driven AI agent system with a four-layer security defense that enforces capabilities, scans for secrets and PII, blocks sensitive paths, and evaluates tool actions via inline LLM — agents cannot bypass it.
+  An event-driven AI agent system with four-layer security, contextual trust enforcement, trust-aware memory, and bounded automation authority. Inputs, tool results, approvals, memory writes, and scheduled execution all pass through runtime chokepoints the agent cannot bypass.
 </p>
 
 <p align="center">
@@ -100,6 +100,9 @@
 
 **Agent Orchestration**
 - Four orchestration primitives — Sequential, Parallel, Loop, and Conditional agents
+- Native automation authoring compiler — conversational automation requests now flow through a typed `AutomationIR`, repair/validation, and then compile into Guardian workflows or scheduled agent tasks before the generic chat/tool loop, and this compiler-first route is enforced in both direct and brokered worker execution paths
+- Graph-backed workflow runtime — deterministic playbooks execute as checkpointed node graphs with run ids and orchestration events instead of only ad hoc step lists
+- Runtime-enforced agent handoffs — multi-agent delegation can carry explicit handoff contracts for context filtering, taint preservation, and capability checks
 - Per-step retry with exponential backoff and fail-branch error handling
 - Inter-agent state passing through SharedState
 - SOUL personality system with configurable profiles
@@ -108,7 +111,7 @@
 - Four-layer defense — admission controls, inline LLM action evaluation, output leak prevention, and retrospective audit
 - Brokered agent isolation — the chat/planner loop runs in a separate worker process by default
 - Guardian admission pipeline — capabilities, secret/PII scanning, path blocking, SSRF protection, prompt injection detection, rate limiting
-- Policy-as-Code engine with shadow mode, hot-reload, and declarative JSON rules
+- Contextual policy enforcement — principal-bound approvals, taint-aware mutation gating, and fail-closed schedule authority
 - Cryptographic audit trail — SHA-256 hash-chained, tamper-evident event log
 
 **Tools & Integrations**
@@ -127,14 +130,16 @@
 
 **Memory & Search**
 - SQLite-backed conversation memory with FTS5 full-text search
-- Per-agent knowledge base with automatic memory flush
+- Trust-aware per-agent knowledge base with markdown + sidecar metadata, quarantine states, and automatic memory flush
 - Native document search — hybrid BM25 keyword + vector similarity over directories, git repos, URLs, and files
 
 **Monitoring & Operations**
 - Host workstation monitoring — process, persistence, path, network, and firewall drift detection
 - Gateway firewall monitoring for edge devices (OPNsense, pfSense, UniFi)
 - Security alert routing — CLI, web, and Telegram delivery with severity and event-type filters
-- Scheduled task management with presets, run history, and EventBus integration
+- Scheduled task management with presets, run history, approval expiry, scope drift detection, run/token caps, and auto-pause
+- Scheduled execution durability — per-task active-run locks prevent overlapping self-runs from duplicating side effects
+- Readiness-aware automation creation — save-time validation blocks broken automations, bounded workspace output writes are treated as covered by the approved automation definition, and fixable policy blockers can now be turned into chained approval prompts and retried automatically
 - Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
 - SQLite-backed analytics and usage tracking
 
@@ -149,10 +154,10 @@ GuardianAgent enforces security at the Runtime level — agents cannot bypass it
 | **1 — Admission** | Before the agent sees input | Prompt injection detection, rate limiting, capability checks, secret/PII scanning, path blocking, SSRF protection |
 | **1.5 — Process Sandbox** | During tool execution | OS-level isolation via bwrap namespaces (Linux), native helper (Windows), or ulimit/env hardening fallback |
 | **2 — Guardian Agent** | Before tool execution | Inline LLM evaluates every non-read-only tool action; blocks high/critical risk. Fail-closed by default |
-| **3 — Output Guardian** | After execution, before delivery | Scans all LLM responses and event payloads for secrets; redacts or blocks before output reaches anyone |
+| **3 — Output Guardian** | After execution, before delivery or reinjection | Scans LLM responses and tool results, classifies trust (`trusted` / `low_trust` / `quarantined`), redacts secrets/PII, and can suppress raw reinjection |
 | **4 — Sentinel Audit** | Retrospective (scheduled or on-demand) | Analyzes audit log for anomaly patterns: capability probing, volume spikes, repeated secret detections, error storms |
 
-The built-in chat/planner loop runs in a **brokered worker process** with no network access. Tools, approvals, and LLM API calls are mediated through broker RPC.
+The built-in chat/planner loop runs in a **brokered worker process** with no network access. Tools, approvals, trust metadata, and LLM API calls are mediated through broker RPC.
 
 For the full security architecture, threat model, and configuration details, see [SECURITY.md](SECURITY.md).
 
@@ -189,7 +194,7 @@ After startup:
 
 1. **Open the web UI** and go to the **Configuration Center** (`#/config`)
 2. **Add your LLM provider** — select Ollama for local models, or add an API key for Anthropic/OpenAI/etc.
-3. **Review tool policy** — defaults to `approve_by_policy` (read-only tools auto-approved, mutating actions require approval)
+3. **Review tool policy** — defaults to `approve_by_policy` (read-only tools auto-approved, mutating actions require approval, tainted remote context cannot directly drive mutation)
 4. **Enable optional channels** — Telegram bot setup is in Settings > Telegram Channel
 5. **Set web auth** — a secure random token is generated by default; customize in Settings if needed
 
@@ -208,13 +213,19 @@ GuardianAgent is accessible through three channels:
 **What you can do:**
 - Chat with the built-in AI assistant
 - Run guarded filesystem, web, network, and automation tasks
-- Create and schedule automations (single-tool and multi-step pipelines)
+- Create and schedule automations with native Guardian objects — open-ended recurring work defaults to scheduled agent tasks, fixed pipelines use workflows
 - Review audit logs, security alerts, and threat intelligence
 - Monitor host and gateway security posture
 - Search across documents, git repos, and web content
 - Manage connectors, playbooks, and scheduled jobs
 
-**Approvals and safety:** Depending on the tool policy and risk level, actions may run automatically, wait for your approval, or be denied before execution. Approval prompts appear natively in all channels (buttons in web/Telegram, interactive prompt in CLI).
+**Approvals and safety:** Depending on the tool policy, content trust level, and risk level, actions may run automatically, wait for your approval, or be denied before execution. Approvals are bound to the current principal, memory writes from low-trust context are quarantined by default, and scheduled automations run only while their approval window, scope hash, and budgets remain valid.
+
+For scheduled automations, the intended workflow is:
+- approve the automation when it is created or updated
+- if Guardian finds a fixable policy blocker first, approve the proposed policy change and let Guardian retry the automation setup automatically
+- let later runs execute under that saved bounded approval
+- stop again only if the automation goes out of scope, expires, exceeds budget, or attempts a higher-risk action that was not part of the approved definition
 
 ### Telegram Setup
 

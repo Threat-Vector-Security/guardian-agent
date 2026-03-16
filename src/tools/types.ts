@@ -8,6 +8,9 @@ export type ToolRisk = 'read_only' | 'mutating' | 'network' | 'external_post';
 export type ToolPolicyMode = 'approve_each' | 'approve_by_policy' | 'autonomous';
 export type ToolPolicySetting = 'auto' | 'policy' | 'manual' | 'deny';
 export type ToolDecision = 'allow' | 'deny' | 'require_approval';
+export type PrincipalRole = 'owner' | 'operator' | 'approver' | 'viewer';
+export type ContentTrustLevel = 'trusted' | 'low_trust' | 'quarantined';
+export type VerificationStatus = 'verified' | 'unverified' | 'failed';
 
 /** Tool category for enable/disable gating. */
 export type ToolCategory =
@@ -153,8 +156,14 @@ export interface ToolExecutionRequest {
   origin: 'assistant' | 'cli' | 'web';
   agentId?: string;
   userId?: string;
+  principalId?: string;
+  principalRole?: PrincipalRole;
   channel?: string;
   requestId?: string;
+  contentTrustLevel?: ContentTrustLevel;
+  taintReasons?: string[];
+  derivedFromTaintedContent?: boolean;
+  scheduleId?: string;
   /**
    * Optional agent context from runtime dispatch.
    * When present, tool actions are checked using ctx.checkAction().
@@ -171,9 +180,12 @@ export interface ToolExecutionRequest {
 
 export interface ToolResult {
   success: boolean;
+  message?: string;
   output?: unknown;
   error?: string;
   metadata?: Record<string, unknown>;
+  verificationStatus?: VerificationStatus;
+  verificationEvidence?: string;
   /** Whether this result is from a dry-run (no side effects). */
   dryRun?: boolean;
   /** Preview description of what would happen (dry-run mode). */
@@ -194,6 +206,8 @@ export interface ToolJobRecord {
   origin: 'assistant' | 'cli' | 'web';
   agentId?: string;
   userId?: string;
+  principalId?: string;
+  principalRole?: PrincipalRole;
   channel?: string;
   requestId?: string;
   /** SHA-256 hash of redacted tool arguments for correlation without raw secrets. */
@@ -210,6 +224,8 @@ export interface ToolJobRecord {
   approvalId?: string;
   resultPreview?: string;
   error?: string;
+  verificationStatus?: VerificationStatus;
+  verificationEvidence?: string;
 }
 
 export interface ToolApprovalRequest {
@@ -218,6 +234,10 @@ export interface ToolApprovalRequest {
   toolName: string;
   risk: ToolRisk;
   origin: 'assistant' | 'cli' | 'web';
+  requestedByPrincipal?: string;
+  requestedByRole?: PrincipalRole;
+  approvableByPrincipals?: string[];
+  approvableByRoles?: PrincipalRole[];
   /** SHA-256 hash of redacted arguments. */
   argsHash?: string;
   /** Redacted approval arguments (never stores raw sensitive values). */
@@ -226,6 +246,7 @@ export interface ToolApprovalRequest {
   status: 'pending' | 'approved' | 'denied';
   decidedAt?: number;
   decidedBy?: string;
+  decisionRole?: PrincipalRole;
   reason?: string;
 }
 
@@ -251,6 +272,9 @@ export interface ToolRunResponse {
   approvalId?: string;
   message: string;
   output?: unknown;
+  verificationStatus?: VerificationStatus;
+  trustLevel?: ContentTrustLevel;
+  taintReasons?: string[];
 }
 
 export type ToolHandler = (
