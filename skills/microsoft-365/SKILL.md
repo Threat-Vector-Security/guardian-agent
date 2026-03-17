@@ -4,6 +4,7 @@ Use Guardian Agent's native Microsoft 365 tools for Outlook Mail, Calendar, OneD
 
 Core rules:
 - Authentication is handled by the connected Microsoft 365 integration. Never ask the user for OAuth access tokens.
+- If the user asks for a generic email or inbox task and both Microsoft 365 and Google Workspace are available, ask which mailbox they mean before acting. Do not silently choose Outlook.
 - For simple plain-text Outlook drafts, prefer `outlook_draft`.
 - For simple plain-text Outlook sends, prefer `outlook_send`.
 - For everything else, use `m365`.

@@ -294,7 +294,7 @@ Current implementation:
 - `SkillRegistry` loads local skill bundles from configured roots
 - supports both Guardian-native `skill.json` manifests and reviewed frontmatter-only `SKILL.md` imports
 - `SkillResolver` auto-selects relevant skills for chat requests
-- resolver uses native triggers first, then compatibility fallback matching for imported skills
+- resolver uses native triggers first, then compatibility fallback matching for reviewed third-party skills
 - active skills are injected as a catalog, and the model reads the most relevant `SKILL.md` before acting
 - active skill IDs are included in chat response metadata
 - runtime skill inspection and toggling are available via `/skills` in CLI and `GET/POST /api/skills`
@@ -572,6 +572,7 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Live Dashboard Invalidation**: mutating web/API operations emit SSE `ui.invalidate` events so the active dashboard page refreshes in place without a manual browser reload
 - **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
+- **Coding Assistant**: web `#/code` page — multi-session coding workspace with repo explorer, file/diff viewer, PTY-backed terminals, and a dedicated assistant sidebar split into Chat, Tasks, Approvals, and Checks; Code sessions keep separate chat history from the general web chat, and assistant-driven file/shell actions are pinned to the active workspace root
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
 - **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
 - **Automations**: web `#/automations` page — unified automation catalog merging playbooks + scheduled tasks, with single-tool and pipeline creation, optional cron scheduling, examples, clone, run history, per-step output inspection, and engine settings. The assistant can also create automations conversationally via `workflow_upsert` and `task_create` tools

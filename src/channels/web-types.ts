@@ -588,6 +588,7 @@ export interface DashboardCallbacks {
       principalId?: string;
       principalRole?: import('../tools/types.js').PrincipalRole;
       channel?: string;
+      metadata?: Record<string, unknown>;
     },
     routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string },
     options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
@@ -689,6 +690,7 @@ export interface DashboardCallbacks {
     derivedFromTaintedContent?: boolean;
     scheduleId?: string;
     channel?: string;
+    metadata?: Record<string, unknown>;
   }) => Promise<ToolRunResponse> | ToolRunResponse;
   onToolsPreflight?: (input: { tools?: string[]; requests?: Array<{ name: string; args?: Record<string, unknown> }> }) => {
     results: Array<{
@@ -825,6 +827,7 @@ export interface DashboardCallbacks {
       principalId?: string;
       principalRole?: import('../tools/types.js').PrincipalRole;
       channel?: string;
+      metadata?: Record<string, unknown>;
     },
     emitSSE: (event: SSEEvent) => void,
   ) => Promise<{ requestId: string; content: string; metadata?: Record<string, unknown> }>;

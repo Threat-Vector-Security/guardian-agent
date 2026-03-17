@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { chromium } from 'playwright';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -86,6 +86,7 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
 }
 
 async function startFakeProvider(workspaceRoot) {
+  const examplePath = path.join(workspaceRoot, 'src', 'example.ts');
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
 
@@ -98,7 +99,52 @@ async function startFakeProvider(workspaceRoot) {
     if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+      const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+
+      if (latestUser.includes('[Code Approval Continuation]')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'code-ui-harness-model',
+          content: 'The approved edit has been applied. Refresh the file view if you want to inspect the updated source.',
+        })));
+        return;
+      }
+
+      if (latestUser.includes('[Code Workspace Context]') && /make the answer 42/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(createChatCompletionResponse({
+            model: 'code-ui-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'code-ui-find-tools',
+              name: 'find_tools',
+              arguments: JSON.stringify({
+                query: 'coding code edit patch create git diff test build lint symbol',
+                maxResults: 10,
+              }),
+            }],
+          })));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'code-ui-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'code-ui-edit',
+            name: 'code_edit',
+            arguments: JSON.stringify({
+              path: examplePath,
+              oldString: 'const answerValue = 41;',
+              newString: 'const answerValue = 42;',
+            }),
+          }],
+        })));
+        return;
+      }
 
       if (latestUser.includes('[Code Workspace Context]') && latestUser.includes('answerValue')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -169,6 +215,7 @@ async function run() {
   const workspaceRoot = path.join(tmpDir, 'workspace');
   const configPath = path.join(tmpDir, 'config.yaml');
   const logPath = path.join(tmpDir, 'guardian.log');
+  const examplePath = path.join(workspaceRoot, 'src', 'example.ts');
 
   setupWorkspace(workspaceRoot);
   const provider = await startFakeProvider(workspaceRoot);
@@ -196,11 +243,10 @@ assistant:
     completed: true
   tools:
     enabled: true
-    policyMode: autonomous
+    policyMode: approve_by_policy
     allowedPaths:
       - ${workspaceRoot}
     allowedCommands:
-      - git
       - pwd
       - echo
 runtime:
@@ -214,7 +260,7 @@ guardian:
   let appProcess;
   let browser;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+    appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -243,20 +289,66 @@ guardian:
     await page.click('[data-code-session-form] button[type="submit"]');
 
     await page.waitForFunction((expected) => {
-      return Array.from(document.querySelectorAll('.code-path')).some((node) => node.textContent.includes(expected));
+      return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
     }, workspaceRoot);
+
+    const chatTab = page.locator('[data-code-assistant-tab="chat"]');
+    const tasksTab = page.locator('[data-code-assistant-tab="tasks"]');
+    const approvalsTab = page.locator('[data-code-assistant-tab="approvals"]');
+    const checksTab = page.locator('[data-code-assistant-tab="checks"]');
+    await Promise.all([
+      chatTab.waitFor(),
+      tasksTab.waitFor(),
+      approvalsTab.waitFor(),
+      checksTab.waitFor(),
+    ]);
+    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
+
     await page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).click();
     await page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).click();
     await page.waitForSelector('text=example.ts');
     assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 41/);
 
-    await page.fill('[data-code-terminal-form] input[name="command"]', 'pwd');
-    await page.click('[data-code-terminal-form] button[type="submit"]');
     await page.waitForFunction(() => {
-      const output = document.querySelector('.code-terminal__output');
-      return output && output.textContent.includes('$ pwd');
+      return Array.from(document.querySelectorAll('.code-terminal-pane__badge')).some((node) => {
+        const text = (node.textContent || '').trim().toLowerCase();
+        return text === 'connected' || text === 'connecting';
+      });
     });
-    assert.match(await page.locator('.code-terminal__output').textContent(), /\$ pwd/);
+    await page.waitForSelector('.code-terminal__viewport .xterm');
+
+    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Search the workspace for answerValue and tell me where it is defined.');
+    await page.click('[data-code-chat-form] button[type="submit"]');
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-message')).some((node) => (node.textContent || '').includes('answerValue'));
+    });
+    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should stay active after a normal coding reply');
+
+    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Make the answer 42 in the selected file.');
+    await page.click('[data-code-chat-form] button[type="submit"]');
+    await page.waitForFunction(() => {
+      const tab = document.querySelector('[data-code-assistant-tab="approvals"]');
+      const notice = document.querySelector('.code-chat__notice');
+      return !!tab && /\b1\b/.test(tab.textContent || '') && !!notice;
+    });
+    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Pending approvals should not auto-switch the active tab');
+    assert.match(await page.locator('.code-chat__notice').textContent(), /approval/i);
+
+    await approvalsTab.click();
+    await page.waitForSelector('.approval-card');
+    assert.equal(await approvalsTab.getAttribute('aria-selected'), 'true', 'Approvals tab should switch only when clicked');
+    assert.ok(await page.locator('.approval-card [data-code-approval-decision="approved"]').count() > 0, 'Approval actions should be visible');
+
+    await page.click('.approval-card [data-code-approval-decision="approved"]');
+    await page.waitForFunction(() => {
+      const card = document.querySelector('.approval-card');
+      const badge = document.querySelector('[data-code-assistant-tab="approvals"] .code-assistant-tab__badge');
+      return !card && !badge;
+    });
+    assert.match(fs.readFileSync(examplePath, 'utf-8'), /answerValue = 42/);
+
+    await chatTab.click();
+    await page.waitForSelector('.code-chat__history');
 
     await page.click('a[data-page="dashboard"]');
     await page.waitForSelector('.code-page', { state: 'detached' });
@@ -265,8 +357,12 @@ guardian:
     await page.click('a[data-page="code"]');
     await page.waitForSelector('.code-page');
     assert.equal(await page.locator('#chat-panel').isHidden(), true, 'Global chat panel should hide again on return to code');
-    assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 41/);
-    assert.match(await page.locator('.code-terminal__output').textContent(), /\$ pwd/);
+    await page.click('[data-code-refresh-file]');
+    await page.waitForFunction(() => {
+      const content = document.querySelector('.code-editor__content');
+      return !!content && (content.textContent || '').includes('answerValue = 42');
+    });
+    assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 42/);
 
     console.log('PASS code UI smoke');
   } finally {

@@ -1,0 +1,56 @@
+{
+  "id": "oracle",
+  "name": "Oracle CLI",
+  "version": "0.1.0",
+  "description": "Bundle a prompt plus selected files for a second-model review with the Oracle CLI or browser runner.",
+  "role": "process",
+  "tags": [
+    "oracle",
+    "second-opinion",
+    "model-review",
+    "cross-check",
+    "prompt-bundle",
+    "browser-automation",
+    "external-review"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "oracle",
+      "second opinion",
+      "cross-check",
+      "external model review",
+      "review with another model",
+      "oracle cli"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "shell_access",
+    "network_access"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/oracle/SKILL.md",
+    "slug": "steipete/oracle",
+    "originalName": "oracle",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:38:14.707Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/oracle/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "id": "k8s-security-policies",
+  "name": "Kubernetes Security Policies",
+  "version": "0.1.0",
+  "description": "Reference Kubernetes hardening patterns for NetworkPolicy, Pod Security Standards, RBAC, and admission-control design.",
+  "role": "process",
+  "tags": [
+    "kubernetes",
+    "security",
+    "networkpolicy",
+    "pod-security",
+    "rbac",
+    "admission-control",
+    "cluster-hardening",
+    "compliance"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "kubernetes",
+      "kubernetes security",
+      "networkpolicy",
+      "pod security",
+      "rbac",
+      "admission control",
+      "cluster hardening"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [],
+  "risk": "informational",
+  "_upstream": {
+    "source": "github-repo",
+    "repo": "https://github.com/wshobson/agents",
+    "path": "plugins/kubernetes-operations/skills/k8s-security-policies/SKILL.md",
+    "slug": "wshobson/k8s-security-policies",
+    "originalName": "k8s-security-policies",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "a6f0f457c4e41cbb0ad329b691d28e255a829210",
+    "fetchedAt": "2026-03-17T03:37:30.507Z",
+    "sourceUrl": "file:///tmp/wshobson-agents/plugins/kubernetes-operations/skills/k8s-security-policies/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

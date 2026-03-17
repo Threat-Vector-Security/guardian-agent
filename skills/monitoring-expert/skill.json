@@ -1,0 +1,54 @@
+{
+  "id": "monitoring-expert",
+  "name": "Monitoring Expert",
+  "version": "0.1.0",
+  "description": "Reference workflow for observability work spanning metrics, logging, tracing, alerting, load testing, and capacity planning.",
+  "role": "domain",
+  "tags": [
+    "monitoring",
+    "observability",
+    "prometheus",
+    "grafana",
+    "logging",
+    "tracing",
+    "alerting",
+    "capacity-planning"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "monitoring",
+      "observability",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "tracing"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [],
+  "risk": "informational",
+  "_upstream": {
+    "source": "github-repo",
+    "repo": "https://github.com/jeffallan/claude-skills",
+    "path": "skills/monitoring-expert/SKILL.md",
+    "slug": "jeffallan/monitoring-expert",
+    "originalName": "monitoring-expert",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "3bf9a24b76a7c122f1fc05e83929fbc84e1c207a",
+    "fetchedAt": "2026-03-17T03:37:44.837Z",
+    "sourceUrl": "file:///tmp/jeffallan-claude-skills/skills/monitoring-expert/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

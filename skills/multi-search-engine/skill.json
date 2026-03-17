@@ -1,0 +1,57 @@
+{
+  "id": "multi-search-engine",
+  "name": "Multi Search Engine",
+  "version": "0.1.0",
+  "description": "Use when standard web lookup is not enough and you need privacy-oriented, international, or engine-specific search strategy.",
+  "role": "process",
+  "tags": [
+    "international-search",
+    "privacy-search",
+    "search-operators",
+    "regional-search",
+    "duckduckgo-bangs",
+    "engine-selection",
+    "wolframalpha"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "international search",
+      "privacy search",
+      "search operators",
+      "duckduckgo bangs",
+      "regional search engine",
+      "engine selection",
+      "wolframalpha"
+    ]
+  },
+  "tools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "requiredCapabilities": [],
+  "risk": "informational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/gpyangyoujun/multi-search-engine/SKILL.md",
+    "slug": "gpyangyoujun/multi-search-engine",
+    "originalName": "multi-search-engine",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:38:14.707Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/gpyangyoujun/multi-search-engine/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

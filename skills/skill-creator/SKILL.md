@@ -28,6 +28,15 @@ When the workflow is still vague, capture 2-3 realistic user prompts before writ
 - Keep `SKILL.md` focused on the workflow. Put heavy reference content in `references/`.
 - If the skill is imported or adapted from a third-party source, preserve provenance and license notices in `THIRD_PARTY_NOTICES.md`.
 
+## Trigger Authoring
+
+- Write the description as activation guidance, not marketing copy.
+- Include the user signals that should cause the skill to trigger.
+- Include nearby non-trigger cases when they are easy to confuse.
+- Prefer concrete request language over broad nouns like "help", "workflow", or "tool".
+- Keep automatically matched keywords narrow; generic words create noisy false positives.
+- If the skill should rarely auto-select, prefer explicit mention and description fallback over a wide keyword list.
+
 ## Improvement Loop
 
 1. Draft or revise the skill.
@@ -48,3 +57,4 @@ When the workflow is still vague, capture 2-3 realistic user prompts before writ
 - When the change affects runtime skill behavior, update `docs/specs/SKILLS-SPEC.md` in the same pass.
 
 Read [references/eval-rubric.md](./references/eval-rubric.md) when you need a compact checklist for writing or reviewing skill evals.
+Read [references/trigger-authoring.md](./references/trigger-authoring.md) when you need examples for writing descriptions and no-trigger prompts.

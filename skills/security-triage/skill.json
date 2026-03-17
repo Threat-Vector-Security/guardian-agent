@@ -2,7 +2,7 @@
   "id": "security-triage",
   "name": "Security Triage",
   "version": "0.1.0",
-  "description": "Use when reviewing a security alert, posture change, suspicious network or cloud behavior, firewall finding, or correlated monitoring output.",
+  "description": "Use when reviewing a security alert, posture change, suspicious network or cloud behavior, firewall finding, correlated monitoring output, or drafting a reusable incident runbook.",
   "role": "domain",
   "tags": ["security", "triage", "incident", "alert", "monitoring", "firewall", "posture"],
   "enabled": true,

@@ -1,0 +1,59 @@
+{
+  "id": "weather",
+  "name": "Weather",
+  "version": "0.1.0",
+  "description": "Fetch current weather conditions and forecasts with `wttr.in` or Open-Meteo.",
+  "role": "domain",
+  "tags": [
+    "weather",
+    "forecast",
+    "current-weather",
+    "wttr",
+    "open-meteo",
+    "weather-cli",
+    "temperature"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "weather",
+      "forecast",
+      "current weather",
+      "wttr",
+      "temperature",
+      "rain forecast"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "shell_access",
+    "network_access"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/weather/SKILL.md",
+    "slug": "steipete/weather",
+    "originalName": "weather",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:37:44.844Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/weather/SKILL.md",
+    "securityAssessment": "benign",
+    "requiredBinaries": [
+      "curl"
+    ]
+  }
+}

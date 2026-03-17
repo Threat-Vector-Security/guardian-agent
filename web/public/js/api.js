@@ -289,16 +289,18 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(updates),
   }),
-  sendMessage:  (content, agentId, userId, channel = 'web') => {
+  sendMessage:  (content, agentId, userId, channel = 'web', metadata) => {
     const payload = { content, userId, channel };
     if (agentId) payload.agentId = agentId;
+    if (metadata && typeof metadata === 'object') payload.metadata = metadata;
     return request('/api/message', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
   },
-  sendMessageStream: (content, agentId, userId, channel = 'web') => {
+  sendMessageStream: (content, agentId, userId, channel = 'web', metadata) => {
     const payload = { content, agentId, userId, channel };
+    if (metadata && typeof metadata === 'object') payload.metadata = metadata;
     return request('/api/message/stream', {
       method: 'POST',
       body: JSON.stringify(payload),

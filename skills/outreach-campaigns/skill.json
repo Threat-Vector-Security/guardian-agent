@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Guidance for safe contact management and campaign execution with mandatory dry-run and approval steps.",
   "role": "domain",
-  "tags": ["contacts", "campaign", "outreach", "email"],
+  "tags": ["contacts", "campaign", "outreach", "bulk-email", "mailing-list"],
   "enabled": true,
   "appliesTo": {
     "channels": ["cli", "web", "telegram"],

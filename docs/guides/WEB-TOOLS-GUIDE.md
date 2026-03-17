@@ -1,6 +1,6 @@
 # Web Search & Fetch Tools
 
-GuardianAgent includes built-in `web_search` and `web_fetch` tools for web information retrieval. These work out of the box with **zero configuration** using DuckDuckGo, and can be upgraded to premium providers.
+GuardianAgent includes built-in `web_search` and `web_fetch` tools for web information retrieval. These work out of the box with **zero configuration** using DuckDuckGo, can be upgraded to premium providers, and can be guided by local search-strategy skills when the default provider is not enough.
 
 ## Tools
 
@@ -40,6 +40,10 @@ Smart content extraction:
 ### Zero-config (default)
 
 DuckDuckGo works immediately with no setup. Just ask the agent to search for something.
+
+For more specialized public-web work, the skill layer can refine the strategy:
+- `web-research` handles normal source discovery and follow-up fetches.
+- `multi-search-engine` is the specialized fallback for privacy, international, or engine-specific search patterns when plain `web_search` is not enough.
 
 ### Config Center (recommended)
 

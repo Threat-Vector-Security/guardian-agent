@@ -56,9 +56,14 @@ export class ShellCommandController implements AdmissionController {
       return null; // No command to validate
     }
 
+    const override = Array.isArray(action.params['allowedCommandsOverride'])
+      ? action.params['allowedCommandsOverride']
+        .filter((value): value is string => typeof value === 'string')
+      : [];
+
     const result = validateShellCommand(
       command,
-      this.allowedCommands,
+      override.length > 0 ? normalizeAllowedCommands(override) : this.allowedCommands,
       (path) => this.scanner.isDeniedPath(path).denied,
     );
 

@@ -48,7 +48,6 @@ function skillRolePriority(role: LoadedSkill['manifest']['role']): number {
 
 function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): number {
   const manifest = skill.manifest;
-  if (manifest.enabled === false) return 0;
 
   const appliesTo = manifest.appliesTo;
   if (appliesTo?.agents?.length && !appliesTo.agents.includes(input.agentId)) return 0;
@@ -58,6 +57,13 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): number {
   if (manifest.requiredManagedProvider) {
     const providers = input.enabledManagedProviders ?? new Set<string>();
     if (!providers.has(manifest.requiredManagedProvider)) return 0;
+  }
+
+  if (manifest.requiredCapabilities?.length) {
+    const capabilities = input.availableCapabilities ?? new Set<string>();
+    for (const capability of manifest.requiredCapabilities) {
+      if (!capabilities.has(capability)) return 0;
+    }
   }
 
   const lowerContent = input.content.toLowerCase();

@@ -67,6 +67,7 @@ import {
   parseScheduledEmailAutomationIntent,
   parseScheduledEmailScheduleIntent,
 } from './runtime/email-automation-intent.js';
+import { getAmbiguousEmailProviderClarification } from './runtime/email-provider-routing.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
@@ -627,15 +628,35 @@ class ChatAgent extends BaseAgent {
 
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
     const stateAgentId = this.stateAgentId;
+    const preResolvedSkills = this.skillResolver?.resolve({
+      agentId: this.id,
+      channel: message.channel,
+      requestType: 'chat',
+      content: message.content,
+      enabledManagedProviders: this.enabledManagedProviders,
+      availableCapabilities: new Set(ctx.capabilities),
+    }) ?? [];
+    const ambiguousEmailProviderClarification = getAmbiguousEmailProviderClarification(
+      message.content,
+      this.enabledManagedProviders,
+    );
+    if (ambiguousEmailProviderClarification) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          message.content,
+          ambiguousEmailProviderClarification,
+        );
+      }
+      return {
+        content: ambiguousEmailProviderClarification,
+        metadata: preResolvedSkills.length > 0
+          ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+          : undefined,
+      };
+    }
     if (workerManager) {
       try {
-        const activeSkills = this.skillResolver?.resolve({
-          agentId: this.id,
-          channel: message.channel,
-          requestType: 'chat',
-          content: message.content,
-          enabledManagedProviders: this.enabledManagedProviders,
-        }) ?? [];
         const knowledgeBase = this.memoryStore?.loadForContext(stateAgentId) ?? '';
         const history = this.conversationService?.getHistoryForContext({
           agentId: stateAgentId,
@@ -651,7 +672,7 @@ class ChatAgent extends BaseAgent {
           systemPrompt: this.systemPrompt,
           history,
           knowledgeBase,
-          activeSkills,
+          activeSkills: preResolvedSkills,
           toolContext: this.tools?.getToolContext() ?? '',
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
         });
@@ -742,13 +763,7 @@ class ChatAgent extends BaseAgent {
         : '';
 
       // Inject knowledge base into system prompt if available
-      activeSkills = this.skillResolver?.resolve({
-        agentId: this.id,
-        channel: message.channel,
-        requestType: 'chat',
-        content: message.content,
-        enabledManagedProviders: this.enabledManagedProviders,
-      }) ?? [];
+      activeSkills = preResolvedSkills;
       if (this.memoryStore) {
         const kb = this.memoryStore.loadForContext(stateAgentId);
         if (kb) {
@@ -791,6 +806,21 @@ class ChatAgent extends BaseAgent {
       const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
       if (directSearch) {
         finalContent = directSearch;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
+        };
+      }
+
+      if (ambiguousEmailProviderClarification) {
+        finalContent = ambiguousEmailProviderClarification;
         if (this.conversationService) {
           this.conversationService.recordTurn(
             { agentId: stateAgentId, userId: message.userId, channel: message.channel },
@@ -871,60 +901,70 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      // Direct web search: if the user clearly wants web results, call web_search
-      // directly so the tool executes even when the LLM doesn't invoke it.
-      let webSearchResult: string | null = null;
-      try {
-        webSearchResult = await this.tryDirectWebSearch(message, ctx);
-      } catch {
-        // Search failed — fall through to LLM with tool calling
-      }
-      if (webSearchResult) {
-        // Scan web search results through OutputGuardian before LLM reinjection
-        const sanitizedWebSearch = this.sanitizeToolResultForLlm(
-          'web_search',
-          webSearchResult,
-          defaultToolResultProviderKind,
-        );
-        const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
-          ? sanitizedWebSearch.sanitized
-          : String(sanitizedWebSearch.sanitized ?? '');
-        const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
-        const llmSearchPayload = warningPrefix
-          ? `${warningPrefix}\n${safeWebSearchResult}`
-          : safeWebSearchResult;
+      // Direct web search: if the user clearly wants generic web results, call
+      // web_search directly so the tool executes even when the LLM doesn't invoke it.
+      // If a more specialized search skill is active, let the LLM read that skill
+      // first instead of forcing the generic shortcut.
+      const skipDirectWebSearch = activeSkills.some((skill) => (
+        skill.id === 'multi-search-engine'
+        || skill.id === 'weather'
+        || skill.id === 'blogwatcher'
+      ));
+      if (!skipDirectWebSearch) {
+        let webSearchResult: string | null = null;
+        try {
+          webSearchResult = await this.tryDirectWebSearch(message, ctx);
+        } catch {
+          // Search failed — fall through to LLM with tool calling
+        }
+        if (webSearchResult) {
+          // Scan web search results through OutputGuardian before LLM reinjection
+          const sanitizedWebSearch = this.sanitizeToolResultForLlm(
+            'web_search',
+            webSearchResult,
+            defaultToolResultProviderKind,
+          );
+          const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
+            ? sanitizedWebSearch.sanitized
+            : String(sanitizedWebSearch.sanitized ?? '');
+          const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
+          const llmSearchPayload = warningPrefix
+            ? `${warningPrefix}\n${safeWebSearchResult}`
+            : safeWebSearchResult;
 
-        // Feed the sanitized search results through the LLM for a natural response
-        if (ctx.llm) {
-          try {
-            const llmFormat: ChatMessage[] = [
-              ...llmMessages,
-              { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
-            ];
-            const formatted = await this.chatWithFallback(ctx, llmFormat);
-            finalContent = formatted.content || llmSearchPayload;
-          } catch {
-            // LLM formatting failed — return raw search results
+          // Feed the sanitized search results through the LLM for a natural response
+          if (ctx.llm) {
+            try {
+              const llmFormat: ChatMessage[] = [
+                ...llmMessages,
+                { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
+              ];
+              const formatted = await this.chatWithFallback(ctx, llmFormat);
+              finalContent = formatted.content || llmSearchPayload;
+            } catch {
+              // LLM formatting failed — return raw search results
+              finalContent = llmSearchPayload;
+            }
+          } else {
             finalContent = llmSearchPayload;
           }
-        } else {
-          finalContent = llmSearchPayload;
+          if (this.conversationService) {
+            this.conversationService.recordTurn(
+              { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+              message.content,
+              finalContent,
+            );
+          }
+          return { content: finalContent };
         }
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
-            message.content,
-            finalContent,
-          );
-        }
-        return { content: finalContent };
       }
     }
 
     // If GWS provider is configured and the message looks like a workspace request,
     // swap to the external model for the tool-calling loop so it handles
     // structured tool calls correctly (local models often struggle with complex schemas).
-    const gwsProvider = this.enabledManagedProviders?.has('gws')
+    const gwsProvider = !ambiguousEmailProviderClarification
+      && this.enabledManagedProviders?.has('gws')
       && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(message.content)
       ? this.resolveGwsProvider?.()
       : undefined;
@@ -1090,6 +1130,7 @@ class ChatAgent extends BaseAgent {
           taintReasons: [...currentTaintReasons],
           derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
           agentContext: { checkAction: ctx.checkAction },
+          codeContext: readCodeRequestMetadata(message.metadata),
         };
 
         const toolResults = await Promise.allSettled(
@@ -3112,6 +3153,19 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function readCodeRequestMetadata(metadata: unknown): { workspaceRoot: string; sessionId?: string } | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const codeContext = metadata.codeContext;
+  if (!isRecord(codeContext)) return undefined;
+  const workspaceRoot = trimOptionalString(codeContext.workspaceRoot);
+  if (!workspaceRoot) return undefined;
+  const sessionId = trimOptionalString(codeContext.sessionId);
+  return {
+    workspaceRoot,
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
+
 function sanitizeStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) return undefined;
   const result: Record<string, string> = {};
@@ -4339,16 +4393,22 @@ function buildDashboardCallbacks(
     onSkillsState: () => {
       const config = configRef.current.assistant.skills;
       const statuses = skillRegistry?.listStatus() ?? [];
+      const managedProviderIds = new Set<string>(['gws', 'm365']);
+      for (const skill of statuses) {
+        if (skill.requiredManagedProvider) {
+          managedProviderIds.add(skill.requiredManagedProvider);
+        }
+      }
       return {
         enabled: config.enabled,
         autoSelect: config.autoSelect,
         maxActivePerRequest: config.maxActivePerRequest,
-        managedProviders: [
-          {
-            id: 'gws',
-            enabled: enabledManagedProviders.has('gws'),
-          },
-        ],
+        managedProviders: [...managedProviderIds]
+          .sort((a, b) => a.localeCompare(b))
+          .map((id) => ({
+            id,
+            enabled: enabledManagedProviders.has(id),
+          })),
         skills: statuses.map((skill) => {
           const requiresProvider = skill.requiredManagedProvider;
           const providerReady = requiresProvider ? enabledManagedProviders.has(requiresProvider) : undefined;
@@ -4413,6 +4473,7 @@ function buildDashboardCallbacks(
         derivedFromTaintedContent: input.derivedFromTaintedContent,
         scheduleId: input.scheduleId,
         channel: input.channel,
+        codeContext: readCodeRequestMetadata(input.metadata),
       });
       analytics.track({
         type: result.success ? 'tool_run_succeeded' : 'tool_run_failed',
@@ -4978,6 +5039,7 @@ function buildDashboardCallbacks(
             principalRole: msg.principalRole ?? 'owner',
             channel,
             content: msg.content,
+            metadata: msg.metadata,
             timestamp: Date.now(),
           };
 

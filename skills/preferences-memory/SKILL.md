@@ -13,6 +13,19 @@ Use memory tools only when the user explicitly wants a stable fact or preference
 3. Save a concise normalized memory with `memory_save`.
 4. Tell the user what was remembered in plain language.
 
+## Recurring Learnings
+
+- If the user explicitly wants a lesson from this task retained for future conversations, normalize it into a short stable rule or project fact before saving it.
+- Prefer one durable memory over a long incident log.
+- Save only the part that will still matter later.
+
+## Do Not Turn This Into
+
+- ad-hoc `.learnings/` files
+- automatic hook installation
+- autonomous self-improvement loops
+- silent edits to `AGENTS.md`, `CLAUDE.md`, or `.github/copilot-instructions.md`
+
 ## Do Save
 
 - preferred writing style or output format

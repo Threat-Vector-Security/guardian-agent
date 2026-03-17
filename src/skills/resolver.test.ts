@@ -85,6 +85,40 @@ describe('SkillResolver', () => {
     })).toHaveLength(1);
   });
 
+  it('requires agent capabilities when a skill declares them', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'weather');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'skill.json'), JSON.stringify({
+      id: 'weather',
+      name: 'Weather',
+      version: '0.1.0',
+      description: 'Fetch weather data',
+      triggers: { keywords: ['weather'] },
+      requiredCapabilities: ['network_access'],
+    }), 'utf-8');
+    writeFileSync(join(skillDir, 'SKILL.md'), '# Weather\n\nUse weather APIs.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Check the weather in Brisbane.',
+    })).toHaveLength(0);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Check the weather in Brisbane.',
+      availableCapabilities: new Set(['network_access']),
+    })).toHaveLength(1);
+  });
+
   it('can disable and re-enable loaded skills at runtime', async () => {
     const root = createSkillRoot();
     const skillDir = join(root, 'security-triage');
@@ -129,6 +163,44 @@ describe('SkillResolver', () => {
       channel: 'cli',
       requestType: 'chat',
       content: 'Investigate this incident.',
+    })).toHaveLength(1);
+  });
+
+  it('loads manifest-disabled skills as inactive so they can be reviewed and enabled later', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'github');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'skill.json'), JSON.stringify({
+      id: 'github',
+      name: 'GitHub',
+      version: '0.1.0',
+      description: 'Operational guidance for GitHub workflows.',
+      enabled: false,
+      triggers: { keywords: ['github'] },
+    }), 'utf-8');
+    writeFileSync(join(skillDir, 'SKILL.md'), '# GitHub\n\nUse reviewed GitHub workflows only after enablement.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(registry.listStatus()).toMatchObject([
+      { id: 'github', enabled: false },
+    ]);
+    expect(registry.get('github')).toBeTruthy();
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Review this GitHub pull request.',
+    })).toHaveLength(0);
+
+    expect(registry.enable('github')).toBe(true);
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Review this GitHub pull request.',
     })).toHaveLength(1);
   });
 

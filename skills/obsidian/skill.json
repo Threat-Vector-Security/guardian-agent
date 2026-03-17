@@ -1,0 +1,59 @@
+{
+  "id": "obsidian",
+  "name": "Obsidian",
+  "version": "0.1.0",
+  "description": "Work with Obsidian vaults, Markdown notes, and safe note refactors through `obsidian-cli`.",
+  "role": "domain",
+  "tags": [
+    "obsidian",
+    "vault",
+    "obsidian-cli",
+    "markdown-vault",
+    "wikilinks",
+    "vault-refactor",
+    "vault-note"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "obsidian",
+      "obsidian vault",
+      "obsidian-cli",
+      "wikilinks",
+      "vault note",
+      "vault rename"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "shell_access",
+    "filesystem_write"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/obsidian/SKILL.md",
+    "slug": "steipete/obsidian",
+    "originalName": "obsidian",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:38:05.160Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/obsidian/SKILL.md",
+    "securityAssessment": "benign",
+    "requiredBinaries": [
+      "obsidian-cli"
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "id": "slack",
+  "name": "Slack Actions",
+  "version": "0.1.0",
+  "description": "Use the Guardian-managed Slack integration to read messages, react, pin items, and send or edit Slack content.",
+  "role": "domain",
+  "tags": [
+    "slack",
+    "channel",
+    "messaging",
+    "reactions",
+    "pins",
+    "workspace",
+    "dm"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "slack",
+      "slack message",
+      "slack channel",
+      "pin message",
+      "react in slack",
+      "send slack"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "network_access"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/slack/SKILL.md",
+    "slug": "steipete/slack",
+    "originalName": "slack",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:38:05.157Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/slack/SKILL.md",
+    "securityAssessment": "benign"
+  },
+  "requiredManagedProvider": "slack"
+}

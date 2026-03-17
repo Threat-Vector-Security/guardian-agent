@@ -188,6 +188,7 @@ assistant:
 
 - Local skill bundles are loaded from configured roots.
 - Both Guardian-native manifests and reviewed frontmatter-only imports are supported.
+- Manifest-disabled reviewed imports still load into the registry for inspection and explicit enablement later.
 - Chat requests can auto-activate matching skills.
 - Active skills are injected as a catalog with descriptions, optional roles, and `SKILL.md` locations.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.

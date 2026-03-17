@@ -1,0 +1,54 @@
+{
+  "id": "cc-skill-security-review",
+  "name": "Security Review Skill",
+  "version": "0.1.0",
+  "description": "Use this review checklist when adding authentication, handling secrets, validating input, or shipping other sensitive application changes.",
+  "role": "process",
+  "tags": [
+    "security",
+    "security-review",
+    "authentication",
+    "input-validation",
+    "secrets",
+    "payments",
+    "api-security",
+    "sensitive-data"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "security review",
+      "authentication",
+      "input validation",
+      "secrets",
+      "payment flow",
+      "sensitive data"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [],
+  "risk": "informational",
+  "_upstream": {
+    "source": "github-repo",
+    "repo": "https://github.com/sickn33/antigravity-awesome-skills",
+    "path": "skills/cc-skill-security-review/SKILL.md",
+    "slug": "antigravity/cc-skill-security-review",
+    "originalName": "cc-skill-security-review",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "883c81609a76d6d70a19068194a632a599de089f",
+    "fetchedAt": "2026-03-17T03:37:30.508Z",
+    "sourceUrl": "file:///tmp/antigravity-awesome-skills/skills/cc-skill-security-review/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

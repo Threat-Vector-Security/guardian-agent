@@ -4,6 +4,7 @@ Use Guardian Agent's native Google Workspace tools for Gmail, Calendar, Drive, D
 
 Core rules:
 - Authentication is handled by the connected Google Workspace integration. Never ask the user for OAuth access tokens.
+- If the user asks for a generic email or inbox task and both Google Workspace and Microsoft 365 are available, ask which mailbox they mean before acting. Do not silently choose Gmail.
 - For simple plain-text Gmail drafts, prefer `gmail_draft`.
 - For simple plain-text Gmail sends, prefer `gmail_send`.
 - For everything else, use `gws`.

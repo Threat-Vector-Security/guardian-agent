@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -44,6 +44,40 @@ function requestJson(baseUrl, token, method, pathname, body) {
         }
       });
     });
+    req.on('error', reject);
+    if (body) {
+      req.write(JSON.stringify(body));
+    }
+    req.end();
+  });
+}
+
+function requestJsonNoAuth(url, method, body, timeoutMs = 2_500) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request({
+      method,
+      hostname: parsed.hostname,
+      port: parsed.port || 80,
+      path: parsed.pathname + parsed.search,
+      timeout: timeoutMs,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        try {
+          resolve(data ? JSON.parse(data) : {});
+        } catch {
+          resolve(data);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error(`Timed out connecting to ${url}`)));
     req.on('error', reject);
     if (body) {
       req.write(JSON.stringify(body));
@@ -110,6 +144,133 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
       total_tokens: 2,
     },
   };
+}
+
+function parseHarnessOptions() {
+  const args = new Set(process.argv.slice(2));
+  return {
+    useRealOllama: args.has('--use-ollama') || process.env.HARNESS_USE_REAL_OLLAMA === '1',
+    ollamaBaseUrl: process.env.HARNESS_OLLAMA_BASE_URL?.trim() || '',
+    ollamaModel: process.env.HARNESS_OLLAMA_MODEL?.trim() || '',
+    wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
+    ollamaBin: process.env.HARNESS_OLLAMA_BIN?.trim() || '',
+    autostartLocalOllama: process.env.HARNESS_AUTOSTART_LOCAL_OLLAMA !== '0',
+  };
+}
+
+function collectOllamaBaseUrlCandidates(options) {
+  const candidates = [];
+  const push = (value) => {
+    const trimmed = value?.trim();
+    if (!trimmed || candidates.includes(trimmed)) return;
+    candidates.push(trimmed.replace(/\/$/, ''));
+  };
+
+  push(options.ollamaBaseUrl);
+  push('http://127.0.0.1:11434');
+  push('http://localhost:11434');
+  push(options.wslHostIp ? `http://${options.wslHostIp}:11434` : '');
+
+  try {
+    const resolv = fs.readFileSync('/etc/resolv.conf', 'utf-8');
+    const match = resolv.match(/^nameserver\s+([0-9.]+)\s*$/m);
+    if (match?.[1]) {
+      push(`http://${match[1]}:11434`);
+    }
+  } catch {
+    // Ignore.
+  }
+
+  return candidates;
+}
+
+function isLoopbackOllamaUrl(candidate) {
+  try {
+    const parsed = new URL(candidate);
+    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
+  } catch {
+    return false;
+  }
+}
+
+async function canReachOllama(candidate) {
+  const result = await requestJsonNoAuth(`${candidate}/api/tags`, 'GET', undefined);
+  const models = Array.isArray(result?.models) ? result.models : [];
+  return models;
+}
+
+async function maybeStartLocalOllama(options, candidate) {
+  if (!options.autostartLocalOllama || !isLoopbackOllamaUrl(candidate)) {
+    return null;
+  }
+
+  const homeDir = os.homedir();
+  const binCandidates = [
+    options.ollamaBin,
+    path.join(homeDir, '.local', 'bin', 'ollama'),
+    'ollama',
+  ].filter(Boolean);
+
+  let ollamaBin = '';
+  for (const candidateBin of binCandidates) {
+    try {
+      const result = spawn(candidateBin, ['--version'], { stdio: 'ignore' });
+      const exitCode = await new Promise((resolve) => {
+        result.on('exit', resolve);
+        result.on('error', () => resolve(-1));
+      });
+      if (exitCode === 0) {
+        ollamaBin = candidateBin;
+        break;
+      }
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  if (!ollamaBin) {
+    return null;
+  }
+
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-coding-ollama-'));
+  const logPath = path.join(logDir, 'ollama.log');
+  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+  const processHandle = spawn(ollamaBin, ['serve'], {
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      NO_COLOR: '1',
+    },
+  });
+  processHandle.stdout.pipe(logStream);
+  processHandle.stderr.pipe(logStream);
+
+  const shutdown = async () => {
+    if (!processHandle.killed) {
+      if (process.platform === 'win32') {
+        processHandle.kill('SIGTERM');
+      } else {
+        process.kill(-processHandle.pid, 'SIGTERM');
+      }
+    }
+    logStream.end();
+  };
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      await canReachOllama(candidate);
+      return { close: shutdown, logPath };
+    } catch {
+      if (processHandle.exitCode !== null) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  await shutdown();
+  throw new Error(`Failed to autostart local Ollama at ${candidate}. See ${logPath}`);
 }
 
 async function startFakeProvider(workspaceRoot, scenarioLog) {
@@ -182,6 +343,32 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         return;
       }
 
+      if (latestUser.includes('[Code Workspace Context]') && /git status/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(createChatCompletionResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'code-git-status',
+              name: 'shell_safe',
+              arguments: JSON.stringify({
+                command: 'git status --short',
+                cwd: workspaceRoot,
+              }),
+            }],
+          })));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'coding-harness-model',
+          content: 'Git status ran inside the active coding workspace.',
+        })));
+        return;
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatCompletionResponse({
         model: 'coding-harness-model',
@@ -202,8 +389,64 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    model: 'coding-harness-model',
+    mode: 'fake',
     close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
+}
+
+async function resolveHarnessProvider(options, workspaceRoot, scenarioLog) {
+  if (!options.useRealOllama) {
+    return startFakeProvider(workspaceRoot, scenarioLog);
+  }
+
+  const candidates = collectOllamaBaseUrlCandidates(options);
+  const errors = [];
+  let localOllama = null;
+  for (const candidate of candidates) {
+    try {
+      let models;
+      try {
+        models = await canReachOllama(candidate);
+      } catch (error) {
+        if (!localOllama) {
+          localOllama = await maybeStartLocalOllama(options, candidate);
+          if (localOllama) {
+            models = await canReachOllama(candidate);
+          } else {
+            throw error;
+          }
+        } else {
+          throw error;
+        }
+      }
+      const resolvedModel = options.ollamaModel || models[0]?.name;
+      if (!resolvedModel) {
+        throw new Error(`No models available at ${candidate}. Set HARNESS_OLLAMA_MODEL or pull a model first.`);
+      }
+      return {
+        baseUrl: candidate,
+        model: resolvedModel,
+        mode: 'real_ollama',
+        async close() {
+          if (localOllama) {
+            await localOllama.close();
+          }
+        },
+      };
+    } catch (error) {
+      errors.push(`${candidate} -> ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  throw new Error(
+    [
+      'Real Ollama mode was requested, but no reachable Ollama endpoint was found.',
+      'Set HARNESS_OLLAMA_BASE_URL to a reachable endpoint or install Ollama locally in WSL so the harness can autostart it on 127.0.0.1:11434.',
+      'If you intend to reach Windows-hosted Ollama from WSL, expose it on the Windows host IP and allow it through the firewall.',
+      `Tried: ${errors.join(' | ')}`,
+    ].join(' '),
+  );
 }
 
 function setupGitWorkspace(workspaceRoot) {
@@ -225,6 +468,7 @@ function setupGitWorkspace(workspaceRoot) {
 }
 
 async function runHarness() {
+  const options = parseHarnessOptions();
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const harnessPort = await getFreePort();
   const harnessToken = `coding-harness-${Date.now()}`;
@@ -245,13 +489,13 @@ async function runHarness() {
   ].join('\n'));
   setupGitWorkspace(workspaceRoot);
 
-  const provider = await startFakeProvider(workspaceRoot, scenarioLog);
+  const provider = await resolveHarnessProvider(options, workspaceRoot, scenarioLog);
   const config = `
 llm:
   local:
     provider: ollama
     baseUrl: ${provider.baseUrl}
-    model: coding-harness-model
+    model: ${provider.model}
 defaultProvider: local
 channels:
   cli:
@@ -273,7 +517,6 @@ assistant:
     allowedPaths:
       - ${workspaceRoot}
     allowedCommands:
-      - git
       - pwd
       - echo
     agentPolicyUpdates:
@@ -290,7 +533,7 @@ guardian:
 
   let appProcess;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+    appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -308,6 +551,12 @@ guardian:
     const toolNames = Array.isArray(toolState?.tools) ? toolState.tools.map((tool) => tool.name) : [];
     assert.ok(toolNames.includes('code_edit'), 'Expected code_edit in tool catalog');
     assert.ok(toolNames.includes('code_symbol_search'), 'Expected code_symbol_search in tool catalog');
+    const codeSessionMetadata = {
+      codeContext: {
+        workspaceRoot,
+        sessionId: 'web-code-harness',
+      },
+    };
 
     const codeEditPending = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
       toolName: 'code_edit',
@@ -341,11 +590,49 @@ guardian:
     assert.equal(codeEditDecision.success, true);
     assert.match(fs.readFileSync(path.join(workspaceRoot, 'src', 'example.ts'), 'utf-8'), /answerValue = 42/);
 
+    const codeShellPending = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'shell_safe',
+      args: {
+        command: 'git init nested-repo',
+        cwd: workspaceRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: codeSessionMetadata,
+    });
+    assert.equal(codeShellPending.success, false);
+    assert.equal(codeShellPending.status, 'pending_approval');
+    assert.ok(codeShellPending.approvalId, `Expected approvalId from shell_safe git init: ${JSON.stringify(codeShellPending)}`);
+
+    const codeShellDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
+      approvalId: codeShellPending.approvalId,
+      decision: 'approved',
+      actor: 'web-code-harness',
+    });
+    assert.equal(codeShellDecision.success, true, `Expected approved shell_safe continuation to succeed: ${JSON.stringify(codeShellDecision)}`);
+    assert.equal(fs.existsSync(path.join(workspaceRoot, 'nested-repo', '.git')), true);
+
+    const blockedShellEscape = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'shell_safe',
+      args: {
+        command: 'git -C /tmp status',
+        cwd: workspaceRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: codeSessionMetadata,
+    });
+    assert.equal(blockedShellEscape.success, false);
+    assert.equal(blockedShellEscape.status, 'failed');
+    assert.match(String(blockedShellEscape.message ?? ''), /denied path|Coding Assistant|blocked/i);
+
     const autonomousPolicy = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/policy', {
       mode: 'autonomous',
       sandbox: {
         allowedPaths: [workspaceRoot],
-        allowedCommands: ['git', 'pwd', 'echo'],
+        allowedCommands: ['pwd', 'echo'],
       },
     });
     assert.equal(autonomousPolicy.success, true);
@@ -387,9 +674,17 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
+      metadata: codeSessionMetadata,
     });
     assert.equal(codeDiff.success, true);
     assert.match(String(codeDiff.output?.stdout ?? ''), /answerValue = 42/);
+
+    const toolsStateBeforeMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const previousJobIds = new Set(
+      (Array.isArray(toolsStateBeforeMessage?.jobs) ? toolsStateBeforeMessage.jobs : [])
+        .map((job) => job?.id)
+        .filter(Boolean),
+    );
 
     const messageResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: [
@@ -404,19 +699,62 @@ guardian:
       ].join('\n'),
       userId: 'web-code-harness',
       channel: 'web',
+      metadata: codeSessionMetadata,
     });
-    assert.match(String(messageResponse.content ?? ''), /answerValue/);
-    assert.match(String(messageResponse.content ?? ''), /src\/example\.ts/);
+    assert.ok(String(messageResponse.content ?? '').trim().length > 0, `Expected non-empty coding response: ${JSON.stringify(messageResponse)}`);
+    if (provider.mode === 'fake') {
+      assert.match(String(messageResponse.content ?? ''), /answerValue/);
+      assert.match(String(messageResponse.content ?? ''), /src\/example\.ts/);
+    }
 
-    const toolsStateAfter = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=20');
+    const toolsStateAfter = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
     const recentJobs = Array.isArray(toolsStateAfter?.jobs) ? toolsStateAfter.jobs : [];
-    assert.ok(recentJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from coding message flow');
-    assert.ok(recentJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from coding message flow');
+    const newJobs = recentJobs.filter((job) => job?.id && !previousJobIds.has(job.id));
 
-    const toolListsSeen = scenarioLog.map((entry) => entry.tools);
-    assert.ok(toolListsSeen.some((tools) => tools.includes('find_tools')), 'Expected find_tools in model tool lists');
+    if (provider.mode === 'fake') {
+      assert.ok(newJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from coding message flow');
+      assert.ok(newJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from coding message flow');
+      const toolListsSeen = scenarioLog.map((entry) => entry.tools);
+      assert.ok(toolListsSeen.some((tools) => tools.includes('find_tools')), 'Expected find_tools in model tool lists');
+    } else {
+      const acceptableToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      assert.ok(
+        newJobs.some((job) => acceptableToolNames.has(job.toolName)),
+        `Expected a coding search/read tool call from the real-model message flow, got ${JSON.stringify(newJobs)}`,
+      );
+    }
 
-    console.log('PASS coding assistant harness');
+    const toolsStateBeforeGitMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const previousGitMessageJobIds = new Set(
+      (Array.isArray(toolsStateBeforeGitMessage?.jobs) ? toolsStateBeforeGitMessage.jobs : [])
+        .map((job) => job?.id)
+        .filter(Boolean),
+    );
+
+    const gitStatusResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: [
+        '[Code Workspace Context]',
+        `workspaceRoot: ${workspaceRoot}`,
+        `selectedFile: ${path.join(workspaceRoot, 'src', 'example.ts')}`,
+        '',
+        'Run git status for this coding workspace and summarize it briefly.',
+      ].join('\n'),
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: codeSessionMetadata,
+    });
+    assert.ok(String(gitStatusResponse.content ?? '').trim().length > 0, `Expected non-empty git status response: ${JSON.stringify(gitStatusResponse)}`);
+
+    const toolsStateAfterGitMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const newGitJobs = (Array.isArray(toolsStateAfterGitMessage?.jobs) ? toolsStateAfterGitMessage.jobs : [])
+      .filter((job) => job?.id && !previousGitMessageJobIds.has(job.id));
+
+    if (provider.mode === 'fake') {
+      assert.ok(newGitJobs.some((job) => job.toolName === 'shell_safe'), 'Expected shell_safe job from git status coding message flow');
+      assert.match(String(gitStatusResponse.content ?? ''), /Git status/i);
+    }
+
+    console.log(`PASS coding assistant harness (${provider.mode})`);
   } finally {
     if (appProcess && !appProcess.killed) {
       appProcess.kill('SIGTERM');

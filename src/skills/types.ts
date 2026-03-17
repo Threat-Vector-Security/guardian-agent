@@ -59,6 +59,7 @@ export interface SkillResolutionInput {
   requestType: string;
   content: string;
   enabledManagedProviders?: ReadonlySet<string>;
+  availableCapabilities?: ReadonlySet<string>;
 }
 
 export interface ResolvedSkill {

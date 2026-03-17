@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -2085,6 +2085,116 @@ describe('ToolExecutor', () => {
     const stdout = String(result.output?.stdout || '').trim();
     // On Windows `cd` returns the Windows-style path; normalize for comparison
     expect(stdout.toLowerCase().replace(/\//g, '\\')).toBe(nested.toLowerCase().replace(/\//g, '\\'));
+  });
+
+  it('uses codeContext workspace roots instead of the global allowedPaths list', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const scopedFile = join(codeRoot, 'scoped.txt');
+    await writeFile(scopedFile, 'scoped hello\n', 'utf-8');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'autonomous',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_read',
+      args: { path: scopedFile },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-1' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      path: scopedFile,
+      content: 'scoped hello\n',
+    });
+  });
+
+  it('allows code-scoped git init with approval even when git is not globally allowlisted', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'git init nested-repo',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-2' },
+    });
+
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+    expect(pending.approvalId).toBeTruthy();
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'web-code-harness');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.success).toBe(true);
+    expect(existsSync(join(codeRoot, 'nested-repo', '.git'))).toBe(true);
+  });
+
+  it('rejects code-scoped shell escape flags and path escapes outside the workspace', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const flagEscape = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'git -C /tmp status',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-3' },
+    });
+    expect(flagEscape.success).toBe(false);
+    expect(flagEscape.status).toBe('failed');
+    expect(flagEscape.message).toMatch(/denied path|Coding Assistant/i);
+
+    const pathEscape = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'git init ../escape-repo',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-3' },
+    });
+    expect(pathEscape.success).toBe(false);
+    expect(pathEscape.status).toBe('failed');
+    expect(pathEscape.message).toContain('denied path');
   });
 
   it('applies code_edit with exact block matching', async () => {

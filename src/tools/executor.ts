@@ -8,6 +8,7 @@ import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlin
 import { isIP } from 'node:net';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { sanitizeShellArgs, scanWriteContent, validateArgSize } from '../guardian/argument-sanitizer.js';
+import { validateShellCommand, type ParsedCommand } from '../guardian/shell-validator.js';
 import { normalizeHttpUrlInput, normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from '../config/input-normalization.js';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
@@ -70,6 +71,83 @@ const MAX_TOOL_CALLS_PER_CHAIN = 24;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const CODE_ASSISTANT_ALLOWED_COMMANDS = [
+  'git',
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'bun',
+  'python',
+  'python3',
+  'pip',
+  'pip3',
+  'uv',
+  'pytest',
+  'cargo',
+  'rustc',
+  'go',
+  'gofmt',
+  'java',
+  'javac',
+  'gradle',
+  'mvn',
+  'dotnet',
+  'php',
+  'composer',
+  'ruby',
+  'bundle',
+  'gem',
+  'deno',
+  'make',
+  'cmake',
+  'ollama',
+  'ls',
+  'dir',
+  'pwd',
+  'echo',
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'which',
+  'type',
+  'file',
+  'find',
+  'rg',
+  'grep',
+  'sed',
+  'awk',
+] as const;
+const CODE_DISALLOWED_SHELL_TOKENS = new Map<string, string>([
+  ['-C', 'Directory override flags like git -C are blocked in the Coding Assistant. Use cwd or the session workspace root instead.'],
+  ['--git-dir', 'Git repository indirection is blocked in the Coding Assistant.'],
+  ['--work-tree', 'Git work tree overrides are blocked in the Coding Assistant.'],
+  ['--super-prefix', 'Git prefix overrides are blocked in the Coding Assistant.'],
+  ['--exec-path', 'Git exec-path overrides are blocked in the Coding Assistant.'],
+  ['--prefix', 'Prefix overrides are blocked in the Coding Assistant.'],
+  ['--cwd', 'Working-directory override flags are blocked in the Coding Assistant. Use the tool cwd field instead.'],
+  ['--cache', 'Cache path overrides are blocked in the Coding Assistant.'],
+  ['--cache-dir', 'Cache path overrides are blocked in the Coding Assistant.'],
+  ['--userconfig', 'User config overrides are blocked in the Coding Assistant.'],
+  ['--globalconfig', 'Global config overrides are blocked in the Coding Assistant.'],
+  ['-g', 'Global installs are blocked in the Coding Assistant.'],
+  ['--global', 'Global installs are blocked in the Coding Assistant.'],
+  ['global', 'Global installs are blocked in the Coding Assistant.'],
+  ['--location=global', 'Global installs are blocked in the Coding Assistant.'],
+  ['--user', 'User-level installs are blocked in the Coding Assistant.'],
+]);
+const CODE_DISALLOWED_SHELL_TOKEN_PREFIXES = new Map<string, string>([
+  ['--git-dir=', 'Git repository indirection is blocked in the Coding Assistant.'],
+  ['--work-tree=', 'Git work tree overrides are blocked in the Coding Assistant.'],
+  ['--prefix=', 'Prefix overrides are blocked in the Coding Assistant.'],
+  ['--cwd=', 'Working-directory override flags are blocked in the Coding Assistant.'],
+  ['--cache=', 'Cache path overrides are blocked in the Coding Assistant.'],
+  ['--cache-dir=', 'Cache path overrides are blocked in the Coding Assistant.'],
+  ['--userconfig=', 'User config overrides are blocked in the Coding Assistant.'],
+  ['--globalconfig=', 'Global config overrides are blocked in the Coding Assistant.'],
+]);
 const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
   'ssl',
   'min_tls_version',
@@ -864,6 +942,121 @@ export class ToolExecutor {
     return this.getPolicy();
   }
 
+  private getCodeWorkspaceRoot(request?: Partial<ToolExecutionRequest>): string | undefined {
+    const rawRoot = request?.codeContext?.workspaceRoot?.trim();
+    if (!rawRoot) return undefined;
+    const normalizedRoot = normalizePathForHost(rawRoot);
+    return isAbsolute(normalizedRoot)
+      ? resolve(normalizedRoot)
+      : resolve(this.options.workspaceRoot, normalizedRoot);
+  }
+
+  private getEffectiveWorkspaceRoot(request?: Partial<ToolExecutionRequest>): string {
+    return this.getCodeWorkspaceRoot(request) ?? this.options.workspaceRoot;
+  }
+
+  private getEffectiveAllowedPaths(request?: Partial<ToolExecutionRequest>): string[] {
+    const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
+    if (codeWorkspaceRoot) {
+      return [codeWorkspaceRoot];
+    }
+    return this.policy.sandbox.allowedPaths.length > 0
+      ? this.policy.sandbox.allowedPaths
+      : [this.options.workspaceRoot];
+  }
+
+  private getEffectiveAllowedCommands(request?: Partial<ToolExecutionRequest>): string[] {
+    if (this.getCodeWorkspaceRoot(request)) {
+      return [...CODE_ASSISTANT_ALLOWED_COMMANDS];
+    }
+    return this.policy.sandbox.allowedCommands;
+  }
+
+  private buildCodeShellEnv(workspaceRoot: string): Record<string, string> {
+    const cacheRoot = resolve(workspaceRoot, '.guardianagent', 'cache');
+    return {
+      npm_config_cache: resolve(cacheRoot, 'npm'),
+      NPM_CONFIG_CACHE: resolve(cacheRoot, 'npm'),
+      YARN_CACHE_FOLDER: resolve(cacheRoot, 'yarn'),
+      PNPM_STORE_DIR: resolve(cacheRoot, 'pnpm'),
+      PIP_CACHE_DIR: resolve(cacheRoot, 'pip'),
+      UV_CACHE_DIR: resolve(cacheRoot, 'uv'),
+      CARGO_HOME: resolve(cacheRoot, 'cargo'),
+      RUSTUP_HOME: resolve(cacheRoot, 'rustup'),
+      GOCACHE: resolve(cacheRoot, 'go-build'),
+      GOMODCACHE: resolve(cacheRoot, 'go-mod'),
+      BUNDLE_PATH: resolve(cacheRoot, 'bundle'),
+      COMPOSER_HOME: resolve(cacheRoot, 'composer'),
+      DOTNET_CLI_HOME: resolve(cacheRoot, 'dotnet'),
+    };
+  }
+
+  private looksLikePathToken(token: string): boolean {
+    if (!token) return false;
+    if (token === '.' || token === '..') return true;
+    if (token.startsWith('./') || token.startsWith('../')) return true;
+    if (token.startsWith('~')) return true;
+    if (token.includes('/') || token.includes('\\')) return true;
+    return /^[a-zA-Z]:[\\/]/.test(token);
+  }
+
+  private isCodePathTokenDenied(token: string, workspaceRoot: string, cwd: string): boolean {
+    const trimmed = token.trim();
+    if (!trimmed) return false;
+    if (!this.looksLikePathToken(trimmed)) return false;
+    if (trimmed.startsWith('~')) return true;
+    const normalized = normalizePathForHost(trimmed);
+    const resolvedTokenPath = isAbsolute(normalized)
+      ? resolve(normalized)
+      : resolve(cwd, normalized);
+    return !isPathInside(resolvedTokenPath, workspaceRoot);
+  }
+
+  private getCodeShellTokenBlockReason(commands: ParsedCommand[]): string | undefined {
+    for (const command of commands) {
+      for (const token of command.args) {
+        const exact = CODE_DISALLOWED_SHELL_TOKENS.get(token);
+        if (exact) return exact;
+        for (const [prefix, reason] of CODE_DISALLOWED_SHELL_TOKEN_PREFIXES.entries()) {
+          if (token.startsWith(prefix)) return reason;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private validateShellCommandForRequest(
+    command: string,
+    request?: Partial<ToolExecutionRequest>,
+    cwd?: string,
+  ): { safe: boolean; reason?: string } {
+    const allowedCommands = this.getEffectiveAllowedCommands(request);
+    const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
+    if (!codeWorkspaceRoot) {
+      return sanitizeShellArgs(command, allowedCommands);
+    }
+
+    const effectiveCwd = cwd ?? codeWorkspaceRoot;
+    const validation = validateShellCommand(
+      command,
+      allowedCommands,
+      (candidate) => this.isCodePathTokenDenied(candidate, codeWorkspaceRoot, effectiveCwd),
+    );
+    if (!validation.valid) {
+      return {
+        safe: false,
+        reason: validation.reason ?? 'Command failed Coding Assistant shell validation.',
+      };
+    }
+
+    const tokenBlockReason = this.getCodeShellTokenBlockReason(validation.commands);
+    if (tokenBlockReason) {
+      return { safe: false, reason: tokenBlockReason };
+    }
+
+    return { safe: true };
+  }
+
   /**
    * Pre-flight validation: check what approval decision each tool would get
    * under the current policy, and suggest fixes the user can apply.
@@ -1248,7 +1441,7 @@ export class ToolExecutor {
       };
     }
 
-    const preApprovalError = await this.validateBeforeApproval(entry.definition.name, args);
+    const preApprovalError = await this.validateBeforeApproval(entry.definition.name, args, request);
     if (preApprovalError) {
       job.status = 'failed';
       job.completedAt = this.now();
@@ -1887,13 +2080,20 @@ export class ToolExecutor {
     return null;
   }
 
-  private async validateBeforeApproval(toolName: string, args: Record<string, unknown>): Promise<string | null> {
+  private async validateBeforeApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+    request?: Partial<ToolExecutionRequest>,
+  ): Promise<string | null> {
     if (toolName === 'shell_safe') {
       const command = typeof args.command === 'string' ? args.command.trim() : '';
       if (!command) {
         return null;
       }
-      const shellCheck = sanitizeShellArgs(command, this.policy.sandbox.allowedCommands);
+      const cwd = typeof args.cwd === 'string' && args.cwd.trim()
+        ? await this.resolveAllowedPath(args.cwd.trim(), request)
+        : this.getEffectiveWorkspaceRoot(request);
+      const shellCheck = this.validateShellCommandForRequest(command, request, cwd);
       return shellCheck.safe ? null : shellCheck.reason ?? 'Command failed shell safety validation.';
     }
 
@@ -1901,7 +2101,7 @@ export class ToolExecutor {
       const path = typeof args.path === 'string' ? args.path.trim() : '';
       if (path) {
         try {
-          await this.resolveAllowedPath(path);
+          await this.resolveAllowedPath(path, request);
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
@@ -1914,7 +2114,7 @@ export class ToolExecutor {
       for (const path of [source, destination]) {
         if (!path) continue;
         try {
-          await this.resolveAllowedPath(path);
+          await this.resolveAllowedPath(path, request);
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
@@ -1925,7 +2125,7 @@ export class ToolExecutor {
       const csvPath = typeof args.csvPath === 'string' ? args.csvPath.trim() : '';
       if (csvPath) {
         try {
-          await this.resolveAllowedPath(csvPath);
+          await this.resolveAllowedPath(csvPath, request);
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
@@ -3208,7 +3408,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = asString(args.path, '.');
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'read_file', { path: rawPath });
         const entries = await readdir(safePath, { withFileTypes: true });
         return {
@@ -3261,7 +3461,7 @@ export class ToolExecutor {
           };
         }
 
-        const safeRoot = await this.resolveAllowedPath(rawPath);
+        const safeRoot = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'read_file', { path: rawPath, query });
 
         const maxResults = Math.max(1, Math.min(MAX_SEARCH_RESULTS, asNumber(args.maxResults, 25)));
@@ -3386,7 +3586,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'read_file', { path: rawPath });
         const maxBytes = Math.min(MAX_READ_BYTES, Math.max(256, asNumber(args.maxBytes, 64_000)));
         const content = await readFile(safePath);
@@ -3437,7 +3637,7 @@ export class ToolExecutor {
             error: `Write content rejected by security policy: ${findings.join(', ')}.`,
           };
         }
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'write_file', { path: rawPath, content });
         await mkdir(dirname(safePath), { recursive: true });
         if (append) {
@@ -3477,7 +3677,7 @@ export class ToolExecutor {
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
         const recursive = args.recursive !== false;
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'write_file', { path: rawPath, content: '[mkdir]' });
         await mkdir(safePath, { recursive });
         return {
@@ -3510,7 +3710,7 @@ export class ToolExecutor {
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
         const recursive = !!args.recursive;
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'write_file', { path: rawPath, content: '[delete]' });
         const details = await stat(safePath);
         const isDir = details.isDirectory();
@@ -3550,8 +3750,8 @@ export class ToolExecutor {
       async (args, request) => {
         const rawSource = requireString(args.source, 'source');
         const rawDest = requireString(args.destination, 'destination');
-        const safeSource = await this.resolveAllowedPath(rawSource);
-        const safeDest = await this.resolveAllowedPath(rawDest);
+        const safeSource = await this.resolveAllowedPath(rawSource, request);
+        const safeDest = await this.resolveAllowedPath(rawDest, request);
         this.guardAction(request, 'write_file', { path: rawSource, content: `[move → ${rawDest}]` });
         await mkdir(dirname(safeDest), { recursive: true });
         await rename(safeSource, safeDest);
@@ -3585,8 +3785,8 @@ export class ToolExecutor {
       async (args, request) => {
         const rawSource = requireString(args.source, 'source');
         const rawDest = requireString(args.destination, 'destination');
-        const safeSource = await this.resolveAllowedPath(rawSource);
-        const safeDest = await this.resolveAllowedPath(rawDest);
+        const safeSource = await this.resolveAllowedPath(rawSource, request);
+        const safeDest = await this.resolveAllowedPath(rawDest, request);
         this.guardAction(request, 'write_file', { path: rawDest, content: `[copy from ${rawSource}]` });
         await mkdir(dirname(safeDest), { recursive: true });
         await copyFile(safeSource, safeDest);
@@ -3626,7 +3826,7 @@ export class ToolExecutor {
         const title = asString(args.title, 'Document');
         const content = asString(args.content, '');
         const template = asString(args.template, 'markdown').toLowerCase();
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         const finalBody = template === 'plain'
           ? `${title}\n\n${content}\n`
           : `# ${title}\n\n${content}\n`;
@@ -3678,21 +3878,27 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const command = requireString(args.command, 'command').trim();
-        const shellCheck = sanitizeShellArgs(command, this.policy.sandbox.allowedCommands);
+        const cwd = args.cwd
+          ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd'), request)
+          : this.getEffectiveWorkspaceRoot(request);
+        const shellCheck = this.validateShellCommandForRequest(command, request, cwd);
         if (!shellCheck.safe) {
           return {
             success: false,
             error: shellCheck.reason ?? `Command is not allowlisted: '${command}'.`,
           };
         }
-        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
         this.guardAction(request, 'execute_command', { command, cwd });
         const timeoutMs = Math.max(500, Math.min(60_000, asNumber(args.timeoutMs, 15_000)));
         try {
+          const env = this.getCodeWorkspaceRoot(request)
+            ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
+            : undefined;
           const { stdout, stderr } = await this.sandboxExec(command, 'workspace-write', {
             cwd,
             timeout: timeoutMs,
             maxBuffer: 1_000_000,
+            env,
           });
           return {
             success: true,
@@ -3769,7 +3975,7 @@ export class ToolExecutor {
         const rawPath = requireString(args.path, 'path');
         const oldString = requireStringAllowEmpty(args.oldString, 'oldString');
         const newString = requireStringAllowEmpty(args.newString, 'newString');
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         const source = await readFile(safePath, 'utf-8');
         const match = findCodeEditRange(source, oldString);
         if (!match) {
@@ -3824,23 +4030,29 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const patch = requireString(args.patch, 'patch');
-        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
+        const cwd = args.cwd
+          ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd'), request)
+          : this.getEffectiveWorkspaceRoot(request);
         const targets = extractPatchTargets(patch);
         if (targets.length === 0) {
           return { success: false, error: 'Patch did not contain any target files.' };
         }
-        const resolvedTargets = await Promise.all(targets.map((target) => this.resolveAllowedPath(resolve(cwd, target))));
+        const resolvedTargets = await Promise.all(targets.map((target) => this.resolveAllowedPath(resolve(cwd, target), request)));
         this.guardAction(request, 'write_file', { cwd, files: targets, patch });
 
-        const patchDir = resolve(this.options.workspaceRoot, '.guardianagent', 'tmp');
+        const patchDir = resolve(this.getEffectiveWorkspaceRoot(request), '.guardianagent', 'tmp');
         await mkdir(patchDir, { recursive: true });
         const patchFile = resolve(patchDir, `patch-${randomUUID()}.diff`);
         await writeFile(patchFile, patch, 'utf-8');
         try {
+          const env = this.getCodeWorkspaceRoot(request)
+            ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
+            : undefined;
           await this.sandboxExec(`git apply --whitespace=nowarn ${shellEscapeArg(patchFile)}`, 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
+            env,
           });
         } catch (err) {
           return {
@@ -3884,7 +4096,7 @@ export class ToolExecutor {
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
         const overwrite = !!args.overwrite;
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         try {
           await stat(safePath);
           if (!overwrite) {
@@ -3938,9 +4150,11 @@ export class ToolExecutor {
           required: ['task'],
         },
       },
-      async (args) => {
+      async (args, request) => {
         const task = requireString(args.task, 'task');
-        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
+        const cwd = args.cwd
+          ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd'), request)
+          : this.getEffectiveWorkspaceRoot(request);
         const selectedFiles = Array.isArray(args.selectedFiles)
           ? args.selectedFiles.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
           : [];
@@ -4006,7 +4220,7 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        const cwd = await this.resolveAllowedPath(requireString(args.cwd, 'cwd'));
+        const cwd = await this.resolveAllowedPath(requireString(args.cwd, 'cwd'), request);
         const message = requireString(args.message, 'message').trim();
         const paths = Array.isArray(args.paths)
           ? args.paths.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
@@ -4015,22 +4229,27 @@ export class ToolExecutor {
           return { success: false, error: 'Commit message is required.' };
         }
         for (const target of paths) {
-          await this.resolveAllowedPath(resolve(cwd, target));
+          await this.resolveAllowedPath(resolve(cwd, target), request);
         }
         this.guardAction(request, 'execute_command', { command: 'git commit', cwd, message, paths });
         const addCommand = paths.length > 0
           ? `git add -- ${paths.map((target) => shellEscapeArg(target)).join(' ')}`
           : 'git add -A';
         try {
+          const env = this.getCodeWorkspaceRoot(request)
+            ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
+            : undefined;
           await this.sandboxExec(addCommand, 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
+            env,
           });
           const { stdout, stderr } = await this.sandboxExec(`git commit -m ${shellEscapeArg(message)}`, 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
+            env,
           });
           return {
             success: true,
@@ -4510,7 +4729,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
-        const safePath = await this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'read_file', { path: rawPath });
         const maxRows = Math.max(1, Math.min(1000, asNumber(args.maxRows, 500)));
         const source = asString(args.source);
@@ -11776,11 +11995,11 @@ export class ToolExecutor {
     }
   }
 
-  private async resolveAllowedPath(inputPath: string): Promise<string> {
+  private async resolveAllowedPath(inputPath: string, request?: Partial<ToolExecutionRequest>): Promise<string> {
     const normalizedInput = normalizePathForHost(inputPath);
     let candidate = isAbsolute(normalizedInput)
       ? resolve(normalizedInput)
-      : resolve(this.options.workspaceRoot, normalizedInput);
+      : resolve(this.getEffectiveWorkspaceRoot(request), normalizedInput);
     // Resolve symlinks to prevent traversal via symlink to sensitive paths
     try {
       candidate = await realpath(candidate);
@@ -11788,7 +12007,7 @@ export class ToolExecutor {
       // Path may not exist yet (e.g. write_file creating new file) — use resolved path
     }
     const roots = await Promise.all(
-      uniqueNonEmpty(this.policy.sandbox.allowedPaths)
+      uniqueNonEmpty(this.getEffectiveAllowedPaths(request))
         .map(async (root) => {
           const resolvedRoot = resolve(normalizePathForHost(root));
           try {
@@ -12427,7 +12646,7 @@ export class ToolExecutor {
   private sandboxExec(
     command: string,
     profile: SandboxProfile,
-    opts: { networkAccess?: boolean; cwd?: string; timeout?: number; maxBuffer?: number } = {},
+    opts: { networkAccess?: boolean; cwd?: string; timeout?: number; maxBuffer?: number; env?: Record<string, string> } = {},
   ): Promise<{ stdout: string; stderr: string }> {
     return sandboxedExec(command, this.sandboxConfig, {
       profile,
@@ -12435,6 +12654,7 @@ export class ToolExecutor {
       cwd: opts.cwd ?? this.options.workspaceRoot,
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
+      env: opts.env,
     });
   }
 
@@ -12474,14 +12694,20 @@ export class ToolExecutor {
     type: string,
     params: Record<string, unknown>,
   ): void {
+    const effectiveParams = request.codeContext && type === 'execute_command'
+      ? {
+          ...params,
+          allowedCommandsOverride: this.getEffectiveAllowedCommands(request),
+        }
+      : params;
     if (request.agentContext) {
-      request.agentContext.checkAction({ type, params });
+      request.agentContext.checkAction({ type, params: effectiveParams });
       return;
     }
     if (!this.options.onCheckAction) return;
     this.options.onCheckAction({
       type,
-      params,
+      params: effectiveParams,
       origin: request.origin,
       agentId: request.agentId ?? 'assistant-tools',
     });

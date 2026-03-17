@@ -12,6 +12,7 @@ Use this when the user is reviewing a security alert, posture change, suspicious
 3. Build a timeline when the order of events matters.
 4. Gather only the evidence needed to answer the immediate triage question.
 5. Recommend next steps in priority order.
+6. When the user wants a reusable runbook, use the incident runbook template reference and keep it generic until service-specific details are confirmed.
 
 ## Tooling Guidance
 
@@ -26,3 +27,7 @@ Use this when the user is reviewing a security alert, posture change, suspicious
 - Prefer chronological and evidence-based summaries.
 - Clearly label severity, affected asset or surface, evidence, and recommended next action.
 - Avoid speculative conclusions when evidence is incomplete.
+
+## Runbooks
+
+Read [references/incident-runbook-template.md](./references/incident-runbook-template.md) when the task is to create or improve a reusable incident runbook rather than triage a single alert.

@@ -1,0 +1,54 @@
+{
+  "id": "gha-security-review",
+  "name": "GitHub Actions Security Review",
+  "version": "0.1.0",
+  "description": "Review GitHub Actions workflows for externally exploitable CI vulnerabilities such as pwn requests, expression injection, secret exposure, and unsafe runner use.",
+  "role": "process",
+  "tags": [
+    "github-actions",
+    "security",
+    "workflow-security",
+    "ci-security",
+    "pwn-request",
+    "expression-injection",
+    "supply-chain",
+    "runner-security"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "github actions security",
+      "workflow security",
+      "ci security",
+      "pwn request",
+      "actions review",
+      "workflow review"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [],
+  "risk": "informational",
+  "_upstream": {
+    "source": "github-repo",
+    "repo": "https://github.com/sickn33/antigravity-awesome-skills",
+    "path": "skills/gha-security-review/SKILL.md",
+    "slug": "antigravity/gha-security-review",
+    "originalName": "gha-security-review",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "883c81609a76d6d70a19068194a632a599de089f",
+    "fetchedAt": "2026-03-17T03:37:30.507Z",
+    "sourceUrl": "file:///tmp/antigravity-awesome-skills/skills/gha-security-review/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

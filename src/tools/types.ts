@@ -176,6 +176,15 @@ export interface ToolExecutionRequest {
    * Only internal control-plane paths such as approved scheduled tasks should set this.
    */
   bypassApprovals?: boolean;
+  /**
+   * Optional Code-session sandbox context.
+   * When present, file and shell actions are constrained to this workspace root
+   * and use the Coding Assistant command allowlist instead of the global shell policy.
+   */
+  codeContext?: {
+    workspaceRoot: string;
+    sessionId?: string;
+  };
 }
 
 export interface ToolResult {

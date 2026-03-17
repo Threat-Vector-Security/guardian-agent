@@ -1,0 +1,56 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "0.1.0",
+  "description": "Use the GitHub CLI to inspect repositories, pull requests, issues, and workflow runs through reviewed `gh` commands.",
+  "role": "domain",
+  "tags": [
+    "github",
+    "pull-request",
+    "issues",
+    "workflow-runs",
+    "gh-cli",
+    "repository",
+    "ci"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "github",
+      "pull request",
+      "workflow run",
+      "gh cli",
+      "github issue",
+      "repository"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "shell_access",
+    "network_access"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/github/SKILL.md",
+    "slug": "steipete/github",
+    "originalName": "github",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:37:30.507Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/github/SKILL.md",
+    "securityAssessment": "benign"
+  }
+}

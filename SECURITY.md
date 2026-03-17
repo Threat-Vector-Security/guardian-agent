@@ -340,6 +340,26 @@ The ShellCommandController goes beyond simple string matching:
 - **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
 - **Dry-run mode**: Preview mutating operations without execution
 
+### Coding Assistant Workspace Scoping
+
+The web `#/code` workspace adds a request-scoped sandbox layer for assistant-driven coding actions.
+
+When a Code session sends a chat/tool request with `codeContext`:
+
+- file and coding tools are pinned to that session `workspaceRoot`, even though the global tool policy remains unchanged
+- `shell_safe` uses a Code-specific repo-work allowlist instead of the global `allowedCommands` list
+- shell validation blocks repo-escape flags and global-install patterns such as `git -C`, `--git-dir`, `--work-tree`, `--prefix`, `--cwd`, `--cache*`, `--userconfig`, `--globalconfig`, `-g`, `--global`, `global`, and `--user`
+- path-like shell args and redirect targets that resolve outside the active workspace root are denied before execution
+- common package/build caches are redirected under `<workspaceRoot>/.guardianagent/cache` to reduce spillover into the user profile
+
+This lets the Coding Assistant run repo-local `git` / build / test flows without globally broadening the shell policy for the rest of the assistant.
+
+Important boundary:
+
+- Code chat history is separate from the main web chat for UX/session isolation
+- repo-scoped enforcement applies to assistant-driven tool calls, not to the manual PTY terminal surface
+- PTY terminals still launch as user-operated shells in the chosen cwd and currently rely on the normal OS/process sandbox plus session ownership checks, not the assistant’s repo-bound command validator
+
 ### Contextual Policy Enforcement
 
 GuardianAgent now ships contextual enforcement directly in the runtime decision path.

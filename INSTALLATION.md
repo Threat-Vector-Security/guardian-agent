@@ -71,9 +71,21 @@ After startup:
 1. Open the web UI and go to Configuration Center.
 2. Add your LLM provider.
 3. Review web auth, tools policy, and channel settings.
-4. Enable optional channels such as Telegram if needed.
+4. Open `#/code` if you want the dedicated Coding Assistant workspace for repo browsing, diffs, terminals, and coding-specific approvals.
+5. Enable optional channels such as Telegram if needed.
 
 Most users should configure GuardianAgent through the web UI or CLI rather than editing config files directly.
+
+## Coding Assistant
+
+GuardianAgent includes a dedicated web Coding Assistant at `#/code`.
+
+- it is separate from the general web chat
+- each Code session keeps its own chat history and workspace state in the browser
+- the page combines explorer, diff viewing, PTY-backed terminals, and a coding sidebar with `Chat`, `Tasks`, `Approvals`, and `Checks`
+- assistant-driven file and shell actions are scoped to the active Code workspace root, so Coding Assistant command breadth does not widen the main chat shell policy
+
+For current behavior and limitations, see [docs/specs/CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md).
 
 ## More Detail
 

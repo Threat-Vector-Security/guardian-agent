@@ -78,6 +78,9 @@ export class SkillRegistry {
           continue;
         }
         this.skills.set(skill.manifest.id, skill);
+        if (skill.manifest.enabled === false) {
+          this.runtimeDisabled.add(skill.manifest.id);
+        }
       }
     }
     for (const id of disabled) {
@@ -106,9 +109,6 @@ async function loadSkill(skillDir: string): Promise<LoadedSkill | null> {
     const { manifest, instruction } = loaded;
     if (!manifest.id?.trim() || !manifest.name?.trim()) {
       log.warn({ skillDir }, 'Skipping skill with missing id or name');
-      return null;
-    }
-    if (manifest.enabled === false) {
       return null;
     }
     const normalizedInstruction = instruction.trim();

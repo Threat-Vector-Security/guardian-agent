@@ -4,6 +4,9 @@ import { onSSE } from '../app.js';
 const STORAGE_KEY = 'guardianagent_code_sessions_v1';
 const DEFAULT_USER_CHANNEL = 'web';
 const MAX_TERMINAL_PANES = 3;
+const APPROVAL_BACKLOG_SOFT_CAP = 3;
+const MAX_SESSION_JOBS = 20;
+const ASSISTANT_TABS = ['chat', 'tasks', 'approvals', 'checks'];
 
 const SCROLL_SELECTORS = ['.code-file-list', '.code-editor__content', '.code-chat__history', '.code-rail__list'];
 
@@ -22,6 +25,10 @@ let terminalUnloadBound = false;
 let terminalLibPromise = null;
 let terminalCssLoaded = false;
 let terminalInstances = new Map();
+
+function isAssistantTab(value) {
+  return ASSISTANT_TABS.includes(value);
+}
 
 // ─── Platform-aware shell options ──────────────────────────
 
@@ -169,6 +176,192 @@ function trimTerminalOutput(text) {
   return text.length > MAX_CHARS ? text.slice(text.length - MAX_CHARS) : text;
 }
 
+function pluralize(count, singular, plural = `${singular}s`) {
+  return count === 1 ? singular : plural;
+}
+
+function humanizeToolName(toolName) {
+  return String(toolName || '')
+    .replace(/^code_/, '')
+    .replace(/^fs_/, 'file ')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatRelativeTime(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  const deltaSeconds = Math.max(0, Math.floor((Date.now() - value) / 1000));
+  if (deltaSeconds < 60) return `${deltaSeconds}s ago`;
+  const deltaMinutes = Math.floor(deltaSeconds / 60);
+  if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+  const deltaHours = Math.floor(deltaMinutes / 60);
+  if (deltaHours < 24) return `${deltaHours}h ago`;
+  const deltaDays = Math.floor(deltaHours / 24);
+  return `${deltaDays}d ago`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isApprovalNotFoundMessage(value) {
+  return /approval\s+'[^']+'\s+not\s+found/i.test(String(value || ''));
+}
+
+function getApprovalBacklogState(session) {
+  const count = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals.length : 0;
+  return {
+    count,
+    blocked: count >= APPROVAL_BACKLOG_SOFT_CAP,
+  };
+}
+
+function isSessionJob(job, session) {
+  return !!job
+    && job.userId === buildUserId(session)
+    && job.channel === DEFAULT_USER_CHANNEL;
+}
+
+function isCodeAssistantJob(job) {
+  const toolName = String(job?.toolName || '').trim();
+  return toolName.startsWith('code_')
+    || toolName === 'find_tools'
+    || toolName.startsWith('fs_')
+    || toolName === 'shell_safe';
+}
+
+function isVerificationJob(job) {
+  const toolName = String(job?.toolName || '').trim();
+  return toolName === 'code_test'
+    || toolName === 'code_lint'
+    || toolName === 'code_build'
+    || !!job?.verificationStatus
+    || job?.status === 'failed';
+}
+
+function mapTaskStatus(job) {
+  if (!job) return 'info';
+  if (job.status === 'pending_approval') return 'waiting';
+  if (job.status === 'failed' || job.status === 'denied') return 'blocked';
+  if (job.status === 'running') return 'active';
+  if (job.status === 'succeeded') return 'completed';
+  return 'info';
+}
+
+function mapCheckStatus(job) {
+  if (!job) return 'info';
+  if (job.status === 'failed' || job.status === 'denied') return 'fail';
+  if (job.verificationStatus === 'verified') return 'pass';
+  if (job.status === 'pending_approval') return 'warn';
+  if (job.verificationStatus === 'unverified') return 'warn';
+  if (job.status === 'succeeded') return 'warn';
+  return 'info';
+}
+
+function summarizeJobDetail(job) {
+  if (!job) return '';
+  if (job.status === 'pending_approval') return 'Waiting for your approval before execution can continue.';
+  if (job.status === 'failed' || job.status === 'denied') return job.error || 'This step did not complete successfully.';
+  if (job.verificationEvidence) return job.verificationEvidence;
+  if (job.resultPreview) return job.resultPreview;
+  if (job.argsPreview) return job.argsPreview;
+  return `${humanizeToolName(job.toolName)} ${job.status || 'updated'}.`;
+}
+
+function summarizeTaskTitle(job) {
+  if (!job) return 'Recent activity';
+  if (job.status === 'pending_approval') return `${humanizeToolName(job.toolName)} is waiting for approval`;
+  if (job.status === 'failed') return `${humanizeToolName(job.toolName)} failed`;
+  if (job.status === 'denied') return `${humanizeToolName(job.toolName)} was denied`;
+  if (job.status === 'succeeded') return `${humanizeToolName(job.toolName)} completed`;
+  return `${humanizeToolName(job.toolName)} is in progress`;
+}
+
+function deriveTaskItems(session) {
+  const items = [];
+  const backlog = getApprovalBacklogState(session);
+  const recentJobs = Array.isArray(session?.recentJobs) ? session.recentJobs.filter(isCodeAssistantJob) : [];
+
+  if (backlog.count > 0) {
+    items.push({
+      id: 'pending-approvals',
+      title: backlog.blocked
+        ? `Approval backlog is full (${backlog.count})`
+        : `${backlog.count} ${pluralize(backlog.count, 'approval')} waiting`,
+      status: backlog.blocked ? 'blocked' : 'waiting',
+      detail: backlog.blocked
+        ? 'New write actions are paused until you clear some approvals.'
+        : 'A mutating step is paused until you approve or deny it.',
+    });
+  }
+
+  if (session?.planSummary) {
+    items.push({
+      id: 'active-plan',
+      title: 'Active plan',
+      status: 'info',
+      detail: session.planSummary,
+    });
+  }
+
+  recentJobs.slice(0, 4).forEach((job) => {
+    items.push({
+      id: job.id,
+      title: summarizeTaskTitle(job),
+      status: mapTaskStatus(job),
+      detail: summarizeJobDetail(job),
+      meta: formatRelativeTime(job.createdAt),
+    });
+  });
+
+  return items;
+}
+
+function deriveCheckItems(session) {
+  const jobs = Array.isArray(session?.recentJobs)
+    ? session.recentJobs.filter(isVerificationJob).slice(0, 8)
+    : [];
+  return jobs.map((job) => ({
+    id: job.id,
+    title: humanizeToolName(job.toolName),
+    status: mapCheckStatus(job),
+    detail: summarizeJobDetail(job),
+    meta: formatRelativeTime(job.createdAt),
+  }));
+}
+
+function getTaskBadgeCount(session) {
+  return deriveTaskItems(session).filter((item) => item.status !== 'completed').length;
+}
+
+function getCheckBadgeCount(session) {
+  return deriveCheckItems(session).filter((item) => item.status !== 'pass' && item.status !== 'info').length;
+}
+
+function normalizePendingApprovals(values, existing = []) {
+  const previousById = new Map(
+    (Array.isArray(existing) ? existing : [])
+      .filter((entry) => entry && typeof entry.id === 'string')
+      .map((entry) => [entry.id, entry]),
+  );
+  return Array.isArray(values)
+    ? values
+      .filter((entry) => entry && typeof entry.id === 'string')
+      .map((entry) => {
+        const previous = previousById.get(entry.id) || {};
+        return {
+          id: entry.id,
+          toolName: String(entry.toolName || previous.toolName || 'unknown'),
+          argsPreview: String(entry.argsPreview || previous.argsPreview || ''),
+          createdAt: Number(entry.createdAt || previous.createdAt) || null,
+          risk: String(entry.risk || previous.risk || ''),
+          origin: String(entry.origin || previous.origin || ''),
+        };
+      })
+    : [];
+}
+
 function disposeTerminalInstance(tabId) {
   const instance = terminalInstances.get(tabId);
   if (!instance) return;
@@ -297,6 +490,7 @@ export async function renderCode(container) {
       await loadExpandedDirs(activeSession);
       cachedFileView = await loadFileView(activeSession);
       await ensureSessionTerminals(activeSession);
+      await refreshAssistantState(activeSession, { rerender: false });
       saveState(codeState);
     } else {
       cachedFileView = { source: '', diff: '', error: null };
@@ -491,31 +685,8 @@ function renderDOM(container) {
               ` : ''}
             </div>
             ${activeSession ? `
-              <div class="code-chat__meta">
-                <div class="code-chat__workspace">${esc(activeSession.resolvedRoot || activeSession.workspaceRoot)}</div>
-              </div>
-              <div class="code-chat__history">
-                ${activeSession.chat.length === 0
-                  ? `<div class="code-chat__onboarding">
-                      <div class="code-chat__onboarding-title">Getting Started</div>
-                      <ul class="code-chat__onboarding-list">
-                        <li>Describe a bug, feature, or refactor in plain language</li>
-                        <li>The agent reads files, edits code, and runs commands</li>
-                        <li>Mutating actions go through Guardian approval automatically</li>
-                        <li>Coding tools are built in &mdash; just describe what you need</li>
-                      </ul>
-                    </div>`
-                  : activeSession.chat.map((message) => `
-                    <div class="code-message ${message.role === 'user' ? 'is-user' : message.role === 'error' ? 'is-error' : 'is-agent'}">
-                      <div class="code-message__role">${esc(message.role)}</div>
-                      <div class="code-message__body">${esc(message.content)}</div>
-                    </div>
-                  `).join('')}
-              </div>
-              <form class="code-chat__form" data-code-chat-form>
-                <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want.">${esc(activeSession.chatDraft || '')}</textarea>
-                <button class="btn btn-primary" type="submit">Send</button>
-              </form>
+              ${renderAssistantTabs(activeSession)}
+              ${renderAssistantPanel(activeSession)}
             ` : '<div class="empty-state">Create a session to start chatting.</div>'}
           </aside>
         </section>
@@ -710,6 +881,198 @@ function renderTerminalPane(session, tab) {
   `;
 }
 
+function renderAssistantTabs(session) {
+  const approvalCount = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals.length : 0;
+  const taskCount = getTaskBadgeCount(session);
+  const checkCount = getCheckBadgeCount(session);
+  const counts = {
+    chat: 0,
+    tasks: taskCount,
+    approvals: approvalCount,
+    checks: checkCount,
+  };
+
+  return `
+    <div class="code-assistant-tabs" role="tablist" aria-label="Coding assistant views">
+      ${ASSISTANT_TABS.map((tabId) => {
+        const label = tabId.charAt(0).toUpperCase() + tabId.slice(1);
+        const isActive = (session?.activeAssistantTab || 'chat') === tabId;
+        const count = counts[tabId] || 0;
+        return `
+          <button
+            class="code-assistant-tab ${isActive ? 'is-active' : ''}"
+            type="button"
+            role="tab"
+            aria-selected="${isActive ? 'true' : 'false'}"
+            data-code-assistant-tab="${escAttr(tabId)}"
+          >
+            <span>${label}</span>
+            ${count > 0 ? `<span class="code-assistant-tab__badge">${count}</span>` : ''}
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderChatNotice(session) {
+  const backlog = getApprovalBacklogState(session);
+  if (backlog.count === 0) return '';
+  const copy = backlog.blocked
+    ? `Too many approvals are waiting. New code changes are paused until you clear some of them.`
+    : `${backlog.count} ${pluralize(backlog.count, 'approval')} ${backlog.count === 1 ? 'is' : 'are'} waiting for your decision.`;
+  return `
+    <div class="code-chat__notice ${backlog.blocked ? 'is-warning' : ''}">
+      <span>${esc(copy)}</span>
+      <button class="btn btn-secondary btn-sm" type="button" data-code-switch-tab="approvals">Review approvals</button>
+    </div>
+  `;
+}
+
+function renderTaskList(session) {
+  const items = deriveTaskItems(session);
+  if (items.length === 0) {
+    return '<div class="empty-state">No tracked coding work yet. Active plans, paused steps, and recent coding actions will appear here.</div>';
+  }
+  return `
+    <div class="code-status-list">
+      ${items.map((item) => `
+        <article class="code-status-card status-${escAttr(item.status)}">
+          <div class="code-status-card__top">
+            <strong>${esc(item.title)}</strong>
+            ${item.meta ? `<span class="code-status-card__meta">${esc(item.meta)}</span>` : ''}
+          </div>
+          <div class="code-status-card__detail">${esc(item.detail || '')}</div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderApprovalList(session) {
+  const approvals = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals : [];
+  const backlog = getApprovalBacklogState(session);
+  const warning = backlog.blocked
+    ? `<div class="code-tab-banner is-warning">New write actions are paused until some approvals are cleared.</div>`
+    : '';
+  if (approvals.length === 0) {
+    return `${warning}<div class="empty-state">No approvals are waiting for this coding session.</div>`;
+  }
+  return `
+    ${warning}
+    <div class="code-status-list">
+      ${approvals.map((approval) => `
+        <article class="approval-card">
+          <div class="approval-card__header">
+            <div>
+              <div class="approval-card__title">${esc(humanizeToolName(approval.toolName))}</div>
+              <div class="approval-card__meta">
+                ${approval.createdAt ? esc(formatRelativeTime(approval.createdAt)) : ''}
+                ${approval.risk ? ` • ${esc(approval.risk)}` : ''}
+                ${approval.origin ? ` • ${esc(approval.origin)}` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="approval-card__preview">${esc(approval.argsPreview || 'No preview available.')}</div>
+          <div class="approval-card__actions">
+            <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="approved">Approve</button>
+            <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="denied">Deny</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderCheckList(session) {
+  const items = deriveCheckItems(session);
+  if (items.length === 0) {
+    return '<div class="empty-state">Verification results will appear here when coding checks or tool verification runs complete.</div>';
+  }
+  return `
+    <div class="code-status-list">
+      ${items.map((item) => `
+        <article class="code-status-card status-${escAttr(item.status)}">
+          <div class="code-status-card__top">
+            <strong>${esc(item.title)}</strong>
+            ${item.meta ? `<span class="code-status-card__meta">${esc(item.meta)}</span>` : ''}
+          </div>
+          <div class="code-status-card__detail">${esc(item.detail || '')}</div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderAssistantPanel(session) {
+  const activeTab = session?.activeAssistantTab || 'chat';
+  switch (activeTab) {
+    case 'tasks':
+      return `
+        <div class="code-assistant-panel__body">
+          <div class="code-chat__meta">
+            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
+          </div>
+          <div class="code-assistant-panel__scroll">
+            ${renderTaskList(session)}
+          </div>
+        </div>
+      `;
+    case 'approvals':
+      return `
+        <div class="code-assistant-panel__body">
+          <div class="code-chat__meta">
+            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
+          </div>
+          <div class="code-assistant-panel__scroll">
+            ${renderApprovalList(session)}
+          </div>
+        </div>
+      `;
+    case 'checks':
+      return `
+        <div class="code-assistant-panel__body">
+          <div class="code-chat__meta">
+            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
+          </div>
+          <div class="code-assistant-panel__scroll">
+            ${renderCheckList(session)}
+          </div>
+        </div>
+      `;
+    case 'chat':
+    default:
+      return `
+        <div class="code-chat__meta">
+          <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
+        </div>
+        ${renderChatNotice(session)}
+        <div class="code-chat__history">
+          ${session.chat.length === 0
+            ? `<div class="code-chat__onboarding">
+                <div class="code-chat__onboarding-title">Getting Started</div>
+                <ul class="code-chat__onboarding-list">
+                  <li>Describe a bug, feature, or refactor in plain language</li>
+                  <li>The agent reads files, edits code, and runs commands</li>
+                  <li>Mutating actions go through Guardian approval automatically</li>
+                  <li>Coding tools are built in &mdash; just describe what you need</li>
+                </ul>
+              </div>`
+            : session.chat.map((message) => `
+              <div class="code-message ${message.role === 'user' ? 'is-user' : message.role === 'error' ? 'is-error' : 'is-agent'}">
+                <div class="code-message__role">${esc(message.role)}</div>
+                <div class="code-message__body">${esc(message.content)}</div>
+              </div>
+            `).join('')}
+        </div>
+        <form class="code-chat__form" data-code-chat-form>
+          <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want.">${esc(session.chatDraft || '')}</textarea>
+          <button class="btn btn-primary" type="submit">Send</button>
+        </form>
+      `;
+  }
+}
+
 // ─── Session card rendering ────────────────────────────────
 
 function renderSessionForm() {
@@ -755,6 +1118,9 @@ function renderSessionForm() {
 
 function renderSessionCard(session) {
   const isActive = session.id === codeState.activeSessionId;
+  const approvalCount = Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0;
+  const checkCount = getCheckBadgeCount(session);
+  const taskCount = getTaskBadgeCount(session);
   return `
     <button class="code-session ${isActive ? 'is-active' : ''}" type="button" data-code-session-id="${escAttr(session.id)}">
       <div class="code-session__top">
@@ -765,6 +1131,11 @@ function renderSessionCard(session) {
         </span>
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
+      <div class="code-session__badges">
+        ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}
+        ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
+        ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}
+      </div>
     </button>
   `;
 }
@@ -802,6 +1173,7 @@ async function refreshSessionData(session) {
   }
   cachedFileView = fileView;
   await loadExpandedDirs(session);
+  await refreshAssistantState(session, { rerender: false });
   saveState(codeState);
   rerenderFromState();
 }
@@ -829,6 +1201,159 @@ async function loadFileView(session) {
     diff: diffResult?.stdout || diffResult?.stderr || '',
     error: sourceResult?.success ? null : (sourceResult?.message || sourceResult?.error || 'Failed to read file.'),
   };
+}
+
+async function loadAssistantState(session) {
+  const userId = buildUserId(session);
+  const [pendingResult, toolsState] = await Promise.all([
+    api.pendingToolApprovals(userId, DEFAULT_USER_CHANNEL, 100).catch(() => []),
+    api.toolsState(100).catch(() => ({ approvals: [], jobs: [] })),
+  ]);
+
+  const approvalsById = new Map(
+    (Array.isArray(toolsState?.approvals) ? toolsState.approvals : [])
+      .filter((approval) => approval && typeof approval.id === 'string')
+      .map((approval) => [approval.id, approval]),
+  );
+
+  const pendingApprovals = normalizePendingApprovals(
+    Array.isArray(pendingResult)
+      ? pendingResult.map((approval) => ({
+        ...approval,
+        ...(approvalsById.get(approval.id) || {}),
+      }))
+      : [],
+    session.pendingApprovals,
+  );
+
+  const recentJobs = (Array.isArray(toolsState?.jobs) ? toolsState.jobs : [])
+    .filter((job) => isSessionJob(job, session))
+    .slice(0, MAX_SESSION_JOBS);
+
+  return {
+    pendingApprovals,
+    recentJobs,
+  };
+}
+
+async function refreshAssistantState(session, { rerender = true, fallbackPendingApprovals = null } = {}) {
+  if (!session) return;
+  const nextState = await loadAssistantState(session);
+  session.pendingApprovals = Array.isArray(nextState.pendingApprovals) && nextState.pendingApprovals.length > 0
+    ? nextState.pendingApprovals
+    : normalizePendingApprovals(fallbackPendingApprovals, session.pendingApprovals);
+  session.recentJobs = nextState.recentJobs;
+  saveState(codeState);
+  if (rerender) rerenderFromState();
+}
+
+function appendChatMessage(session, role, content) {
+  if (!session || !content) return;
+  session.chat.push({ role, content });
+}
+
+async function decideCodeApprovalWithRetry(session, approvalId, decision) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const result = await api.decideToolApproval({ approvalId, decision, actor: buildUserId(session) });
+      if (result?.success === false && isApprovalNotFoundMessage(result.message) && attempt < 4) {
+        lastError = new Error(result.message);
+      } else {
+        return result;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (!isApprovalNotFoundMessage(lastError.message) || attempt >= 4) {
+        throw lastError;
+      }
+    }
+
+    await delay(250 * (attempt + 1));
+    const refreshed = await loadAssistantState(session).catch(() => null);
+    if (refreshed) {
+      if (Array.isArray(refreshed.pendingApprovals) && refreshed.pendingApprovals.length > 0) {
+        session.pendingApprovals = refreshed.pendingApprovals;
+      }
+      if (Array.isArray(refreshed.recentJobs)) {
+        session.recentJobs = refreshed.recentJobs;
+      }
+      saveState(codeState);
+    }
+  }
+
+  if (lastError) throw lastError;
+  throw new Error(`Approval '${approvalId}' could not be processed.`);
+}
+
+async function handleCodeApprovalDecision(session, approvalIds, decision) {
+  if (!session || !Array.isArray(approvalIds) || approvalIds.length === 0) return;
+
+  const approvalResponses = [];
+  let continuationPendingApprovals = null;
+  for (const id of approvalIds) {
+    try {
+      const result = await decideCodeApprovalWithRetry(session, id, decision);
+      approvalResponses.push(result);
+    } catch (err) {
+      approvalResponses.push({
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+        continueConversation: false,
+      });
+    }
+  }
+
+  const immediateMessages = approvalResponses
+    .map((result) => result.displayMessage)
+    .filter((value) => typeof value === 'string' && value.trim().length > 0);
+  const continuedResponses = approvalResponses
+    .map((result) => result.continuedResponse)
+    .filter((value) => value && typeof value.content === 'string');
+
+  immediateMessages.forEach((message) => appendChatMessage(session, 'agent', message));
+  continuedResponses.forEach((response) => appendChatMessage(session, 'agent', response.content));
+
+  if (decision === 'approved' && continuedResponses.length === 0 && approvalResponses.some((result) => result.continueConversation !== false)) {
+    const summary = approvalResponses
+      .map((result) => result.success ? (result.message || 'approved') : `Failed: ${result.message || 'unknown error'}`)
+      .join('; ');
+    const continuationMessage = [
+      '[Code Approval Continuation]',
+      `[User approved the pending tool action(s). Result: ${summary}]`,
+      'Please continue the original coding task and adjust if any approved action failed.',
+    ].join('\n');
+    try {
+      const response = await api.sendMessage(
+        buildCodePrompt(session, continuationMessage),
+        session.agentId || undefined,
+        buildUserId(session),
+        DEFAULT_USER_CHANNEL,
+        buildCodeMessageMetadata(session),
+      );
+      if (Array.isArray(response?.metadata?.activeSkills)) {
+        session.activeSkills = response.metadata.activeSkills.map((value) => String(value));
+      }
+      const responsePendingApprovals = Array.isArray(response?.metadata?.pendingApprovals)
+        ? response.metadata.pendingApprovals
+        : null;
+      if (responsePendingApprovals) {
+        continuationPendingApprovals = responsePendingApprovals;
+        session.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, session.pendingApprovals);
+      }
+      appendChatMessage(session, 'agent', response.content || 'Approval processed.');
+    } catch (err) {
+      appendChatMessage(session, 'error', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  await refreshAssistantState(session, {
+    rerender: false,
+    fallbackPendingApprovals: continuationPendingApprovals,
+  });
+  saveState(codeState);
+  rerenderFromState();
+  scrollToBottom(currentContainer, '.code-chat__history');
 }
 
 // ─── Event binding ─────────────────────────────────────────
@@ -1141,6 +1666,36 @@ function bindEvents(container) {
     });
   });
 
+  // ── Assistant tabs ──
+
+  container.querySelectorAll('[data-code-assistant-tab], [data-code-switch-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const session = getActiveSession();
+      if (!session) return;
+      const nextTab = button.dataset.codeAssistantTab || button.dataset.codeSwitchTab;
+      if (!isAssistantTab(nextTab)) return;
+      session.activeAssistantTab = nextTab;
+      saveState(codeState);
+      rerenderFromState();
+    });
+  });
+
+  container.querySelectorAll('[data-code-approval-id][data-code-approval-decision]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const session = getActiveSession();
+      if (!session) return;
+      const approvalId = button.dataset.codeApprovalId;
+      const decision = button.dataset.codeApprovalDecision;
+      if (!approvalId || (decision !== 'approved' && decision !== 'denied')) return;
+      button.setAttribute('disabled', 'true');
+      try {
+        await handleCodeApprovalDecision(session, [approvalId], decision);
+      } finally {
+        button.removeAttribute('disabled');
+      }
+    });
+  });
+
   // ── Chat ──
 
   container.querySelector('[data-code-chat-form]')?.addEventListener('submit', async (event) => {
@@ -1162,13 +1717,24 @@ function bindEvents(container) {
         session.agentId || undefined,
         buildUserId(session),
         DEFAULT_USER_CHANNEL,
+        buildCodeMessageMetadata(session),
       );
       session.activeSkills = Array.isArray(response?.metadata?.activeSkills)
         ? response.metadata.activeSkills.map((value) => String(value))
         : [];
-      session.chat.push({ role: 'agent', content: response.content || 'No response content.' });
+      const responsePendingApprovals = Array.isArray(response?.metadata?.pendingApprovals)
+        ? response.metadata.pendingApprovals
+        : null;
+      if (responsePendingApprovals) {
+        session.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, session.pendingApprovals);
+      }
+      appendChatMessage(session, 'agent', response.content || 'No response content.');
+      await refreshAssistantState(session, {
+        rerender: false,
+        fallbackPendingApprovals: responsePendingApprovals,
+      });
     } catch (err) {
-      session.chat.push({ role: 'error', content: err instanceof Error ? err.message : String(err) });
+      appendChatMessage(session, 'error', err instanceof Error ? err.message : String(err));
     }
     saveState(codeState);
     rerenderFromState();
@@ -1185,6 +1751,7 @@ function bindEvents(container) {
     } catch {
       // Keep local reset even if server reset fails.
     }
+    await refreshAssistantState(session, { rerender: false });
     rerenderFromState();
   });
 
@@ -1227,9 +1794,11 @@ function normalizeState(raw, agents) {
         chatDraft: session.chatDraft || '',
         pendingApprovals: Array.isArray(session.pendingApprovals) ? session.pendingApprovals : [],
         activeSkills: Array.isArray(session.activeSkills) ? session.activeSkills : [],
+        recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
         lastExplorerPath: session.lastExplorerPath || null,
         planSummary: session.planSummary || '',
         compactedSummary: session.compactedSummary || '',
+        activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : 'chat',
       };
     }) : [],
     activeSessionId: raw?.activeSessionId || null,
@@ -1289,6 +1858,7 @@ function saveState(state) {
             output: typeof tab.output === 'string' ? trimTerminalOutput(tab.output) : '',
           }))
           : [],
+        recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
       }))
       : [],
   };
@@ -1316,9 +1886,11 @@ function createSession(title, workspaceRoot, agentId) {
     chatDraft: '',
     pendingApprovals: [],
     activeSkills: [],
+    recentJobs: [],
     lastExplorerPath: null,
     planSummary: '',
     compactedSummary: '',
+    activeAssistantTab: 'chat',
   };
 }
 
@@ -1341,10 +1913,21 @@ function buildUserId(session) {
   return `web-code-${session.id}`;
 }
 
+function buildCodeMessageMetadata(session) {
+  const workspaceRoot = session.resolvedRoot || session.workspaceRoot || '.';
+  return {
+    codeContext: {
+      sessionId: session.id,
+      workspaceRoot,
+    },
+  };
+}
+
 function buildCodePrompt(session, message) {
   const workspaceRoot = session.resolvedRoot || session.workspaceRoot;
   const selectedFile = session.selectedFilePath || '(none)';
   const currentDirectory = session.currentDirectory || workspaceRoot;
+  const backlog = getApprovalBacklogState(session);
   return [
     '[Code Workspace Context]',
     `workspaceRoot: ${workspaceRoot}`,
@@ -1353,6 +1936,7 @@ function buildCodePrompt(session, message) {
     Array.isArray(session.activeSkills) && session.activeSkills.length > 0
       ? `activeSkills: ${session.activeSkills.join(', ')}`
       : 'activeSkills: (none)',
+    `pendingApprovals: ${backlog.count}`,
     session.planSummary ? `activePlan:\n${session.planSummary}` : 'activePlan: (none)',
     session.compactedSummary ? `compactedSummary:\n${session.compactedSummary}` : 'compactedSummary: (none)',
     '',
@@ -1364,6 +1948,9 @@ function buildCodePrompt(session, message) {
     'After material changes, run targeted verification such as tests, lint, or build when available.',
     'If you start repeating the same failed action, stop and change approach.',
     'If the current thread feels stale or bloated, summarize progress clearly so the session can be compacted.',
+    backlog.blocked
+      ? `Approval backlog is saturated (${backlog.count} pending). Do not initiate new mutating tool calls that would require additional approvals until the queue is reduced. Continue with read-only investigation, explanation, or planning instead.`
+      : 'If approvals are already pending, prefer read-only investigation or planning before creating more write actions unless the user explicitly asks to proceed.',
     '',
     'Use coding tools when appropriate. If coding tools are not visible, call find_tools with query "coding code edit patch create plan git diff commit test build lint symbol".',
     `When running shell commands, use cwd="${workspaceRoot}".`,

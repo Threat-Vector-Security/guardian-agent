@@ -2,6 +2,8 @@
 
 When the user is managing contacts or running outreach campaigns:
 
+This skill is for campaign and mailing-list workflows, not ordinary mailbox reads or one-off personal email handling.
+
 ## Contact Management
 
 - Confirm the data source before importing: CSV file path, browser discovery target.

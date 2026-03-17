@@ -9,6 +9,7 @@ Use indexed search when the user wants answers from local docs, notes, wikis, or
    - Use `fs_read` for exact follow-up reads.
 3. Use `doc_search_status` when the user asks about indexing health or when search results look unexpectedly empty.
 4. Use `doc_search_reindex` only when stale or missing search state is actually blocking the task.
+5. When the user wants a summary of local docs or indexed material, summarize from the retrieved passages directly instead of depending on an external summary CLI unless that reviewed third-party skill has been explicitly approved and enabled.
 
 ## Practical Rules
 

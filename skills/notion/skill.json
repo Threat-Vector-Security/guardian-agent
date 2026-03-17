@@ -1,0 +1,56 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "version": "0.1.0",
+  "description": "Use the Guardian-managed Notion integration to work with pages, data sources, and blocks.",
+  "role": "domain",
+  "tags": [
+    "notion",
+    "pages",
+    "data-sources",
+    "blocks",
+    "workspace",
+    "database",
+    "notion-workspace"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "notion",
+      "notion page",
+      "notion database",
+      "data source",
+      "notion blocks",
+      "notion workspace"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "network_access"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/notion/SKILL.md",
+    "slug": "steipete/notion",
+    "originalName": "notion",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:38:05.156Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/notion/SKILL.md",
+    "securityAssessment": "benign"
+  },
+  "requiredManagedProvider": "notion"
+}

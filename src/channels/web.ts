@@ -122,6 +122,12 @@ interface TerminalSessionRecord {
   rows: number;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 export class WebChannel implements ChannelAdapter {
   readonly name = 'web';
   private server: Server | null = null;
@@ -928,6 +934,7 @@ export class WebChannel implements ChannelAdapter {
           derivedFromTaintedContent?: boolean;
           scheduleId?: string;
           channel?: string;
+          metadata?: Record<string, unknown>;
         };
         try {
           parsed = JSON.parse(body) as {
@@ -941,6 +948,7 @@ export class WebChannel implements ChannelAdapter {
             derivedFromTaintedContent?: boolean;
             scheduleId?: string;
             channel?: string;
+            metadata?: Record<string, unknown>;
           };
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
@@ -972,6 +980,7 @@ export class WebChannel implements ChannelAdapter {
           derivedFromTaintedContent: parsed.derivedFromTaintedContent === true,
           scheduleId: typeof parsed.scheduleId === 'string' ? parsed.scheduleId : undefined,
           channel: parsed.channel ?? 'web',
+          metadata: asRecord(parsed.metadata),
         });
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, toolInvalidationTopics(parsed.toolName), 'tools.run', url.pathname);
@@ -2428,7 +2437,7 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string };
+        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
         try {
           parsed = JSON.parse(body) as typeof parsed;
         } catch {
@@ -2459,6 +2468,7 @@ export class WebChannel implements ChannelAdapter {
               principalId: principal.principalId,
               principalRole: principal.principalRole,
               channel: parsed.channel ?? 'web',
+              metadata: asRecord(parsed.metadata),
             },
             emitSSE,
           );
@@ -2482,9 +2492,9 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string };
+        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
         try {
-          parsed = JSON.parse(body) as { content?: string; userId?: string; agentId?: string; channel?: string };
+          parsed = JSON.parse(body) as { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
@@ -2505,6 +2515,7 @@ export class WebChannel implements ChannelAdapter {
               principalId: principal.principalId,
               principalRole: principal.principalRole,
               channel: parsed.channel ?? 'web',
+              metadata: asRecord(parsed.metadata),
             });
             sendJSON(res, 200, response);
           } catch (err) {
@@ -2528,8 +2539,9 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId ?? 'web-user',
             principalId: principal.principalId,
             principalRole: principal.principalRole,
-            channel: 'web',
+            channel: parsed.channel ?? 'web',
             content: parsed.content,
+            metadata: asRecord(parsed.metadata),
             timestamp: Date.now(),
           });
           sendJSON(res, 200, response);

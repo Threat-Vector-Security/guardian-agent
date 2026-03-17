@@ -4331,35 +4331,143 @@ tr:hover td {
   overflow: hidden;
 }
 
+.code-assistant-tabs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.code-assistant-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.code-assistant-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.code-assistant-tab.is-active {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.code-assistant-tab__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: rgba(79, 172, 254, 0.14);
+  color: var(--accent);
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.code-assistant-panel__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-assistant-panel__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.8rem;
+}
+
 .code-chat__meta {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 1rem;
+  padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--border);
 }
 
-.code-approvals {
+.code-chat__notice,
+.code-tab-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
+  background: rgba(79, 172, 254, 0.08);
+  color: var(--text-primary);
+  font-size: 0.74rem;
 }
 
-.code-approvals h4 {
-  margin-bottom: 0.75rem;
-  font-size: 0.76rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+.code-chat__notice.is-warning,
+.code-tab-banner.is-warning {
+  background: rgba(251, 191, 36, 0.12);
 }
 
+.code-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.code-status-card,
 .approval-card {
   padding: 0.8rem;
-  border: 1px solid rgba(251, 191, 36, 0.28);
   border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.code-status-card.status-active {
+  border-color: rgba(79, 172, 254, 0.28);
+}
+
+.code-status-card.status-waiting,
+.code-status-card.status-warn {
+  border-color: rgba(251, 191, 36, 0.28);
   background: rgba(251, 191, 36, 0.08);
 }
 
-.approval-card + .approval-card {
-  margin-top: 0.65rem;
+.code-status-card.status-blocked,
+.code-status-card.status-fail {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.code-status-card.status-completed,
+.code-status-card.status-pass {
+  border-color: rgba(52, 211, 153, 0.28);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.approval-card {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.code-status-card__top,
+.approval-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .approval-card__title {
@@ -4367,6 +4475,14 @@ tr:hover td {
   color: var(--text-primary);
 }
 
+.code-status-card__meta,
+.approval-card__meta {
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.code-status-card__detail,
 .approval-card__preview {
   margin-top: 0.35rem;
   color: var(--text-secondary);

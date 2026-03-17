@@ -1,0 +1,59 @@
+{
+  "id": "nano-pdf",
+  "name": "Nano PDF",
+  "version": "0.1.0",
+  "description": "Edit PDFs with natural-language instructions using the `nano-pdf` CLI.",
+  "role": "domain",
+  "tags": [
+    "pdf",
+    "nano-pdf",
+    "pdf-editing",
+    "document-edit",
+    "page-edit",
+    "pdf-cli",
+    "natural-language"
+  ],
+  "enabled": false,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "pdf",
+      "edit pdf",
+      "change this pdf",
+      "nano-pdf",
+      "pdf page",
+      "update pdf"
+    ]
+  },
+  "tools": [],
+  "requiredCapabilities": [
+    "shell_access",
+    "filesystem_write"
+  ],
+  "risk": "operational",
+  "_upstream": {
+    "source": "clawhub",
+    "repo": "https://github.com/openclaw/skills",
+    "path": "skills/steipete/nano-pdf/SKILL.md",
+    "slug": "steipete/nano-pdf",
+    "originalName": "nano-pdf",
+    "version": "unknown",
+    "license": "MIT",
+    "commit": "7cc622d1b8d9ceeea735baf188eb4172b56b5455",
+    "fetchedAt": "2026-03-17T03:37:44.855Z",
+    "sourceUrl": "file:///tmp/openclaw-skills/skills/steipete/nano-pdf/SKILL.md",
+    "securityAssessment": "benign",
+    "requiredBinaries": [
+      "nano-pdf"
+    ]
+  }
+}

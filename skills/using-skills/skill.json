@@ -1,0 +1,18 @@
+{
+  "id": "using-skills",
+  "name": "Using Skills",
+  "version": "0.1.0",
+  "description": "Use when the user explicitly asks which skill applies, wants guidance on skill selection, or wants stronger discipline around reading the right skill before acting.",
+  "role": "process",
+  "tags": ["skills", "skill selection", "workflow", "read before acting"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["which skill", "use a skill", "relevant skill", "read the skill first", "what skill should"]
+  },
+  "tools": [],
+  "risk": "informational"
+}
