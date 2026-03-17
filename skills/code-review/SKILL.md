@@ -1,36 +1,6 @@
 ---
-id: code-review
-name: Code Review
-version: 0.1.0
+name: code-review
 description: Review workflow focused on bugs, regressions, missing tests, and operational risk.
-tags:
-  - review
-  - regression
-  - bug
-  - test
-  - risk
-enabled: true
-appliesTo:
-  channels:
-    - cli
-    - web
-    - telegram
-  requestTypes:
-    - chat
-triggers:
-  keywords:
-    - review
-    - audit
-    - regression
-    - inspect changes
-    - look for bugs
-    - code review
-tools:
-  - code_symbol_search
-  - code_git_diff
-  - code_test
-  - code_lint
-risk: informational
 ---
 
 # Code Review

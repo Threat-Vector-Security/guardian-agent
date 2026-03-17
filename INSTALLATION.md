@@ -81,9 +81,10 @@ Most users should configure GuardianAgent through the web UI or CLI rather than 
 GuardianAgent includes a dedicated web Coding Assistant at `#/code`.
 
 - it is separate from the general web chat
-- each Code session keeps its own chat history and workspace state in the browser
+- each Code session keeps its own backend-owned chat history, workspace profile, and focus state
 - the page combines explorer, diff viewing, PTY-backed terminals, and a coding sidebar with `Chat`, `Tasks`, `Approvals`, and `Checks`
 - assistant-driven file and shell actions are scoped to the active Code workspace root, so Coding Assistant command breadth does not widen the main chat shell policy
+- the Coding Assistant can still use broader Guardian capabilities from that workspace context when they directly support the repo task
 
 For current behavior and limitations, see [docs/specs/CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md).
 

@@ -1,0 +1,799 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import {
+  hasSQLiteDriver,
+  openSQLiteDatabase,
+  type SQLiteDatabase,
+  type SQLiteStatement,
+} from './sqlite-driver.js';
+import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './code-workspace-profile.js';
+import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
+
+export type CodeSessionStatus =
+  | 'idle'
+  | 'active'
+  | 'awaiting_approval'
+  | 'blocked'
+  | 'failed'
+  | 'completed';
+
+export type CodeSessionAttachmentMode = 'observer' | 'participant' | 'controller';
+export type CodeSessionAttachmentPolicy = 'explicit_only' | 'same_principal';
+
+export interface CodeSessionPendingApproval {
+  id: string;
+  toolName: string;
+  argsPreview: string;
+  createdAt?: number | null;
+  risk?: string;
+  origin?: string;
+}
+
+export interface CodeSessionRecentJob {
+  id: string;
+  toolName: string;
+  status: string;
+  createdAt?: number;
+  resultPreview?: string;
+  argsPreview?: string;
+  error?: string;
+  verificationStatus?: string;
+  verificationEvidence?: string;
+}
+
+export interface CodeSessionWorkState {
+  focusSummary: string;
+  planSummary: string;
+  compactedSummary: string;
+  workspaceProfile: CodeWorkspaceProfile | null;
+  activeSkills: string[];
+  pendingApprovals: CodeSessionPendingApproval[];
+  recentJobs: CodeSessionRecentJob[];
+  changedFiles: string[];
+  verification: Array<{
+    id: string;
+    kind: 'test' | 'lint' | 'build' | 'manual';
+    status: 'pass' | 'warn' | 'fail' | 'not_run';
+    summary: string;
+    timestamp: number;
+  }>;
+}
+
+export interface CodeSessionUiState {
+  currentDirectory: string | null;
+  selectedFilePath: string | null;
+  showDiff: boolean;
+  expandedDirs: string[];
+  activeAssistantTab: string;
+  terminalCollapsed: boolean;
+  terminalTabs: Array<{
+    id: string;
+    name: string;
+    shell: string;
+    output?: string;
+  }>;
+}
+
+export interface CodeSessionRecord {
+  id: string;
+  ownerUserId: string;
+  ownerPrincipalId?: string;
+  title: string;
+  workspaceRoot: string;
+  resolvedRoot: string;
+  agentId: string | null;
+  status: CodeSessionStatus;
+  attachmentPolicy: CodeSessionAttachmentPolicy;
+  createdAt: number;
+  updatedAt: number;
+  lastActivityAt: number;
+  conversationUserId: string;
+  conversationChannel: string;
+  uiState: CodeSessionUiState;
+  workState: CodeSessionWorkState;
+}
+
+export interface CodeSessionAttachmentRecord {
+  id: string;
+  codeSessionId: string;
+  userId: string;
+  principalId?: string;
+  channel: string;
+  surfaceId: string;
+  mode: CodeSessionAttachmentMode;
+  attachedAt: number;
+  lastSeenAt: number;
+  active: boolean;
+}
+
+export interface ResolvedCodeSessionContext {
+  session: CodeSessionRecord;
+  attachment?: CodeSessionAttachmentRecord;
+}
+
+export interface CodeSessionStoreOptions {
+  enabled?: boolean;
+  sqlitePath: string;
+  now?: () => number;
+  onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+}
+
+export interface CreateCodeSessionInput {
+  ownerUserId: string;
+  ownerPrincipalId?: string;
+  title: string;
+  workspaceRoot: string;
+  agentId?: string | null;
+  attachmentPolicy?: CodeSessionAttachmentPolicy;
+}
+
+export interface UpdateCodeSessionInput {
+  sessionId: string;
+  ownerUserId: string;
+  title?: string;
+  workspaceRoot?: string;
+  agentId?: string | null;
+  status?: CodeSessionStatus;
+  uiState?: Partial<CodeSessionUiState>;
+  workState?: Partial<CodeSessionWorkState>;
+}
+
+interface StoredSessionRow {
+  id: string;
+  owner_user_id: string;
+  owner_principal_id: string | null;
+  title: string;
+  workspace_root: string;
+  resolved_root: string;
+  agent_id: string | null;
+  status: CodeSessionStatus;
+  attachment_policy: CodeSessionAttachmentPolicy;
+  created_at: number;
+  updated_at: number;
+  last_activity_at: number;
+  conversation_user_id: string;
+  conversation_channel: string;
+  payload_json: string;
+}
+
+interface StoredAttachmentRow {
+  id: string;
+  code_session_id: string;
+  user_id: string;
+  principal_id: string | null;
+  channel: string;
+  surface_id: string;
+  mode: CodeSessionAttachmentMode;
+  attached_at: number;
+  last_seen_at: number;
+  active: number;
+}
+
+interface MemoryStore {
+  sessions: Map<string, CodeSessionRecord>;
+  attachments: Map<string, CodeSessionAttachmentRecord>;
+}
+
+function defaultUiState(): CodeSessionUiState {
+  return {
+    currentDirectory: null,
+    selectedFilePath: null,
+    showDiff: false,
+    expandedDirs: [],
+    activeAssistantTab: 'chat',
+    terminalCollapsed: false,
+    terminalTabs: [],
+  };
+}
+
+function defaultWorkState(): CodeSessionWorkState {
+  return {
+    focusSummary: '',
+    planSummary: '',
+    compactedSummary: '',
+    workspaceProfile: null,
+    activeSkills: [],
+    pendingApprovals: [],
+    recentJobs: [],
+    changedFiles: [],
+    verification: [],
+  };
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function cloneWorkspaceProfile(profile: CodeWorkspaceProfile | null | undefined): CodeWorkspaceProfile | null {
+  if (!profile) return null;
+  return {
+    ...profile,
+    stack: Array.isArray(profile.stack) ? [...profile.stack] : [],
+    manifests: Array.isArray(profile.manifests) ? [...profile.manifests] : [],
+    inspectedFiles: Array.isArray(profile.inspectedFiles) ? [...profile.inspectedFiles] : [],
+    topLevelEntries: Array.isArray(profile.topLevelEntries) ? [...profile.topLevelEntries] : [],
+    entryHints: Array.isArray(profile.entryHints) ? [...profile.entryHints] : [],
+  };
+}
+
+function normalizePath(value: string): string {
+  const trimmed = value.trim();
+  return resolve(trimmed || '.');
+}
+
+function conversationUserIdForSession(sessionId: string): string {
+  return `code-session:${sessionId}`;
+}
+
+function toAttachmentKey(userId: string, channel: string, surfaceId: string): string {
+  return `${userId}::${channel}::${surfaceId}`;
+}
+
+export class CodeSessionStore {
+  private readonly now: () => number;
+  private readonly enabled: boolean;
+  private readonly sqlitePath: string;
+  private readonly onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+  private readonly mode: 'sqlite' | 'memory';
+  private db: SQLiteDatabase | null = null;
+  private securityMonitor: SQLiteSecurityMonitor | null = null;
+  private memory: MemoryStore = {
+    sessions: new Map(),
+    attachments: new Map(),
+  };
+  private insertSessionStmt: SQLiteStatement | null = null;
+  private updateSessionStmt: SQLiteStatement | null = null;
+  private deleteSessionStmt: SQLiteStatement | null = null;
+  private insertAttachmentStmt: SQLiteStatement | null = null;
+  private deactivateAttachmentStmt: SQLiteStatement | null = null;
+  private updateAttachmentSeenStmt: SQLiteStatement | null = null;
+
+  constructor(options: CodeSessionStoreOptions) {
+    this.enabled = options.enabled ?? true;
+    this.sqlitePath = options.sqlitePath;
+    this.now = options.now ?? Date.now;
+    this.onSecurityEvent = options.onSecurityEvent;
+
+    if (!this.enabled || !hasSQLiteDriver()) {
+      this.mode = 'memory';
+      return;
+    }
+
+    try {
+      mkdirSync(dirname(this.sqlitePath), { recursive: true });
+      this.db = openSQLiteDatabase(this.sqlitePath, { enableForeignKeyConstraints: true });
+      if (!this.db) {
+        this.mode = 'memory';
+        return;
+      }
+      this.mode = 'sqlite';
+      this.initializeSchema();
+      this.securityMonitor = new SQLiteSecurityMonitor({
+        service: 'code_sessions',
+        db: this.db,
+        sqlitePath: this.sqlitePath,
+        onEvent: this.onSecurityEvent,
+        now: this.now,
+      });
+      this.securityMonitor.initialize();
+    } catch {
+      this.mode = 'memory';
+    }
+  }
+
+  close(): void {
+    this.db?.close();
+    this.db = null;
+    this.securityMonitor = null;
+  }
+
+  private withDerivedWorkspaceProfile(record: CodeSessionRecord): CodeSessionRecord {
+    if (record.workState.workspaceProfile) return record;
+    return {
+      ...record,
+      workState: {
+        ...record.workState,
+        workspaceProfile: inspectCodeWorkspaceSync(record.resolvedRoot, this.now()),
+      },
+    };
+  }
+
+  listSessionsForUser(ownerUserId: string): CodeSessionRecord[] {
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT *
+        FROM code_sessions
+        WHERE owner_user_id = ?
+        ORDER BY last_activity_at DESC, created_at DESC
+      `).all(ownerUserId) as unknown as StoredSessionRow[];
+      return rows.map((row) => this.withDerivedWorkspaceProfile(this.fromStoredRow(row)));
+    }
+
+    return [...this.memory.sessions.values()]
+      .filter((session) => session.ownerUserId === ownerUserId)
+      .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
+      .map((session) => this.withDerivedWorkspaceProfile(clone(session)));
+  }
+
+  getSession(sessionId: string, ownerUserId?: string): CodeSessionRecord | null {
+    if (this.mode === 'sqlite' && this.db) {
+      const row = this.db.prepare(`
+        SELECT *
+        FROM code_sessions
+        WHERE id = ?
+      `).get(sessionId) as StoredSessionRow | undefined;
+      if (!row) return null;
+      if (ownerUserId && row.owner_user_id !== ownerUserId) return null;
+      return this.withDerivedWorkspaceProfile(this.fromStoredRow(row));
+    }
+
+    const session = this.memory.sessions.get(sessionId);
+    if (!session) return null;
+    if (ownerUserId && session.ownerUserId !== ownerUserId) return null;
+    return this.withDerivedWorkspaceProfile(clone(session));
+  }
+
+  createSession(input: CreateCodeSessionInput): CodeSessionRecord {
+    const now = this.now();
+    const id = randomUUID();
+    const workspaceRoot = input.workspaceRoot.trim() || '.';
+    const resolvedRoot = normalizePath(workspaceRoot);
+    const workspaceProfile = inspectCodeWorkspaceSync(resolvedRoot, now);
+    const record: CodeSessionRecord = {
+      id,
+      ownerUserId: input.ownerUserId,
+      ownerPrincipalId: input.ownerPrincipalId?.trim() || undefined,
+      title: input.title.trim() || 'Coding Session',
+      workspaceRoot,
+      resolvedRoot,
+      agentId: input.agentId?.trim() || null,
+      status: 'idle',
+      attachmentPolicy: input.attachmentPolicy ?? 'explicit_only',
+      createdAt: now,
+      updatedAt: now,
+      lastActivityAt: now,
+      conversationUserId: conversationUserIdForSession(id),
+      conversationChannel: 'code-session',
+      uiState: defaultUiState(),
+      workState: {
+        ...defaultWorkState(),
+        workspaceProfile,
+      },
+    };
+
+    if (this.mode === 'sqlite' && this.db && this.insertSessionStmt) {
+      this.insertSessionStmt.run(...this.toStoredValues(record));
+      this.securityMonitor?.maybeCheck();
+      return clone(record);
+    }
+
+    this.memory.sessions.set(record.id, clone(record));
+    return clone(record);
+  }
+
+  updateSession(input: UpdateCodeSessionInput): CodeSessionRecord | null {
+    const existing = this.getSession(input.sessionId, input.ownerUserId);
+    if (!existing) return null;
+
+    const now = this.now();
+    const nextResolvedRoot = input.workspaceRoot !== undefined ? normalizePath(input.workspaceRoot) : existing.resolvedRoot;
+    const nextWorkspaceProfile = input.workState?.workspaceProfile !== undefined
+      ? cloneWorkspaceProfile(input.workState.workspaceProfile)
+      : (input.workspaceRoot !== undefined
+        ? inspectCodeWorkspaceSync(nextResolvedRoot, now)
+        : cloneWorkspaceProfile(existing.workState.workspaceProfile));
+    const next: CodeSessionRecord = {
+      ...existing,
+      title: input.title !== undefined ? (input.title.trim() || existing.title) : existing.title,
+      workspaceRoot: input.workspaceRoot !== undefined ? (input.workspaceRoot.trim() || existing.workspaceRoot) : existing.workspaceRoot,
+      agentId: input.agentId !== undefined ? (input.agentId?.trim() || null) : existing.agentId,
+      status: input.status ?? existing.status,
+      resolvedRoot: nextResolvedRoot,
+      updatedAt: now,
+      lastActivityAt: now,
+      uiState: {
+        ...existing.uiState,
+        ...(input.uiState ?? {}),
+        expandedDirs: Array.isArray(input.uiState?.expandedDirs)
+          ? [...input.uiState.expandedDirs]
+          : [...existing.uiState.expandedDirs],
+        terminalTabs: Array.isArray(input.uiState?.terminalTabs)
+          ? input.uiState.terminalTabs.map((tab) => ({ ...tab }))
+          : existing.uiState.terminalTabs.map((tab) => ({ ...tab })),
+      },
+      workState: {
+        ...existing.workState,
+        ...(input.workState ?? {}),
+        focusSummary: input.workState?.focusSummary !== undefined
+          ? input.workState.focusSummary
+          : existing.workState.focusSummary,
+        workspaceProfile: nextWorkspaceProfile,
+        activeSkills: Array.isArray(input.workState?.activeSkills)
+          ? [...input.workState.activeSkills]
+          : [...existing.workState.activeSkills],
+        pendingApprovals: Array.isArray(input.workState?.pendingApprovals)
+          ? input.workState.pendingApprovals.map((approval) => ({ ...approval }))
+          : existing.workState.pendingApprovals.map((approval) => ({ ...approval })),
+        recentJobs: Array.isArray(input.workState?.recentJobs)
+          ? input.workState.recentJobs.map((job) => ({ ...job }))
+          : existing.workState.recentJobs.map((job) => ({ ...job })),
+        changedFiles: Array.isArray(input.workState?.changedFiles)
+          ? [...input.workState.changedFiles]
+          : [...existing.workState.changedFiles],
+        verification: Array.isArray(input.workState?.verification)
+          ? input.workState.verification.map((entry) => ({ ...entry }))
+          : existing.workState.verification.map((entry) => ({ ...entry })),
+      },
+    };
+
+    if (this.mode === 'sqlite' && this.db && this.updateSessionStmt) {
+      this.updateSessionStmt.run(...this.toUpdateStoredValues(next));
+      this.securityMonitor?.maybeCheck();
+      return clone(next);
+    }
+
+    this.memory.sessions.set(next.id, clone(next));
+    return clone(next);
+  }
+
+  deleteSession(sessionId: string, ownerUserId: string): boolean {
+    const existing = this.getSession(sessionId, ownerUserId);
+    if (!existing) return false;
+
+    if (this.mode === 'sqlite' && this.db && this.deleteSessionStmt) {
+      this.deleteSessionStmt.run(sessionId, ownerUserId);
+      this.securityMonitor?.maybeCheck();
+      return true;
+    }
+
+    this.memory.sessions.delete(sessionId);
+    for (const [key, attachment] of this.memory.attachments.entries()) {
+      if (attachment.codeSessionId === sessionId) {
+        this.memory.attachments.delete(key);
+      }
+    }
+    return true;
+  }
+
+  touchSession(sessionId: string, ownerUserId?: string, status?: CodeSessionStatus): CodeSessionRecord | null {
+    const existing = this.getSession(sessionId, ownerUserId);
+    if (!existing) return null;
+    return this.updateSession({
+      sessionId,
+      ownerUserId: existing.ownerUserId,
+      ...(status ? { status } : {}),
+    });
+  }
+
+  attachSession(args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    mode?: CodeSessionAttachmentMode;
+  }): CodeSessionAttachmentRecord | null {
+    const session = this.getSession(args.sessionId, args.userId);
+    if (!session) return null;
+
+    const now = this.now();
+    const record: CodeSessionAttachmentRecord = {
+      id: randomUUID(),
+      codeSessionId: session.id,
+      userId: args.userId,
+      principalId: args.principalId?.trim() || undefined,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      mode: args.mode ?? 'controller',
+      attachedAt: now,
+      lastSeenAt: now,
+      active: true,
+    };
+
+    if (this.mode === 'sqlite' && this.db && this.insertAttachmentStmt && this.deactivateAttachmentStmt) {
+      this.deactivateAttachmentStmt.run(now, args.userId, args.channel, args.surfaceId);
+      this.insertAttachmentStmt.run(
+        record.id,
+        record.codeSessionId,
+        record.userId,
+        record.principalId ?? null,
+        record.channel,
+        record.surfaceId,
+        record.mode,
+        record.attachedAt,
+        record.lastSeenAt,
+        record.active ? 1 : 0,
+      );
+      this.securityMonitor?.maybeCheck();
+    } else {
+      this.memory.attachments.set(
+        toAttachmentKey(args.userId, args.channel, args.surfaceId),
+        clone(record),
+      );
+    }
+
+    this.touchSession(session.id, session.ownerUserId, 'active');
+    return clone(record);
+  }
+
+  detachSession(args: {
+    userId: string;
+    channel: string;
+    surfaceId: string;
+  }): boolean {
+    if (this.mode === 'sqlite' && this.db && this.deactivateAttachmentStmt) {
+      const result = this.deactivateAttachmentStmt.run(this.now(), args.userId, args.channel, args.surfaceId) as { changes?: number } | undefined;
+      this.securityMonitor?.maybeCheck();
+      return Number(result?.changes ?? 0) > 0;
+    }
+
+    return this.memory.attachments.delete(toAttachmentKey(args.userId, args.channel, args.surfaceId));
+  }
+
+  resolveForRequest(args: {
+    requestedSessionId?: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    touchAttachment?: boolean;
+  }): ResolvedCodeSessionContext | null {
+    const explicitSessionId = args.requestedSessionId?.trim();
+    if (explicitSessionId) {
+      const session = this.getSession(explicitSessionId, args.userId);
+      if (!session) return null;
+      return { session };
+    }
+
+    const attachment = this.getActiveAttachment(args.userId, args.channel, args.surfaceId);
+    if (!attachment) return null;
+
+    if (args.touchAttachment && attachment.active) {
+      this.touchAttachmentSeen(attachment.id, attachment.userId, attachment.channel, attachment.surfaceId);
+    }
+
+    const session = this.getSession(attachment.codeSessionId, args.userId);
+    if (!session) return null;
+    return {
+      session,
+      attachment,
+    };
+  }
+
+  private getActiveAttachment(userId: string, channel: string, surfaceId: string): CodeSessionAttachmentRecord | null {
+    if (this.mode === 'sqlite' && this.db) {
+      const row = this.db.prepare(`
+        SELECT *
+        FROM code_session_attachments
+        WHERE user_id = ? AND channel = ? AND surface_id = ? AND active = 1
+        ORDER BY last_seen_at DESC, attached_at DESC
+        LIMIT 1
+      `).get(userId, channel, surfaceId) as StoredAttachmentRow | undefined;
+      if (!row) return null;
+      return this.fromStoredAttachmentRow(row);
+    }
+
+    const attachment = this.memory.attachments.get(toAttachmentKey(userId, channel, surfaceId));
+    return attachment ? clone(attachment) : null;
+  }
+
+  private touchAttachmentSeen(attachmentId: string, userId: string, channel: string, surfaceId: string): void {
+    const now = this.now();
+    if (this.mode === 'sqlite' && this.db && this.updateAttachmentSeenStmt) {
+      this.updateAttachmentSeenStmt.run(now, attachmentId, userId, channel, surfaceId);
+      return;
+    }
+
+    const key = toAttachmentKey(userId, channel, surfaceId);
+    const existing = this.memory.attachments.get(key);
+    if (!existing || existing.id !== attachmentId) return;
+    existing.lastSeenAt = now;
+  }
+
+  private fromStoredRow(row: StoredSessionRow): CodeSessionRecord {
+    let payload: { uiState?: Partial<CodeSessionUiState>; workState?: Partial<CodeSessionWorkState> } = {};
+    try {
+      payload = JSON.parse(row.payload_json) as typeof payload;
+    } catch {
+      payload = {};
+    }
+
+    return {
+      id: row.id,
+      ownerUserId: row.owner_user_id,
+      ownerPrincipalId: row.owner_principal_id ?? undefined,
+      title: row.title,
+      workspaceRoot: row.workspace_root,
+      resolvedRoot: row.resolved_root,
+      agentId: row.agent_id ?? null,
+      status: row.status,
+      attachmentPolicy: row.attachment_policy,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      lastActivityAt: row.last_activity_at,
+      conversationUserId: row.conversation_user_id,
+      conversationChannel: row.conversation_channel,
+      uiState: {
+        ...defaultUiState(),
+        ...(payload.uiState ?? {}),
+      },
+      workState: {
+        ...defaultWorkState(),
+        ...(payload.workState ?? {}),
+        workspaceProfile: cloneWorkspaceProfile(payload.workState?.workspaceProfile as CodeWorkspaceProfile | null | undefined),
+      },
+    };
+  }
+
+  private fromStoredAttachmentRow(row: StoredAttachmentRow): CodeSessionAttachmentRecord {
+    return {
+      id: row.id,
+      codeSessionId: row.code_session_id,
+      userId: row.user_id,
+      principalId: row.principal_id ?? undefined,
+      channel: row.channel,
+      surfaceId: row.surface_id,
+      mode: row.mode,
+      attachedAt: row.attached_at,
+      lastSeenAt: row.last_seen_at,
+      active: row.active === 1,
+    };
+  }
+
+  private toStoredValues(record: CodeSessionRecord): unknown[] {
+    return [
+      record.id,
+      record.ownerUserId,
+      record.ownerPrincipalId ?? null,
+      record.title,
+      record.workspaceRoot,
+      record.resolvedRoot,
+      record.agentId,
+      record.status,
+      record.attachmentPolicy,
+      record.createdAt,
+      record.updatedAt,
+      record.lastActivityAt,
+      record.conversationUserId,
+      record.conversationChannel,
+      JSON.stringify({
+        uiState: record.uiState,
+        workState: record.workState,
+      }),
+    ];
+  }
+
+  private toUpdateStoredValues(record: CodeSessionRecord): unknown[] {
+    return [
+      record.ownerUserId,
+      record.ownerPrincipalId ?? null,
+      record.title,
+      record.workspaceRoot,
+      record.resolvedRoot,
+      record.agentId,
+      record.status,
+      record.attachmentPolicy,
+      record.createdAt,
+      record.updatedAt,
+      record.lastActivityAt,
+      record.conversationUserId,
+      record.conversationChannel,
+      JSON.stringify({
+        uiState: record.uiState,
+        workState: record.workState,
+      }),
+      record.id,
+    ];
+  }
+
+  private initializeSchema(): void {
+    if (!this.db) return;
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS code_sessions (
+        id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        owner_principal_id TEXT,
+        title TEXT NOT NULL,
+        workspace_root TEXT NOT NULL,
+        resolved_root TEXT NOT NULL,
+        agent_id TEXT,
+        status TEXT NOT NULL,
+        attachment_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_activity_at INTEGER NOT NULL,
+        conversation_user_id TEXT NOT NULL,
+        conversation_channel TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_code_sessions_owner_activity
+        ON code_sessions(owner_user_id, last_activity_at DESC);
+
+      CREATE TABLE IF NOT EXISTS code_session_attachments (
+        id TEXT PRIMARY KEY,
+        code_session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        principal_id TEXT,
+        channel TEXT NOT NULL,
+        surface_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        attached_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        active INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_code_session_attachments_scope
+        ON code_session_attachments(user_id, channel, surface_id, active, last_seen_at DESC);
+    `);
+
+    this.insertSessionStmt = this.db.prepare(`
+      INSERT INTO code_sessions (
+        id,
+        owner_user_id,
+        owner_principal_id,
+        title,
+        workspace_root,
+        resolved_root,
+        agent_id,
+        status,
+        attachment_policy,
+        created_at,
+        updated_at,
+        last_activity_at,
+        conversation_user_id,
+        conversation_channel,
+        payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.updateSessionStmt = this.db.prepare(`
+      UPDATE code_sessions
+      SET owner_user_id = ?,
+          owner_principal_id = ?,
+          title = ?,
+          workspace_root = ?,
+          resolved_root = ?,
+          agent_id = ?,
+          status = ?,
+          attachment_policy = ?,
+          created_at = ?,
+          updated_at = ?,
+          last_activity_at = ?,
+          conversation_user_id = ?,
+          conversation_channel = ?,
+          payload_json = ?
+      WHERE id = ?
+    `);
+    this.deleteSessionStmt = this.db.prepare(`
+      DELETE FROM code_sessions
+      WHERE id = ? AND owner_user_id = ?
+    `);
+    this.insertAttachmentStmt = this.db.prepare(`
+      INSERT INTO code_session_attachments (
+        id,
+        code_session_id,
+        user_id,
+        principal_id,
+        channel,
+        surface_id,
+        mode,
+        attached_at,
+        last_seen_at,
+        active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.deactivateAttachmentStmt = this.db.prepare(`
+      UPDATE code_session_attachments
+      SET active = 0,
+          last_seen_at = ?
+      WHERE user_id = ? AND channel = ? AND surface_id = ? AND active = 1
+    `);
+    this.updateAttachmentSeenStmt = this.db.prepare(`
+      UPDATE code_session_attachments
+      SET last_seen_at = ?
+      WHERE id = ? AND user_id = ? AND channel = ? AND surface_id = ?
+    `);
+  }
+}

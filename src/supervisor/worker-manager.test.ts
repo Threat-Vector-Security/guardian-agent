@@ -1,8 +1,14 @@
 import { EventEmitter } from 'node:events';
+import { mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+let workerMessageHandler:
+  | ((params: Record<string, unknown>) => { content: string; metadata?: Record<string, unknown> })
+  | undefined;
 
 class FakeWorkerChild extends EventEmitter {
   stdin = new PassThrough();
@@ -34,10 +40,11 @@ class FakeWorkerChild extends EventEmitter {
           })}\n`);
         }
         if (message.method === 'message.handle') {
+          const response = workerMessageHandler?.(message.params ?? {}) ?? { content: 'ok' };
           this.stdout.write(`${JSON.stringify({
             jsonrpc: '2.0',
             method: 'message.response',
-            params: { content: 'ok' },
+            params: response,
           })}\n`);
         }
       }
@@ -64,6 +71,7 @@ vi.mock('../sandbox/index.js', () => ({
 describe('WorkerManager', () => {
   beforeEach(() => {
     workerNotifications.length = 0;
+    workerMessageHandler = undefined;
     vi.clearAllMocks();
   });
 
@@ -512,5 +520,148 @@ describe('WorkerManager', () => {
     expect(vi.mocked(sandbox.sandboxedSpawn)).not.toHaveBeenCalled();
 
     manager.shutdown();
+  });
+
+  it('resumes suspended worker sessions after approvals are granted out of band', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = (params) => {
+      const message = (params.message ?? {}) as { content?: string };
+      if (typeof message.content === 'string' && message.content.includes('[User approved the pending tool action(s). Result:')) {
+        return { content: 'The Outlook draft is present in Drafts.' };
+      }
+      return {
+        content: 'Waiting for approval to create the Outlook draft.',
+        metadata: {
+          pendingApprovals: [
+            {
+              id: 'approval-outlook-1',
+              toolName: 'outlook_draft',
+              argsPreview: '{"to":"alex@example.com","subject":"Test One"}',
+            },
+          ],
+        },
+      };
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const initial = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-outlook',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Draft an Outlook email to alex@example.com.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBase: '',
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    expect(initial.metadata).toMatchObject({
+      pendingApprovals: [
+        {
+          id: 'approval-outlook-1',
+          toolName: 'outlook_draft',
+        },
+      ],
+    });
+    expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(true);
+
+    const resumed = await manager.continueAfterApproval(
+      'approval-outlook-1',
+      'approved',
+      'Outlook draft created.',
+    );
+
+    expect(resumed?.content).toBe('The Outlook draft is present in Drafts.');
+    expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(false);
+
+    manager.shutdown();
+  });
+
+  it('does not abort shutdown when worker workspace cleanup is busy', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+    const workspacePath = join(tmpdir(), `ga-worker-busy-${Date.now()}`);
+    mkdirSync(workspacePath, { recursive: true });
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const worker = {
+      id: 'worker-busy',
+      sessionId: 'tester:web',
+      agentId: 'local',
+      authorizedBy: 'tester',
+      grantedCapabilities: [],
+      process: new FakeWorkerChild(),
+      brokerServer: { sendNotification: vi.fn() },
+      workspacePath,
+      lastActivityMs: Date.now(),
+      status: 'ready' as 'starting' | 'ready' | 'error' | 'shutting_down',
+    };
+
+    const managerState = manager as unknown as {
+      workers: Map<string, typeof worker>;
+      sessionToWorker: Map<string, string>;
+      removeWorkspacePath: (workspacePath: string) => void;
+    };
+
+    managerState.workers.set(worker.id, worker);
+    managerState.sessionToWorker.set(worker.sessionId, worker.id);
+    const removeWorkspacePath = vi.fn(() => {
+      throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    });
+    managerState.removeWorkspacePath = removeWorkspacePath;
+
+    expect(() => manager.shutdown()).not.toThrow();
+    expect(worker.status).toBe('shutting_down');
+    expect(removeWorkspacePath).toHaveBeenCalledWith(worker.workspacePath);
+    expect(managerState.workers.size).toBe(0);
+    expect(managerState.sessionToWorker.size).toBe(0);
+
+    rmSync(workspacePath, { recursive: true, force: true });
   });
 });

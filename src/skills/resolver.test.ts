@@ -204,6 +204,67 @@ describe('SkillResolver', () => {
     })).toHaveLength(1);
   });
 
+  it('prefers native skill.json metadata when SKILL.md uses compatibility frontmatter', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'coding-workspace');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'skill.json'), JSON.stringify({
+      id: 'coding-workspace',
+      name: 'Coding Workspace',
+      version: '0.2.0',
+      description: 'Workflow guidance for backend-owned coding sessions.',
+      triggers: { keywords: ['coding', 'patch', 'repo', 'analyze'] },
+      tools: ['code_patch'],
+      risk: 'operational',
+    }), 'utf-8');
+    writeFileSync(join(skillDir, 'SKILL.md'), `---
+name: coding-workspace
+description: Compatibility frontmatter for editor tooling.
+---
+
+# Coding Workspace
+
+Attach first, inspect the relevant files, then make the smallest safe change.
+`, 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+    const status = registry.listStatus();
+
+    expect(status).toMatchObject([
+      {
+        id: 'coding-workspace',
+        name: 'Coding Workspace',
+        description: 'Workflow guidance for backend-owned coding sessions.',
+        tools: ['code_patch'],
+        risk: 'operational',
+      },
+    ]);
+
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'web',
+      requestType: 'chat',
+      content: 'Please patch this coding issue.',
+    });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].id).toBe('coding-workspace');
+    expect(resolved[0].summary).toContain('Attach first, inspect the relevant files');
+    expect(resolved[0].summary).not.toContain('Compatibility frontmatter');
+
+    const repoResolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'web',
+      requestType: 'chat',
+      content: 'Analyze this repo and explain what the app does.',
+    });
+
+    expect(repoResolved).toHaveLength(1);
+    expect(repoResolved[0].id).toBe('coding-workspace');
+  });
+
   it('loads Anthropic-style frontmatter skills and strips metadata from summaries', async () => {
     const root = createSkillRoot();
     const skillDir = join(root, 'mcp-builder');

@@ -39,7 +39,9 @@ import { GuardianAgentService, SentinelAuditService } from './runtime/sentinel.j
 import { createPolicyEngine, loadPolicyFiles, ShadowEvaluator } from './policy/index.js';
 import type { PolicyModeConfig } from './policy/index.js';
 import { createLogger, setLogLevel } from './util/logging.js';
-import { ConversationService } from './runtime/conversation.js';
+import { ConversationService, type ConversationKey } from './runtime/conversation.js';
+import { CodeSessionStore, type CodeSessionRecord, type ResolvedCodeSessionContext } from './runtime/code-sessions.js';
+import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
 import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
@@ -67,7 +69,14 @@ import {
   parseScheduledEmailAutomationIntent,
   parseScheduledEmailScheduleIntent,
 } from './runtime/email-automation-intent.js';
-import { getAmbiguousEmailProviderClarification } from './runtime/email-provider-routing.js';
+import {
+  applyContextualEmailProviderHint,
+  getAmbiguousEmailProviderClarification,
+} from './runtime/email-provider-routing.js';
+import {
+  formatSkillInventoryResponse,
+  isSkillInventoryQuery,
+} from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
@@ -216,6 +225,22 @@ function buildSoulSummary(text: string, maxChars: number): string {
   }
 
   return out || truncatePromptText(text, maxChars);
+}
+
+async function settleTerminalForExit(): Promise<void> {
+  const stdin = process.stdin as NodeJS.ReadStream & {
+    isTTY?: boolean;
+    setRawMode?: (mode: boolean) => void;
+  };
+  if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
+    try {
+      stdin.setRawMode(false);
+    } catch {
+      // Ignore terminal restoration failures during shutdown.
+    }
+  }
+  stdin.pause?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function loadSoulProfile(config: GuardianAgentConfig): LoadedSoulProfile | null {
@@ -405,6 +430,7 @@ class ChatAgent extends BaseAgent {
   private conversationService?: ConversationService;
   private tools?: ToolExecutor;
   private outputGuardian?: OutputGuardian;
+  private skillRegistry?: SkillRegistry;
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
@@ -420,6 +446,8 @@ class ChatAgent extends BaseAgent {
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
   private memoryStore?: AgentMemoryStore;
+  /** Backend-owned coding session store for cross-surface coding workflows. */
+  private codeSessionStore?: CodeSessionStore;
   /** Logical state identity used for shared conversation/memory context. */
   private readonly stateAgentId: string;
   /** Resolver for the GWS LLM provider — looked up at request time so hot-reloaded config is used. */
@@ -494,11 +522,13 @@ class ChatAgent extends BaseAgent {
     conversationService?: ConversationService,
     tools?: ToolExecutor,
     outputGuardian?: OutputGuardian,
+    skillRegistry?: SkillRegistry,
     skillResolver?: SkillResolver,
     enabledManagedProviders?: ReadonlySet<string>,
     fallbackChain?: ModelFallbackChain,
     soulPrompt?: string,
     memoryStore?: AgentMemoryStore,
+    codeSessionStore?: CodeSessionStore,
     stateAgentId?: string,
     resolveGwsProvider?: () => LLMProvider | undefined,
     contextBudget?: number,
@@ -518,16 +548,24 @@ class ChatAgent extends BaseAgent {
     this.conversationService = conversationService;
     this.tools = tools;
     this.outputGuardian = outputGuardian;
+    this.skillRegistry = skillRegistry;
     this.skillResolver = skillResolver;
     this.enabledManagedProviders = enabledManagedProviders;
     this.maxToolRounds = 6;
     this.fallbackChain = fallbackChain;
     this.memoryStore = memoryStore;
+    this.codeSessionStore = codeSessionStore;
     this.stateAgentId = stateAgentId ?? id;
     this.resolveGwsProvider = resolveGwsProvider;
     this.contextBudget = contextBudget ?? 80_000;
     this.qualityFallbackEnabled = qualityFallback ?? true;
     this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
+  }
+
+  private tryDirectSkillInventoryResponse(content: string): string | null {
+    if (!this.skillRegistry) return null;
+    if (!isSkillInventoryQuery(content)) return null;
+    return formatSkillInventoryResponse(this.skillRegistry.listStatus());
   }
 
   /**
@@ -628,22 +666,103 @@ class ChatAgent extends BaseAgent {
 
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
     const stateAgentId = this.stateAgentId;
+    const requestedCodeContext = readCodeRequestMetadata(message.metadata);
+    let resolvedCodeSession = this.resolveCodeSessionContext(message);
+    if (resolvedCodeSession) {
+      resolvedCodeSession = this.refreshCodeSessionWorkspaceAwareness(resolvedCodeSession, message.content);
+    }
+    const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? message.userId;
+    const conversationChannel = resolvedCodeSession?.session.conversationChannel ?? message.channel;
+    const conversationKey = {
+      agentId: stateAgentId,
+      userId: conversationUserId,
+      channel: conversationChannel,
+    };
+    const effectiveCodeContext = resolvedCodeSession
+      ? {
+          sessionId: resolvedCodeSession.session.id,
+          workspaceRoot: resolvedCodeSession.session.resolvedRoot,
+        }
+      : requestedCodeContext?.workspaceRoot
+        ? {
+            workspaceRoot: requestedCodeContext.workspaceRoot,
+            ...(requestedCodeContext.sessionId ? { sessionId: requestedCodeContext.sessionId } : {}),
+          }
+        : undefined;
+    if (resolvedCodeSession) {
+      this.codeSessionStore?.touchSession(
+        resolvedCodeSession.session.id,
+        resolvedCodeSession.session.ownerUserId,
+        'active',
+      );
+    }
+    const scopedMessage: UserMessage = (conversationUserId !== message.userId
+      || conversationChannel !== message.channel
+      || effectiveCodeContext)
+      ? {
+          ...message,
+          userId: conversationUserId,
+          channel: conversationChannel,
+          metadata: {
+            ...(message.metadata ?? {}),
+            ...(effectiveCodeContext ? { codeContext: effectiveCodeContext } : {}),
+          },
+        }
+      : message;
+    const priorHistory = this.conversationService?.getHistoryForContext({
+      agentId: stateAgentId,
+      userId: conversationUserId,
+      channel: conversationChannel,
+    }) ?? [];
+    const hintedMessageContent = applyContextualEmailProviderHint(
+      scopedMessage.content,
+      priorHistory,
+      this.enabledManagedProviders,
+    );
+    const contextAwareScopedMessage = hintedMessageContent === scopedMessage.content
+      ? scopedMessage
+      : { ...scopedMessage, content: hintedMessageContent };
+    const groundedScopedMessage = resolvedCodeSession && isCodeWorkspaceOverviewRequest(contextAwareScopedMessage.content)
+      ? {
+          ...contextAwareScopedMessage,
+          content: applyCodeWorkspaceGroundingInstruction(contextAwareScopedMessage.content),
+        }
+      : contextAwareScopedMessage;
     const preResolvedSkills = this.skillResolver?.resolve({
       agentId: this.id,
       channel: message.channel,
       requestType: 'chat',
-      content: message.content,
+      content: groundedScopedMessage.content,
       enabledManagedProviders: this.enabledManagedProviders,
       availableCapabilities: new Set(ctx.capabilities),
     }) ?? [];
+    const directSkillInventory = this.tryDirectSkillInventoryResponse(groundedScopedMessage.content);
+    if (directSkillInventory) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          conversationKey,
+          message.content,
+          directSkillInventory,
+        );
+      }
+      if (resolvedCodeSession) {
+        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+      }
+      return {
+        content: directSkillInventory,
+        metadata: preResolvedSkills.length > 0
+          ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+          : undefined,
+      };
+    }
     const ambiguousEmailProviderClarification = getAmbiguousEmailProviderClarification(
-      message.content,
+      contextAwareScopedMessage.content,
       this.enabledManagedProviders,
     );
     if (ambiguousEmailProviderClarification) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
-          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          conversationKey,
           message.content,
           ambiguousEmailProviderClarification,
         );
@@ -658,34 +777,45 @@ class ChatAgent extends BaseAgent {
     if (workerManager) {
       try {
         const knowledgeBase = this.memoryStore?.loadForContext(stateAgentId) ?? '';
-        const history = this.conversationService?.getHistoryForContext({
-          agentId: stateAgentId,
-          userId: message.userId,
-          channel: message.channel,
-        }) ?? [];
+        const workerSystemPrompt = resolvedCodeSession
+          ? `${this.systemPrompt}\n\n${this.buildCodeSessionSystemContext(resolvedCodeSession.session)}`
+          : this.systemPrompt;
         const result = await workerManager.handleMessage({
-          sessionId: `${message.userId}:${message.channel}`,
+          sessionId: `${conversationUserId}:${conversationChannel}`,
           agentId: this.id,
-          userId: message.userId,
+          userId: conversationUserId,
           grantedCapabilities: [...ctx.capabilities],
-          message,
-          systemPrompt: this.systemPrompt,
-          history,
+          message: groundedScopedMessage,
+          systemPrompt: workerSystemPrompt,
+          history: priorHistory,
           knowledgeBase,
           activeSkills: preResolvedSkills,
-          toolContext: this.tools?.getToolContext() ?? '',
+          toolContext: this.tools?.getToolContext({
+            userId: conversationUserId,
+            principalId: message.principalId ?? conversationUserId,
+            channel: conversationChannel,
+            codeContext: effectiveCodeContext,
+          }) ?? '',
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
         });
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             result.content,
           );
         }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
+        if (requestedCodeContext?.sessionId) {
+          workerMeta.codeSessionResolved = !!resolvedCodeSession;
+          if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;
+        }
         return {
           content: result.content,
-          metadata: result.metadata,
+          metadata: Object.keys(workerMeta).length > 0 ? workerMeta : undefined,
         };
       } catch (error) {
         log.error({ agent: this.id, error: error instanceof Error ? error.stack ?? error.message : String(error) }, 'Brokered message execution failed');
@@ -696,30 +826,36 @@ class ChatAgent extends BaseAgent {
     if (!ctx.llm) {
       return { content: 'No LLM provider configured.' };
     }
-    const userKey = `${message.userId}:${message.channel}`;
-    this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
+    const userKey = `${conversationUserId}:${conversationChannel}`;
+    this.syncPendingApprovalsFromExecutor(userKey, conversationUserId, conversationChannel);
 
     // Check if user is approving a pending tool action (text-based: CLI / Telegram)
-    const approvalResult = await this.tryHandleApproval(message, userKey, ctx);
+    const approvalResult = await this.tryHandleApproval(contextAwareScopedMessage, userKey, ctx);
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
-          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          conversationKey,
           message.content,
           approvalResult.content,
         );
       }
+      if (resolvedCodeSession) {
+        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+      }
       return approvalResult;
     }
 
-    const directToolReport = this.tryDirectRecentToolReport(message);
+    const directToolReport = this.tryDirectRecentToolReport(contextAwareScopedMessage);
     if (directToolReport) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
-          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          conversationKey,
           message.content,
           directToolReport,
         );
+      }
+      if (resolvedCodeSession) {
+        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
       }
       return { content: directToolReport };
     }
@@ -729,7 +865,7 @@ class ChatAgent extends BaseAgent {
     const suspended = this.suspendedSessions.get(userKey);
     const requestIntentContent = (isContinuation && suspended)
       ? suspended.originalMessage.content
-      : message.content;
+      : contextAwareScopedMessage.content;
     const allowImplicitMemorySave = this.shouldAllowImplicitMemorySave(requestIntentContent);
 
     let llmMessages: import('./llm/types.js').ChatMessage[];
@@ -774,11 +910,19 @@ class ChatAgent extends BaseAgent {
         enrichedSystemPrompt += `\n\n${formatAvailableSkillsPrompt(activeSkills, 'fs_read')}`;
       }
       if (this.tools) {
-        enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext()}\n</tool-context>`;
+        enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext({
+          userId: conversationUserId,
+          principalId: message.principalId ?? conversationUserId,
+          channel: conversationChannel,
+          codeContext: effectiveCodeContext,
+        })}\n</tool-context>`;
       }
       const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
       if (toolRuntimeNotices.length > 0) {
         enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
+      }
+      if (resolvedCodeSession) {
+        enrichedSystemPrompt += `\n\n${this.buildCodeSessionSystemContext(resolvedCodeSession.session)}`;
       }
       if (pendingApprovalContext) {
         enrichedSystemPrompt += pendingApprovalContext;
@@ -786,13 +930,13 @@ class ChatAgent extends BaseAgent {
 
       llmMessages = this.conversationService
         ? this.conversationService.buildMessages(
-          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          conversationKey,
           enrichedSystemPrompt,
-          message.content,
+          groundedScopedMessage.content,
         )
         : [
           { role: 'system', content: enrichedSystemPrompt },
-          { role: 'user', content: message.content },
+          { role: 'user', content: groundedScopedMessage.content },
         ];
     }
 
@@ -803,12 +947,16 @@ class ChatAgent extends BaseAgent {
     let responseSource: ResponseSourceMetadata | undefined;
     
     if (!skipDirectTools) {
-      const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
+      const directSearch = await this.tryDirectFilesystemSearch(
+        contextAwareScopedMessage,
+        ctx,
+        effectiveCodeContext,
+      );
       if (directSearch) {
         finalContent = directSearch;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -823,7 +971,7 @@ class ChatAgent extends BaseAgent {
         finalContent = ambiguousEmailProviderClarification;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -834,12 +982,12 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(message, ctx, userKey, stateAgentId);
+      const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(contextAwareScopedMessage, ctx, userKey, stateAgentId);
       if (directScheduledEmailAutomation) {
         finalContent = directScheduledEmailAutomation;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -850,12 +998,17 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(message, ctx, userKey);
+      const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
+        contextAwareScopedMessage,
+        ctx,
+        userKey,
+        effectiveCodeContext,
+      );
       if (directAutomationAuthoring) {
         finalContent = directAutomationAuthoring.content;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -869,12 +1022,12 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(message, ctx, userKey);
+      const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(contextAwareScopedMessage, ctx, userKey);
       if (directWorkspaceWrite) {
         finalContent = directWorkspaceWrite;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -885,12 +1038,12 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(message, ctx);
+      const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(contextAwareScopedMessage, ctx);
       if (directWorkspaceRead) {
         finalContent = directWorkspaceRead;
         if (this.conversationService) {
           this.conversationService.recordTurn(
-            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            conversationKey,
             message.content,
             finalContent,
           );
@@ -905,15 +1058,17 @@ class ChatAgent extends BaseAgent {
       // web_search directly so the tool executes even when the LLM doesn't invoke it.
       // If a more specialized search skill is active, let the LLM read that skill
       // first instead of forcing the generic shortcut.
-      const skipDirectWebSearch = activeSkills.some((skill) => (
-        skill.id === 'multi-search-engine'
-        || skill.id === 'weather'
-        || skill.id === 'blogwatcher'
-      ));
+      const skipDirectWebSearch = !!resolvedCodeSession
+        || !!effectiveCodeContext
+        || activeSkills.some((skill) => (
+          skill.id === 'multi-search-engine'
+          || skill.id === 'weather'
+          || skill.id === 'blogwatcher'
+        ));
       if (!skipDirectWebSearch) {
         let webSearchResult: string | null = null;
         try {
-          webSearchResult = await this.tryDirectWebSearch(message, ctx);
+          webSearchResult = await this.tryDirectWebSearch(contextAwareScopedMessage, ctx);
         } catch {
           // Search failed — fall through to LLM with tool calling
         }
@@ -950,7 +1105,7 @@ class ChatAgent extends BaseAgent {
           }
           if (this.conversationService) {
             this.conversationService.recordTurn(
-              { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+              conversationKey,
               message.content,
               finalContent,
             );
@@ -965,7 +1120,7 @@ class ChatAgent extends BaseAgent {
     // structured tool calls correctly (local models often struggle with complex schemas).
     const gwsProvider = !ambiguousEmailProviderClarification
       && this.enabledManagedProviders?.has('gws')
-      && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(message.content)
+      && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(contextAwareScopedMessage.content)
       ? this.resolveGwsProvider?.()
       : undefined;
     let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
@@ -1060,7 +1215,9 @@ class ChatAgent extends BaseAgent {
           // but the message clearly needed web search, pre-fetch results and re-prompt.
           // This catches cases where Ollama/local models fail to emit tool calls.
           if (rounds === 0 && response.finishReason === 'stop' && this.tools) {
-            const searchQuery = parseWebSearchIntent(message.content);
+            const searchQuery = (!resolvedCodeSession && !effectiveCodeContext)
+              ? parseWebSearchIntent(message.content)
+              : null;
             if (searchQuery) {
               const prefetched = await this.tools.executeModelTool(
                 'web_search',
@@ -1068,10 +1225,11 @@ class ChatAgent extends BaseAgent {
                 {
                   origin: 'assistant',
                   agentId: this.id,
-                  userId: message.userId,
-                  channel: message.channel,
+                  userId: conversationUserId,
+                  channel: conversationChannel,
                   requestId: message.id,
                   agentContext: { checkAction: ctx.checkAction },
+                  codeContext: effectiveCodeContext,
                 },
               );
               if (toBoolean(prefetched.success) && prefetched.output) {
@@ -1121,16 +1279,16 @@ class ChatAgent extends BaseAgent {
         const toolExecOrigin = {
           origin: 'assistant' as const,
           agentId: this.id,
-          userId: message.userId,
-          principalId: message.principalId ?? message.userId,
+          userId: conversationUserId,
+          principalId: message.principalId ?? conversationUserId,
           principalRole: message.principalRole ?? 'owner',
-          channel: message.channel,
+          channel: conversationChannel,
           requestId: message.id,
           contentTrustLevel: currentContextTrustLevel,
           taintReasons: [...currentTaintReasons],
           derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
           agentContext: { checkAction: ctx.checkAction },
-          codeContext: readCodeRequestMetadata(message.metadata),
+          codeContext: effectiveCodeContext,
         };
 
         const toolResults = await Promise.allSettled(
@@ -1249,7 +1407,7 @@ class ChatAgent extends BaseAgent {
               userKey,
               llmMessages: [...llmMessages],
               pendingTools,
-              originalMessage: suspended?.originalMessage ?? message,
+              originalMessage: suspended?.originalMessage ?? contextAwareScopedMessage,
               ctx,
             });
             break;
@@ -1322,10 +1480,13 @@ class ChatAgent extends BaseAgent {
             const fbToolOrigin = {
               origin: 'assistant' as const,
               agentId: this.id,
-              userId: message.userId,
-              channel: message.channel,
+              userId: conversationUserId,
+              principalId: message.principalId ?? conversationUserId,
+              principalRole: message.principalRole ?? 'owner',
+              channel: conversationChannel,
               requestId: message.id,
               agentContext: { checkAction: ctx.checkAction },
+              codeContext: effectiveCodeContext,
             };
             const fbToolResults = await Promise.allSettled(
               this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, { allowImplicitMemorySave })
@@ -1420,7 +1581,7 @@ class ChatAgent extends BaseAgent {
                   userKey,
                   llmMessages: [...fbMessages],
                   pendingTools,
-                  originalMessage: suspended?.originalMessage ?? message,
+                  originalMessage: suspended?.originalMessage ?? contextAwareScopedMessage,
                   ctx,
                 });
               } else {
@@ -1505,9 +1666,18 @@ class ChatAgent extends BaseAgent {
 
     if (this.conversationService) {
       this.conversationService.recordTurn(
-        { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+        conversationKey,
         message.content,
         finalContent,
+      );
+    }
+    if (resolvedCodeSession) {
+      this.syncCodeSessionRuntimeState(
+        resolvedCodeSession.session,
+        conversationUserId,
+        conversationChannel,
+        activeSkills,
+        lastToolRoundResults,
       );
     }
 
@@ -1515,11 +1685,227 @@ class ChatAgent extends BaseAgent {
     if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
     if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
     if (responseSource) metadata.responseSource = responseSource;
+    // Signal code session resolution status so the frontend can detect drift.
+    if (requestedCodeContext?.sessionId) {
+      metadata.codeSessionResolved = !!resolvedCodeSession;
+      if (resolvedCodeSession) {
+        metadata.codeSessionId = resolvedCodeSession.session.id;
+      }
+    }
 
     return {
       content: finalContent,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
+  }
+
+  private getCodeSessionSurfaceId(message: UserMessage): string {
+    // Use canonical userId (not principalId) for stable surfaceId across restarts.
+    // principalId depends on the ephemeral session cookie and changes when the
+    // backend restarts (in-memory session map is lost).
+    const userId = message.userId?.trim();
+    return userId || 'default-surface';
+  }
+
+  private resolveCodeSessionContext(message: UserMessage): ResolvedCodeSessionContext | null {
+    if (!this.codeSessionStore) return null;
+    const requested = readCodeRequestMetadata(message.metadata);
+    const userId = message.userId?.trim();
+    const channel = message.channel?.trim();
+    if (!userId || !channel) return null;
+    const resolved = this.codeSessionStore.resolveForRequest({
+      requestedSessionId: requested?.sessionId,
+      userId,
+      principalId: message.principalId,
+      channel,
+      surfaceId: this.getCodeSessionSurfaceId(message),
+      touchAttachment: true,
+    });
+    if (!resolved && requested?.sessionId) {
+      log.warn(
+        {
+          agent: this.id,
+          requestedSessionId: requested.sessionId,
+          userId,
+          channel,
+          surfaceId: this.getCodeSessionSurfaceId(message),
+        },
+        'Code session resolution failed — message will fall back to web chat context',
+      );
+    }
+    return resolved;
+  }
+
+  private refreshCodeSessionWorkspaceAwareness(
+    resolved: ResolvedCodeSessionContext,
+    messageContent?: string,
+  ): ResolvedCodeSessionContext {
+    if (!this.codeSessionStore) return resolved;
+    const workState = resolved.session.workState;
+    const updates: Partial<typeof workState> = {};
+    if (!workState.workspaceProfile) {
+      updates.workspaceProfile = inspectCodeWorkspaceSync(resolved.session.resolvedRoot, Date.now());
+    }
+    if (shouldRefreshCodeSessionFocus(messageContent ?? '')) {
+      const nextFocusSummary = summarizeCodeSessionFocus(
+        messageContent ?? '',
+        resolved.session.uiState.selectedFilePath,
+      );
+      if (nextFocusSummary && nextFocusSummary !== workState.focusSummary) {
+        updates.focusSummary = nextFocusSummary;
+      }
+    }
+    if (Object.keys(updates).length === 0) return resolved;
+
+    const updated = this.codeSessionStore.updateSession({
+      sessionId: resolved.session.id,
+      ownerUserId: resolved.session.ownerUserId,
+      workState: {
+        ...resolved.session.workState,
+        ...updates,
+      },
+    });
+    if (!updated) return resolved;
+    return {
+      ...resolved,
+      session: updated,
+    };
+  }
+
+  private formatCodeWorkspaceProfileForPrompt(profile: CodeWorkspaceProfile | null | undefined): string {
+    if (!profile) return 'workspaceProfile: (not indexed yet)';
+    return [
+      `workspaceProfile.repoName: ${profile.repoName || '(unknown)'}`,
+      `workspaceProfile.repoKind: ${profile.repoKind || '(unknown)'}`,
+      `workspaceProfile.stack: ${profile.stack.length > 0 ? profile.stack.join(', ') : '(unknown)'}`,
+      `workspaceProfile.manifests: ${profile.manifests.length > 0 ? profile.manifests.join(', ') : '(none)'}`,
+      `workspaceProfile.entryHints: ${profile.entryHints.length > 0 ? profile.entryHints.join(', ') : '(none)'}`,
+      `workspaceProfile.topLevelEntries: ${profile.topLevelEntries.length > 0 ? profile.topLevelEntries.join(', ') : '(none)'}`,
+      `workspaceProfile.inspectedFiles: ${profile.inspectedFiles.length > 0 ? profile.inspectedFiles.join(', ') : '(none)'}`,
+      `workspaceProfile.lastIndexedAt: ${profile.lastIndexedAt ? new Date(profile.lastIndexedAt).toISOString() : '(unknown)'}`,
+      profile.summary
+        ? `workspaceProfile.summary:\n${profile.summary}`
+        : 'workspaceProfile.summary: (none)',
+    ].join('\n');
+  }
+
+  private buildCodeSessionSystemContext(session: CodeSessionRecord): string {
+    const selectedFile = session.uiState.selectedFilePath || '(none)';
+    const currentDirectory = session.uiState.currentDirectory || session.resolvedRoot;
+    const pendingApprovals = Array.isArray(session.workState.pendingApprovals)
+      ? session.workState.pendingApprovals.length
+      : 0;
+    const activeSkills = Array.isArray(session.workState.activeSkills) && session.workState.activeSkills.length > 0
+      ? session.workState.activeSkills.join(', ')
+      : '(none)';
+    return [
+      '<code-session>',
+      'This chat is attached to a backend-owned coding session.',
+      `sessionId: ${session.id}`,
+      `title: ${session.title}`,
+      `workspaceRoot: ${session.resolvedRoot}`,
+      `currentDirectory: ${currentDirectory}`,
+      `selectedFile: ${selectedFile}`,
+      `pendingApprovals: ${pendingApprovals}`,
+      `activeSkills: ${activeSkills}`,
+      session.workState.focusSummary
+        ? `focusSummary:\n${session.workState.focusSummary}`
+        : 'focusSummary: (none)',
+      this.formatCodeWorkspaceProfileForPrompt(session.workState.workspaceProfile),
+      session.workState.planSummary
+        ? `planSummary:\n${session.workState.planSummary}`
+        : 'planSummary: (none)',
+      session.workState.compactedSummary
+        ? `compactedSummary:\n${session.workState.compactedSummary}`
+        : 'compactedSummary: (none)',
+      'Use this backend session as the authoritative coding context for subsequent tool calls.',
+      'This coding session is workspace-centered, but you may use broader Guardian tools when they directly support the work in this session.',
+      'Keep file edits, shell commands, git actions, tests, and builds inside workspaceRoot unless the user explicitly changes session scope.',
+      'For questions about what this repo/workspace/app is, inspect the attached workspace before answering.',
+      'At minimum, look at the workspace root, README, and the primary manifest/config files that identify the project.',
+      'Mention which files you inspected in your answer.',
+      'Do not answer repo/workspace questions from Guardian host-app context, prior non-session chat, or generic assumptions.',
+      '</code-session>',
+    ].join('\n');
+  }
+
+  private formatCodePlanSummary(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
+    const planResult = results.find((entry) => entry.toolName === 'code_plan');
+    if (!planResult || !isRecord(planResult.result.output)) return '';
+    const output = planResult.result.output as Record<string, unknown>;
+    const goal = toString(output.goal);
+    const plan = Array.isArray(output.plan) ? output.plan.map((step) => `- ${String(step)}`) : [];
+    const verification = Array.isArray(output.verification)
+      ? output.verification.map((step) => `- ${String(step)}`)
+      : [];
+    const sections = [
+      goal ? `Goal: ${goal}` : '',
+      plan.length > 0 ? `Plan:\n${plan.join('\n')}` : '',
+      verification.length > 0 ? `Verification:\n${verification.join('\n')}` : '',
+    ].filter((value) => value);
+    return sections.join('\n\n');
+  }
+
+  private syncCodeSessionRuntimeState(
+    session: CodeSessionRecord,
+    conversationUserId: string,
+    conversationChannel: string,
+    activeSkills: ResolvedSkill[],
+    lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [],
+  ): void {
+    if (!this.codeSessionStore) return;
+    const pending = this.getPendingApprovals(`${conversationUserId}:${conversationChannel}`);
+    const approvalSummaries = pending?.ids.length
+      ? this.tools?.getApprovalSummaries(pending.ids)
+      : undefined;
+    const pendingApprovals = pending?.ids.length
+      ? pending.ids.map((id) => {
+          const summary = approvalSummaries?.get(id);
+          return {
+            id,
+            toolName: summary?.toolName ?? 'unknown',
+            argsPreview: summary?.argsPreview ?? '',
+          };
+        })
+      : [];
+    const recentJobs = (this.tools?.listJobs(100) ?? [])
+      .filter((job) => job.userId === conversationUserId && job.channel === conversationChannel)
+      .slice(0, 20)
+      .map((job) => ({
+        id: job.id,
+        toolName: job.toolName,
+        status: job.status,
+        createdAt: job.createdAt,
+        resultPreview: job.resultPreview,
+        argsPreview: job.argsPreview,
+        error: job.error,
+        verificationStatus: job.verificationStatus,
+        verificationEvidence: job.verificationEvidence,
+      }));
+    const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
+    const status = pendingApprovals.length > 0
+      ? 'awaiting_approval'
+      : recentJobs.some((job) => job.status === 'failed' || job.status === 'denied')
+        ? 'blocked'
+        : recentJobs.some((job) => job.status === 'running')
+          ? 'active'
+          : 'active';
+
+    this.codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+      ...(session.agentId ? {} : { agentId: this.id }),
+      status,
+      workState: {
+        ...session.workState,
+        focusSummary: session.workState.focusSummary,
+        workspaceProfile: session.workState.workspaceProfile,
+        planSummary,
+        activeSkills: activeSkills.map((skill) => skill.id),
+        pendingApprovals,
+        recentJobs,
+      },
+    });
   }
 
   private buildImmediateResponseMetadata(
@@ -2147,10 +2533,14 @@ class ChatAgent extends BaseAgent {
     message: UserMessage,
     ctx: AgentContext,
     userKey: string,
+    codeContext?: { workspaceRoot?: string },
     options?: { allowRemediation?: boolean },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
-    const allowedPaths = this.tools.getPolicy().sandbox.allowedPaths;
+    const codeWorkspaceRoot = codeContext?.workspaceRoot?.trim();
+    const allowedPaths = codeWorkspaceRoot
+      ? [codeWorkspaceRoot]
+      : this.tools.getPolicy().sandbox.allowedPaths;
     const trackedPendingApprovalIds: string[] = [];
     const result = await tryAutomationPreRoute({
       agentId: this.id,
@@ -2511,6 +2901,7 @@ class ChatAgent extends BaseAgent {
   private async tryDirectFilesystemSearch(
     message: UserMessage,
     ctx: AgentContext,
+    codeContext?: { workspaceRoot: string; sessionId?: string },
   ): Promise<string | null> {
     if (!this.tools?.isEnabled()) return null;
 
@@ -2533,6 +2924,7 @@ class ChatAgent extends BaseAgent {
         channel: message.channel,
         requestId: message.id,
         agentContext: { checkAction: ctx.checkAction },
+        ...(codeContext ? { codeContext } : {}),
       },
     );
 
@@ -2678,6 +3070,48 @@ function findHeaderValue(
     }
   }
   return '';
+}
+
+function isCodeWorkspaceOverviewRequest(content: string): boolean {
+  const lower = content.trim().toLowerCase();
+  if (!lower) return false;
+  return (
+    /\b(analy[sz]e|inspect|review|summari[sz]e|describe|explain)\b/.test(lower)
+    && /\b(repo|repository|project|workspace|codebase|app|application)\b/.test(lower)
+  ) || /\bwhat(?:'s| is)\s+(?:this|the)\s+(?:repo|repository|project|workspace|codebase|app|application)\b/.test(lower);
+}
+
+function applyCodeWorkspaceGroundingInstruction(content: string): string {
+  return [
+    content,
+    '',
+    'Grounding requirement for this coding session: inspect the attached workspace before answering.',
+    'At minimum, check the workspace root plus README and the primary manifest/config files, then cite the files you inspected.',
+    'Do not answer from Guardian host-app context, prior non-session chat, or generic assumptions.',
+  ].join('\n');
+}
+
+function shouldRefreshCodeSessionFocus(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('[User approved the pending tool action(s)')) return false;
+  if (trimmed.startsWith('[Code Approval Continuation]')) return false;
+  if (/^(approve|approved|deny|denied|reject|rejected)\b/i.test(trimmed)) return false;
+  if (isAffirmativeContinuation(trimmed)) return false;
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 3 || trimmed.length >= 24;
+}
+
+function summarizeCodeSessionFocus(content: string, selectedFilePath?: string | null): string {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  const truncated = compact.length > 240
+    ? `${compact.slice(0, 237).trimEnd()}...`
+    : compact;
+  if (selectedFilePath) {
+    return `${truncated} Selected file: ${selectedFilePath}.`;
+  }
+  return truncated;
 }
 
 function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspaceIntent | null {
@@ -3153,15 +3587,20 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function readCodeRequestMetadata(metadata: unknown): { workspaceRoot: string; sessionId?: string } | undefined {
+type ParsedCodeRequestMetadata = {
+  workspaceRoot?: string;
+  sessionId?: string;
+};
+
+function readCodeRequestMetadata(metadata: unknown): ParsedCodeRequestMetadata | undefined {
   if (!isRecord(metadata)) return undefined;
   const codeContext = metadata.codeContext;
   if (!isRecord(codeContext)) return undefined;
   const workspaceRoot = trimOptionalString(codeContext.workspaceRoot);
-  if (!workspaceRoot) return undefined;
   const sessionId = trimOptionalString(codeContext.sessionId);
+  if (!workspaceRoot && !sessionId) return undefined;
   return {
-    workspaceRoot,
+    ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
 }
@@ -3715,6 +4154,7 @@ function buildDashboardCallbacks(
   threatIntel: ThreatIntelService,
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
+  codeSessionStore: CodeSessionStore,
   chatAgents: Map<string, ChatAgent>,
   skillRegistry: SkillRegistry | undefined,
   enabledManagedProviders: Set<string>,
@@ -3750,9 +4190,26 @@ function buildDashboardCallbacks(
     localAgentId: router.findAgentByRole('local')?.id,
     externalAgentId: router.findAgentByRole('external')?.id,
   });
-
   const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
   const trimOrUndefined = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const getCodeSessionSurfaceId = (args: { userId?: string; principalId?: string }): string => (
+    // Use canonical userId for stable surfaceId across restarts.
+    // principalId depends on ephemeral session cookies and drifts after restart.
+    trimOrUndefined(args.userId)
+    || 'default-surface'
+  );
+  const getCodeSessionConversationKey = (session: CodeSessionRecord): ConversationKey => {
+    const preferredAgentId = session.agentId
+      ?? router.findAgentByRole('local')?.id
+      ?? configRef.current.channels.web?.defaultAgent
+      ?? configRef.current.channels.cli?.defaultAgent
+      ?? 'default';
+    return {
+      agentId: resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId,
+      userId: session.conversationUserId,
+      channel: session.conversationChannel,
+    };
+  };
   const existingProfilesById = (rawCloud: Record<string, unknown>, key: string): Map<string, Record<string, unknown>> => {
     const profiles = Array.isArray(rawCloud[key]) ? rawCloud[key] : [];
     return new Map(
@@ -3768,6 +4225,38 @@ function buildDashboardCallbacks(
 
   /** Mutable ref set from main() to enable hot-reload of the Document Search engine. */
   const reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null } = { current: null };
+
+  const buildCodeSessionSnapshot = (
+    session: CodeSessionRecord,
+    options?: {
+      ownerUserId?: string;
+      principalId?: string;
+      channel?: string;
+      surfaceId?: string;
+      historyLimit?: number;
+    },
+  ) => {
+    const history = conversations.getSessionHistory(
+      getCodeSessionConversationKey(session),
+      { limit: options?.historyLimit ?? 120 },
+    );
+    const channel = options?.channel?.trim() || 'web';
+    const ownerUserId = options?.ownerUserId ?? session.ownerUserId;
+    const surfaceId = options?.surfaceId ?? getCodeSessionSurfaceId({ userId: ownerUserId, principalId: options?.principalId });
+    const currentAttachment = codeSessionStore.resolveForRequest({
+      userId: ownerUserId,
+      principalId: options?.principalId,
+      channel,
+      surfaceId,
+      touchAttachment: false,
+    });
+    return {
+      session,
+      history,
+      attached: currentAttachment?.session.id === session.id,
+      attachment: currentAttachment?.session.id === session.id ? currentAttachment.attachment ?? null : null,
+    };
+  };
 
   const persistAndApplyConfig = (
     rawConfig: Record<string, unknown>,
@@ -4460,6 +4949,34 @@ function buildDashboardCallbacks(
     },
 
     onToolsRun: async (input) => {
+      const resolvedChannel = input.channel?.trim() || 'web';
+      const channelUserId = input.userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = (resolvedChannel === 'code-session' && channelUserId.startsWith('code-session:'))
+        ? channelUserId
+        : identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const requestedCodeContext = readCodeRequestMetadata(input.metadata);
+      let resolvedCodeContext = requestedCodeContext?.workspaceRoot
+        ? {
+            workspaceRoot: requestedCodeContext.workspaceRoot,
+            ...(requestedCodeContext.sessionId ? { sessionId: requestedCodeContext.sessionId } : {}),
+          }
+        : undefined;
+      if (requestedCodeContext?.sessionId) {
+        const resolvedSession = codeSessionStore.resolveForRequest({
+          requestedSessionId: requestedCodeContext.sessionId,
+          userId: canonicalUserId,
+          principalId: input.principalId ?? input.userId,
+          channel: resolvedChannel,
+          surfaceId: getCodeSessionSurfaceId({ userId: canonicalUserId, principalId: input.principalId ?? input.userId }),
+          touchAttachment: false,
+        });
+        if (resolvedSession) {
+          resolvedCodeContext = {
+            sessionId: resolvedSession.session.id,
+            workspaceRoot: resolvedSession.session.resolvedRoot,
+          };
+        }
+      }
       const result = await toolExecutor.runTool({
         toolName: input.toolName,
         args: input.args ?? {},
@@ -4473,7 +4990,7 @@ function buildDashboardCallbacks(
         derivedFromTaintedContent: input.derivedFromTaintedContent,
         scheduleId: input.scheduleId,
         channel: input.channel,
-        codeContext: readCodeRequestMetadata(input.metadata),
+        codeContext: resolvedCodeContext,
       });
       analytics.track({
         type: result.success ? 'tool_run_succeeded' : 'tool_run_failed',
@@ -4592,7 +5109,7 @@ function buildDashboardCallbacks(
       const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId));
       let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
       if (result.success) {
-        continuedResponse = await runtime.workerManager?.continueAutomationAfterApproval(input.approvalId, input.decision) ?? undefined;
+        continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;
         if (!continuedResponse) {
           for (const agent of chatAgents.values()) {
             const followUp = await agent.continueAutomationAfterApproval(input.approvalId, input.decision);
@@ -5013,6 +5530,35 @@ function buildDashboardCallbacks(
       const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
       const priority = options?.priority ?? 'high';
       const requestType = options?.requestType?.trim() || 'chat';
+
+      // Pre-resolve code session at dispatch level so the orchestrator uses the
+      // correct (code-session-scoped) identity for concurrency tracking.  This
+      // also logs early when resolution fails instead of letting the ChatAgent
+      // silently fall back to generic web chat.
+      const dispatchCodeContext = readCodeRequestMetadata(msg.metadata);
+      let dispatchCodeSession: ResolvedCodeSessionContext | null = null;
+      if (dispatchCodeContext?.sessionId) {
+        dispatchCodeSession = codeSessionStore.resolveForRequest({
+          requestedSessionId: dispatchCodeContext.sessionId,
+          userId: canonicalUserId,
+          channel,
+          surfaceId: canonicalUserId,
+          touchAttachment: false,
+        });
+        if (!dispatchCodeSession) {
+          log.warn(
+            {
+              sessionId: dispatchCodeContext.sessionId,
+              userId: canonicalUserId,
+              channel,
+            },
+            'Code session pre-resolution failed at dispatch — message will fall back to web chat',
+          );
+        }
+      }
+      const dispatchUserId = dispatchCodeSession?.session.conversationUserId ?? canonicalUserId;
+      const dispatchChannel = dispatchCodeSession?.session.conversationChannel ?? channel;
+
       analytics.track({
         type: 'message_sent',
         channel,
@@ -5025,8 +5571,8 @@ function buildDashboardCallbacks(
       return orchestrator.dispatch(
         {
           agentId,
-          userId: canonicalUserId,
-          channel,
+          userId: dispatchUserId,
+          channel: dispatchChannel,
           content: msg.content,
           priority,
           requestType,
@@ -5144,6 +5690,165 @@ function buildDashboardCallbacks(
           }
         },
       );
+    },
+
+    onCodeSessionsList: ({ userId, principalId, channel, surfaceId }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const sessions = codeSessionStore.listSessionsForUser(canonicalUserId);
+      const current = codeSessionStore.resolveForRequest({
+        userId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        touchAttachment: false,
+      });
+      return {
+        sessions,
+        currentSessionId: current?.session.id ?? null,
+      };
+    },
+
+    onCodeSessionGet: ({ sessionId, userId, principalId, channel, surfaceId, historyLimit }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
+      if (!session) return null;
+      return buildCodeSessionSnapshot(session, {
+        ownerUserId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        historyLimit,
+      });
+    },
+
+    onCodeSessionCreate: ({ userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, attach }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const session = codeSessionStore.createSession({
+        ownerUserId: canonicalUserId,
+        ownerPrincipalId: principalId ?? canonicalUserId,
+        title,
+        workspaceRoot,
+        agentId: agentId?.trim() || null,
+      });
+      if (attach !== false) {
+        codeSessionStore.attachSession({
+          sessionId: session.id,
+          userId: canonicalUserId,
+          principalId,
+          channel: resolvedChannel,
+          surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+          mode: 'controller',
+        });
+      }
+      return buildCodeSessionSnapshot(session, {
+        ownerUserId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+      });
+    },
+
+    onCodeSessionUpdate: ({ sessionId, userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, uiState, workState, status }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const updated = codeSessionStore.updateSession({
+        sessionId,
+        ownerUserId: canonicalUserId,
+        ...(title !== undefined ? { title } : {}),
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(agentId !== undefined ? { agentId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(uiState ? { uiState } : {}),
+        ...(workState ? { workState } : {}),
+      });
+      if (!updated) return null;
+      return buildCodeSessionSnapshot(updated, {
+        ownerUserId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+      });
+    },
+
+    onCodeSessionDelete: ({ sessionId, userId, principalId, channel, surfaceId }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const deleted = codeSessionStore.deleteSession(sessionId, canonicalUserId);
+      const current = codeSessionStore.resolveForRequest({
+        userId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        touchAttachment: false,
+      });
+      return {
+        success: deleted,
+        currentSessionId: current?.session.id ?? null,
+      };
+    },
+
+    onCodeSessionAttach: ({ sessionId, userId, principalId, channel, surfaceId, mode }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const attachment = codeSessionStore.attachSession({
+        sessionId,
+        userId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        mode,
+      });
+      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
+      return {
+        success: !!attachment && !!session,
+        ...(session ? {
+          snapshot: buildCodeSessionSnapshot(session, {
+            ownerUserId: canonicalUserId,
+            principalId,
+            channel: resolvedChannel,
+            surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+          }),
+        } : {}),
+      };
+    },
+
+    onCodeSessionDetach: ({ userId, principalId, channel, surfaceId }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      return {
+        success: codeSessionStore.detachSession({
+          userId: canonicalUserId,
+          channel: resolvedChannel,
+          surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        }),
+      };
+    },
+
+    onCodeSessionResetConversation: ({ sessionId, userId, channel }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
+      if (!session) {
+        return { success: false, message: `Code session '${sessionId}' was not found.` };
+      }
+      const removed = conversations.resetConversation(getCodeSessionConversationKey(session));
+      return {
+        success: true,
+        message: removed
+          ? `Conversation reset for coding session '${session.title}'.`
+          : `No stored conversation found for coding session '${session.title}'.`,
+      };
     },
 
     onConversationReset: async ({ agentId, userId, channel }) => {
@@ -6738,7 +7443,7 @@ async function main(): Promise<void> {
   const identity = new IdentityService(config.assistant.identity);
   let analytics: AnalyticsService | null = null;
   const onSQLiteSecurityEvent = (event: {
-    service: 'conversation' | 'analytics';
+    service: 'conversation' | 'analytics' | 'code_sessions';
     severity: 'info' | 'warn';
     code: string;
     message: string;
@@ -6791,6 +7496,7 @@ async function main(): Promise<void> {
 
   const conversationDbPath = resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite');
   const analyticsDbPath = resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite');
+  const codeSessionDbPath = resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite');
   const conversations = new ConversationService({
     enabled: config.assistant.memory.enabled,
     sqlitePath: conversationDbPath,
@@ -6825,6 +7531,11 @@ async function main(): Promise<void> {
         'Memory flush: persisted dropped context to knowledge base',
       );
     } : undefined,
+  });
+  const codeSessionStore = new CodeSessionStore({
+    enabled: true,
+    sqlitePath: codeSessionDbPath,
+    onSecurityEvent: onSQLiteSecurityEvent,
   });
   analytics = new AnalyticsService({
     enabled: config.assistant.analytics.enabled,
@@ -7620,6 +8331,7 @@ async function main(): Promise<void> {
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
+    codeSessionStore,
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
     googleService,
@@ -8089,11 +8801,13 @@ async function main(): Promise<void> {
         conversations,
         toolExecutor,
         runtime.outputGuardian,
+        skillRegistry,
         skillResolver,
         enabledManagedProviders,
         fallbackChain,
         selectSoulPrompt(soulProfile, soulMode),
         agentMemoryStore,
+        codeSessionStore,
         sharedStateAgentId,
         resolveGwsProvider,
         config.assistant.tools.contextBudget,
@@ -8127,11 +8841,13 @@ async function main(): Promise<void> {
       conversations,
       toolExecutor,
       runtime.outputGuardian,
+      skillRegistry,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      codeSessionStore,
       SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
@@ -8152,11 +8868,13 @@ async function main(): Promise<void> {
       conversations,
       toolExecutor,
       runtime.outputGuardian,
+      skillRegistry,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
       agentMemoryStore,
+      codeSessionStore,
       SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
@@ -8202,11 +8920,13 @@ async function main(): Promise<void> {
       conversations,
       toolExecutor,
       runtime.outputGuardian,
+      skillRegistry,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      codeSessionStore,
       'default',
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
@@ -8300,6 +9020,44 @@ async function main(): Promise<void> {
       return router.routeWithTier(content, tierMode, threshold);
     }
     return router.route(content);
+  };
+  const resolveAgentForIncomingMessage = (
+    channelDefault: string | undefined,
+    msg: Pick<UserMessage, 'content' | 'userId' | 'principalId' | 'channel' | 'metadata'>,
+  ): RouteDecision => {
+    const channel = msg.channel?.trim() || 'web';
+    const channelUserId = msg.userId?.trim() || `${channel}-user`;
+    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
+    const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
+    const resolvedCodeSession = codeSessionStore.resolveForRequest({
+      requestedSessionId: requestedCodeContext?.sessionId,
+      userId: canonicalUserId,
+      principalId: msg.principalId,
+      channel,
+      surfaceId: canonicalUserId,
+      touchAttachment: false,
+    });
+    if (resolvedCodeSession) {
+      const preferredAgentId = resolvedCodeSession.session.agentId?.trim()
+        || router.findAgentByRole('local')?.id
+        || channelDefault
+        || defaultAgentId;
+      return {
+        agentId: preferredAgentId,
+        confidence: 'high',
+        reason: requestedCodeContext?.sessionId
+          ? 'explicit backend-owned coding session'
+          : 'attached backend-owned coding session',
+      };
+    }
+    if (requestedCodeContext?.workspaceRoot) {
+      return {
+        agentId: router.findAgentByRole('local')?.id || channelDefault || defaultAgentId,
+        confidence: 'high',
+        reason: 'code workspace context',
+      };
+    }
+    return resolveAgentWithTier(channelDefault, msg.content);
   };
   // ─── Policy-as-Code Engine Bootstrap ─────────────────────────────
   const policyConfig = config.guardian?.policy ?? { enabled: true, mode: 'shadow' as const, rulesPath: 'policies/', mismatchLogLimit: 1000 };
@@ -8449,6 +9207,7 @@ async function main(): Promise<void> {
     threatIntel,
     connectors,
     toolExecutor,
+    codeSessionStore,
     chatAgents,
     skillRegistry,
     enabledManagedProviders,
@@ -8515,13 +9274,16 @@ async function main(): Promise<void> {
     // Close DB connections before deleting SQLite files
     if (scope === 'data' || scope === 'all') {
       try { conversations.close(); } catch { /* already closed */ }
+      try { codeSessionStore.close(); } catch { /* already closed */ }
       try { analytics.close(); } catch { /* already closed */ }
 
       tryDelete('assistant-memory.sqlite', resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite'));
+      tryDelete('assistant-code-sessions.sqlite', resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite'));
       tryDelete('assistant-analytics.sqlite', resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite'));
       // Also remove SQLite WAL/SHM files if present
       for (const suffix of ['-wal', '-shm']) {
         tryDelete(`assistant-memory.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite') + suffix);
+        tryDelete(`assistant-code-sessions.sqlite${suffix}`, resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite') + suffix);
         tryDelete(`assistant-analytics.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite') + suffix);
       }
       tryDelete('memory/ (agent knowledge base)', join(baseDir, 'memory'), { recursive: true });
@@ -8826,7 +9588,7 @@ async function main(): Promise<void> {
       }),
     });
     await cliChannel.start(async (msg) => {
-      const decision = resolveAgentWithTier(configRef.current.channels.cli?.defaultAgent, msg.content);
+      const decision = resolveAgentForIncomingMessage(configRef.current.channels.cli?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
           decision.agentId,
@@ -8836,6 +9598,7 @@ async function main(): Promise<void> {
             principalId: msg.principalId,
             principalRole: msg.principalRole,
             channel: msg.channel,
+            metadata: msg.metadata,
           },
           decision,
         );
@@ -8897,11 +9660,18 @@ async function main(): Promise<void> {
       },
     });
     await telegram.start(async (msg) => {
-      const decision = resolveAgentWithTier(configRef.current.channels.telegram?.defaultAgent, msg.content);
+      const decision = resolveAgentForIncomingMessage(configRef.current.channels.telegram?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
           decision.agentId,
-          { content: msg.content, userId: msg.userId, channel: msg.channel },
+          {
+            content: msg.content,
+            userId: msg.userId,
+            principalId: msg.principalId,
+            principalRole: msg.principalRole,
+            channel: msg.channel,
+            metadata: msg.metadata,
+          },
           decision,
         );
       }
@@ -9040,11 +9810,18 @@ async function main(): Promise<void> {
     });
     activeWebChannel = web;
     await web.start(async (msg) => {
-      const decision = resolveAgentWithTier(configRef.current.channels.web?.defaultAgent, msg.content);
+      const decision = resolveAgentForIncomingMessage(configRef.current.channels.web?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
           decision.agentId,
-          { content: msg.content, userId: msg.userId, channel: msg.channel },
+          {
+            content: msg.content,
+            userId: msg.userId,
+            principalId: msg.principalId,
+            principalRole: msg.principalRole,
+            channel: msg.channel,
+            metadata: msg.metadata,
+          },
           decision,
         );
       }
@@ -9284,10 +10061,11 @@ async function main(): Promise<void> {
     notificationService.stop();
     await runtime.stop();
     conversations.close();
+    codeSessionStore.close();
     analytics.close();
 
-    clearTimeout(forceExitTimer);
-    process.exit(0);
+    process.exitCode = 0;
+    await settleTerminalForExit();
   };
 
   // Killswitch: triggers graceful shutdown from CLI or web

@@ -214,6 +214,19 @@ export class ConversationService {
     }));
   }
 
+  /** Return stored history for the active session without context trimming. */
+  getSessionHistory(
+    key: ConversationKey,
+    options?: { limit?: number },
+  ): Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }> {
+    const sessionId = this.getActiveSessionId(key);
+    const history = this.mode === 'sqlite'
+      ? this.getSessionHistorySQLite(key, sessionId)
+      : this.memory.conversations.get(this.toMapKey(key, sessionId)) ?? [];
+    const limit = Math.max(1, options?.limit ?? history.length);
+    return history.slice(-limit).map((entry) => ({ ...entry }));
+  }
+
   /** Record the completed user/assistant turn for future context. */
   recordTurn(key: ConversationKey, userContent: string, assistantContent: string): void {
     const sessionId = this.getActiveSessionId(key);

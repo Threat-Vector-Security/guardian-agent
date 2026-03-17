@@ -2117,6 +2117,71 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('surfaces code-session workspace roots in tool context', () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const context = executor.getToolContext({
+      userId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-context' },
+    });
+
+    expect(context).toContain(`Workspace root (default for file operations): ${codeRoot}`);
+    expect(context).toContain(`Allowed paths: ${codeRoot}`);
+    expect(context).toContain('Active coding session workspace:');
+    expect(context).toContain('already trusted');
+  });
+
+  it('treats add_path for the active code workspace as a no-op instead of requiring approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-allowlist' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message || result.output?.message).toMatch(/already trusted for the active coding session workspace/i);
+  });
+
   it('allows code-scoped git init with approval even when git is not globally allowlisted', async () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();

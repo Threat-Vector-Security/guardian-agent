@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sandboxedSpawn, detectSandboxHealth, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
@@ -13,13 +14,15 @@ import type { AgentIsolationConfig } from '../config/types.js';
 import type { UserMessage } from '../agent/types.js';
 import type { ResolvedSkill } from '../skills/types.js';
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
-import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 
 const log = createLogger('worker-manager');
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const WORKER_WORKSPACE_CLEANUP_MAX_RETRIES = 10;
+const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
 
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
@@ -59,11 +62,25 @@ interface DirectAutomationContinuation {
   expiresAt: number;
 }
 
+interface WorkerSuspendedApprovalState {
+  workerId: string;
+  sessionId: string;
+  agentId: string;
+  userId: string;
+  principalId: string;
+  principalRole: NonNullable<UserMessage['principalRole']>;
+  channel: string;
+  approvalIds: string[];
+  expiresAt: number;
+}
+
 export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
   private readonly directPendingApprovals = new Map<string, { ids: string[]; expiresAt: number }>();
   private readonly directAutomationContinuations = new Map<string, DirectAutomationContinuation>();
+  private readonly workerSuspendedApprovalsBySession = new Map<string, WorkerSuspendedApprovalState>();
+  private readonly workerSuspendedApprovalToSession = new Map<string, string>();
   private readonly tokenManager: CapabilityTokenManager;
   private readonly tools: ToolExecutor;
   private readonly runtime: Runtime;
@@ -113,6 +130,7 @@ export class WorkerManager {
   shutdown(): void {
     clearInterval(this.reapInterval);
     for (const worker of this.workers.values()) {
+      worker.status = 'shutting_down';
       this.safeKillWorker(worker);
       this.cleanupWorker(worker);
     }
@@ -120,6 +138,8 @@ export class WorkerManager {
     this.sessionToWorker.clear();
     this.directPendingApprovals.clear();
     this.directAutomationContinuations.clear();
+    this.workerSuspendedApprovalsBySession.clear();
+    this.workerSuspendedApprovalToSession.clear();
   }
 
   private async tryHandleDirectApprovalMessage(
@@ -222,7 +242,7 @@ export class WorkerManager {
       },
       formatPendingApprovalPrompt: (ids) => {
         const meta = this.resolveDirectPendingApprovalMetadata(ids);
-        return shouldUseStructuredPendingApprovalMessage(input.message.channel)
+        return meta.length > 0
           ? formatPendingApprovalMessage(meta)
           : 'This action needs approval before I can continue.';
       },
@@ -307,12 +327,19 @@ export class WorkerManager {
     return false;
   }
 
-  async continueAutomationAfterApproval(
+  hasSuspendedApproval(approvalId: string): boolean {
+    return !!this.getWorkerSuspendedApprovalState(approvalId);
+  }
+
+  async continueAfterApproval(
     approvalId: string,
     decision: 'approved' | 'denied',
+    resultMessage?: string,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const normalizedId = approvalId.trim();
     if (!normalizedId) return null;
+    const workerContinuation = await this.continueWorkerAfterApproval(normalizedId, decision, resultMessage);
+    if (workerContinuation) return workerContinuation;
     for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
       if (!continuation.pendingApprovalIds.includes(normalizedId)) continue;
       if (decision !== 'approved') {
@@ -377,7 +404,7 @@ export class WorkerManager {
     }
 
     const workerId = randomUUID();
-    const workspacePath = join('/tmp', `ga-worker-${workerId}`);
+    const workspacePath = join(tmpdir(), `ga-worker-${workerId}`);
     mkdirSync(join(workspacePath, 'tmp'), { recursive: true });
 
     const token = this.tokenManager.mint({
@@ -573,6 +600,7 @@ export class WorkerManager {
 
       const wrappedResolve = (value: { content: string; metadata?: Record<string, unknown> }) => {
         clearTimeout(timeout);
+        this.syncWorkerSuspendedApprovals(worker, params.message, value.metadata);
         resolve(value);
       };
       const wrappedReject = (error: Error) => {
@@ -628,12 +656,41 @@ export class WorkerManager {
   }
 
   private cleanupWorker(worker: WorkerProcess): void {
+    this.clearWorkerSuspendedApprovals(worker.sessionId);
     this.tokenManager.revokeForWorker(worker.id);
     this.workers.delete(worker.id);
     if (this.sessionToWorker.get(worker.sessionId) === worker.id) {
       this.sessionToWorker.delete(worker.sessionId);
     }
-    rmSync(worker.workspacePath, { recursive: true, force: true });
+    if (!existsSync(worker.workspacePath)) {
+      return;
+    }
+    try {
+      this.removeWorkspacePath(worker.workspacePath);
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : undefined;
+      log.warn(
+        {
+          workerId: worker.id,
+          sessionId: worker.sessionId,
+          workspacePath: worker.workspacePath,
+          code,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Failed to remove worker workspace during cleanup',
+      );
+    }
+  }
+
+  private removeWorkspacePath(workspacePath: string): void {
+    rmSync(workspacePath, {
+      recursive: true,
+      force: true,
+      maxRetries: WORKER_WORKSPACE_CLEANUP_MAX_RETRIES,
+      retryDelay: WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS,
+    });
   }
 
   private safeKillWorker(worker: WorkerProcess): void {
@@ -643,6 +700,114 @@ export class WorkerManager {
     } catch (error) {
       log.warn({ workerId: worker.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to kill worker');
     }
+  }
+
+  private syncWorkerSuspendedApprovals(
+    worker: WorkerProcess,
+    message: UserMessage,
+    metadata: Record<string, unknown> | undefined,
+  ): void {
+    const approvalIds = Array.isArray(metadata?.pendingApprovals)
+      ? metadata.pendingApprovals
+        .map((value) => isRecord(value) ? value.id : undefined)
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    this.clearWorkerSuspendedApprovals(worker.sessionId);
+    if (approvalIds.length === 0) return;
+    this.setWorkerSuspendedApprovals({
+      workerId: worker.id,
+      sessionId: worker.sessionId,
+      agentId: worker.agentId,
+      userId: message.userId,
+      principalId: message.principalId ?? message.userId,
+      principalRole: message.principalRole ?? 'owner',
+      channel: message.channel,
+      approvalIds: [...new Set(approvalIds)],
+      expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private setWorkerSuspendedApprovals(state: WorkerSuspendedApprovalState): void {
+    this.workerSuspendedApprovalsBySession.set(state.sessionId, state);
+    for (const approvalId of state.approvalIds) {
+      this.workerSuspendedApprovalToSession.set(approvalId, state.sessionId);
+    }
+  }
+
+  private clearWorkerSuspendedApprovals(sessionId: string): void {
+    const existing = this.workerSuspendedApprovalsBySession.get(sessionId);
+    if (!existing) return;
+    for (const approvalId of existing.approvalIds) {
+      this.workerSuspendedApprovalToSession.delete(approvalId);
+    }
+    this.workerSuspendedApprovalsBySession.delete(sessionId);
+  }
+
+  private getWorkerSuspendedApprovalState(
+    approvalId: string,
+    nowMs: number = Date.now(),
+  ): WorkerSuspendedApprovalState | null {
+    const sessionId = this.workerSuspendedApprovalToSession.get(approvalId.trim());
+    if (!sessionId) return null;
+    const state = this.workerSuspendedApprovalsBySession.get(sessionId);
+    if (!state) {
+      this.workerSuspendedApprovalToSession.delete(approvalId.trim());
+      return null;
+    }
+    if (state.expiresAt <= nowMs) {
+      this.clearWorkerSuspendedApprovals(sessionId);
+      return null;
+    }
+    return state;
+  }
+
+  private async continueWorkerAfterApproval(
+    approvalId: string,
+    decision: 'approved' | 'denied',
+    resultMessage?: string,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const state = this.getWorkerSuspendedApprovalState(approvalId);
+    if (!state) return null;
+
+    if (decision !== 'approved') {
+      this.clearWorkerSuspendedApprovals(state.sessionId);
+      return null;
+    }
+
+    const pendingIds = new Set(this.tools.listApprovals(500, 'pending').map((entry) => entry.id));
+    const remaining = state.approvalIds.filter((id) => id !== approvalId && pendingIds.has(id));
+    if (remaining.length > 0) {
+      this.clearWorkerSuspendedApprovals(state.sessionId);
+      this.setWorkerSuspendedApprovals({
+        ...state,
+        approvalIds: remaining,
+        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+      });
+      return null;
+    }
+
+    const worker = this.workers.get(state.workerId);
+    this.clearWorkerSuspendedApprovals(state.sessionId);
+    if (!worker || worker.status !== 'ready') return null;
+
+    return this.dispatchToWorker(worker, {
+      message: {
+        id: randomUUID(),
+        userId: state.userId,
+        principalId: state.principalId,
+        principalRole: state.principalRole,
+        channel: state.channel,
+        content: `[User approved the pending tool action(s). Result: ${resultMessage?.trim() || 'Approved and executed.'}] Please continue with the current request only. Do not resume older unrelated pending tasks.`,
+        timestamp: Date.now(),
+      },
+      systemPrompt: '',
+      history: [],
+      knowledgeBase: '',
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),
+    });
   }
 }
 

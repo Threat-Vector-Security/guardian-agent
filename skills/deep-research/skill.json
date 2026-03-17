@@ -1,0 +1,41 @@
+{
+  "id": "deep-research",
+  "name": "Deep Research",
+  "version": "0.1.0",
+  "description": "Research workflow for comparing code paths, tracing behavior, and synthesizing findings before implementation.",
+  "tags": [
+    "research",
+    "investigate",
+    "compare",
+    "trace",
+    "analysis"
+  ],
+  "enabled": true,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "research",
+      "investigate",
+      "compare",
+      "trace",
+      "spike",
+      "analyze this codebase"
+    ]
+  },
+  "tools": [
+    "code_symbol_search",
+    "code_git_diff",
+    "fs_read",
+    "fs_list"
+  ],
+  "risk": "informational"
+}

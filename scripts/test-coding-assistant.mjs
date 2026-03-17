@@ -298,7 +298,7 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         toolMessages: toolMessages.map((message) => String(message.content ?? '')),
       });
 
-      if (latestUser.includes('[Code Workspace Context]') && latestUser.includes('answerValue')) {
+      if (latestUser.includes('answerValue')) {
         if (toolMessages.length === 0) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(createChatCompletionResponse({
@@ -343,7 +343,7 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         return;
       }
 
-      if (latestUser.includes('[Code Workspace Context]') && /git status/i.test(latestUser)) {
+      if (/git status/i.test(latestUser)) {
         if (toolMessages.length === 0) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(createChatCompletionResponse({
@@ -551,10 +551,18 @@ guardian:
     const toolNames = Array.isArray(toolState?.tools) ? toolState.tools.map((tool) => tool.name) : [];
     assert.ok(toolNames.includes('code_edit'), 'Expected code_edit in tool catalog');
     assert.ok(toolNames.includes('code_symbol_search'), 'Expected code_symbol_search in tool catalog');
+    const codeSessionCreate = await requestJson(baseUrl, harnessToken, 'POST', '/api/code/sessions', {
+      userId: 'web-code-harness',
+      channel: 'web',
+      title: 'Harness Session',
+      workspaceRoot,
+      attach: true,
+    });
+    assert.ok(codeSessionCreate?.session?.id, `Expected backend code session creation to return a session id: ${JSON.stringify(codeSessionCreate)}`);
     const codeSessionMetadata = {
       codeContext: {
+        sessionId: codeSessionCreate.session.id,
         workspaceRoot,
-        sessionId: 'web-code-harness',
       },
     };
 
@@ -687,16 +695,7 @@ guardian:
     );
 
     const messageResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: [
-        '[Code Workspace Context]',
-        `workspaceRoot: ${workspaceRoot}`,
-        `selectedFile: ${path.join(workspaceRoot, 'src', 'example.ts')}`,
-        'activeTerminal: Agent',
-        'Use coding tools when appropriate. If coding tools are not visible, call find_tools with query "coding code edit create git diff test build lint symbol".',
-        `When running shell commands, use cwd="${workspaceRoot}".`,
-        '',
-        'Search the workspace for answerValue and tell me where it is defined.',
-      ].join('\n'),
+      content: 'Search the workspace for answerValue and tell me where it is defined.',
       userId: 'web-code-harness',
       channel: 'web',
       metadata: codeSessionMetadata,
@@ -716,11 +715,48 @@ guardian:
       assert.ok(newJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from coding message flow');
       const toolListsSeen = scenarioLog.map((entry) => entry.tools);
       assert.ok(toolListsSeen.some((tools) => tools.includes('find_tools')), 'Expected find_tools in model tool lists');
+      assert.ok(scenarioLog.some((entry) => entry.latestUser === 'Search the workspace for answerValue and tell me where it is defined.'), 'Expected raw coding message content, not wrapped prompt metadata');
     } else {
       const acceptableToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
       assert.ok(
         newJobs.some((job) => acceptableToolNames.has(job.toolName)),
         `Expected a coding search/read tool call from the real-model message flow, got ${JSON.stringify(newJobs)}`,
+      );
+    }
+
+    const toolsStateBeforeFallbackMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const previousFallbackMessageJobIds = new Set(
+      (Array.isArray(toolsStateBeforeFallbackMessage?.jobs) ? toolsStateBeforeFallbackMessage.jobs : [])
+        .map((job) => job?.id)
+        .filter(Boolean),
+    );
+
+    const staleSessionFallbackResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Search the workspace for answerValue and tell me where it is defined.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: {
+        codeContext: {
+          sessionId: 'missing-session-id',
+          workspaceRoot,
+        },
+      },
+    });
+    assert.ok(String(staleSessionFallbackResponse.content ?? '').trim().length > 0, `Expected non-empty fallback coding response: ${JSON.stringify(staleSessionFallbackResponse)}`);
+
+    const toolsStateAfterFallback = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const fallbackJobs = (Array.isArray(toolsStateAfterFallback?.jobs) ? toolsStateAfterFallback.jobs : [])
+      .filter((job) => job?.id && !previousFallbackMessageJobIds.has(job.id));
+
+    if (provider.mode === 'fake') {
+      assert.match(String(staleSessionFallbackResponse.content ?? ''), /answerValue/);
+      assert.ok(fallbackJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from stale-session workspace fallback flow');
+      assert.ok(fallbackJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from stale-session workspace fallback flow');
+    } else {
+      const acceptableFallbackToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      assert.ok(
+        fallbackJobs.some((job) => acceptableFallbackToolNames.has(job.toolName)),
+        `Expected a coding tool call from the stale-session workspace fallback flow, got ${JSON.stringify(fallbackJobs)}`,
       );
     }
 
@@ -732,13 +768,7 @@ guardian:
     );
 
     const gitStatusResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: [
-        '[Code Workspace Context]',
-        `workspaceRoot: ${workspaceRoot}`,
-        `selectedFile: ${path.join(workspaceRoot, 'src', 'example.ts')}`,
-        '',
-        'Run git status for this coding workspace and summarize it briefly.',
-      ].join('\n'),
+      content: 'Run git status for this coding workspace and summarize it briefly.',
       userId: 'web-code-harness',
       channel: 'web',
       metadata: codeSessionMetadata,

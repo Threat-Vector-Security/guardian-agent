@@ -1,63 +1,180 @@
 # Coding Assistant Spec
 
-**Status:** As Built
-**Date:** 2026-03-17
-**Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-**Primary Web API:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
+**Status:** As Built  
+**Date:** 2026-03-17  
+**Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
+**Primary Runtime:** [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)  
+**Code Session Store:** [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)  
+**Primary Web API:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)  
 **Primary Tools:** [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
 
 ## Purpose
 
-The Coding Assistant is the `Code` page in the web UI. It provides a project-scoped workspace for:
+The Coding Assistant is Guardian’s repo-scoped coding workflow surface.
 
-- repository browsing
-- file inspection
-- diff inspection
-- coding-focused assistant chat
-- persistent PTY-backed terminals
-- session-scoped approval handling
-- session-scoped work/status visibility
+It provides:
 
-It runs on top of the existing Guardian web API and tool system. It is not a separate runtime.
+- backend-owned coding sessions
+- repo-aware assistant chat with backend workspace profiling
+- explorer and source/diff inspection
+- approval-aware coding execution
+- PTY terminals for manual operator shell work
+- session resume across web, main chat, CLI, and Telegram
+- broader Guardian actions performed from the active workspace context
 
-## Current Architecture
+It is not a separate runtime. It is a coding mode built on the main Guardian runtime, tool executor, conversation service, and policy system.
 
-The current Code page is implemented as a browser-side workspace shell with server-backed tool and chat calls.
+## Architecture Summary
 
-Core pieces:
+The important architectural change is that coding sessions are now backend-owned.
 
-- Code page UI: [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- Styles: [style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- Generic web API client: [api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
-- Web API server: [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
-- Coding tool registrations: [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+The browser no longer owns the authoritative coding session. The browser is now a client of a backend `CodeSession`.
 
-## Session Model
+Core layers:
 
-Code sessions are stored in browser `localStorage`.
+- backend `CodeSessionStore` persists coding sessions and surface attachments
+- backend workspace profiling builds durable repo identity for each session
+- `ConversationService` stores the coding transcript for each session conversation identity
+- `ChatAgent` resolves attached or explicit coding sessions before prompt assembly and tool execution
+- `ToolExecutor` exposes coding-session tools and enforces repo-scoped coding sandbox rules
+- the Code page renders and edits a server-owned session, but still keeps transient UI cache locally
 
-Each session contains:
+## Backend-Owned Code Sessions
 
-- session id
-- title
-- workspace root
-- resolved root
-- selected file
-- diff toggle state
-- expanded explorer directories
-- terminal tabs and terminal output
-- assistant chat history
-- draft assistant message
-- active assistant sidebar tab
-- pending approvals for that Code session
-- recent coding job/check state for that Code session
-- selected agent id
+Code sessions are persisted in the backend by [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts).
 
-If no sessions exist, the page creates a default session automatically.
+Primary persisted shape:
 
-## Workspace UI
+- `CodeSessionRecord`
+  - `id`
+  - `ownerUserId`
+  - `ownerPrincipalId`
+  - `title`
+  - `workspaceRoot`
+  - `resolvedRoot`
+  - `agentId`
+  - `status`
+  - `attachmentPolicy`
+  - `createdAt`
+  - `updatedAt`
+  - `lastActivityAt`
+  - `conversationUserId`
+  - `conversationChannel`
+  - `uiState`
+  - `workState`
+- `CodeSessionUiState`
+  - `currentDirectory`
+  - `selectedFilePath`
+  - `showDiff`
+  - `expandedDirs`
+  - `activeAssistantTab`
+  - `terminalCollapsed`
+  - `terminalTabs`
+- `CodeSessionWorkState`
+  - `focusSummary`
+  - `planSummary`
+  - `compactedSummary`
+  - `workspaceProfile`
+  - `activeSkills`
+  - `pendingApprovals`
+  - `recentJobs`
+  - `changedFiles`
+  - `verification`
+- `CodeSessionAttachmentRecord`
+  - `codeSessionId`
+  - `userId`
+  - `principalId`
+  - `channel`
+  - `surfaceId`
+  - `mode`
+  - `attachedAt`
+  - `lastSeenAt`
+  - `active`
 
-The Code page has five visible areas:
+Persistence uses SQLite when available and falls back to in-memory storage otherwise.
+
+## Workspace Awareness Model
+
+The Coding Assistant no longer relies only on a workspace path and ad hoc prompt wording.
+
+Each backend `CodeSession` carries durable workspace awareness state:
+
+- `workspaceProfile`
+  - repo name
+  - repo kind
+  - stack/framework hints
+  - key manifests inspected
+  - top-level entries
+  - likely entry/focus points
+  - summary of what the repo appears to be
+- `focusSummary`
+  - short durable summary of the current coding objective for that session
+
+Workspace profiling is built from lightweight backend inspection of the session root, `README`, and primary manifest/config files. That profile is then injected into the coding-session prompt on later turns.
+
+This is the mechanism that makes the Coding Assistant feel project-aware in the same way a dedicated coding agent should, rather than behaving like a general chat that merely has file tools.
+
+## Conversation Model
+
+Each coding session gets its own backend conversation identity:
+
+- `conversationUserId = code-session:<sessionId>`
+- `conversationChannel = code-session`
+
+That means:
+
+- a coding session has one durable coding transcript
+- the transcript is separate from the normal main-chat transcript
+- web Code, main chat, CLI, and Telegram can all attach to the same coding session and continue that same coding transcript
+
+The Code page is still a separate coding conversation surface in UX terms, but it is no longer a browser-only conversation.
+
+## Attach And Resume Model
+
+Guardian supports two ways to enter a coding session:
+
+1. Explicit session targeting  
+   The client sends `metadata.codeContext.sessionId`.
+
+2. Surface attachment  
+   A chat surface is attached to a `CodeSession`, and later messages on that surface inherit it automatically.
+
+Surface attachment is tracked in `CodeSessionStore`.
+
+Current behavior:
+
+- the Code page sends explicit `sessionId` metadata on chat requests
+- main chat, CLI, and Telegram can use `code_session_attach`
+- once attached, later messages on that surface resolve to the same coding session
+
+## Routing Behavior
+
+Routing is code-session-aware.
+
+When an incoming message is tied to a coding session:
+
+- Guardian first checks for an explicit or attached backend coding session
+- if one exists, routing prefers that session’s bound `agentId`
+- if the session is not yet bound, routing prefers the local/coding-capable agent tier
+- only non-coding messages fall back to normal tier routing
+
+This prevents “continue that coding session” style follow-ups from being routed as unrelated general chat.
+
+## Capability Model
+
+The Coding Assistant is workspace-centered, not coding-only.
+
+That means:
+
+- repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
+- the assistant may still use broader Guardian capabilities when they directly support the coding session, such as research, web/docs lookup, or creating automations
+- unrelated general-assistant tasks should remain in the main chat instead of diluting the coding session
+
+In practice, the coding session is the anchor. Broader tools are allowed when they serve that anchored workspace task.
+
+## Code Page UI Model
+
+The Code page keeps the existing layout:
 
 - session rail
 - explorer
@@ -65,63 +182,127 @@ The Code page has five visible areas:
 - terminal panes
 - assistant sidebar
 
-The session rail lets the user:
-
-- create a session
-- edit the session title and workspace root
-- delete a session
-- switch between sessions
-
-The explorer uses `fs_list` to load directory contents.
-
-The editor uses:
-
-- `fs_read` for source content
-- `code_git_diff` for diff output
-
-The assistant sidebar is tabbed so the coding conversation stays readable.
-
-Current tabs:
+The assistant sidebar remains tabbed:
 
 - `Chat`
 - `Tasks`
 - `Approvals`
 - `Checks`
 
-Behavior as built:
+Behavior:
 
-- `Chat` is the only normal conversation surface
-- `Tasks` shows active plan/status summaries plus recent coding jobs
-- `Approvals` shows pending approval cards and actions for the active Code session
-- `Checks` shows recent verification-oriented job results
-- approval state does not auto-switch the active tab
-- chat shows a small non-blocking approval notice instead of full inline approval cards
-- session cards in the rail surface approval/task/check badges
+- `Chat` is the main back-and-forth coding conversation
+- `Tasks` shows plan and recent coding activity
+- `Approvals` shows queued coding approvals
+- `Checks` shows recent verification outcomes
+- the UI does not auto-switch tabs when approvals appear
+- chat shows only a small approval notice instead of dumping approval cards inline
 
-The chat tab sends a normal web message with extra coding context injected into the prompt, including:
+## Code Page State Ownership
 
-- workspace root
-- current directory
-- selected file
+Authoritative server state:
+
+- session list
+- session metadata
+- workspace root and resolved root
+- workspace profile
+- focus summary
+- coding transcript
+- conversation identity
+- pending approvals
+- recent jobs
 - active skills
-- active plan summary
-- compacted summary
-- pending approval count
+- plan/compaction summaries
 
-The chat tab also sends structured request metadata:
+Browser-side cache only:
+
+- cached session copies for faster reload
+- unsent chat draft
+- live terminal output buffer
+- temporary runtime terminal ids
+- dir-picker state
+
+If the browser cache disagrees with the backend, the backend wins.
+
+## Web API Methods
+
+Primary backend-owned session methods:
+
+- `GET /api/code/sessions`
+  - returns the user’s backend coding sessions and the currently attached session for that surface
+- `POST /api/code/sessions`
+  - creates a backend coding session
+- `GET /api/code/sessions/:id`
+  - returns session metadata plus coding transcript history
+- `PATCH /api/code/sessions/:id`
+  - updates session metadata or persisted UI/work state
+- `DELETE /api/code/sessions/:id`
+  - deletes the backend coding session
+- `POST /api/code/sessions/:id/attach`
+  - attaches the current surface to that coding session
+- `POST /api/code/sessions/detach`
+  - detaches the current surface
+- `POST /api/code/sessions/:id/reset`
+  - resets the coding transcript for that session
+
+Session-backed direct Code UI methods:
+
+- `POST /api/code/fs/list`
+- `POST /api/code/fs/read`
+- `POST /api/code/git/diff`
+- `POST /api/code/terminals`
+- `POST /api/code/terminals/:id/input`
+- `POST /api/code/terminals/:id/resize`
+- `DELETE /api/code/terminals/:id`
+
+For `fs`, `diff`, and terminal open requests, the client can supply `sessionId`. The backend resolves the session and enforces the workspace root from the session record instead of trusting a browser-supplied root path.
+
+## Chat Request Metadata
+
+The authoritative coding-session request hook is:
 
 - `metadata.codeContext.sessionId`
-- `metadata.codeContext.workspaceRoot`
 
-That metadata is the enforcement hook for assistant-driven Code sandboxing. The prompt text gives the model context; the structured metadata is what scopes tool execution.
+`workspaceRoot` may still appear for compatibility, but backend session resolution is the real authority.
 
-Code chat is separate from the rest of the app’s general chat. Each Code session uses its own session-scoped web user id, so Code history is not mixed into the global chat panel.
+Chat flow:
 
-## Coding Tools Available
+- the Code page sends a normal `/api/message` request
+- it includes `metadata.codeContext.sessionId`
+- `ChatAgent` resolves the backend session
+- prompt assembly includes structured coding-session context plus the durable workspace profile and focus summary
+- tool execution gets a repo-scoped `codeContext`
 
-The Code page relies on the existing coding tool set registered in the main tool executor.
+## Main Chat And Remote Channels
 
-Built-in coding tools:
+The main Guardian agent can see coding sessions through coding-session tools:
+
+- `code_session_list`
+- `code_session_current`
+- `code_session_create`
+- `code_session_attach`
+- `code_session_detach`
+
+That means:
+
+- main chat can inspect available coding sessions
+- main chat can attach to one and continue it
+- CLI and Telegram can do the same
+- all of them can continue the same backend coding transcript
+
+The web Code page is still the richest coding client, but it is no longer the only client.
+
+## Coding Tooling
+
+Built-in coding session tools:
+
+- `code_session_list`
+- `code_session_current`
+- `code_session_create`
+- `code_session_attach`
+- `code_session_detach`
+
+Built-in coding implementation tools:
 
 - `code_symbol_search`
 - `code_edit`
@@ -134,101 +315,83 @@ Built-in coding tools:
 - `code_build`
 - `code_lint`
 
-These tools are part of the global tool catalog and are not Code-page-only APIs.
+These remain global tools in the main executor. The Code page uses them through session-aware context, not through a separate coding runtime.
 
-## Code-Scoped Tool Sandbox
+## Sandbox And Security Model
 
-Assistant-driven tool calls from the Code page run with a request-scoped workspace context.
+Assistant-driven coding requests remain repo-scoped.
 
 As built:
 
-- file and coding tools resolve paths against the active Code session `workspaceRoot`
-- the effective `allowedPaths` set becomes that single workspace root for the request
-- `shell_safe` uses a Code-specific command allowlist instead of widening the global web-chat shell allowlist
-- common coding commands such as `git`, build/test runners, and repo-local package-manager commands are available in Code without adding them to the global shell policy
-- shell validation still blocks chain operators, redirections to denied paths, and subshell execution
-- Code-specific shell validation also blocks repo-escape and global-install patterns such as `git -C`, `--git-dir`, `--work-tree`, `--prefix`, `--cwd`, `--cache*`, `--userconfig`, `--globalconfig`, `-g`, `--global`, `global`, and `--user`
-- path-like shell args and redirect targets that resolve outside the active workspace root are denied
-- common tool caches are redirected into `<workspaceRoot>/.guardianagent/cache`
+- the active coding workspace root comes from the backend `CodeSession`
+- effective file access for coding requests is pinned to that single workspace root
+- coding requests use the Coding Assistant shell allowlist instead of widening the global assistant shell policy
+- path-like shell arguments are validated against the active workspace root
+- repo-escape patterns like `git -C`, `--git-dir`, `--work-tree`, `--prefix`, `--cwd`, `--cache*`, `--global`, `-g`, and similar global-install or external-path patterns are blocked
+- common command caches are redirected into `<workspaceRoot>/.guardianagent/cache`
 
-This gives the Code page a broader repo-work shell surface without widening the global assistant shell policy.
+This wider coding shell surface applies only when a request is running with coding-session context.
 
-## Terminal Behavior
+## Terminal Model
 
-The terminal area is a PTY-backed shell surface in the Code page.
+The Code page terminal area is still a manual PTY surface.
 
-Behavior as built:
+As built:
 
-- terminals are per-session UI panes
-- each pane maps to a server-side PTY process
-- output is streamed to the browser over SSE
-- shell state persists within the pane while the session is alive
-- pane output is also cached in browser state for reload continuity
-- the browser surface uses `xterm.js`
-- sessions can have multiple terminal panes
-- pane state survives route changes within the same browser session
-
-## Shell Execution Path
-
-Manual shell terminals in the Code page use dedicated Code terminal endpoints:
-
-- `POST /api/code/terminals`
-- `POST /api/code/terminals/:id/input`
-- `POST /api/code/terminals/:id/resize`
-- `DELETE /api/code/terminals/:id`
-
-Terminal output and exit events are streamed over SSE:
-
-- `terminal.output`
-- `terminal.exit`
-
-The backend uses `node-pty` to spawn the selected shell as a PTY process.
+- terminals are opened from the current coding session workspace
+- terminals are session-associated in the UI
+- output is streamed over SSE
+- terminals use `xterm.js`
+- multiple panes are supported
 
 Important boundary:
 
-- these PTY terminals are manual operator surfaces
-- they are not driven by assistant tool calls
-- they do not currently inherit the assistant’s Code-scoped shell allowlist or repo-bound argument checks
+- PTY terminals are still operator-controlled
+- the assistant does not remote-control those PTYs in v1
+- assistant-driven coding shell execution still goes through the guarded tool path, not through PTY takeover
 
-## Shell Selection
+## Persistence Split
 
-Shell options are platform-dependent.
+Guardian now uses two different persistence layers for coding:
 
-Windows options in the current implementation:
+General memory system:
 
-- PowerShell
-- CMD
-- Git Bash
-- WSL
-- Bash
+- durable cross-channel memory facts
+- searchable chat history
+- normal conversation sessions
+- memory flush/compaction support
 
-macOS options:
+Backend `CodeSessionStore`:
 
-- Zsh
-- Bash
-- sh
+- active coding session records
+- surface attachments
+- coding UI state
+- coding work state
+- shared coding conversation identity
 
-Linux options:
-
-- Bash
-- Zsh
-- sh
-
-Shell selection affects which executable is used when the PTY terminal session is created.
+The memory system is not the live coding session state machine. The backend `CodeSessionStore` is.
 
 ## Current Limitations
 
-As built, the Code page does not provide:
+As built, the Coding Assistant still does not provide:
 
-- server-side Code session persistence
-- durable server-side work-state/todo storage separate from browser session state
-- dedicated task/subagent orchestration in the Code runtime yet
-- automatic stuck-state smart routing/escalation yet
-- repo-jailed PTY terminals matching the assistant-driven Code tool sandbox yet
+- assistant-driven remote control of live PTY terminals
+- repo-jailed PTYs matching the assistant shell validator exactly
+- dedicated subagent `task` orchestration in the coding runtime yet
+- automatic smart-routing escalation when the model gets stuck yet
+- fully event-driven cross-client live sync; the Code page currently relies on refresh/polling and normal session reload paths
 
 ## Verification
 
-Relevant implementation checks in the repo:
+Relevant checks:
 
-- coding assistant harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- typecheck: `npm run check`
+- executor unit tests: `npm test -- src/tools/executor.test.ts`
 - code UI smoke: [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
+- coding assistant harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+
+Validated during this implementation:
+
+- `node scripts/test-code-ui-smoke.mjs`
+- `node scripts/test-coding-assistant.mjs`
+- `HARNESS_USE_REAL_OLLAMA=1 node scripts/test-coding-assistant.mjs --use-ollama`

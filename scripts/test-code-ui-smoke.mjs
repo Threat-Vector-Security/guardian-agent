@@ -97,6 +97,7 @@ async function startFakeProvider(workspaceRoot) {
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+      await new Promise((resolve) => setTimeout(resolve, 150));
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
@@ -111,7 +112,7 @@ async function startFakeProvider(workspaceRoot) {
         return;
       }
 
-      if (latestUser.includes('[Code Workspace Context]') && /make the answer 42/i.test(latestUser)) {
+      if (/make the answer 42/i.test(latestUser)) {
         if (toolMessages.length === 0) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(createChatCompletionResponse({
@@ -146,11 +147,21 @@ async function startFakeProvider(workspaceRoot) {
         return;
       }
 
-      if (latestUser.includes('[Code Workspace Context]') && latestUser.includes('answerValue')) {
+      if (latestUser.includes('answerValue')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(createChatCompletionResponse({
           model: 'code-ui-harness-model',
           content: 'I found `answerValue` in `src/example.ts` in the current coding workspace.',
+        })));
+        return;
+      }
+
+      if (/slow repo summary/i.test(latestUser)) {
+        await new Promise((resolve) => setTimeout(resolve, 5600));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'code-ui-harness-model',
+          content: 'This repo contains a src directory with example.ts and a generated live-generated.ts file.',
         })));
         return;
       }
@@ -303,11 +314,43 @@ guardian:
       checksTab.waitFor(),
     ]);
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
+    assert.match(await page.locator('.code-chat__title').textContent(), /Coding Assistant/);
+
+    await page.click('[data-code-toggle-rail]');
+    await page.waitForFunction(() => {
+      const shell = document.querySelector('.code-page__shell');
+      const rail = document.querySelector('.code-rail');
+      return !!shell?.classList.contains('rail-collapsed') && !!rail?.classList.contains('is-collapsed');
+    });
+    await page.click('[data-code-toggle-rail]');
+    await page.waitForFunction(() => {
+      const shell = document.querySelector('.code-page__shell');
+      const rail = document.querySelector('.code-rail');
+      return !shell?.classList.contains('rail-collapsed') && !rail?.classList.contains('is-collapsed');
+    });
 
     await page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).click();
+    await page.click('[data-code-toggle-explorer]');
+    await page.waitForFunction(() => {
+      const main = document.querySelector('.code-workspace__main');
+      const explorer = document.querySelector('.code-explorer');
+      return !!main?.classList.contains('explorer-collapsed') && !!explorer?.classList.contains('is-collapsed');
+    });
+    await page.click('[data-code-toggle-explorer]');
+    await page.waitForFunction(() => {
+      const main = document.querySelector('.code-workspace__main');
+      const explorer = document.querySelector('.code-explorer');
+      return !main?.classList.contains('explorer-collapsed') && !explorer?.classList.contains('is-collapsed');
+    });
     await page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).click();
     await page.waitForSelector('text=example.ts');
     assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 41/);
+
+    const liveGeneratedPath = path.join(workspaceRoot, 'src', 'live-generated.ts');
+    fs.writeFileSync(liveGeneratedPath, 'export const liveGenerated = true;\n');
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('[data-code-tree-file]')).some((node) => (node.textContent || '').includes('live-generated.ts'));
+    }, null, { timeout: 12000 });
 
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-terminal-pane__badge')).some((node) => {
@@ -317,12 +360,52 @@ guardian:
     });
     await page.waitForSelector('.code-terminal__viewport .xterm');
 
+    const draftInput = page.locator('[data-code-chat-form] textarea[name="message"]');
+    await draftInput.click();
+    await draftInput.type('Focus should stay in the code chat input.');
+    await page.waitForTimeout(6000);
+    const draftFocusState = await page.evaluate(() => {
+      const active = document.activeElement;
+      const draft = document.querySelector('[data-code-chat-form] textarea[name="message"]');
+      return {
+        activeName: active?.getAttribute?.('name') || '',
+        inChat: !!active?.closest?.('[data-code-chat-form]'),
+        value: draft?.value || '',
+      };
+    });
+    assert.equal(draftFocusState.inChat, true, 'Code chat input should keep focus during background refresh');
+    assert.equal(draftFocusState.activeName, 'message', 'Code chat input should remain the active control');
+    assert.match(draftFocusState.value, /Focus should stay in the code chat input/);
+    await draftInput.fill('');
+
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Search the workspace for answerValue and tell me where it is defined.');
     await page.click('[data-code-chat-form] button[type="submit"]');
     await page.waitForFunction(() => {
+      const pendingUser = document.querySelector('.code-message.is-pending');
+      const thinking = document.querySelector('.code-message.is-thinking');
+      return !!pendingUser && !!thinking && (pendingUser.textContent || '').includes('Search the workspace');
+    });
+    await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-message')).some((node) => (node.textContent || '').includes('answerValue'));
     });
+    assert.equal(await page.locator('.code-chat__history').textContent().then((text) => text.includes('[Code Workspace Context]')), false, 'Code chat should not render internal prompt wrapper text');
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should stay active after a normal coding reply');
+
+    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Give me a slow repo summary.');
+    await page.click('[data-code-chat-form] button[type="submit"]');
+    await page.waitForFunction(() => {
+      const pendingUser = document.querySelector('.code-message.is-pending');
+      const thinking = document.querySelector('.code-message.is-thinking');
+      return !!pendingUser && !!thinking && (pendingUser.textContent || '').includes('slow repo summary');
+    });
+    await page.waitForFunction(() => {
+      const history = Array.from(document.querySelectorAll('.code-message'));
+      const summaries = history.filter((node) => (node.textContent || '').includes('slow repo summary'));
+      const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));
+      const pending = document.querySelector('.code-message.is-pending');
+      const thinking = document.querySelector('.code-message.is-thinking');
+      return summaries.length === 1 && finalReply && !pending && !thinking;
+    }, null, { timeout: 15000 });
 
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Make the answer 42 in the selected file.');
     await page.click('[data-code-chat-form] button[type="submit"]');
@@ -353,6 +436,9 @@ guardian:
     await page.click('a[data-page="dashboard"]');
     await page.waitForSelector('.code-page', { state: 'detached' });
     assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Global chat panel should reappear off the code route');
+    await page.waitForTimeout(6000);
+    assert.equal(await page.locator('.code-page').count(), 0, 'Leaving Code should not be overwritten by a delayed Code rerender');
+    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Global chat panel should stay visible after leaving Code');
 
     await page.click('a[data-page="code"]');
     await page.waitForSelector('.code-page');

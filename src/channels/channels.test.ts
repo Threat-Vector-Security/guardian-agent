@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
@@ -92,6 +92,31 @@ describe('CLIChannel', () => {
     expect(text).toContain('chat');
     expect(text).toContain('idle');
     expect(text).toContain('Sentinel');
+
+    await cli.stop();
+  });
+
+  it('does not re-prompt after /kill requests shutdown', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const onKillswitch = vi.fn();
+    const cli = new CLIChannel({
+      input,
+      output,
+      prompt: 'test> ',
+      dashboard: { onKillswitch },
+    });
+
+    await cli.start(async () => ({ content: 'response' }));
+    output.read();
+
+    input.write('/kill\n');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const text = output.read()?.toString() ?? '';
+    expect(onKillswitch).toHaveBeenCalledTimes(1);
+    expect(text).toContain('KILLSWITCH');
+    expect(text).not.toContain('test> ');
 
     await cli.stop();
   });
@@ -1870,6 +1895,38 @@ describe('WebChannel', () => {
     expect(res.status).toBe(400);
   });
 
+  it('should return 400 for non-string content', async () => {
+    web = new WebChannel({ port: 18966, authToken: TEST_TOKEN });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18966/api/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ content: { text: 'Hello' } }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('content is required');
+  });
+
+  it('should return 400 for whitespace-only content', async () => {
+    web = new WebChannel({ port: 18967, authToken: TEST_TOKEN });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18967/api/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ content: '   ' }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('content is required');
+  });
+
   it('should return 404 for unknown routes', async () => {
     web = new WebChannel({ port: 18927, authToken: TEST_TOKEN });
 
@@ -2503,6 +2560,26 @@ describe('WebChannel', () => {
       expect(body.content).toBe('Reply from agent-1');
       expect(dispatched.length).toBe(1);
       expect(dispatched[0].agentId).toBe('agent-1');
+    });
+
+    it('POST /api/message/stream rejects non-string content', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onStreamDispatch: async () => ({ content: 'Reply from stream' }),
+      };
+
+      web = new WebChannel({ port: 18968, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18968/api/message/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ content: 123, agentId: 'agent-1' }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe('content and agentId are required');
     });
 
     it('does not expose internal error details from dashboard callbacks', async () => {

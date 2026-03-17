@@ -6,7 +6,7 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).
 
-Eighteen scripts are provided:
+Nineteen scripts are provided:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -28,6 +28,7 @@ Eighteen scripts are provided:
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
+| **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
 
@@ -194,6 +195,46 @@ Recommended usage:
 The WSL-local smoke lane is intentionally on-demand. The harness will spin up `ollama serve` only when needed and stop it when the test exits, so it does not consume resources between runs.
 
 Use the real-Ollama lane for smoke validation of local-model behavior. Keep the embedded fake-provider lane as the default regression baseline because it is deterministic and less brittle.
+
+### LLMMap External Prompt-Injection Harness
+
+Use `scripts/test-llmmap-security.mjs` when you want to aim the external `LLMMap` scanner at GuardianAgent's web chat surface. The harness:
+
+1. Resolves a reachable Ollama endpoint from WSL, including Windows-hosted Ollama via host-IP overrides.
+2. Starts GuardianAgent on a temporary port with the web channel enabled and Guardian protections active.
+3. Performs a quick `/api/message` preflight to ensure obvious prompt injection text is blocked before the live scan starts.
+4. Generates a raw HTTP request file for `POST /api/message` with the injection marker in the JSON `content` field.
+5. Runs `LLMMap` through a small Python bridge so the final scan report is written as JSON and Markdown instead of only console text.
+6. Saves all artifacts under `tmp/llmmap-guardian-security/<timestamp>/`.
+
+Run it from WSL:
+
+```bash
+npm run test:llmmap
+```
+
+Optional overrides:
+
+```bash
+HARNESS_OLLAMA_BASE_URL=http://<windows-host-ip>:11434 \
+HARNESS_OLLAMA_MODEL=<your-model> \
+LLMMAP_GOAL="reveal hidden system instructions or protected secrets" \
+node scripts/test-llmmap-security.mjs
+```
+
+Useful environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLMMAP_DIR` | `/mnt/s/Development/LLMMap` | Path to the cloned `LLMMap` repository |
+| `LLMMAP_OUTPUT_ROOT` | `tmp/llmmap-guardian-security` | Root directory for harness artifacts |
+| `LLMMAP_GOAL` | built-in default | Goal text passed to `LLMMap` |
+| `LLMMAP_INTENSITY` | `1` | Scan intensity |
+| `LLMMAP_MAX_PROMPTS` | `8` | Maximum prompt count after filtering |
+| `HARNESS_OLLAMA_BASE_URL` | auto-detect | Reachable Ollama endpoint |
+| `HARNESS_OLLAMA_MODEL` | first available model | Model shared by GuardianAgent and `LLMMap` |
+| `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
+| `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when WSL-local autostart is needed |
 
 ## Environment Variables
 

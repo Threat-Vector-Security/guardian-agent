@@ -1,12 +1,39 @@
 import { api } from '../api.js';
 import { onSSE } from '../app.js';
 
-const STORAGE_KEY = 'guardianagent_code_sessions_v1';
+const STORAGE_KEY = 'guardianagent_code_sessions_v2';
 const DEFAULT_USER_CHANNEL = 'web';
+const DEFAULT_CODE_USER_ID = 'web-user';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
 const ASSISTANT_TABS = ['chat', 'tasks', 'approvals', 'checks'];
+const SESSION_REFRESH_INTERVAL_MS = 5000;
+const JS_TS_KEYWORDS = [
+  'abstract', 'as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'delete',
+  'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'get', 'if', 'implements',
+  'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'private', 'protected', 'public', 'readonly',
+  'return', 'set', 'static', 'super', 'switch', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'yield',
+];
+const JS_TS_TYPES = [
+  'Array', 'Map', 'Promise', 'ReadonlyArray', 'Record', 'Set', 'any', 'boolean', 'never', 'null', 'number', 'object',
+  'string', 'true', 'false', 'undefined', 'unknown', 'void',
+];
+const PYTHON_KEYWORDS = [
+  'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+  'False', 'finally', 'for', 'from', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass',
+  'raise', 'return', 'True', 'try', 'while', 'with', 'yield',
+];
+const SHELL_KEYWORDS = [
+  'case', 'do', 'done', 'elif', 'else', 'esac', 'export', 'fi', 'for', 'function', 'if', 'in', 'local', 'readonly',
+  'return', 'select', 'then', 'until', 'while',
+];
+const MARKDOWN_INLINE_RULES = [
+  { type: 'string', pattern: /`[^`\n]+`/g },
+  { type: 'function', pattern: /\[[^\]]+\]\([^)]+\)/g },
+  { type: 'keyword', pattern: /\*\*[^*\n]+\*\*|__[^_\n]+__/g },
+  { type: 'type', pattern: /\*[^*\n]+\*|_[^_\n]+_/g },
+];
 
 const SCROLL_SELECTORS = ['.code-file-list', '.code-editor__content', '.code-chat__history', '.code-rail__list'];
 
@@ -17,6 +44,7 @@ let cachedFileView = { source: '', diff: '', error: null };
 let treeCache = new Map(); // keyed by absolute path → { entries, error }
 let renderInFlight = false;
 let hasRenderedOnce = false;
+let codeViewLifecycleId = 0;
 let detectedPlatform = 'linux'; // populated on first render from server
 let shellOptionsCache = [];
 let terminalListenersBound = false;
@@ -25,9 +53,17 @@ let terminalUnloadBound = false;
 let terminalLibPromise = null;
 let terminalCssLoaded = false;
 let terminalInstances = new Map();
+let sessionRefreshInterval = null;
+let sessionPersistTimers = new Map();
+let pendingTerminalFocusTabId = null;
+let deferredSelectionRerenderTimer = null;
 
 function isAssistantTab(value) {
   return ASSISTANT_TABS.includes(value);
+}
+
+function isActiveCodeView(container, lifecycleId) {
+  return currentContainer === container && lifecycleId === codeViewLifecycleId;
 }
 
 // ─── Platform-aware shell options ──────────────────────────
@@ -42,8 +78,8 @@ function getShellOptions() {
         { id: 'powershell', label: 'PowerShell (Windows)', detail: 'powershell.exe' },
         { id: 'cmd', label: 'Command Prompt (cmd.exe)', detail: 'cmd.exe' },
         { id: 'git-bash', label: 'Git Bash', detail: 'C:\\Program Files\\Git\\bin\\bash.exe' },
-        { id: 'wsl', label: 'WSL Bash', detail: 'wsl -- bash' },
-        { id: 'bash', label: 'Bash', detail: 'bash' },
+        { id: 'wsl-login', label: 'WSL Ubuntu', detail: 'wsl.exe (default shell/profile)' },
+        { id: 'wsl', label: 'WSL Bash (Clean)', detail: 'wsl -- bash --noprofile --norc' },
       ];
     case 'darwin':
       return [
@@ -66,6 +102,12 @@ function getDefaultShell() {
 
 function getShellOption(shellId) {
   return getShellOptions().find((option) => option.id === shellId) || null;
+}
+
+function normalizeTerminalShell(shellId) {
+  const requested = typeof shellId === 'string' && shellId.trim() ? shellId.trim() : getDefaultShell();
+  const normalized = detectedPlatform === 'win32' && requested === 'bash' ? 'git-bash' : requested;
+  return getShellOption(normalized)?.id || getDefaultShell();
 }
 
 function ensureTerminalCss() {
@@ -176,6 +218,274 @@ function trimTerminalOutput(text) {
   return text.length > MAX_CHARS ? text.slice(text.length - MAX_CHARS) : text;
 }
 
+function renderCodeBlock(content, { filePath = '', kind = 'source' } = {}) {
+  const text = String(content ?? '');
+  const language = kind === 'diff' ? 'diff' : detectCodeLanguage(filePath);
+  const highlighted = kind === 'diff'
+    ? highlightDiff(text)
+    : highlightCode(text, language);
+  const highlightedClass = highlighted !== esc(text) ? ' is-highlighted' : '';
+  return `<pre class="code-editor__content code-editor__content--${escAttr(kind)}${highlightedClass}" data-code-language="${escAttr(language)}">${highlighted}</pre>`;
+}
+
+function detectCodeLanguage(filePath) {
+  const name = basename(filePath || '').toLowerCase();
+  if (!name) return 'plaintext';
+  if (name === 'dockerfile' || name === 'makefile' || name === '.gitignore' || name.endsWith('.env')) {
+    return 'shell';
+  }
+  const ext = name.includes('.') ? name.split('.').pop() : '';
+  switch (ext) {
+    case 'ts':
+    case 'tsx':
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'cjs':
+      return 'javascript';
+    case 'json':
+    case 'jsonc':
+      return 'json';
+    case 'css':
+    case 'scss':
+    case 'less':
+      return 'css';
+    case 'html':
+    case 'htm':
+    case 'xml':
+    case 'svg':
+      return 'markup';
+    case 'md':
+    case 'markdown':
+      return 'markdown';
+    case 'yml':
+    case 'yaml':
+      return 'yaml';
+    case 'py':
+      return 'python';
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+    case 'fish':
+    case 'ps1':
+    case 'psm1':
+    case 'bat':
+    case 'cmd':
+      return 'shell';
+    default:
+      return 'plaintext';
+  }
+}
+
+function highlightCode(text, language) {
+  switch (language) {
+    case 'javascript':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /\/\*[\s\S]*?\*\//g },
+        { type: 'comment', pattern: /\/\/.*$/gm },
+        { type: 'keyword', pattern: /@[A-Za-z_$][\w$]*/g },
+        { type: 'string', pattern: /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+        { type: 'keyword', pattern: makeWordPattern(JS_TS_KEYWORDS) },
+        { type: 'type', pattern: makeWordPattern(JS_TS_TYPES) },
+        { type: 'number', pattern: /\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b/g },
+        { type: 'function', pattern: /\b[A-Za-z_$][\w$]*(?=\s*\()/g },
+      ]);
+    case 'json':
+      return highlightByRules(text, [
+        { type: 'property', pattern: /"(?:\\.|[^"\\])*"(?=\s*:)/g },
+        { type: 'string', pattern: /"(?:\\.|[^"\\])*"/g },
+        { type: 'number', pattern: /\b-?\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi },
+        { type: 'keyword', pattern: /\b(?:true|false|null)\b/g },
+      ]);
+    case 'css':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /\/\*[\s\S]*?\*\//g },
+        { type: 'keyword', pattern: /@[\w-]+/g },
+        { type: 'property', pattern: /--[\w-]+(?=\s*:)|\b[A-Za-z-]+(?=\s*:)/g },
+        { type: 'function', pattern: /\b[A-Za-z-]+(?=\()/g },
+        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+        { type: 'number', pattern: /#[\da-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|ms|s|deg)?\b/g },
+      ]);
+    case 'markup':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /<!--[\s\S]*?-->/g },
+        { type: 'keyword', pattern: /<\/?[A-Za-z][A-Za-z0-9:-]*/g },
+        { type: 'property', pattern: /\b[A-Za-z_:][-A-Za-z0-9_:.]*(?=\=)/g },
+        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+      ]);
+    case 'yaml':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /#.*$/gm },
+        { type: 'property', pattern: /^[ \t-]*[A-Za-z0-9_"'.-]+(?=\s*:)/gm },
+        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+        { type: 'keyword', pattern: /\b(?:true|false|null|yes|no|on|off)\b/gi },
+        { type: 'number', pattern: /\b-?\d+(?:\.\d+)?\b/g },
+      ]);
+    case 'python':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /#.*$/gm },
+        { type: 'string', pattern: /"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+        { type: 'keyword', pattern: makeWordPattern(PYTHON_KEYWORDS) },
+        { type: 'number', pattern: /\b\d+(?:\.\d+)?\b/g },
+        { type: 'function', pattern: /\b[A-Za-z_][\w]*(?=\s*\()/g },
+      ]);
+    case 'shell':
+      return highlightByRules(text, [
+        { type: 'comment', pattern: /#.*$/gm },
+        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+        { type: 'variable', pattern: /\$\{[^}]+\}|\$[A-Za-z_][\w]*|%[A-Za-z_][\w]*%/g },
+        { type: 'keyword', pattern: makeWordPattern(SHELL_KEYWORDS) },
+        { type: 'number', pattern: /\b\d+(?:\.\d+)?\b/g },
+        { type: 'function', pattern: /\b[A-Za-z_][\w-]*(?=\s*\()/g },
+      ]);
+    case 'markdown':
+      return highlightMarkdown(text);
+    default:
+      return esc(text);
+  }
+}
+
+function highlightMarkdown(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        return `<span class="code-line code-line--meta">${renderToken('keyword', line)}</span>`;
+      }
+      if (/^\s{0,3}#{1,6}\s/.test(line)) {
+        return `<span class="code-line code-line--meta">${highlightByRules(line, MARKDOWN_INLINE_RULES)}</span>`;
+      }
+      if (/^\s*>\s/.test(line)) {
+        return `<span class="code-line code-line--context">${renderToken('comment', line)}</span>`;
+      }
+      if (/^\s*(?:[-*+]|\d+\.)\s/.test(line)) {
+        return `<span class="code-line code-line--context">${highlightByRules(line, MARKDOWN_INLINE_RULES)}</span>`;
+      }
+      const inline = highlightByRules(line, MARKDOWN_INLINE_RULES);
+      return `<span class="code-line code-line--context">${inline || '&#8203;'}</span>`;
+    })
+    .join('');
+}
+
+function highlightDiff(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map((line) => {
+      let lineClass = 'context';
+      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+        lineClass = 'meta';
+      } else if (line.startsWith('@@')) {
+        lineClass = 'hunk';
+      } else if (line.startsWith('+') && !line.startsWith('+++')) {
+        lineClass = 'add';
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        lineClass = 'remove';
+      }
+      const body = line.length > 0 ? esc(line) : '&#8203;';
+      return `<span class="code-line code-line--${lineClass}">${body}</span>`;
+    })
+    .join('');
+}
+
+function highlightByRules(text, rules) {
+  const input = String(text ?? '');
+  let cursor = 0;
+  let output = '';
+
+  while (cursor < input.length) {
+    const next = findNextHighlightMatch(input, cursor, rules);
+    if (!next) {
+      output += esc(input.slice(cursor));
+      break;
+    }
+    if (next.index > cursor) {
+      output += esc(input.slice(cursor, next.index));
+    }
+    output += renderToken(next.type, next.value);
+    cursor = next.index + next.value.length;
+  }
+
+  return output;
+}
+
+function findNextHighlightMatch(text, cursor, rules) {
+  let best = null;
+  for (const rule of rules) {
+    rule.pattern.lastIndex = cursor;
+    const match = rule.pattern.exec(text);
+    if (!match || typeof match.index !== 'number' || match[0].length === 0) continue;
+    if (!best || match.index < best.index || (match.index === best.index && match[0].length > best.value.length)) {
+      best = {
+        index: match.index,
+        value: match[0],
+        type: typeof rule.type === 'function' ? rule.type(match[0], match) : rule.type,
+      };
+    }
+  }
+  return best;
+}
+
+function makeWordPattern(words) {
+  return new RegExp(`\\b(?:${words.join('|')})\\b`, 'g');
+}
+
+function renderToken(type, value) {
+  return `<span class="code-token code-token--${type}">${esc(value)}</span>`;
+}
+
+async function readClipboardTextFromEvent(event) {
+  const directText = event?.clipboardData?.getData?.('text/plain');
+  if (typeof directText === 'string' && directText.length > 0) {
+    return directText;
+  }
+  if (navigator.clipboard?.readText) {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+async function forwardTerminalPaste(event, tab) {
+  if (!tab?.runtimeTerminalId) return;
+  const text = await readClipboardTextFromEvent(event);
+  if (!text) return;
+  api.codeTerminalInput(tab.runtimeTerminalId, { input: text }).catch(() => {});
+}
+
+function forwardTerminalText(tab, text) {
+  if (!tab?.runtimeTerminalId || !text) return;
+  api.codeTerminalInput(tab.runtimeTerminalId, { input: text }).catch(() => {});
+}
+
+function isClipboardPasteSentinel(text) {
+  return text === '^V' || text === '\u0016';
+}
+
+function shouldBridgeTerminalTextInput(event, text = '') {
+  const inputType = String(event?.inputType || '');
+  if (inputType === 'insertFromPaste' || inputType === 'insertFromDrop' || inputType === 'insertReplacementText') {
+    return true;
+  }
+  const candidate = typeof text === 'string' && text
+    ? text
+    : (typeof event?.data === 'string' ? event.data : '');
+  if (!candidate) return false;
+  if (isClipboardPasteSentinel(candidate)) return true;
+  if (/[\r\n\t ]/.test(candidate)) return true;
+  return candidate.length >= 4;
+}
+
+async function forwardTerminalInsertedText(event, tab, text = '') {
+  if (isClipboardPasteSentinel(text) || !text) {
+    await forwardTerminalPaste(event, tab);
+    return;
+  }
+  forwardTerminalText(tab, text);
+}
+
 function pluralize(count, singular, plural = `${singular}s`) {
   return count === 1 ? singular : plural;
 }
@@ -205,6 +515,50 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sortTreeEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const typeA = a.type === 'dir' ? 'dir' : 'file';
+    const typeB = b.type === 'dir' ? 'dir' : 'file';
+    if (typeA !== typeB) return typeA === 'dir' ? -1 : 1;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+}
+
+function normalizeTreeEntries(entries) {
+  return Array.isArray(entries)
+    ? sortTreeEntries(entries
+      .filter((entry) => entry && typeof entry.name === 'string')
+      .map((entry) => ({
+        name: String(entry.name),
+        type: entry.type === 'dir' ? 'dir' : 'file',
+      })))
+    : [];
+}
+
+function getTreeCacheSignature(value) {
+  return JSON.stringify({
+    error: String(value?.error || ''),
+    resolvedPath: String(value?.resolvedPath || ''),
+    entries: normalizeTreeEntries(value?.entries),
+  });
+}
+
+function getVisibleTreePaths(session) {
+  if (!session) return [];
+  const rootPath = session.resolvedRoot || session.workspaceRoot || '.';
+  return Array.from(new Set([
+    rootPath,
+    ...(Array.isArray(session.expandedDirs) ? session.expandedDirs : []),
+  ]));
+}
+
+function getVisibleTreeSignature(session) {
+  return JSON.stringify(getVisibleTreePaths(session).map((dirPath) => ({
+    path: dirPath,
+    signature: getTreeCacheSignature(treeCache.get(dirPath)),
+  })));
+}
+
 function isApprovalNotFoundMessage(value) {
   return /approval\s+'[^']+'\s+not\s+found/i.test(String(value || ''));
 }
@@ -219,8 +573,8 @@ function getApprovalBacklogState(session) {
 
 function isSessionJob(job, session) {
   return !!job
-    && job.userId === buildUserId(session)
-    && job.channel === DEFAULT_USER_CHANNEL;
+    && job.userId === session.conversationUserId
+    && job.channel === (session.conversationChannel || 'code-session');
 }
 
 function isCodeAssistantJob(job) {
@@ -282,6 +636,7 @@ function deriveTaskItems(session) {
   const items = [];
   const backlog = getApprovalBacklogState(session);
   const recentJobs = Array.isArray(session?.recentJobs) ? session.recentJobs.filter(isCodeAssistantJob) : [];
+  const workspaceProfile = session?.workspaceProfile || null;
 
   if (backlog.count > 0) {
     items.push({
@@ -293,6 +648,27 @@ function deriveTaskItems(session) {
       detail: backlog.blocked
         ? 'New write actions are paused until you clear some approvals.'
         : 'A mutating step is paused until you approve or deny it.',
+    });
+  }
+
+  if (workspaceProfile?.summary) {
+    items.push({
+      id: 'workspace-profile',
+      title: workspaceProfile.repoName
+        ? `Workspace profile: ${workspaceProfile.repoName}`
+        : 'Workspace profile',
+      status: 'info',
+      detail: workspaceProfile.summary,
+      meta: workspaceProfile.stack?.length ? workspaceProfile.stack.join(', ') : (workspaceProfile.repoKind || ''),
+    });
+  }
+
+  if (session?.focusSummary) {
+    items.push({
+      id: 'focus-summary',
+      title: 'Current focus',
+      status: 'info',
+      detail: session.focusSummary,
     });
   }
 
@@ -332,7 +708,10 @@ function deriveCheckItems(session) {
 }
 
 function getTaskBadgeCount(session) {
-  return deriveTaskItems(session).filter((item) => item.status !== 'completed').length;
+  return deriveTaskItems(session)
+    .filter((item) => item.status !== 'completed')
+    .filter((item) => item.id !== 'workspace-profile' && item.id !== 'focus-summary')
+    .length;
 }
 
 function getCheckBadgeCount(session) {
@@ -379,7 +758,7 @@ function disposeInactiveTerminalInstances(activeTabs) {
   }
 }
 
-async function mountActiveTerminals(container, session) {
+async function mountActiveTerminals(container, session, { focusTabId = null } = {}) {
   const tabs = session?.terminalTabs || [];
   disposeInactiveTerminalInstances(tabs);
   if (tabs.length === 0) return;
@@ -393,6 +772,9 @@ async function mountActiveTerminals(container, session) {
     const existing = terminalInstances.get(tab.id);
     if (existing?.host === host) {
       existing.fitAddon.fit();
+      if (focusTabId && focusTabId === tab.id) {
+        existing.term.focus();
+      }
       continue;
     }
     disposeTerminalInstance(tab.id);
@@ -411,6 +793,7 @@ async function mountActiveTerminals(container, session) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(host);
+    const helperTextarea = host.querySelector('textarea');
     fitAddon.fit();
     if (tab.output) {
       term.write(tab.output);
@@ -423,11 +806,21 @@ async function mountActiveTerminals(container, session) {
         event.preventDefault();
         return false;
       }
+      const isPaste = event.type === 'keydown'
+        && (
+          (event.key.toLowerCase() === 'v' && (event.ctrlKey || event.metaKey))
+          || (event.key === 'Insert' && event.shiftKey)
+        );
+      if (isPaste) {
+        event.preventDefault();
+        void forwardTerminalPaste(event, tab);
+        return false;
+      }
       return true;
     });
     term.onData((data) => {
       if (!tab.runtimeTerminalId) return;
-      api.codeTerminalInput(tab.runtimeTerminalId, { input: data }).catch(() => {});
+      forwardTerminalText(tab, data);
     });
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
@@ -440,7 +833,31 @@ async function mountActiveTerminals(container, session) {
     });
     resizeObserver.observe(host);
     host.addEventListener('click', () => term.focus());
-    term.focus();
+    const handlePaste = (event) => {
+      event.preventDefault();
+      void forwardTerminalPaste(event, tab);
+    };
+    const handleBeforeInput = (event) => {
+      if (!shouldBridgeTerminalTextInput(event)) return;
+      event.preventDefault();
+      const text = typeof event.data === 'string' ? event.data : '';
+      void forwardTerminalInsertedText(event, tab, text);
+    };
+    const handleInput = (event) => {
+      const text = typeof helperTextarea?.value === 'string' ? helperTextarea.value : '';
+      if (!shouldBridgeTerminalTextInput(event, text)) return;
+      if (helperTextarea) helperTextarea.value = '';
+      event.preventDefault?.();
+      void forwardTerminalInsertedText(event, tab, text);
+    };
+    host.addEventListener('paste', handlePaste, true);
+    helperTextarea?.addEventListener('paste', handlePaste, true);
+    host.addEventListener('beforeinput', handleBeforeInput, true);
+    helperTextarea?.addEventListener('beforeinput', handleBeforeInput, true);
+    helperTextarea?.addEventListener('input', handleInput, true);
+    if (focusTabId && focusTabId === tab.id) {
+      term.focus();
+    }
     if (tab.runtimeTerminalId) {
       api.codeTerminalResize(tab.runtimeTerminalId, {
         cols: term.cols,
@@ -451,10 +868,257 @@ async function mountActiveTerminals(container, session) {
   }
 }
 
+function mapServerHistory(history) {
+  return Array.isArray(history)
+    ? history
+      .map((entry) => normalizeVisibleHistoryEntry(entry))
+      .filter(Boolean)
+    : [];
+}
+
+function normalizeVisibleHistoryEntry(entry) {
+  const role = entry?.role === 'user' ? 'user' : 'agent';
+  const content = sanitizeVisibleHistoryContent(role, String(entry?.content || ''));
+  if (!content) return null;
+  return {
+    role,
+    content,
+    timestamp: Number(entry?.timestamp) || Date.now(),
+  };
+}
+
+function sanitizeVisibleHistoryContent(role, content) {
+  if (!content) return '';
+  if (role !== 'user') return content;
+  if (content.startsWith('[Code Approval Continuation]')) {
+    return '';
+  }
+  if (!content.startsWith('[Code Workspace Context]')) {
+    return content;
+  }
+  const rulesMarker = '\n\n[Code Workspace Operating Rules]\n';
+  const rulesIndex = content.indexOf(rulesMarker);
+  if (rulesIndex < 0) return content;
+  const afterRules = content.indexOf('\n\n', rulesIndex + rulesMarker.length);
+  if (afterRules < 0) return content;
+  return content.slice(afterRules + 2).trim();
+}
+
+function normalizeWorkspaceProfile(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  return {
+    repoName: profile.repoName || '',
+    repoKind: profile.repoKind || '',
+    summary: profile.summary || '',
+    stack: Array.isArray(profile.stack) ? profile.stack.map((value) => String(value)) : [],
+    manifests: Array.isArray(profile.manifests) ? profile.manifests.map((value) => String(value)) : [],
+    inspectedFiles: Array.isArray(profile.inspectedFiles) ? profile.inspectedFiles.map((value) => String(value)) : [],
+    topLevelEntries: Array.isArray(profile.topLevelEntries) ? profile.topLevelEntries.map((value) => String(value)) : [],
+    entryHints: Array.isArray(profile.entryHints) ? profile.entryHints.map((value) => String(value)) : [],
+    lastIndexedAt: Number(profile.lastIndexedAt) || 0,
+  };
+}
+
+function normalizeServerSession(record, existing = {}) {
+  const uiState = record?.uiState || {};
+  const workState = record?.workState || {};
+  return {
+    ...existing,
+    id: record.id,
+    title: record.title || 'Coding Session',
+    workspaceRoot: record.workspaceRoot || '.',
+    resolvedRoot: record.resolvedRoot || record.workspaceRoot || '.',
+    currentDirectory: uiState.currentDirectory || existing.currentDirectory || record.resolvedRoot || record.workspaceRoot || '.',
+    selectedFilePath: uiState.selectedFilePath || null,
+    showDiff: !!uiState.showDiff,
+    agentId: record.agentId || null,
+    status: record.status || 'idle',
+    conversationUserId: record.conversationUserId || '',
+    conversationChannel: record.conversationChannel || 'code-session',
+    terminalTabs: normalizeTerminalTabs(uiState.terminalTabs, existing.terminalTabs),
+    terminalCollapsed: !!uiState.terminalCollapsed,
+    expandedDirs: Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : [],
+    chat: Array.isArray(existing.chat) ? existing.chat : [],
+    chatDraft: existing.chatDraft || '',
+    pendingApprovals: normalizePendingApprovals(workState.pendingApprovals, existing.pendingApprovals),
+    activeSkills: Array.isArray(workState.activeSkills) ? workState.activeSkills.map((value) => String(value)) : [],
+    recentJobs: Array.isArray(workState.recentJobs) ? workState.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
+    focusSummary: workState.focusSummary || '',
+    planSummary: workState.planSummary || '',
+    compactedSummary: workState.compactedSummary || '',
+    workspaceProfile: normalizeWorkspaceProfile(workState.workspaceProfile) || existing.workspaceProfile || null,
+    activeAssistantTab: isAssistantTab(uiState.activeAssistantTab) ? uiState.activeAssistantTab : (existing.activeAssistantTab || 'chat'),
+    lastExplorerPath: existing.lastExplorerPath || null,
+  };
+}
+
+function upsertSession(session) {
+  const index = codeState.sessions.findIndex((entry) => entry.id === session.id);
+  if (index >= 0) {
+    codeState.sessions.splice(index, 1, session);
+  } else {
+    codeState.sessions.unshift(session);
+  }
+  return session;
+}
+
+function mergeSessionsFromServer(payload) {
+  const previousById = new Map((codeState.sessions || []).map((session) => [session.id, session]));
+  const sessions = Array.isArray(payload?.sessions)
+    ? payload.sessions.map((record) => normalizeServerSession(record, previousById.get(record.id) || {}))
+    : [];
+  codeState.sessions = sessions;
+  const serverCurrentSessionId = typeof payload?.currentSessionId === 'string' ? payload.currentSessionId : null;
+  const preferredActiveId = codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
+    ? codeState.activeSessionId
+    : (serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
+      ? serverCurrentSessionId
+      : sessions[0]?.id || null);
+  codeState.activeSessionId = preferredActiveId;
+}
+
+function applyCodeSessionSnapshot(snapshot) {
+  if (!snapshot?.session) return null;
+  const existing = codeState.sessions.find((session) => session.id === snapshot.session.id) || {};
+  const merged = normalizeServerSession(snapshot.session, existing);
+  merged.chat = mapServerHistory(snapshot.history);
+  upsertSession(merged);
+  return merged;
+}
+
+async function refreshSessionsIndex() {
+  const result = await api.codeSessions({ channel: DEFAULT_USER_CHANNEL });
+  mergeSessionsFromServer(result);
+  saveState(codeState);
+  return codeState.sessions;
+}
+
+async function refreshSessionSnapshot(sessionId, { historyLimit = 120 } = {}) {
+  const snapshot = await api.codeSessionGet(sessionId, {
+    channel: DEFAULT_USER_CHANNEL,
+    historyLimit,
+  });
+  const session = applyCodeSessionSnapshot(snapshot);
+  saveState(codeState);
+  return session;
+}
+
+async function ensureBackendSession(session) {
+  if (!session) return null;
+
+  if (session.id) {
+    const fresh = await refreshSessionSnapshot(session.id).catch(() => null);
+    if (fresh) {
+      await api.codeSessionAttach(fresh.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+      return fresh;
+    }
+  }
+
+  await refreshSessionsIndex().catch(() => []);
+
+  const desiredRoot = normalizeComparablePath(session.resolvedRoot || session.workspaceRoot || '.');
+  const desiredTitle = String(session.title || '').trim().toLowerCase();
+  const matched = codeState.sessions.find((candidate) => {
+    const candidateRoot = normalizeComparablePath(candidate.resolvedRoot || candidate.workspaceRoot || '.');
+    if (!candidateRoot || candidateRoot !== desiredRoot) return false;
+    if (!desiredTitle) return true;
+    return String(candidate.title || '').trim().toLowerCase() === desiredTitle;
+  }) || null;
+
+  if (matched) {
+    await api.codeSessionAttach(matched.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+    return refreshSessionSnapshot(matched.id).catch(() => matched);
+  }
+
+  const createdSnapshot = await api.codeSessionCreate({
+    channel: DEFAULT_USER_CHANNEL,
+    title: session.title || basename(session.resolvedRoot || session.workspaceRoot || '.') || 'Coding Session',
+    workspaceRoot: session.resolvedRoot || session.workspaceRoot || '.',
+    agentId: session.agentId || undefined,
+    attach: true,
+  });
+  const created = applyCodeSessionSnapshot(createdSnapshot);
+  if (!created) return session;
+
+  created.chat = Array.isArray(session.chat) ? [...session.chat] : created.chat;
+  created.chatDraft = session.chatDraft || created.chatDraft || '';
+  created.currentDirectory = session.currentDirectory || created.currentDirectory;
+  created.selectedFilePath = session.selectedFilePath || created.selectedFilePath;
+  created.expandedDirs = Array.isArray(session.expandedDirs) ? [...session.expandedDirs] : created.expandedDirs;
+  created.activeAssistantTab = isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : created.activeAssistantTab;
+  created.terminalTabs = normalizeTerminalTabs(created.terminalTabs, session.terminalTabs);
+  upsertSession(created);
+  codeState.activeSessionId = created.id;
+  saveState(codeState);
+  queueSessionPersist(created);
+  return created;
+}
+
+function buildCodeSessionUiState(session) {
+  return {
+    currentDirectory: session.currentDirectory || session.resolvedRoot || session.workspaceRoot || '.',
+    selectedFilePath: session.selectedFilePath || null,
+    showDiff: !!session.showDiff,
+    expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
+    activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : 'chat',
+    terminalCollapsed: !!session.terminalCollapsed,
+    terminalTabs: Array.isArray(session.terminalTabs)
+      ? session.terminalTabs.map((tab) => ({
+        id: tab.id,
+        name: tab.name,
+        shell: normalizeTerminalShell(tab.shell),
+      }))
+      : [],
+  };
+}
+
+function queueSessionPersist(session) {
+  if (!session?.id) return;
+  const existing = sessionPersistTimers.get(session.id);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(async () => {
+    sessionPersistTimers.delete(session.id);
+    try {
+      const snapshot = await api.codeSessionUpdate(session.id, {
+        channel: DEFAULT_USER_CHANNEL,
+        uiState: buildCodeSessionUiState(session),
+        agentId: session.agentId || null,
+      });
+      applyCodeSessionSnapshot(snapshot);
+      saveState(codeState);
+      if (currentContainer) rerenderFromState();
+    } catch {
+      // Best-effort UI persistence. The next snapshot refresh will reconcile state.
+    }
+  }, 150);
+  sessionPersistTimers.set(session.id, timer);
+}
+
+function ensureSessionRefreshLoop() {
+  if (sessionRefreshInterval) return;
+  sessionRefreshInterval = setInterval(async () => {
+    const activeSession = getActiveSession();
+    if (!activeSession || !currentContainer) return;
+    try {
+      const previousSignature = getSessionRenderSignature(activeSession);
+      const previousTreeSignature = getVisibleTreeSignature(activeSession);
+      const session = await refreshSessionSnapshot(activeSession.id);
+      if (!session) return;
+      await refreshVisibleTreeDirs(session);
+      await refreshAssistantState(session, { rerender: false });
+      if (getSessionRenderSignature(session) !== previousSignature || getVisibleTreeSignature(session) !== previousTreeSignature) {
+        rerenderFromState();
+      }
+    } catch {
+      // Ignore transient refresh failures; the next tick can recover.
+    }
+  }, SESSION_REFRESH_INTERVAL_MS);
+}
+
 // ─── Render pipeline ──────────────────────────────────────
 
 export async function renderCode(container) {
-  if (renderInFlight) return;
+  const lifecycleId = ++codeViewLifecycleId;
   renderInFlight = true;
   currentContainer = container;
   bindTerminalListeners();
@@ -473,9 +1137,23 @@ export async function renderCode(container) {
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
     codeState = normalizeState(codeState, cachedAgents);
-    saveState(codeState);
+    await refreshSessionsIndex().catch(() => {
+      saveState(codeState);
+    });
+    if (!isActiveCodeView(container, lifecycleId)) return;
+    ensureSessionRefreshLoop();
 
-    const activeSession = getActiveSession();
+    let activeSession = getActiveSession();
+    if (activeSession) {
+      activeSession = await refreshSessionSnapshot(activeSession.id).catch(() => activeSession);
+      // Re-attach on page load so the backend attachment record stays fresh.
+      // After a backend restart the in-memory session map is lost, so the old
+      // attachment (keyed by the previous principalId/surfaceId) may be stale.
+      if (activeSession?.id) {
+        await api.codeSessionAttach(activeSession.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+      }
+    }
+    if (!isActiveCodeView(container, lifecycleId)) return;
     if (activeSession) {
       // Load root tree dir if not cached
       const rootPath = activeSession.resolvedRoot || activeSession.workspaceRoot || '.';
@@ -486,6 +1164,7 @@ export async function renderCode(container) {
           activeSession.resolvedRoot = rootData.resolvedPath;
         }
       }
+      if (!isActiveCodeView(container, lifecycleId)) return;
       // Load expanded dirs
       await loadExpandedDirs(activeSession);
       cachedFileView = await loadFileView(activeSession);
@@ -495,23 +1174,63 @@ export async function renderCode(container) {
     } else {
       cachedFileView = { source: '', diff: '', error: null };
     }
+    if (!isActiveCodeView(container, lifecycleId)) return;
 
     renderDOM(container);
     hasRenderedOnce = true;
   } catch (err) {
-    container.innerHTML = `<div class="loading" style="padding:2rem">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    if (isActiveCodeView(container, lifecycleId)) {
+      container.innerHTML = `<div class="loading" style="padding:2rem">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    }
   } finally {
-    renderInFlight = false;
+    if (lifecycleId === codeViewLifecycleId) {
+      renderInFlight = false;
+    }
   }
 }
 
 export function updateCode() {
-  // No-op: Code page manages its own state; SSE invalidation is disabled for this route.
+  if (!currentContainer) return;
+  const activeSession = getActiveSession();
+  if (activeSession) {
+    void refreshSessionData(activeSession);
+  } else {
+    void refreshSessionsIndex().then(() => rerenderFromState()).catch(() => {});
+  }
+}
+
+export function teardownCode() {
+  codeViewLifecycleId += 1;
+  currentContainer = null;
+  pendingTerminalFocusTabId = null;
+  renderInFlight = false;
+  if (deferredSelectionRerenderTimer) {
+    clearTimeout(deferredSelectionRerenderTimer);
+    deferredSelectionRerenderTimer = null;
+  }
+  if (sessionRefreshInterval) {
+    clearInterval(sessionRefreshInterval);
+    sessionRefreshInterval = null;
+  }
+  disposeInactiveTerminalInstances([]);
 }
 
 function rerenderFromState() {
   if (!currentContainer) return;
-  renderDOM(currentContainer);
+  if (hasActiveChatSelection(currentContainer)) {
+    if (deferredSelectionRerenderTimer) return;
+    deferredSelectionRerenderTimer = window.setTimeout(() => {
+      deferredSelectionRerenderTimer = null;
+      if (currentContainer) rerenderFromState();
+    }, 250);
+    return;
+  }
+  if (deferredSelectionRerenderTimer) {
+    clearTimeout(deferredSelectionRerenderTimer);
+    deferredSelectionRerenderTimer = null;
+  }
+  renderDOM(currentContainer, { focusTerminalTabId: pendingTerminalFocusTabId });
+  pendingTerminalFocusTabId = null;
   const activeSession = getActiveSession();
   if (activeSession) {
     void ensureSessionTerminals(activeSession);
@@ -534,6 +1253,145 @@ function restoreScrollPositions(container, positions) {
   }
 }
 
+function captureFocusState(container) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !container.contains(active)) return null;
+
+  const terminalPane = active.closest('.code-terminal-pane[data-pane-id]');
+  if (terminalPane instanceof HTMLElement) {
+    return {
+      type: 'terminal',
+      tabId: terminalPane.dataset.paneId || null,
+    };
+  }
+
+  if (active.matches('[data-code-chat-form] textarea[name="message"]')) {
+    return captureSelectionState({ type: 'chat-input' }, active);
+  }
+
+  if (active.matches('[data-code-session-form] [name]')) {
+    return captureSelectionState({
+      type: 'create-session-form',
+      name: active.getAttribute('name') || '',
+    }, active);
+  }
+
+  if (active.matches('[data-code-edit-session-form] [name]')) {
+    return captureSelectionState({
+      type: 'edit-session-form',
+      name: active.getAttribute('name') || '',
+    }, active);
+  }
+
+  return null;
+}
+
+function captureSelectionState(state, element) {
+  if (typeof element.selectionStart === 'number') {
+    state.selectionStart = element.selectionStart;
+    state.selectionEnd = typeof element.selectionEnd === 'number' ? element.selectionEnd : element.selectionStart;
+    state.selectionDirection = element.selectionDirection || 'none';
+  }
+  return state;
+}
+
+function restoreFocusState(container, state) {
+  if (!state || state.type === 'terminal') return;
+  let selector = '';
+  if (state.type === 'chat-input') {
+    selector = '[data-code-chat-form] textarea[name="message"]';
+  } else if (state.type === 'create-session-form' && state.name) {
+    selector = `[data-code-session-form] [name="${state.name}"]`;
+  } else if (state.type === 'edit-session-form' && state.name) {
+    selector = `[data-code-edit-session-form] [name="${state.name}"]`;
+  }
+  if (!selector) return;
+  const element = container.querySelector(selector);
+  if (!(element instanceof HTMLElement)) return;
+  element.focus({ preventScroll: true });
+  if (typeof element.setSelectionRange === 'function' && typeof state.selectionStart === 'number') {
+    try {
+      element.setSelectionRange(state.selectionStart, state.selectionEnd, state.selectionDirection);
+    } catch {
+      // Ignore controls that do not support selection restoration.
+    }
+  }
+}
+
+function hasActiveChatSelection(container) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  const chatHistory = container.querySelector('.code-chat__history');
+  if (!chatHistory) return false;
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const range = selection.getRangeAt(index);
+    const common = range.commonAncestorContainer;
+    const node = common?.nodeType === Node.TEXT_NODE ? common.parentNode : common;
+    if (node instanceof Node && chatHistory.contains(node)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getSessionRenderSignature(session) {
+  if (!session) return '';
+  return JSON.stringify({
+    title: session.title || '',
+    workspaceRoot: session.workspaceRoot || '',
+    resolvedRoot: session.resolvedRoot || '',
+    currentDirectory: session.currentDirectory || '',
+    selectedFilePath: session.selectedFilePath || '',
+    showDiff: !!session.showDiff,
+    status: session.status || '',
+    expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
+    chat: Array.isArray(session.chat)
+      ? session.chat.map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp || 0,
+      }))
+      : [],
+    pendingApprovals: Array.isArray(session.pendingApprovals)
+      ? session.pendingApprovals.map((approval) => ({
+        id: approval.id,
+        toolName: approval.toolName,
+        argsPreview: approval.argsPreview,
+        createdAt: approval.createdAt || null,
+        risk: approval.risk || '',
+        origin: approval.origin || '',
+      }))
+      : [],
+    activeSkills: Array.isArray(session.activeSkills) ? session.activeSkills : [],
+    recentJobs: Array.isArray(session.recentJobs)
+      ? session.recentJobs.map((job) => ({
+        id: job.id,
+        toolName: job.toolName,
+        status: job.status,
+        resultPreview: job.resultPreview || '',
+        error: job.error || '',
+        argsPreview: job.argsPreview || '',
+        verificationStatus: job.verificationStatus || '',
+        verificationEvidence: job.verificationEvidence || '',
+        createdAt: job.createdAt || 0,
+      }))
+      : [],
+    focusSummary: session.focusSummary || '',
+    planSummary: session.planSummary || '',
+    compactedSummary: session.compactedSummary || '',
+    workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+    activeAssistantTab: session.activeAssistantTab || 'chat',
+    terminalCollapsed: !!session.terminalCollapsed,
+    terminalTabs: Array.isArray(session.terminalTabs)
+      ? session.terminalTabs.map((tab) => ({
+        id: tab.id,
+        name: tab.name,
+        shell: normalizeTerminalShell(tab.shell),
+      }))
+      : [],
+  });
+}
+
 function scrollToBottom(container, selector) {
   const el = container.querySelector(selector);
   if (el) el.scrollTop = el.scrollHeight;
@@ -553,8 +1411,9 @@ async function ensureTerminalConnected(session, tab) {
   saveState(codeState);
   try {
     const result = await api.codeTerminalOpen({
-      cwd: session.resolvedRoot || session.workspaceRoot,
-      shell: tab.shell || getDefaultShell(),
+      sessionId: session.id,
+      cwd: session.currentDirectory || session.resolvedRoot || session.workspaceRoot,
+      shell: normalizeTerminalShell(tab.shell),
       cols: 120,
       rows: 30,
     });
@@ -587,24 +1446,33 @@ async function closeTerminal(tab) {
   tab.openFailed = false;
 }
 
-function renderDOM(container) {
+function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const saved = saveScrollPositions(container);
+  const focusState = captureFocusState(container);
   const activeSession = getActiveSession();
   const fileView = cachedFileView;
+  const railCollapsed = !!codeState.railCollapsed;
+  const explorerCollapsed = !!codeState.explorerCollapsed;
 
   const editorContent = activeSession?.selectedFilePath
     ? (activeSession.showDiff
       ? `<div class="code-editor__split">
           <div class="code-editor__pane">
             <div class="code-editor__pane-label">Source</div>
-            <pre class="code-editor__content">${esc(fileView.source || 'Empty file.')}</pre>
+            ${renderCodeBlock(fileView.source || 'Empty file.', {
+              filePath: activeSession.selectedFilePath,
+              kind: 'source',
+            })}
           </div>
           <div class="code-editor__pane">
             <div class="code-editor__pane-label">Diff</div>
-            <pre class="code-editor__content">${esc(fileView.diff || 'No diff output for this file.')}</pre>
+            ${renderCodeBlock(fileView.diff || 'No diff output for this file.', { kind: 'diff' })}
           </div>
         </div>`
-      : `<pre class="code-editor__content">${esc(fileView.source || 'Empty file.')}</pre>`)
+      : renderCodeBlock(fileView.source || 'Empty file.', {
+          filePath: activeSession.selectedFilePath,
+          kind: 'source',
+        }))
     : '';
 
   const isCollapsed = activeSession?.terminalCollapsed;
@@ -612,33 +1480,37 @@ function renderDOM(container) {
 
   container.innerHTML = `
     <div class="code-page">
-      <div class="code-page__shell">
-        <aside class="code-rail">
+      <div class="code-page__shell ${railCollapsed ? 'rail-collapsed' : ''}">
+        <aside class="code-rail ${railCollapsed ? 'is-collapsed' : ''}">
           <div class="code-rail__header">
-            <h3>Sessions</h3>
-            <button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>
+            <h3><span class="code-panel-title__icon">&#128451;</span><span class="code-panel-title__text">Sessions</span></h3>
+            ${!railCollapsed ? '<button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>' : ''}
           </div>
-          ${renderSessionForm()}
-          <div class="code-rail__list">
-            ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
-          </div>
+          ${!railCollapsed ? renderSessionForm() : ''}
+          ${!railCollapsed ? `
+            <div class="code-rail__list">
+              ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
+            </div>
+          ` : ''}
+          <button class="sidebar-toggle code-panel-toggle" type="button" data-code-toggle-rail title="${railCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel'}">${railCollapsed ? '&#x276F;' : '&#x276E;'}</button>
         </aside>
         <section class="code-workspace">
-          <div class="code-workspace__main ${isCollapsed ? 'terminals-collapsed' : ''}">
-            <section class="code-explorer panel">
+          <div class="code-workspace__main ${isCollapsed ? 'terminals-collapsed' : ''} ${explorerCollapsed ? 'explorer-collapsed' : ''}">
+            <section class="code-explorer panel ${explorerCollapsed ? 'is-collapsed' : ''}">
               <div class="panel__header">
-                <h3>Explorer <span class="code-tooltip-icon" title="Browse workspace files. Expand folders in the tree, click files to view source.">&#9432;</span></h3>
-                ${activeSession ? `
+                <h3><span class="code-panel-title__icon">&#128193;</span><span class="code-panel-title__text">Explorer</span> ${!explorerCollapsed ? '<span class="code-tooltip-icon" title="Browse workspace files. Expand folders in the tree, click files to view source.">&#9432;</span>' : ''}</h3>
+                ${activeSession && !explorerCollapsed ? `
                   <div class="panel__actions">
                     <button class="btn btn-secondary btn-sm" type="button" data-code-refresh-explorer title="Reload directory tree">&#x21BB;</button>
                   </div>
                 ` : ''}
               </div>
-              ${activeSession ? `
+              ${activeSession && !explorerCollapsed ? `
                 <div class="code-file-list">
                   ${renderTree(activeSession.resolvedRoot || activeSession.workspaceRoot || '.', activeSession)}
                 </div>
-              ` : '<div class="empty-state">Create a session to browse.</div>'}
+              ` : (!activeSession ? '<div class="empty-state">Create a session to browse.</div>' : '')}
+              <button class="sidebar-toggle code-panel-toggle" type="button" data-code-toggle-explorer title="${explorerCollapsed ? 'Expand explorer panel' : 'Collapse explorer panel'}">${explorerCollapsed ? '&#x276F;' : '&#x276E;'}</button>
             </section>
             <section class="code-editor panel">
               <div class="panel__header">
@@ -677,7 +1549,7 @@ function renderDOM(container) {
           </div>
           <aside class="code-chat panel">
             <div class="panel__header">
-              <h3>Assistant</h3>
+              <h3 class="code-chat__title"><span class="code-chat__title-icon">&#x1F4BB;</span><span>Coding Assistant</span></h3>
               ${activeSession ? `
                 <div class="panel__actions">
                   <button class="btn btn-secondary btn-sm" type="button" data-code-reset-chat title="Clear conversation and start fresh">Reset</button>
@@ -696,8 +1568,10 @@ function renderDOM(container) {
 
   bindEvents(container);
   restoreScrollPositions(container, saved);
+  restoreFocusState(container, focusState);
   if (activeSession) {
-    void mountActiveTerminals(container, activeSession);
+    const terminalFocusTabId = focusTerminalTabId || (focusState?.type === 'terminal' ? focusState.tabId : null);
+    void mountActiveTerminals(container, activeSession, { focusTabId: terminalFocusTabId });
   } else {
     disposeInactiveTerminalInstances([]);
   }
@@ -756,6 +1630,7 @@ function renderTreeEntries(basePath, entries, depth, session) {
 
 async function loadTreeDir(session, dirPath) {
   const result = await api.codeFsList({
+    sessionId: session?.id,
     path: dirPath,
   }).catch((err) => ({ success: false, error: err.message }));
 
@@ -858,7 +1733,7 @@ function getVisibleTerminalPanes(session) {
 
 function renderTerminalPane(session, tab) {
   const shellOptions = getShellOptions();
-  const currentShell = tab.shell || getDefaultShell();
+  const currentShell = normalizeTerminalShell(tab.shell);
   const selectedShell = getShellOption(currentShell);
   const cwd = session.resolvedRoot || session.workspaceRoot;
 
@@ -925,6 +1800,40 @@ function renderChatNotice(session) {
     <div class="code-chat__notice ${backlog.blocked ? 'is-warning' : ''}">
       <span>${esc(copy)}</span>
       <button class="btn btn-secondary btn-sm" type="button" data-code-switch-tab="approvals">Review approvals</button>
+    </div>
+  `;
+}
+
+function formatCodeMessageRole(role) {
+  switch (role) {
+    case 'user':
+      return 'You';
+    case 'error':
+      return 'System';
+    case 'agent':
+    default:
+      return 'Coding Assistant';
+  }
+}
+
+function renderCodeMessage(role, content, extraClass = '') {
+  const className = `code-message ${role === 'user' ? 'is-user' : role === 'error' ? 'is-error' : 'is-agent'}${extraClass ? ` ${extraClass}` : ''}`;
+  return `
+    <div class="${className}">
+      <div class="code-message__role">${esc(formatCodeMessageRole(role))}</div>
+      <div class="code-message__body">${esc(content)}</div>
+    </div>
+  `;
+}
+
+function renderCodeThinkingMessage() {
+  return `
+    <div class="code-message is-agent is-thinking">
+      <div class="code-message__role">Coding Assistant</div>
+      <div class="code-message__thinking">
+        <span class="chat-spinner" aria-hidden="true"></span>
+        <span>Thinking through the workspace...</span>
+      </div>
     </div>
   `;
 }
@@ -1042,13 +1951,18 @@ function renderAssistantPanel(session) {
       `;
     case 'chat':
     default:
+      const committedMessages = Array.isArray(session.chat) ? session.chat : [];
+      const pendingUserMessage = typeof session.pendingResponse?.message === 'string'
+        ? session.pendingResponse.message.trim()
+        : '';
+      const hasVisibleMessages = committedMessages.length > 0 || !!pendingUserMessage;
       return `
         <div class="code-chat__meta">
           <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
         </div>
         ${renderChatNotice(session)}
         <div class="code-chat__history">
-          ${session.chat.length === 0
+          ${!hasVisibleMessages
             ? `<div class="code-chat__onboarding">
                 <div class="code-chat__onboarding-title">Getting Started</div>
                 <ul class="code-chat__onboarding-list">
@@ -1058,12 +1972,7 @@ function renderAssistantPanel(session) {
                   <li>Coding tools are built in &mdash; just describe what you need</li>
                 </ul>
               </div>`
-            : session.chat.map((message) => `
-              <div class="code-message ${message.role === 'user' ? 'is-user' : message.role === 'error' ? 'is-error' : 'is-agent'}">
-                <div class="code-message__role">${esc(message.role)}</div>
-                <div class="code-message__body">${esc(message.content)}</div>
-              </div>
-            `).join('')}
+            : `${committedMessages.map((message) => renderCodeMessage(message.role, message.content)).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
         </div>
         <form class="code-chat__form" data-code-chat-form>
           <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want.">${esc(session.chatDraft || '')}</textarea>
@@ -1155,25 +2064,48 @@ async function refreshTree(session) {
   rerenderFromState();
 }
 
+async function refreshVisibleTreeDirs(session) {
+  const visiblePaths = getVisibleTreePaths(session);
+  if (visiblePaths.length === 0) return false;
+
+  const results = await Promise.all(visiblePaths.map((dirPath) => loadTreeDir(session, dirPath)));
+  let changed = false;
+
+  results.forEach((result, index) => {
+    const dirPath = visiblePaths[index];
+    if (getTreeCacheSignature(treeCache.get(dirPath)) !== getTreeCacheSignature(result)) {
+      changed = true;
+    }
+    treeCache.set(dirPath, result);
+    if (index === 0 && !session.resolvedRoot && result.resolvedPath) {
+      session.resolvedRoot = result.resolvedPath;
+    }
+  });
+
+  return changed;
+}
+
 async function refreshFileView(session) {
   cachedFileView = await loadFileView(session);
   rerenderFromState();
 }
 
 async function refreshSessionData(session) {
-  const rootPath = session.resolvedRoot || session.workspaceRoot || '.';
+  const latestSession = await refreshSessionSnapshot(session.id).catch(() => session);
+  const currentSession = latestSession || session;
+  const rootPath = currentSession.resolvedRoot || currentSession.workspaceRoot || '.';
   treeCache.clear();
   const [rootData, fileView] = await Promise.all([
-    loadTreeDir(session, rootPath),
-    loadFileView(session),
+    loadTreeDir(currentSession, rootPath),
+    loadFileView(currentSession),
   ]);
   treeCache.set(rootPath, rootData);
-  if (!session.resolvedRoot && rootData.resolvedPath) {
-    session.resolvedRoot = rootData.resolvedPath;
+  if (!currentSession.resolvedRoot && rootData.resolvedPath) {
+    currentSession.resolvedRoot = rootData.resolvedPath;
   }
   cachedFileView = fileView;
-  await loadExpandedDirs(session);
-  await refreshAssistantState(session, { rerender: false });
+  await loadExpandedDirs(currentSession);
+  await refreshAssistantState(currentSession, { rerender: false });
   saveState(codeState);
   rerenderFromState();
 }
@@ -1187,12 +2119,14 @@ async function loadFileView(session) {
 
   const [sourceResult, diffResult] = await Promise.all([
     api.codeFsRead({
+      sessionId: session.id,
       path: session.selectedFilePath,
       maxBytes: 250000,
     }).catch((err) => ({ success: false, error: err.message })),
     api.codeGitDiff({
-      cwd: session.resolvedRoot || session.workspaceRoot,
-      path: toRelativePath(session.selectedFilePath, session.resolvedRoot || session.workspaceRoot),
+      sessionId: session.id,
+      cwd: session.currentDirectory || session.resolvedRoot || session.workspaceRoot,
+      path: session.selectedFilePath,
     }).catch((err) => ({ success: false, error: err.message })),
   ]);
 
@@ -1204,9 +2138,16 @@ async function loadFileView(session) {
 }
 
 async function loadAssistantState(session) {
-  const userId = buildUserId(session);
+  const userId = session.conversationUserId;
+  const channel = session.conversationChannel || 'code-session';
+  if (!userId) {
+    return {
+      pendingApprovals: normalizePendingApprovals(session.pendingApprovals, session.pendingApprovals),
+      recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
+    };
+  }
   const [pendingResult, toolsState] = await Promise.all([
-    api.pendingToolApprovals(userId, DEFAULT_USER_CHANNEL, 100).catch(() => []),
+    api.pendingToolApprovals(userId, channel, 100).catch(() => []),
     api.toolsState(100).catch(() => ({ approvals: [], jobs: [] })),
   ]);
 
@@ -1256,7 +2197,7 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
   let lastError = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const result = await api.decideToolApproval({ approvalId, decision, actor: buildUserId(session) });
+      const result = await api.decideToolApproval({ approvalId, decision, actor: session.conversationUserId || DEFAULT_CODE_USER_ID });
       if (result?.success === false && isApprovalNotFoundMessage(result.message) && attempt < 4) {
         lastError = new Error(result.message);
       } else {
@@ -1288,12 +2229,15 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
 
 async function handleCodeApprovalDecision(session, approvalIds, decision) {
   if (!session || !Array.isArray(approvalIds) || approvalIds.length === 0) return;
+  const sessionId = session.id;
+  let refreshSessionId = sessionId;
 
   const approvalResponses = [];
   let continuationPendingApprovals = null;
   for (const id of approvalIds) {
+    const liveSession = resolveLiveSession(sessionId, session);
     try {
-      const result = await decideCodeApprovalWithRetry(session, id, decision);
+      const result = await decideCodeApprovalWithRetry(liveSession, id, decision);
       approvalResponses.push(result);
     } catch (err) {
       approvalResponses.push({
@@ -1311,8 +2255,9 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
     .map((result) => result.continuedResponse)
     .filter((value) => value && typeof value.content === 'string');
 
-  immediateMessages.forEach((message) => appendChatMessage(session, 'agent', message));
-  continuedResponses.forEach((response) => appendChatMessage(session, 'agent', response.content));
+  const currentSession = resolveLiveSession(sessionId, session);
+  immediateMessages.forEach((message) => appendChatMessage(currentSession, 'agent', message));
+  continuedResponses.forEach((response) => appendChatMessage(currentSession, 'agent', response.content));
 
   if (decision === 'approved' && continuedResponses.length === 0 && approvalResponses.some((result) => result.continueConversation !== false)) {
     const summary = approvalResponses
@@ -1324,30 +2269,41 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
       'Please continue the original coding task and adjust if any approved action failed.',
     ].join('\n');
     try {
+      const outboundSession = await ensureBackendSession(currentSession || session);
+      const outboundSessionId = outboundSession?.id || sessionId;
+      refreshSessionId = outboundSessionId;
       const response = await api.sendMessage(
-        buildCodePrompt(session, continuationMessage),
-        session.agentId || undefined,
-        buildUserId(session),
+        continuationMessage,
+        outboundSession?.agentId || currentSession?.agentId || session.agentId || undefined,
+        DEFAULT_CODE_USER_ID,
         DEFAULT_USER_CHANNEL,
-        buildCodeMessageMetadata(session),
+        buildCodeMessageMetadata(outboundSession || currentSession || session),
       );
+      const liveSession = resolveLiveSession(outboundSessionId, outboundSession || currentSession || session);
       if (Array.isArray(response?.metadata?.activeSkills)) {
-        session.activeSkills = response.metadata.activeSkills.map((value) => String(value));
+        liveSession.activeSkills = response.metadata.activeSkills.map((value) => String(value));
       }
       const responsePendingApprovals = Array.isArray(response?.metadata?.pendingApprovals)
         ? response.metadata.pendingApprovals
         : null;
       if (responsePendingApprovals) {
         continuationPendingApprovals = responsePendingApprovals;
-        session.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, session.pendingApprovals);
+        liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
       }
-      appendChatMessage(session, 'agent', response.content || 'Approval processed.');
+      // Detect session drift on continuation
+      if (response?.metadata?.codeSessionResolved === false && outboundSessionId) {
+        appendChatMessage(liveSession, 'error',
+          'Session drift detected on continuation — re-attaching.');
+        await api.codeSessionAttach(outboundSessionId, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+      }
+      appendChatMessage(liveSession, 'agent', response.content || 'Approval processed.');
     } catch (err) {
-      appendChatMessage(session, 'error', err instanceof Error ? err.message : String(err));
+      appendChatMessage(resolveLiveSession(sessionId, currentSession || session), 'error', err instanceof Error ? err.message : String(err));
     }
   }
 
-  await refreshAssistantState(session, {
+  const refreshedSession = await refreshSessionSnapshot(refreshSessionId).catch(() => resolveLiveSession(refreshSessionId, session));
+  await refreshAssistantState(refreshedSession || session, {
     rerender: false,
     fallbackPendingApprovals: continuationPendingApprovals,
   });
@@ -1360,6 +2316,18 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
 
 function bindEvents(container) {
   // ── Session rail ──
+
+  container.querySelector('[data-code-toggle-rail]')?.addEventListener('click', () => {
+    codeState.railCollapsed = !codeState.railCollapsed;
+    saveState(codeState);
+    rerenderFromState();
+  });
+
+  container.querySelector('[data-code-toggle-explorer]')?.addEventListener('click', () => {
+    codeState.explorerCollapsed = !codeState.explorerCollapsed;
+    saveState(codeState);
+    rerenderFromState();
+  });
 
   container.querySelector('[data-code-new-session]')?.addEventListener('click', () => {
     codeState.showCreateForm = true;
@@ -1395,15 +2363,21 @@ function bindEvents(container) {
     saveState(codeState);
   });
 
-  createForm?.addEventListener('submit', (event) => {
+  createForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const title = form.elements.title.value.trim() || 'Coding Session';
     const workspaceRoot = form.elements.workspaceRoot.value.trim() || '.';
     const agentId = form.elements.agentId?.value || '';
-    const session = createSession(title, workspaceRoot, agentId || null);
-    codeState.sessions.unshift(session);
-    codeState.activeSessionId = session.id;
+    const snapshot = await api.codeSessionCreate({
+      title,
+      workspaceRoot,
+      agentId: agentId || null,
+      channel: DEFAULT_USER_CHANNEL,
+      attach: true,
+    });
+    const session = applyCodeSessionSnapshot(snapshot);
+    codeState.activeSessionId = session?.id || null;
     codeState.showCreateForm = false;
     codeState.createDraft = { title: '', workspaceRoot: '.', agentId: '' };
     treeCache.clear();
@@ -1411,7 +2385,7 @@ function bindEvents(container) {
     closeDirPicker();
     saveState(codeState);
     rerenderFromState();
-    void refreshSessionData(session);
+    if (session) void refreshSessionData(session);
   });
 
   // Edit form
@@ -1431,12 +2405,10 @@ function bindEvents(container) {
     const session = codeState.sessions.find((s) => s.id === codeState.editingSessionId);
     if (!session) return;
     const form = event.currentTarget;
-    session.title = form.elements.title.value.trim() || session.title;
+    const nextTitle = form.elements.title.value.trim() || session.title;
     const newRoot = form.elements.workspaceRoot.value.trim() || session.workspaceRoot;
     if (newRoot !== session.workspaceRoot) {
       await Promise.all((session.terminalTabs || []).map((tab) => closeTerminal(tab)));
-      session.workspaceRoot = newRoot;
-      session.resolvedRoot = null;
       session.terminalTabs = (session.terminalTabs || []).map((tab, index) => ({
         ...tab,
         runtimeTerminalId: null,
@@ -1446,6 +2418,19 @@ function bindEvents(container) {
       }));
       treeCache.clear();
     }
+    const snapshot = await api.codeSessionUpdate(session.id, {
+      title: nextTitle,
+      workspaceRoot: newRoot,
+      channel: DEFAULT_USER_CHANNEL,
+      uiState: {
+        ...buildCodeSessionUiState(session),
+        currentDirectory: newRoot !== session.workspaceRoot
+          ? newRoot
+          : (session.currentDirectory || session.resolvedRoot || session.workspaceRoot || '.'),
+        selectedFilePath: newRoot !== session.workspaceRoot ? null : session.selectedFilePath,
+      },
+    });
+    applyCodeSessionSnapshot(snapshot);
     codeState.editingSessionId = null;
     codeState.editDraft = null;
     closeDirPicker();
@@ -1522,7 +2507,10 @@ function bindEvents(container) {
       saveState(codeState);
       rerenderFromState();
       const session = getActiveSession();
-      if (session) void refreshSessionData(session);
+      if (session) {
+        void api.codeSessionAttach(session.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+        void refreshSessionData(session);
+      }
     });
   });
 
@@ -1534,6 +2522,9 @@ function bindEvents(container) {
       const deletedSession = codeState.sessions.find((session) => session.id === deletedId);
       if (deletedSession) {
         await Promise.all((deletedSession.terminalTabs || []).map((tab) => closeTerminal(tab)));
+      }
+      if (deletedId) {
+        await api.codeSessionDelete(deletedId, { channel: DEFAULT_USER_CHANNEL }).catch(() => null);
       }
       codeState.sessions = codeState.sessions.filter((session) => session.id !== deletedId);
       const wasActive = codeState.activeSessionId === deletedId;
@@ -1581,6 +2572,7 @@ function bindEvents(container) {
         }
       }
       saveState(codeState);
+      queueSessionPersist(session);
       rerenderFromState();
     });
   });
@@ -1592,6 +2584,7 @@ function bindEvents(container) {
       session.selectedFilePath = button.dataset.codeTreeFile || null;
       session.showDiff = false;
       saveState(codeState);
+      queueSessionPersist(session);
       void refreshFileView(session);
     });
   });
@@ -1606,6 +2599,7 @@ function bindEvents(container) {
     if (!session) return;
     session.showDiff = !session.showDiff;
     saveState(codeState);
+    queueSessionPersist(session);
     rerenderFromState();
   });
 
@@ -1616,6 +2610,7 @@ function bindEvents(container) {
     if (!session) return;
     session.terminalCollapsed = !session.terminalCollapsed;
     saveState(codeState);
+    queueSessionPersist(session);
     rerenderFromState();
   });
 
@@ -1625,7 +2620,9 @@ function bindEvents(container) {
     if (session.terminalTabs.length >= MAX_TERMINAL_PANES) return;
     const tab = createTerminalTab(`Terminal ${session.terminalTabs.length + 1}`, getDefaultShell());
     session.terminalTabs.push(tab);
+    pendingTerminalFocusTabId = tab.id;
     saveState(codeState);
+    queueSessionPersist(session);
     rerenderFromState();
     void ensureTerminalConnected(session, tab);
   });
@@ -1643,6 +2640,7 @@ function bindEvents(container) {
       }
       session.terminalTabs = session.terminalTabs.filter((candidate) => candidate.id !== tabId);
       saveState(codeState);
+      queueSessionPersist(session);
       rerenderFromState();
     });
   });
@@ -1656,10 +2654,11 @@ function bindEvents(container) {
       const tab = session.terminalTabs.find((t) => t.id === tabId);
       if (tab) {
         await closeTerminal(tab);
-        tab.shell = select.value;
+        tab.shell = normalizeTerminalShell(select.value);
         tab.output = '';
         tab.openFailed = false;
         saveState(codeState);
+        queueSessionPersist(session);
         rerenderFromState();
         void ensureTerminalConnected(session, tab);
       }
@@ -1676,6 +2675,7 @@ function bindEvents(container) {
       if (!isAssistantTab(nextTab)) return;
       session.activeAssistantTab = nextTab;
       saveState(codeState);
+      queueSessionPersist(session);
       rerenderFromState();
     });
   });
@@ -1702,39 +2702,57 @@ function bindEvents(container) {
     event.preventDefault();
     const session = getActiveSession();
     if (!session) return;
+    const sessionId = session.id;
     const form = event.currentTarget;
     const message = form.elements.message.value.trim();
     if (!message) return;
     session.chatDraft = '';
-    session.chat.push({ role: 'user', content: message });
+    session.pendingResponse = { message, startedAt: Date.now() };
     saveState(codeState);
     rerenderFromState();
     scrollToBottom(currentContainer, '.code-chat__history');
 
     try {
+      const outboundSession = await ensureBackendSession(session);
+      const outboundSessionId = outboundSession?.id || sessionId;
       const response = await api.sendMessage(
-        buildCodePrompt(session, message),
-        session.agentId || undefined,
-        buildUserId(session),
+        message,
+        outboundSession?.agentId || session.agentId || undefined,
+        DEFAULT_CODE_USER_ID,
         DEFAULT_USER_CHANNEL,
-        buildCodeMessageMetadata(session),
+        buildCodeMessageMetadata(outboundSession || session),
       );
-      session.activeSkills = Array.isArray(response?.metadata?.activeSkills)
+      const liveSession = resolveLiveSession(outboundSessionId, outboundSession || session);
+      liveSession.activeSkills = Array.isArray(response?.metadata?.activeSkills)
         ? response.metadata.activeSkills.map((value) => String(value))
         : [];
       const responsePendingApprovals = Array.isArray(response?.metadata?.pendingApprovals)
         ? response.metadata.pendingApprovals
         : null;
       if (responsePendingApprovals) {
-        session.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, session.pendingApprovals);
+        liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
       }
-      appendChatMessage(session, 'agent', response.content || 'No response content.');
-      await refreshAssistantState(session, {
+      appendChatMessage(liveSession, 'user', message);
+      liveSession.pendingResponse = null;
+      // Detect session binding drift: backend couldn't resolve the code session
+      if (response?.metadata?.codeSessionResolved === false && outboundSessionId) {
+        appendChatMessage(liveSession, 'error',
+          'Session drift detected — the backend could not resolve this coding session. '
+          + 'Re-attaching now. If the problem persists, try resetting the chat or re-creating the session.');
+        // Attempt recovery: re-attach and mark for next message
+        await api.codeSessionAttach(outboundSessionId, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+      }
+      appendChatMessage(liveSession, 'agent', response.content || 'No response content.');
+      const refreshedSession = await refreshSessionSnapshot(outboundSessionId).catch(() => resolveLiveSession(outboundSessionId, liveSession));
+      await refreshAssistantState(refreshedSession || liveSession, {
         rerender: false,
         fallbackPendingApprovals: responsePendingApprovals,
       });
     } catch (err) {
-      appendChatMessage(session, 'error', err instanceof Error ? err.message : String(err));
+      const liveSession = resolveLiveSession(sessionId, session);
+      appendChatMessage(liveSession, 'user', message);
+      liveSession.pendingResponse = null;
+      appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
     }
     saveState(codeState);
     rerenderFromState();
@@ -1745,13 +2763,15 @@ function bindEvents(container) {
     const session = getActiveSession();
     if (!session) return;
     session.chat = [];
+    session.pendingResponse = null;
     saveState(codeState);
     try {
-      await api.resetConversation(session.agentId || cachedAgents[0]?.id || 'default', buildUserId(session), DEFAULT_USER_CHANNEL);
+      await api.codeSessionResetConversation(session.id, { channel: DEFAULT_USER_CHANNEL });
     } catch {
       // Keep local reset even if server reset fails.
     }
-    await refreshAssistantState(session, { rerender: false });
+    const refreshedSession = await refreshSessionSnapshot(session.id).catch(() => session);
+    await refreshAssistantState(refreshedSession || session, { rerender: false });
     rerenderFromState();
   });
 
@@ -1768,9 +2788,23 @@ function bindEvents(container) {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { sessions: [], activeSessionId: null, showCreateForm: false, createDraft: { title: '', workspaceRoot: '.', agentId: '' } };
+    return raw ? JSON.parse(raw) : {
+      sessions: [],
+      activeSessionId: null,
+      showCreateForm: false,
+      railCollapsed: false,
+      explorerCollapsed: false,
+      createDraft: { title: '', workspaceRoot: '.', agentId: '' },
+    };
   } catch {
-    return { sessions: [], activeSessionId: null, showCreateForm: false, createDraft: { title: '', workspaceRoot: '.', agentId: '' } };
+    return {
+      sessions: [],
+      activeSessionId: null,
+      showCreateForm: false,
+      railCollapsed: false,
+      explorerCollapsed: false,
+      createDraft: { title: '', workspaceRoot: '.', agentId: '' },
+    };
   }
 }
 
@@ -1787,6 +2821,9 @@ function normalizeState(raw, agents) {
         selectedFilePath: session.selectedFilePath || null,
         showDiff: !!session.showDiff,
         agentId: resolveAgentId(session.agentId, agents),
+        status: session.status || 'idle',
+        conversationUserId: session.conversationUserId || '',
+        conversationChannel: session.conversationChannel || 'code-session',
         terminalTabs,
         terminalCollapsed: !!session.terminalCollapsed,
         expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
@@ -1796,13 +2833,17 @@ function normalizeState(raw, agents) {
         activeSkills: Array.isArray(session.activeSkills) ? session.activeSkills : [],
         recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
         lastExplorerPath: session.lastExplorerPath || null,
+        focusSummary: session.focusSummary || '',
         planSummary: session.planSummary || '',
         compactedSummary: session.compactedSummary || '',
+        workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
         activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : 'chat',
       };
     }) : [],
     activeSessionId: raw?.activeSessionId || null,
     showCreateForm: !!raw?.showCreateForm,
+    railCollapsed: !!raw?.railCollapsed,
+    explorerCollapsed: !!raw?.explorerCollapsed,
     editingSessionId: raw?.editingSessionId || null,
     editDraft: raw?.editDraft || null,
     createDraft: {
@@ -1812,12 +2853,6 @@ function normalizeState(raw, agents) {
     },
   };
 
-  if (next.sessions.length === 0) {
-    const session = createSession('GuardianAgent', '.', resolveAgentId(null, agents));
-    next.sessions = [session];
-    next.activeSessionId = session.id;
-  }
-
   if (!next.sessions.some((session) => session.id === next.activeSessionId)) {
     next.activeSessionId = next.sessions[0]?.id || null;
   }
@@ -1825,20 +2860,30 @@ function normalizeState(raw, agents) {
   return next;
 }
 
-function normalizeTerminalTabs(value) {
+function normalizeTerminalTabs(value, existing = []) {
+  const previousById = new Map(
+    (Array.isArray(existing) ? existing : [])
+      .filter((tab) => tab && typeof tab.id === 'string')
+      .map((tab) => [tab.id, tab]),
+  );
   const userTabs = Array.isArray(value) && value.length > 0
     ? value
       .map((tab) => ({
+        ...(previousById.get(tab.id) || {}),
         id: tab.id && tab.id !== 'agent' ? tab.id : crypto.randomUUID(),
         name: tab.name && tab.name !== 'Agent' ? tab.name : 'Terminal 1',
-        shell: tab.shell || getDefaultShell(),
-        output: typeof tab.output === 'string'
-          ? trimTerminalOutput(tab.output)
-          : trimTerminalOutput(Array.isArray(tab.history) ? tab.history.join('\n\n') : ''),
-        runtimeTerminalId: typeof tab.runtimeTerminalId === 'string' && tab.runtimeTerminalId ? tab.runtimeTerminalId : null,
-        connecting: !!tab.connecting,
-        connected: !!tab.connected,
-        openFailed: !!tab.openFailed,
+        shell: normalizeTerminalShell(tab.shell || previousById.get(tab.id)?.shell || getDefaultShell()),
+        output: typeof previousById.get(tab.id)?.output === 'string'
+          ? trimTerminalOutput(previousById.get(tab.id).output)
+          : trimTerminalOutput(typeof tab.output === 'string'
+            ? tab.output
+            : Array.isArray(tab.history) ? tab.history.join('\n\n') : ''),
+        runtimeTerminalId: typeof previousById.get(tab.id)?.runtimeTerminalId === 'string' && previousById.get(tab.id).runtimeTerminalId
+          ? previousById.get(tab.id).runtimeTerminalId
+          : null,
+        connecting: !!previousById.get(tab.id)?.connecting,
+        connected: !!previousById.get(tab.id)?.connected,
+        openFailed: !!previousById.get(tab.id)?.openFailed,
       }))
     : [];
   return userTabs.length > 0 ? userTabs : [createTerminalTab('Terminal 1', getDefaultShell())];
@@ -1848,18 +2893,22 @@ function saveState(state) {
   const persistable = {
     ...state,
     sessions: Array.isArray(state.sessions)
-      ? state.sessions.map((session) => ({
-        ...session,
+      ? state.sessions.map((session) => {
+        const { pendingResponse: _pendingResponse, ...persistedSession } = session;
+        return {
+        ...persistedSession,
         terminalTabs: Array.isArray(session.terminalTabs)
           ? session.terminalTabs.map((tab) => ({
             id: tab.id,
             name: tab.name,
-            shell: tab.shell,
+            shell: normalizeTerminalShell(tab.shell),
             output: typeof tab.output === 'string' ? trimTerminalOutput(tab.output) : '',
           }))
           : [],
         recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
-      }))
+        workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+      };
+      })
       : [],
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
@@ -1869,36 +2918,22 @@ function getActiveSession() {
   return codeState.sessions.find((session) => session.id === codeState.activeSessionId) || null;
 }
 
-function createSession(title, workspaceRoot, agentId) {
-  return {
-    id: crypto.randomUUID(),
-    title,
-    workspaceRoot,
-    resolvedRoot: null,
-    currentDirectory: null,
-    selectedFilePath: null,
-    showDiff: false,
-    agentId,
-    terminalTabs: [createTerminalTab('Terminal 1', getDefaultShell())],
-    terminalCollapsed: false,
-    expandedDirs: [],
-    chat: [],
-    chatDraft: '',
-    pendingApprovals: [],
-    activeSkills: [],
-    recentJobs: [],
-    lastExplorerPath: null,
-    planSummary: '',
-    compactedSummary: '',
-    activeAssistantTab: 'chat',
-  };
+function getSessionById(sessionId) {
+  if (!sessionId) return null;
+  return codeState.sessions.find((session) => session.id === sessionId) || null;
+}
+
+function resolveLiveSession(sessionOrId, fallback = null) {
+  if (!sessionOrId) return fallback;
+  const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
+  return getSessionById(sessionId) || fallback || (typeof sessionOrId === 'string' ? null : sessionOrId);
 }
 
 function createTerminalTab(name, shell) {
   return {
     id: crypto.randomUUID(),
     name,
-    shell: shell || getDefaultShell(),
+    shell: normalizeTerminalShell(shell),
     output: '',
     runtimeTerminalId: null,
     connecting: false,
@@ -1909,54 +2944,14 @@ function createTerminalTab(name, shell) {
 
 // ─── Prompt and output helpers ─────────────────────────────
 
-function buildUserId(session) {
-  return `web-code-${session.id}`;
-}
-
 function buildCodeMessageMetadata(session) {
-  const workspaceRoot = session.resolvedRoot || session.workspaceRoot || '.';
+  const workspaceRoot = session?.resolvedRoot || session?.workspaceRoot || '.';
   return {
     codeContext: {
-      sessionId: session.id,
+      ...(session?.id ? { sessionId: session.id } : {}),
       workspaceRoot,
     },
   };
-}
-
-function buildCodePrompt(session, message) {
-  const workspaceRoot = session.resolvedRoot || session.workspaceRoot;
-  const selectedFile = session.selectedFilePath || '(none)';
-  const currentDirectory = session.currentDirectory || workspaceRoot;
-  const backlog = getApprovalBacklogState(session);
-  return [
-    '[Code Workspace Context]',
-    `workspaceRoot: ${workspaceRoot}`,
-    `currentDirectory: ${currentDirectory}`,
-    `selectedFile: ${selectedFile}`,
-    Array.isArray(session.activeSkills) && session.activeSkills.length > 0
-      ? `activeSkills: ${session.activeSkills.join(', ')}`
-      : 'activeSkills: (none)',
-    `pendingApprovals: ${backlog.count}`,
-    session.planSummary ? `activePlan:\n${session.planSummary}` : 'activePlan: (none)',
-    session.compactedSummary ? `compactedSummary:\n${session.compactedSummary}` : 'compactedSummary: (none)',
-    '',
-    '[Code Workspace Operating Rules]',
-    'Follow this loop: understand first, act second, verify third.',
-    'Read files before editing them. Prefer code-aware tools when available.',
-    'Use code_symbol_search before broad changes and use git diff to verify what changed.',
-    'For complex or multi-file work, create or update a concise plan before making large edits.',
-    'After material changes, run targeted verification such as tests, lint, or build when available.',
-    'If you start repeating the same failed action, stop and change approach.',
-    'If the current thread feels stale or bloated, summarize progress clearly so the session can be compacted.',
-    backlog.blocked
-      ? `Approval backlog is saturated (${backlog.count} pending). Do not initiate new mutating tool calls that would require additional approvals until the queue is reduced. Continue with read-only investigation, explanation, or planning instead.`
-      : 'If approvals are already pending, prefer read-only investigation or planning before creating more write actions unless the user explicitly asks to proceed.',
-    '',
-    'Use coding tools when appropriate. If coding tools are not visible, call find_tools with query "coding code edit patch create plan git diff commit test build lint symbol".',
-    `When running shell commands, use cwd="${workspaceRoot}".`,
-    '',
-    message,
-  ].join('\n');
 }
 
 // ─── Path and string utilities ─────────────────────────────
@@ -2013,4 +3008,12 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/`/g, '&#96;');
+}
+
+function normalizeComparablePath(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[\\/]+/g, '/')
+    .replace(/\/$/, '')
+    .toLowerCase();
 }

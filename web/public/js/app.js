@@ -10,7 +10,7 @@ import { renderReference } from './pages/reference.js';
 import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { renderCloud, updateCloud } from './pages/cloud.js';
-import { renderCode, updateCode } from './pages/code.js';
+import { renderCode, updateCode, teardownCode } from './pages/code.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
@@ -357,6 +357,11 @@ function navigate() {
 
   const params = new URLSearchParams(query || '');
   const route = routes[path] || routes['/'];
+  const previousPage = currentPage;
+
+  if (previousPage === 'code' && route.name !== 'code') {
+    teardownCode();
+  }
 
   currentPage = route.name;
   if (currentPage !== 'code') {

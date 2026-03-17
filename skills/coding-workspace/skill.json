@@ -1,0 +1,65 @@
+{
+  "id": "coding-workspace",
+  "name": "Coding Workspace",
+  "version": "0.2.0",
+  "description": "Workflow guidance for backend-owned Guardian coding sessions, including workspace-aware repo understanding, attach/resume across surfaces, and broader Guardian actions performed from the active workspace context.",
+  "tags": [
+    "coding",
+    "code",
+    "refactor",
+    "bugfix",
+    "implementation"
+  ],
+  "enabled": true,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "code workspace",
+      "workspaceRoot",
+      "selectedFile",
+      "coding",
+      "codebase",
+      "repo",
+      "repository",
+      "analyze",
+      "inspect this repo",
+      "what this app is",
+      "implement",
+      "fix",
+      "refactor",
+      "patch",
+      "bug"
+    ]
+  },
+  "tools": [
+    "code_session_list",
+    "code_session_current",
+    "code_session_create",
+    "code_session_attach",
+    "code_session_detach",
+    "find_tools",
+    "code_symbol_search",
+    "code_edit",
+    "code_patch",
+    "code_create",
+    "code_plan",
+    "code_git_diff",
+    "code_test",
+    "code_build",
+    "code_lint",
+    "workflow_upsert",
+    "task_create",
+    "task_update",
+    "web_search"
+  ],
+  "risk": "operational"
+}

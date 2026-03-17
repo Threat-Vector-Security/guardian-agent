@@ -434,6 +434,44 @@ export const api = {
   codeTerminalClose: (terminalId) => request(`/api/code/terminals/${encodeURIComponent(terminalId)}`, {
     method: 'DELETE',
   }),
+  codeSessions: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    return request(`/api/code/sessions${qs.toString() ? `?${qs.toString()}` : ''}`);
+  },
+  codeSessionGet: (sessionId, params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    }
+    return request(`/api/code/sessions/${encodeURIComponent(sessionId)}${qs.toString() ? `?${qs.toString()}` : ''}`);
+  },
+  codeSessionCreate: (payload) => request('/api/code/sessions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionUpdate: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionDelete: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionAttach: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/attach`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionDetach: (payload = {}) => request('/api/code/sessions/detach', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionResetConversation: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/reset`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   codeFsList: (payload) => request('/api/code/fs/list', {
     method: 'POST',
     body: JSON.stringify(payload),

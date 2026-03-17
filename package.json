@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "test:llmmap": "node scripts/test-llmmap-security.mjs",
     "test:verbose": "vitest run --reporter=verbose",
     "test:coverage": "vitest run --coverage",
     "check": "tsc --noEmit",

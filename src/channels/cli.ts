@@ -183,6 +183,7 @@ export class CLIChannel implements ChannelAdapter {
   private historyEnabled: boolean;
   private pendingPromptResolver: ((answer: string) => void) | null = null;
   private pendingInlineApprovalState: InlineApprovalState | null = null;
+  private shutdownRequested = false;
 
   constructor(options: CLIChannelOptions = {}) {
     this.prompt = options.prompt ?? 'you> ';
@@ -206,6 +207,7 @@ export class CLIChannel implements ChannelAdapter {
 
   async start(onMessage: MessageCallback): Promise<void> {
     this.onMessage = onMessage;
+    this.shutdownRequested = false;
 
     // Load persisted command history for Up/Down arrow recall
     let history: string[] = [];
@@ -242,8 +244,11 @@ export class CLIChannel implements ChannelAdapter {
       }
 
       const trimmed = line.trim();
+      if (this.shutdownRequested) {
+        return;
+      }
       if (!trimmed) {
-        this.rl?.prompt();
+        this.promptIfReady();
         return;
       }
 
@@ -258,13 +263,13 @@ export class CLIChannel implements ChannelAdapter {
           }
         }
         await this.handleCommand(trimmed);
-        this.rl?.prompt();
+        this.promptIfReady();
         return;
       }
 
       // Send message to agent
       await this.handleUserMessage(trimmed);
-      this.rl?.prompt();
+      this.promptIfReady();
     });
 
     this.rl.on('close', () => {
@@ -275,17 +280,41 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
-    if (this.rl) {
-      this.rl.close();
-      this.rl = null;
+    this.shutdownRequested = true;
+    const rl = this.rl;
+    this.rl = null;
+    if (rl) {
+      rl.pause();
+      rl.close();
     }
+    this.input.pause?.();
     this.onMessage = null;
     log.info('CLI channel stopped');
   }
 
+  private promptIfReady(): void {
+    if (this.shutdownRequested) return;
+    try {
+      this.rl?.prompt();
+    } catch (err) {
+      log.debug({ err }, 'Skipped prompt on closing readline');
+    }
+  }
+
+  private requestShutdown(): void {
+    this.shutdownRequested = true;
+    this.rl?.pause();
+    this.input.pause?.();
+    if (this.dashboard?.onKillswitch) {
+      this.dashboard.onKillswitch();
+      return;
+    }
+    void this.stop();
+  }
+
   async send(_userId: string, text: string): Promise<void> {
     this.write(`\nguardian-agent> ${text}\n\n`);
-    this.rl?.prompt();
+    this.promptIfReady();
   }
 
   // ─── Message handling ────────────────────────────────────────
@@ -623,10 +652,7 @@ export class CLIChannel implements ChannelAdapter {
       case 'close':
       case 'shutdown':
         this.write('\n' + this.red('⚡ KILLSWITCH') + ' — Shutting down all services...\n');
-        this.rl?.close();
-        if (this.dashboard?.onKillswitch) {
-          this.dashboard.onKillswitch();
-        }
+        this.requestShutdown();
         break;
       default:
         this.write(`\nUnknown command: /${cmd}. Try /help\n\n`);
@@ -3014,21 +3040,21 @@ export class CLIChannel implements ChannelAdapter {
 
     if (!choice) {
       this.write('\n');
-      this.rl?.prompt();
+      this.promptIfReady();
       return;
     }
 
     const num = parseInt(choice, 10);
     if (isNaN(num) || num < 1 || num > entries.length) {
       this.write(`\n${this.red('Invalid selection.')} Enter a number between 1 and ${entries.length}.\n\n`);
-      this.rl?.prompt();
+      this.promptIfReady();
       return;
     }
 
     const selected = entries[num - 1];
     if (selected.active) {
       this.write(`\n${selected.model} is already the active model.\n\n`);
-      this.rl?.prompt();
+      this.promptIfReady();
       return;
     }
 
@@ -3041,7 +3067,7 @@ export class CLIChannel implements ChannelAdapter {
     } else {
       this.write(`\nTo switch: /config set ${selected.provider} model ${selected.model}\n\n`);
     }
-    this.rl?.prompt();
+    this.promptIfReady();
   }
 
   // ─── /reset ──────────────────────────────────────────────────
@@ -3156,10 +3182,7 @@ export class CLIChannel implements ChannelAdapter {
       }
       if (scope === 'all') {
         this.write(`\n  ${this.red('Shutting down...')}\n\n`);
-        this.rl?.close();
-        if (this.dashboard?.onKillswitch) {
-          this.dashboard.onKillswitch();
-        }
+        this.requestShutdown();
         return;
       }
       if (scope === 'data') {
@@ -4023,10 +4046,10 @@ export class CLIChannel implements ChannelAdapter {
       // Fire-and-forget greeting
       options.onGreeting().then((greeting) => {
         this.write(`\nassistant> ${greeting}\n\n`);
-        this.rl?.prompt();
+        this.promptIfReady();
       }).catch(() => {
         this.write(`\nassistant> Guardian Agent is online and ready.\n\n`);
-        this.rl?.prompt();
+        this.promptIfReady();
       });
     } else {
       this.runSetupWizard(options.onSetupApply, options.onGreeting);
@@ -4055,7 +4078,7 @@ export class CLIChannel implements ChannelAdapter {
       const apiKey = (await this.askQuestion('  Anthropic API key: ')).trim();
       if (!apiKey) {
         this.write(`\n${this.red('  Error:')} API key is required.\n\n`);
-        this.rl?.prompt();
+        this.promptIfReady();
         return;
       }
       const model = (await this.askQuestion('  Model [claude-sonnet-4-20250514]: ', 'claude-sonnet-4-20250514')).trim();
@@ -4073,7 +4096,7 @@ export class CLIChannel implements ChannelAdapter {
       const apiKey = (await this.askQuestion('  OpenAI API key: ')).trim();
       if (!apiKey) {
         this.write(`\n${this.red('  Error:')} API key is required.\n\n`);
-        this.rl?.prompt();
+        this.promptIfReady();
         return;
       }
       const model = (await this.askQuestion('  Model [gpt-4o]: ', 'gpt-4o')).trim();
@@ -4122,7 +4145,7 @@ export class CLIChannel implements ChannelAdapter {
       this.write(`  ${this.red('✗')} Setup failed: ${msg}\n\n`);
     }
 
-    this.rl?.prompt();
+    this.promptIfReady();
   }
 
   private askQuestion(prompt: string, defaultValue?: string): Promise<string> {

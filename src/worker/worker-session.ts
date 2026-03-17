@@ -4,7 +4,6 @@ import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../t
 import {
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
-  shouldUseStructuredPendingApprovalMessage,
 } from '../runtime/pending-approval-copy.js';
 import {
   buildLocalModelTooComplicatedMessage,
@@ -322,7 +321,7 @@ export class BrokeredWorkerSession {
       },
       formatPendingApprovalPrompt: (ids) => {
         const meta = toolExecutor.getApprovalMetadata(ids);
-        return shouldUseStructuredPendingApprovalMessage(message.channel)
+        return meta.length > 0
           ? formatPendingApprovalMessage(meta)
           : 'This action needs approval before I can continue.';
       },
@@ -427,7 +426,7 @@ export class BrokeredWorkerSession {
 
       const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
       return {
-        content: shouldUseStructuredPendingApprovalMessage(message.channel)
+        content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0

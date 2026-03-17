@@ -34,6 +34,7 @@ import { MCPClientManager } from './mcp-client.js';
 import type { AssistantCloudConfig, AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
+import type { CodeSessionStore } from '../runtime/code-sessions.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
@@ -391,6 +392,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
+  /** Backend-owned coding session store for multi-surface coding workflows. */
+  codeSessionStore?: CodeSessionStore;
   /** Resolve logical state identity for chat memory/session operations. */
   resolveStateAgentId?: (agentId?: string) => string | undefined;
   /** Document search service for indexed document collections (hybrid BM25 + vector). */
@@ -714,20 +717,30 @@ export class ToolExecutor {
   }
 
   /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
-  getToolContext(): string {
+  getToolContext(request?: Partial<ToolExecutionRequest>): string {
     const enabledCategories = this.getCategoryInfo()
       .filter((category) => category.enabled)
       .map((category) => `${category.category} (${category.toolCount})`);
     const policyUpdateActions = this.describePolicyUpdateActions();
+    const effectiveWorkspaceRoot = this.getEffectiveWorkspaceRoot(request);
+    const effectiveAllowedPaths = uniqueNonEmpty(this.getEffectiveAllowedPaths(request));
+    const effectiveAllowedCommands = uniqueNonEmpty(this.getEffectiveAllowedCommands(request));
+    const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
     const lines: string[] = [
-      `Workspace root (default for file operations): ${this.options.workspaceRoot}`,
+      `Workspace root (default for file operations): ${effectiveWorkspaceRoot}`,
       `Policy mode: ${this.policy.mode}`,
-      `Allowed paths: ${this.policy.sandbox.allowedPaths.join(', ') || '(workspace root only)'}`,
-      `Allowed commands: ${this.policy.sandbox.allowedCommands.join(', ')}`,
+      `Allowed paths: ${effectiveAllowedPaths.join(', ') || '(workspace root only)'}`,
+      `Allowed commands: ${effectiveAllowedCommands.join(', ') || '(none)'}`,
       `Enabled tool categories: ${enabledCategories.join(', ') || '(none)'}`,
       policyUpdateActions,
       'Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.',
     ];
+    if (codeWorkspaceRoot) {
+      lines.push(
+        `Active coding session workspace: ${codeWorkspaceRoot}`,
+        'For this coding-session request, the workspace root above is already trusted. Do not call update_tool_policy to add that same path unless the user explicitly wants to widen the persistent global allowlist.',
+      );
+    }
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
@@ -970,6 +983,98 @@ export class ToolExecutor {
       return [...CODE_ASSISTANT_ALLOWED_COMMANDS];
     }
     return this.policy.sandbox.allowedCommands;
+  }
+
+  private isCodeWorkspacePolicyNoOp(
+    definition: ToolDefinition,
+    args: Record<string, unknown>,
+    request?: Partial<ToolExecutionRequest>,
+  ): boolean {
+    if (definition.name !== 'update_tool_policy') return false;
+    const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
+    if (!codeWorkspaceRoot) return false;
+    const action = asString(args.action, '').trim();
+    const value = asString(args.value, '').trim();
+    if (action !== 'add_path' || !value) return false;
+    const normalizedValue = normalizePathForHost(value);
+    const resolvedValue = isAbsolute(normalizedValue)
+      ? resolve(normalizedValue)
+      : resolve(codeWorkspaceRoot, normalizedValue);
+    return isPathInside(resolvedValue, codeWorkspaceRoot);
+  }
+
+  private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
+    const principalId = request?.principalId?.trim();
+    const userId = request?.userId?.trim();
+    return principalId || userId || 'default-surface';
+  }
+
+  private listOwnedCodeSessions(request?: Partial<ToolExecutionRequest>) {
+    const ownerUserId = request?.userId?.trim();
+    if (!ownerUserId || !this.options.codeSessionStore) return [];
+    return this.options.codeSessionStore.listSessionsForUser(ownerUserId);
+  }
+
+  private getOwnedCodeSession(sessionId: string, request?: Partial<ToolExecutionRequest>) {
+    const ownerUserId = request?.userId?.trim();
+    if (!ownerUserId || !this.options.codeSessionStore) return null;
+    return this.options.codeSessionStore.getSession(sessionId, ownerUserId);
+  }
+
+  private summarizeCodeSession(session: {
+    id: string;
+    title: string;
+    workspaceRoot: string;
+    resolvedRoot: string;
+    agentId: string | null;
+    status: string;
+    lastActivityAt: number;
+    workState: {
+      focusSummary: string;
+      planSummary: string;
+      compactedSummary: string;
+      pendingApprovals: unknown[];
+      recentJobs: unknown[];
+      activeSkills: string[];
+      workspaceProfile?: {
+        repoName?: string;
+        repoKind?: string;
+        summary?: string;
+        stack?: string[];
+      } | null;
+    };
+  }) {
+    const pendingApprovals = Array.isArray(session.workState.pendingApprovals)
+      ? session.workState.pendingApprovals.length
+      : 0;
+    const recentJobs = Array.isArray(session.workState.recentJobs)
+      ? session.workState.recentJobs.length
+      : 0;
+    return {
+      id: session.id,
+      title: session.title,
+      workspaceRoot: session.workspaceRoot,
+      resolvedRoot: session.resolvedRoot,
+      agentId: session.agentId,
+      status: session.status,
+      lastActivityAt: session.lastActivityAt,
+      pendingApprovalCount: pendingApprovals,
+      recentJobCount: recentJobs,
+      activeSkills: Array.isArray(session.workState.activeSkills) ? [...session.workState.activeSkills] : [],
+      focusSummary: session.workState.focusSummary || '',
+      planSummary: session.workState.planSummary || '',
+      compactedSummary: session.workState.compactedSummary || '',
+      workspaceProfile: session.workState.workspaceProfile
+        ? {
+            repoName: session.workState.workspaceProfile.repoName || '',
+            repoKind: session.workState.workspaceProfile.repoKind || '',
+            summary: session.workState.workspaceProfile.summary || '',
+            stack: Array.isArray(session.workState.workspaceProfile.stack)
+              ? [...session.workState.workspaceProfile.stack]
+              : [],
+          }
+        : null,
+    };
   }
 
   private buildCodeShellEnv(workspaceRoot: string): Record<string, string> {
@@ -1771,6 +1876,10 @@ export class ToolExecutor {
     const gwsDecision = this.decideGwsTool(definition.name, args);
     if (gwsDecision) {
       return gwsDecision;
+    }
+
+    if (this.isCodeWorkspacePolicyNoOp(definition, args, request)) {
+      return 'allow';
     }
 
     const m365Decision = this.decideM365Tool(definition.name, args);
@@ -3916,6 +4025,203 @@ export class ToolExecutor {
             error: `Command failed: ${message}`,
           };
         }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_session_list',
+        description: 'List backend-owned coding sessions for the current user. Use this when the user wants to continue, inspect, or compare existing coding work across web, CLI, or Telegram.',
+        shortDescription: 'List the current user\'s backend-owned coding sessions.',
+        risk: 'read_only',
+        category: 'coding',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Maximum sessions to return (default 20).' },
+          },
+        },
+      },
+      async (args, request) => {
+        const sessions = this.listOwnedCodeSessions(request)
+          .slice(0, Math.max(1, Math.min(50, asNumber(args.limit, 20))))
+          .map((session) => this.summarizeCodeSession(session));
+        return {
+          success: true,
+          output: { sessions },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_session_current',
+        description: 'Show the coding session currently attached to this chat surface, if any.',
+        shortDescription: 'Show the current attached coding session for this surface.',
+        risk: 'read_only',
+        category: 'coding',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.codeSessionStore) {
+          return { success: false, error: 'Code session store is not available.' };
+        }
+        const userId = request.userId?.trim();
+        const channel = request.channel?.trim();
+        if (!userId || !channel) {
+          return { success: false, error: 'Current user context is unavailable.' };
+        }
+        const resolved = this.options.codeSessionStore.resolveForRequest({
+          userId,
+          principalId: request.principalId,
+          channel,
+          surfaceId: this.getCodeSessionSurfaceId(request),
+          touchAttachment: false,
+        });
+        return {
+          success: true,
+          output: {
+            session: resolved ? this.summarizeCodeSession(resolved.session) : null,
+            attached: !!resolved,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_session_create',
+        description: 'Create a backend-owned coding session for a workspace. Use this to start repo-scoped coding work that can later be resumed from other channels.',
+        shortDescription: 'Create a backend-owned coding session for a workspace.',
+        risk: 'read_only',
+        category: 'coding',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Human-readable title for the coding session.' },
+            workspaceRoot: { type: 'string', description: 'Workspace or repo root for the coding session.' },
+            agentId: { type: 'string', description: 'Optional bound agent id for the coding session.' },
+            attach: { type: 'boolean', description: 'Attach the current chat surface to the new coding session.' },
+          },
+          required: ['title', 'workspaceRoot'],
+        },
+      },
+      async (args, request) => {
+        if (!this.options.codeSessionStore) {
+          return { success: false, error: 'Code session store is not available.' };
+        }
+        const ownerUserId = request.userId?.trim();
+        const channel = request.channel?.trim();
+        if (!ownerUserId || !channel) {
+          return { success: false, error: 'Current user context is unavailable.' };
+        }
+        const session = this.options.codeSessionStore.createSession({
+          ownerUserId,
+          ownerPrincipalId: request.principalId,
+          title: requireString(args.title, 'title'),
+          workspaceRoot: requireString(args.workspaceRoot, 'workspaceRoot'),
+          agentId: asString(args.agentId, '').trim() || null,
+        });
+        if (args.attach !== false) {
+          this.options.codeSessionStore.attachSession({
+            sessionId: session.id,
+            userId: ownerUserId,
+            principalId: request.principalId,
+            channel,
+            surfaceId: this.getCodeSessionSurfaceId(request),
+            mode: 'controller',
+          });
+        }
+        return {
+          success: true,
+          output: {
+            session: this.summarizeCodeSession(session),
+            attached: args.attach !== false,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_session_attach',
+        description: 'Attach this chat surface to an existing backend-owned coding session so later messages share that coding workspace and conversation context.',
+        shortDescription: 'Attach this chat surface to an existing coding session.',
+        risk: 'read_only',
+        category: 'coding',
+        parameters: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', description: 'The code session id to attach to.' },
+          },
+          required: ['sessionId'],
+        },
+      },
+      async (args, request) => {
+        if (!this.options.codeSessionStore) {
+          return { success: false, error: 'Code session store is not available.' };
+        }
+        const ownerUserId = request.userId?.trim();
+        const channel = request.channel?.trim();
+        if (!ownerUserId || !channel) {
+          return { success: false, error: 'Current user context is unavailable.' };
+        }
+        const sessionId = requireString(args.sessionId, 'sessionId').trim();
+        const session = this.getOwnedCodeSession(sessionId, request);
+        if (!session) {
+          return { success: false, error: `Code session '${sessionId}' was not found for the current user.` };
+        }
+        const attachment = this.options.codeSessionStore.attachSession({
+          sessionId,
+          userId: ownerUserId,
+          principalId: request.principalId,
+          channel,
+          surfaceId: this.getCodeSessionSurfaceId(request),
+          mode: 'controller',
+        });
+        return {
+          success: true,
+          output: {
+            session: this.summarizeCodeSession(session),
+            attachment,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_session_detach',
+        description: 'Detach this chat surface from its current backend-owned coding session.',
+        shortDescription: 'Detach this chat surface from the current coding session.',
+        risk: 'read_only',
+        category: 'coding',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.codeSessionStore) {
+          return { success: false, error: 'Code session store is not available.' };
+        }
+        const ownerUserId = request.userId?.trim();
+        const channel = request.channel?.trim();
+        if (!ownerUserId || !channel) {
+          return { success: false, error: 'Current user context is unavailable.' };
+        }
+        const detached = this.options.codeSessionStore.detachSession({
+          userId: ownerUserId,
+          channel,
+          surfaceId: this.getCodeSessionSurfaceId(request),
+        });
+        return {
+          success: true,
+          output: { detached },
+        };
       },
     );
 
@@ -11893,12 +12199,22 @@ export class ToolExecutor {
             required: ['action', 'value'],
           },
         },
-        async (args) => {
+        async (args, request) => {
           const action = requireString(args.action, 'action').trim();
           const value = requireString(args.value, 'value').trim();
           if (!value) return { success: false, error: 'Value cannot be empty.' };
           if (!enabledActions.includes(action)) {
             return { success: false, error: `Action '${action}' is not enabled. Enabled actions: ${enabledActions.join(', ')}.` };
+          }
+
+          if (action === 'add_path' && this.isCodeWorkspacePolicyNoOp({ name: 'update_tool_policy' } as ToolDefinition, { action, value }, request)) {
+            return {
+              success: true,
+              output: {
+                message: `Path '${value}' is already trusted for the active coding session workspace.`,
+                allowedPaths: this.getEffectiveAllowedPaths(request),
+              },
+            };
           }
 
           const current = this.getPolicy();

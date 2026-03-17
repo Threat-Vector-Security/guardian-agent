@@ -33,6 +33,14 @@ import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../
 import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
 import type { SandboxHealth } from '../sandbox/index.js';
 import type { SkillRisk } from '../skills/types.js';
+import type {
+  CodeSessionAttachmentMode,
+  CodeSessionAttachmentRecord,
+  CodeSessionRecord,
+  CodeSessionStatus,
+  CodeSessionUiState,
+  CodeSessionWorkState,
+} from '../runtime/code-sessions.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -599,6 +607,69 @@ export interface DashboardCallbacks {
     userId: string;
     channel: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  onCodeSessionsList?: (args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => DashboardCodeSessionsList;
+  onCodeSessionGet?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    historyLimit?: number;
+  }) => DashboardCodeSessionSnapshot | null;
+  onCodeSessionCreate?: (args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    title: string;
+    workspaceRoot: string;
+    agentId?: string | null;
+    attach?: boolean;
+  }) => DashboardCodeSessionSnapshot;
+  onCodeSessionUpdate?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    title?: string;
+    workspaceRoot?: string;
+    agentId?: string | null;
+    status?: CodeSessionStatus;
+    uiState?: Partial<CodeSessionUiState>;
+    workState?: Partial<CodeSessionWorkState>;
+  }) => DashboardCodeSessionSnapshot | null;
+  onCodeSessionDelete?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => { success: boolean; currentSessionId: string | null };
+  onCodeSessionAttach?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    mode?: CodeSessionAttachmentMode;
+  }) => { success: boolean; snapshot?: DashboardCodeSessionSnapshot };
+  onCodeSessionDetach?: (args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => { success: boolean };
+  onCodeSessionResetConversation?: (args: {
+    sessionId: string;
+    userId: string;
+    channel: string;
+  }) => { success: boolean; message: string };
   onConversationSessions?: (args: {
     userId: string;
     channel: string;
@@ -1147,4 +1218,20 @@ export interface ConfigUpdate {
       };
     };
   };
+}
+
+export interface DashboardCodeSessionSnapshot {
+  session: CodeSessionRecord;
+  history: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: number;
+  }>;
+  attached: boolean;
+  attachment?: CodeSessionAttachmentRecord | null;
+}
+
+export interface DashboardCodeSessionsList {
+  sessions: CodeSessionRecord[];
+  currentSessionId: string | null;
 }

@@ -126,7 +126,7 @@
 **Channels & Dashboard**
 - CLI, Web UI, and Telegram bot with cross-channel identity mapping
 - Web dashboard — real-time status, providers, agents, sessions, jobs, alerts, and integrated chat
-- Coding Assistant (`#/code`) — multi-session coding workspace with repo explorer, file/diff viewer, PTY-backed xterm terminals, a dedicated coding sidebar split into Chat, Tasks, Approvals, and Checks, and repo-scoped assistant file/shell execution
+- Coding Assistant (`#/code`) — multi-session coding workspace with repo explorer, file/diff viewer, PTY-backed xterm terminals, a dedicated coding sidebar split into Chat, Tasks, Approvals, and Checks, backend workspace profiling/focus state, and repo-scoped assistant file/shell execution
 - SSE-driven live refresh when config, automation, or network state changes
 
 **Memory & Search**
@@ -215,6 +215,7 @@ GuardianAgent is accessible through three channels:
 **What you can do:**
 - Chat with the built-in AI assistant
 - Use the Coding Assistant for repository-scoped work with a separate Code-session chat history, repo explorer, diff view, and PTY-backed terminals
+- Each Code session now keeps a backend workspace profile and current focus summary so the Coding Assistant stays project-aware across resume/attach flows
 - Run guarded filesystem, web, network, and automation tasks
 - Create and schedule automations with native Guardian objects — open-ended recurring work defaults to scheduled agent tasks, fixed pipelines use workflows
 - Review audit logs, security alerts, and threat intelligence
@@ -235,10 +236,12 @@ For scheduled automations, the intended workflow is:
 The web `Code` page is a dedicated coding workspace, not just the general chat panel pointed at a repo.
 
 - Each Code session keeps its own coding conversation history separate from the rest of the web chat
+- Each Code session also keeps backend-owned workspace identity and focus state, built from lightweight repo inspection of the root, `README`, and primary manifests/configs
 - The workspace combines a session rail, file explorer, source/diff viewer, and PTY-backed `xterm.js` terminals
 - The assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks` so operational detail does not flood the transcript
 - Approval-heavy coding flows stay in the same workspace; pending approvals appear in their own tab and as a small non-blocking chat notice instead of hijacking the page
 - Assistant-driven file and shell tools are pinned to the active workspace root, so Code can use repo-local `git` and verification commands without broadening the main chat shell policy
+- The Coding Assistant is workspace-centered rather than coding-only: it can still use broader Guardian capabilities like research or automation creation when they directly support the active workspace task
 
 Implementation detail and current limitations are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](docs/specs/CODING-ASSISTANT-SPEC.md).
 

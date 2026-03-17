@@ -13,7 +13,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { join, normalize, extname, resolve } from 'node:path';
+import { join, normalize, extname, resolve, relative, isAbsolute, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -120,12 +120,51 @@ interface TerminalSessionRecord {
   cwd: string;
   cols: number;
   rows: number;
+  codeSessionId?: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function trimOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isPathWithinRoot(root: string, target: string): boolean {
+  const normalizedRoot = resolve(root);
+  const normalizedTarget = resolve(target);
+  const rel = relative(normalizedRoot, normalizedTarget);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolveCodeSessionPath(root: string, requestedPath: string | undefined, fallbackRelative = '.'): string {
+  const candidate = trimOptionalString(requestedPath) || fallbackRelative;
+  const target = isAbsolute(candidate) ? resolve(candidate) : resolve(root, candidate);
+  if (!isPathWithinRoot(root, target)) {
+    throw new Error('Path must stay inside the coding session workspace.');
+  }
+  return target;
+}
+
+function toRelativeSessionPath(root: string, target: string): string {
+  const normalizedRoot = resolve(root);
+  const normalizedTarget = resolve(target);
+  if (!isPathWithinRoot(normalizedRoot, normalizedTarget)) {
+    throw new Error('Path must stay inside the coding session workspace.');
+  }
+  const rel = relative(normalizedRoot, normalizedTarget).replace(/\\/g, '/');
+  return rel === '' ? '.' : rel;
 }
 
 export class WebChannel implements ChannelAdapter {
@@ -2437,7 +2476,7 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
+        let parsed: { content?: unknown; userId?: string; agentId?: unknown; channel?: string; metadata?: Record<string, unknown> };
         try {
           parsed = JSON.parse(body) as typeof parsed;
         } catch {
@@ -2445,7 +2484,9 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        if (!parsed.content || !parsed.agentId) {
+        const content = asNonEmptyString(parsed.content);
+        const agentId = trimOptionalString(parsed.agentId);
+        if (!content || !agentId) {
           sendJSON(res, 400, { error: 'content and agentId are required' });
           return;
         }
@@ -2461,9 +2502,9 @@ export class WebChannel implements ChannelAdapter {
         try {
           const principal = this.resolveRequestPrincipal(req);
           const result = await this.dashboard.onStreamDispatch(
-            parsed.agentId,
+            agentId,
             {
-              content: parsed.content,
+              content,
               userId: parsed.userId,
               principalId: principal.principalId,
               principalRole: principal.principalRole,
@@ -2492,25 +2533,27 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
+        let parsed: { content?: unknown; userId?: string; agentId?: unknown; channel?: string; metadata?: Record<string, unknown> };
         try {
-          parsed = JSON.parse(body) as { content?: string; userId?: string; agentId?: string; channel?: string; metadata?: Record<string, unknown> };
+          parsed = JSON.parse(body) as typeof parsed;
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
 
-        if (!parsed.content) {
+        const content = asNonEmptyString(parsed.content);
+        const agentId = trimOptionalString(parsed.agentId);
+        if (!content) {
           sendJSON(res, 400, { error: 'content is required' });
           return;
         }
 
         // Agent-targeted dispatch via dashboard callback
-        if (parsed.agentId && this.dashboard.onDispatch) {
+        if (agentId && this.dashboard.onDispatch) {
           try {
             const principal = this.resolveRequestPrincipal(req);
-            const response = await this.dashboard.onDispatch(parsed.agentId, {
-              content: parsed.content,
+            const response = await this.dashboard.onDispatch(agentId, {
+              content,
               userId: parsed.userId,
               principalId: principal.principalId,
               principalRole: principal.principalRole,
@@ -2540,7 +2583,7 @@ export class WebChannel implements ChannelAdapter {
             principalId: principal.principalId,
             principalRole: principal.principalRole,
             channel: parsed.channel ?? 'web',
-            content: parsed.content,
+            content,
             metadata: asRecord(parsed.metadata),
             timestamp: Date.now(),
           });
@@ -3328,11 +3371,229 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/code/sessions') {
+        if (!this.dashboard.onCodeSessionsList) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') || 'web-user';
+        const channel = url.searchParams.get('channel') || 'web';
+        sendJSON(res, 200, this.dashboard.onCodeSessionsList({
+          userId,
+          principalId: principal.principalId,
+          channel,
+          surfaceId: principal.principalId,
+        }));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/code/sessions') {
+        if (!this.dashboard.onCodeSessionCreate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as {
+          userId?: string;
+          channel?: string;
+          title?: string;
+          workspaceRoot?: string;
+          agentId?: string | null;
+          attach?: boolean;
+        };
+        if (!trimOptionalString(parsed.title) || !trimOptionalString(parsed.workspaceRoot)) {
+          sendJSON(res, 400, { error: 'title and workspaceRoot are required' });
+          return;
+        }
+        const principal = this.resolveRequestPrincipal(req);
+        const result = this.dashboard.onCodeSessionCreate({
+          userId: parsed.userId || 'web-user',
+          principalId: principal.principalId,
+          channel: parsed.channel || 'web',
+          surfaceId: principal.principalId,
+          title: parsed.title!,
+          workspaceRoot: parsed.workspaceRoot!,
+          agentId: trimOptionalString(parsed.agentId) ?? null,
+          attach: parsed.attach !== false,
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/code/sessions/detach') {
+        if (!this.dashboard.onCodeSessionDetach) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+        const principal = this.resolveRequestPrincipal(req);
+        const result = this.dashboard.onCodeSessionDetach({
+          userId: parsed.userId || 'web-user',
+          principalId: principal.principalId,
+          channel: parsed.channel || 'web',
+          surfaceId: principal.principalId,
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      const codeSessionAttachMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/attach$/)
+        : null;
+      if (codeSessionAttachMatch) {
+        if (!this.dashboard.onCodeSessionAttach) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionAttachMatch[1]);
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; mode?: string };
+        const principal = this.resolveRequestPrincipal(req);
+        const result = this.dashboard.onCodeSessionAttach({
+          sessionId,
+          userId: parsed.userId || 'web-user',
+          principalId: principal.principalId,
+          channel: parsed.channel || 'web',
+          surfaceId: principal.principalId,
+          mode: trimOptionalString(parsed.mode) as import('../runtime/code-sessions.js').CodeSessionAttachmentMode | undefined,
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      const codeSessionResetMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/reset$/)
+        : null;
+      if (codeSessionResetMatch) {
+        if (!this.dashboard.onCodeSessionResetConversation) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionResetMatch[1]);
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+        const result = this.dashboard.onCodeSessionResetConversation({
+          sessionId,
+          userId: parsed.userId || 'web-user',
+          channel: parsed.channel || 'web',
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      const codeSessionMatch = url.pathname.match(/^\/api\/code\/sessions\/([^/]+)$/);
+      if (codeSessionMatch) {
+        const sessionId = decodeURIComponent(codeSessionMatch[1]);
+        const principal = this.resolveRequestPrincipal(req);
+
+        if (req.method === 'GET') {
+          if (!this.dashboard.onCodeSessionGet) {
+            sendJSON(res, 404, { error: 'Not available' });
+            return;
+          }
+          const userId = url.searchParams.get('userId') || 'web-user';
+          const channel = url.searchParams.get('channel') || 'web';
+          const historyLimit = Number.parseInt(url.searchParams.get('historyLimit') || '120', 10);
+          const result = this.dashboard.onCodeSessionGet({
+            sessionId,
+            userId,
+            principalId: principal.principalId,
+            channel,
+            surfaceId: principal.principalId,
+            historyLimit: Number.isFinite(historyLimit) ? historyLimit : 120,
+          });
+          if (!result) {
+            sendJSON(res, 404, { error: 'Code session not found' });
+            return;
+          }
+          sendJSON(res, 200, result);
+          return;
+        }
+
+        if (req.method === 'PATCH') {
+          if (!this.dashboard.onCodeSessionUpdate) {
+            sendJSON(res, 404, { error: 'Not available' });
+            return;
+          }
+          const body = await readBody(req, this.maxBodyBytes);
+          const parsed = JSON.parse(body || '{}') as {
+            userId?: string;
+            channel?: string;
+            title?: string;
+            workspaceRoot?: string;
+            agentId?: string | null;
+            status?: string;
+            uiState?: Record<string, unknown>;
+            workState?: Record<string, unknown>;
+          };
+          const result = this.dashboard.onCodeSessionUpdate({
+            sessionId,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+            title: trimOptionalString(parsed.title),
+            workspaceRoot: trimOptionalString(parsed.workspaceRoot),
+            agentId: hasOwn(parsed as object, 'agentId') ? (trimOptionalString(parsed.agentId) ?? null) : undefined,
+            status: trimOptionalString(parsed.status) as import('../runtime/code-sessions.js').CodeSessionStatus | undefined,
+            uiState: asRecord(parsed.uiState) as import('../runtime/code-sessions.js').CodeSessionUiState | undefined,
+            workState: asRecord(parsed.workState) as import('../runtime/code-sessions.js').CodeSessionWorkState | undefined,
+          });
+          if (!result) {
+            sendJSON(res, 404, { error: 'Code session not found' });
+            return;
+          }
+          sendJSON(res, 200, result);
+          return;
+        }
+
+        if (req.method === 'DELETE') {
+          if (!this.dashboard.onCodeSessionDelete) {
+            sendJSON(res, 404, { error: 'Not available' });
+            return;
+          }
+          const body = await readBody(req, this.maxBodyBytes).catch(() => '');
+          const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+          const result = this.dashboard.onCodeSessionDelete({
+            sessionId,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+          });
+          sendJSON(res, result.success ? 200 : 404, result);
+          return;
+        }
+      }
+
       // POST /api/code/fs/list — direct user directory listing for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/fs/list') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { path?: string };
-        const targetPath = resolve(parsed.path || '.');
+        const parsed = JSON.parse(body || '{}') as { path?: string; sessionId?: string; userId?: string; channel?: string };
+        let targetPath = resolve(parsed.path || '.');
+        if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
+          const principal = this.resolveRequestPrincipal(req);
+          const snapshot = this.dashboard.onCodeSessionGet({
+            sessionId: parsed.sessionId!,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+            historyLimit: 1,
+          });
+          if (!snapshot) {
+            sendJSON(res, 404, { success: false, error: 'Code session not found' });
+            return;
+          }
+          try {
+            targetPath = resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path, '.');
+          } catch (err) {
+            sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+            return;
+          }
+        }
         try {
           const entries = await readdir(targetPath, { withFileTypes: true });
           sendJSON(res, 200, {
@@ -3354,8 +3615,29 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/fs/read — direct user file read for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/fs/read') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { path?: string; maxBytes?: number };
-        const targetPath = resolve(parsed.path || '.');
+        const parsed = JSON.parse(body || '{}') as { path?: string; maxBytes?: number; sessionId?: string; userId?: string; channel?: string };
+        let targetPath = resolve(parsed.path || '.');
+        if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
+          const principal = this.resolveRequestPrincipal(req);
+          const snapshot = this.dashboard.onCodeSessionGet({
+            sessionId: parsed.sessionId!,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+            historyLimit: 1,
+          });
+          if (!snapshot) {
+            sendJSON(res, 404, { success: false, error: 'Code session not found' });
+            return;
+          }
+          try {
+            targetPath = resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path);
+          } catch (err) {
+            sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+            return;
+          }
+        }
         const maxBytes = Math.max(1024, Math.min(500_000, Number(parsed.maxBytes) || 250_000));
         try {
           const content = await readFile(targetPath, 'utf-8');
@@ -3373,11 +3655,37 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/git/diff — direct user git diff for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/git/diff') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { cwd?: string; path?: string; staged?: boolean };
-        const cwd = resolve(parsed.cwd || '.');
+        const parsed = JSON.parse(body || '{}') as { cwd?: string; path?: string; staged?: boolean; sessionId?: string; userId?: string; channel?: string };
+        let cwd = resolve(parsed.cwd || '.');
+        let sessionPath = trimOptionalString(parsed.path);
+        if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
+          const principal = this.resolveRequestPrincipal(req);
+          const snapshot = this.dashboard.onCodeSessionGet({
+            sessionId: parsed.sessionId!,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+            historyLimit: 1,
+          });
+          if (!snapshot) {
+            sendJSON(res, 404, { success: false, error: 'Code session not found' });
+            return;
+          }
+          try {
+            cwd = resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.cwd, '.');
+            if (sessionPath) {
+              const resolvedPath = resolveCodeSessionPath(snapshot.session.resolvedRoot, sessionPath);
+              sessionPath = toRelativeSessionPath(snapshot.session.resolvedRoot, resolvedPath);
+            }
+          } catch (err) {
+            sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+            return;
+          }
+        }
         const args = ['diff'];
         if (parsed.staged) args.push('--staged');
-        if (parsed.path) args.push('--', parsed.path);
+        if (sessionPath) args.push('--', sessionPath);
         try {
           const { execFile } = await import('node:child_process');
           const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolveResult) => {
@@ -3404,20 +3712,48 @@ export class WebChannel implements ChannelAdapter {
           shell?: string;
           cols?: number;
           rows?: number;
+          sessionId?: string;
+          userId?: string;
+          channel?: string;
         };
         const platform = process.platform;
         const shellType = parsed.shell || getDefaultShellForPlatform(platform);
-        const launch = getPtyShellLaunch(shellType, platform, parsed.cwd || process.cwd());
+        let requestedCwd = parsed.cwd || process.cwd();
+        let codeSessionId: string | null = null;
+        if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
+          const principal = this.resolveRequestPrincipal(req);
+          const snapshot = this.dashboard.onCodeSessionGet({
+            sessionId: parsed.sessionId!,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: principal.principalId,
+            historyLimit: 1,
+          });
+          if (!snapshot) {
+            sendJSON(res, 404, { success: false, error: 'Code session not found' });
+            return;
+          }
+          try {
+            requestedCwd = resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.cwd, '.');
+            codeSessionId = snapshot.session.id;
+          } catch (err) {
+            sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+            return;
+          }
+        }
+        const launch = getPtyShellLaunch(shellType, platform, requestedCwd);
         const cols = Math.max(40, Math.min(240, Number(parsed.cols) || 120));
         const rows = Math.max(12, Math.min(120, Number(parsed.rows) || 30));
         const ownerSessionId = this.parseCookie(req, SESSION_COOKIE_NAME) || null;
         try {
           const terminalId = randomUUID();
+          const ptyCwd = launch.cwd === null ? undefined : (launch.cwd || requestedCwd || process.cwd());
           const pty = spawnPty(launch.file, launch.args, {
             name: 'xterm-color',
             cols,
             rows,
-            cwd: launch.cwd || parsed.cwd || process.cwd(),
+            cwd: ptyCwd,
             env: {
               ...process.env,
               ...launch.env,
@@ -3428,9 +3764,10 @@ export class WebChannel implements ChannelAdapter {
             ownerSessionId,
             pty,
             shell: shellType,
-            cwd: parsed.cwd || process.cwd(),
+            cwd: requestedCwd,
             cols,
             rows,
+            ...(codeSessionId ? { codeSessionId } : {}),
           };
           this.terminalSessions.set(terminalId, session);
           pty.onData((data) => {
@@ -3745,8 +4082,8 @@ function getShellOptionsForPlatform(platform: NodeJS.Platform): ShellOptionDescr
         { id: 'powershell', label: 'PowerShell (Windows)', detail: 'powershell.exe' },
         { id: 'cmd', label: 'Command Prompt (cmd.exe)', detail: 'cmd.exe' },
         { id: 'git-bash', label: 'Git Bash', detail: 'C:\\Program Files\\Git\\bin\\bash.exe' },
-        { id: 'wsl', label: 'WSL', detail: 'wsl.exe' },
-        { id: 'bash', label: 'Bash', detail: 'bash' },
+        { id: 'wsl-login', label: 'WSL Ubuntu', detail: 'wsl.exe (default shell/profile)' },
+        { id: 'wsl', label: 'WSL Bash (Clean)', detail: 'wsl.exe -- bash --noprofile --norc' },
       ];
     case 'darwin':
       return [
@@ -3767,7 +4104,7 @@ function getDefaultShellForPlatform(platform: NodeJS.Platform): string {
   return getShellOptionsForPlatform(platform)[0]?.id || 'bash';
 }
 
-function resolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string {
+function tryResolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string | null {
   for (const candidate of fallbackPaths) {
     if (candidate && existsSync(candidate)) return candidate;
   }
@@ -3787,49 +4124,164 @@ function resolveWindowsExecutable(command: string, fallbackPaths: string[] = [])
     // Fall back to known paths or the raw command name.
   }
 
-  return fallbackPaths[0] || command;
+  return null;
+}
+
+function resolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string {
+  return tryResolveWindowsExecutable(command, fallbackPaths) || fallbackPaths[0] || command;
+}
+
+function listWindowsExecutableCandidates(command: string): string[] {
+  try {
+    const output = execFileSync('where', [command], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function inferWindowsGitRoot(executablePath: string): string {
+  const normalized = executablePath.replace(/\//g, '\\');
+  const lower = normalized.toLowerCase();
+  if (lower.endsWith('\\usr\\bin\\bash.exe')) {
+    return dirname(dirname(dirname(normalized)));
+  }
+  if (lower.endsWith('\\bin\\bash.exe')) {
+    return dirname(dirname(normalized));
+  }
+  if (lower.endsWith('\\git-bash.exe')) {
+    return dirname(normalized);
+  }
+  return dirname(dirname(normalized));
+}
+
+function buildWindowsGitBashEnv(executablePath: string): Record<string, string> {
+  const gitRoot = inferWindowsGitRoot(executablePath);
+  const existingPath = process.env.Path || process.env.PATH || '';
+  const pathEntries = [
+    join(gitRoot, 'cmd'),
+    join(gitRoot, 'usr', 'bin'),
+    join(gitRoot, 'bin'),
+    join(gitRoot, 'mingw64', 'bin'),
+  ].filter((entry) => entry && existsSync(entry));
+  const mergedPath = Array.from(new Set([
+    ...pathEntries,
+    ...existingPath.split(';').map((entry) => entry.trim()).filter(Boolean),
+  ])).join(';');
+  return {
+    TERM: 'xterm-256color',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    PS1: '\\w$ ',
+    MSYSTEM: 'MINGW64',
+    CHERE_INVOKING: '1',
+    PATH: mergedPath,
+    Path: mergedPath,
+  };
+}
+
+function toWslPath(value: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '/';
+  if (normalized.startsWith('/')) {
+    return normalized.replace(/\\/g, '/');
+  }
+  const driveMatch = normalized.replace(/\//g, '\\').match(/^([A-Za-z]):\\(.*)$/);
+  if (driveMatch) {
+    const [, drive, rest] = driveMatch;
+    return `/mnt/${drive.toLowerCase()}/${rest.replace(/\\/g, '/')}`;
+  }
+  return normalized.replace(/\\/g, '/');
+}
+
+function shellQuotePosix(value: string): string {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function resolveWindowsGitBashExecutable(): string {
+  const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const preferred = [
+    join(programFiles, 'Git', 'bin', 'bash.exe'),
+    join(programFiles, 'Git', 'usr', 'bin', 'bash.exe'),
+    join(programFilesX86, 'Git', 'bin', 'bash.exe'),
+    join(programFilesX86, 'Git', 'usr', 'bin', 'bash.exe'),
+  ];
+  const gitBash = preferred.find((candidate) => candidate && existsSync(candidate))
+    || listWindowsExecutableCandidates('bash.exe')
+      .find((candidate) => candidate.toLowerCase().includes('\\git\\') && candidate.toLowerCase().endsWith('bash.exe'));
+  if (gitBash) return gitBash;
+  throw new Error('Git Bash was not found. Install Git for Windows or use PowerShell/WSL.');
 }
 
 function getPtyShellLaunch(shellType: string, platform: NodeJS.Platform, requestedCwd?: string): {
   file: string;
   args: string[];
   env: Record<string, string>;
-  cwd?: string;
+  cwd?: string | null;
 } {
   switch (shellType) {
     case 'powershell':
       return {
-        file: platform === 'win32' ? 'powershell.exe' : 'pwsh',
+        file: platform === 'win32' ? resolveWindowsExecutable('powershell.exe', ['powershell.exe']) : 'pwsh',
         args: ['-NoLogo', '-NoProfile'],
         env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
         cwd: requestedCwd,
       };
     case 'cmd':
       return {
-        file: 'cmd.exe',
+        file: platform === 'win32' ? resolveWindowsExecutable('cmd.exe', ['cmd.exe']) : 'cmd.exe',
         args: [],
         env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
         cwd: requestedCwd,
       };
+    case 'wsl-login':
     case 'wsl': {
       const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
       const wslExe = platform === 'win32'
-        ? resolveWindowsExecutable('wsl.exe', [join(systemRoot, 'System32', 'wsl.exe')])
+        ? tryResolveWindowsExecutable('wsl.exe', [join(systemRoot, 'System32', 'wsl.exe')])
         : 'wsl';
+      if (platform === 'win32' && !wslExe) {
+        throw new Error('WSL was not found. Install Windows Subsystem for Linux or use PowerShell.');
+      }
+      if (shellType === 'wsl-login') {
+        return {
+          file: wslExe || 'wsl',
+          args: platform === 'win32'
+            ? (requestedCwd ? ['--cd', toWslPath(requestedCwd)] : [])
+            : [],
+          env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
+          cwd: platform === 'win32' ? null : requestedCwd,
+        };
+      }
+      const wslBootstrap = requestedCwd
+        ? `cd ${shellQuotePosix(toWslPath(requestedCwd))} && exec bash --noprofile --norc -i`
+        : 'exec bash --noprofile --norc -i';
       return {
-        file: wslExe,
-        args: [],
+        file: wslExe || 'wsl',
+        args: platform === 'win32' ? ['--', 'bash', '-lc', wslBootstrap] : [],
         env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
+        cwd: platform === 'win32' ? null : requestedCwd,
+      };
+    }
+    case 'git-bash': {
+      const gitBash = platform === 'win32' ? resolveWindowsGitBashExecutable() : 'bash';
+      return {
+        file: gitBash,
+        args: ['--noprofile', '--norc', '-i'],
+        env: platform === 'win32'
+          ? buildWindowsGitBashEnv(gitBash)
+          : { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
         cwd: requestedCwd,
       };
     }
-    case 'git-bash':
-      return {
-        file: 'C:\\Program Files\\Git\\bin\\bash.exe',
-        args: ['--noprofile', '--norc', '-i'],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
-        cwd: requestedCwd,
-      };
     case 'zsh':
       return {
         file: 'zsh',
@@ -3846,6 +4298,15 @@ function getPtyShellLaunch(shellType: string, platform: NodeJS.Platform, request
       };
     case 'bash':
     default:
+      if (platform === 'win32') {
+        const gitBash = resolveWindowsGitBashExecutable();
+        return {
+          file: gitBash,
+          args: ['--noprofile', '--norc', '-i'],
+          env: buildWindowsGitBashEnv(gitBash),
+          cwd: requestedCwd,
+        };
+      }
       return {
         file: 'bash',
         args: ['--noprofile', '--norc', '-i'],

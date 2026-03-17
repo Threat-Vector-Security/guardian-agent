@@ -19,6 +19,7 @@ On Windows, if you want the extra native isolation layer for risky subprocess-ba
 
 - chat with the built-in assistant
 - use the Coding Assistant for project-scoped coding sessions with their own chat history, repo explorer, diffs, and terminals
+- use the Coding Assistant for project-scoped work with backend workspace profiling and focus state, so the session stays aware of what repo it is in and what it is trying to do
 - inspect tool availability and approvals
 - run guarded filesystem, web, and automation tasks
 - use orchestrated agents and playbooks
@@ -29,10 +30,12 @@ On Windows, if you want the extra native isolation layer for risky subprocess-ba
 The web `Code` page is a dedicated coding workspace rather than a variant of the main chat panel.
 
 - each Code session has its own coding chat history, separate from the general web chat
+- each Code session also keeps backend-owned workspace identity and focus state derived from repo inspection
 - the workspace includes a session rail, repo explorer, file/diff viewer, and PTY-backed `xterm.js` terminals
 - the assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks`
 - coding approvals stay in their own tab and appear in chat only as a small notice, which keeps the transcript readable during longer edit/review flows
 - assistant-driven file and shell actions are scoped to the active Code workspace root instead of widening the main chat shell policy
+- broader Guardian actions such as research or automation creation can still be performed from the Coding Assistant when they directly support the active workspace task
 
 Current implementation details are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md).
 

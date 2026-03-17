@@ -459,8 +459,8 @@ function renderHistory(historyEl, agentId) {
 
 function createThinkingEl() {
   const el = document.createElement('div');
-  el.className = 'chat-message agent';
-  el.innerHTML = '<div class="msg-body" style="font-style:italic;color:var(--text-muted)">Thinking...</div>';
+  el.className = 'chat-message agent is-thinking';
+  el.innerHTML = '<div class="msg-body"><div class="chat-thinking"><span class="chat-spinner" aria-hidden="true"></span><span>Thinking...</span></div></div>';
   return el;
 }
 

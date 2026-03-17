@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { getAmbiguousEmailProviderClarification } from './email-provider-routing.js';
+import {
+  applyContextualEmailProviderHint,
+  getAmbiguousEmailProviderClarification,
+} from './email-provider-routing.js';
 
 const BOTH_MAIL_PROVIDERS = new Set(['gws', 'm365']);
 
@@ -28,5 +31,34 @@ describe('email-provider-routing', () => {
 
   it('ignores general informational email questions', () => {
     expect(getAmbiguousEmailProviderClarification('Explain email authentication headers.', BOTH_MAIL_PROVIDERS)).toBeNull();
+  });
+
+  it('inherits the previously selected Outlook provider for mailbox follow-ups', () => {
+    expect(applyContextualEmailProviderHint(
+      'Check that it is in the drafts.',
+      [
+        { role: 'assistant', content: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?' },
+        { role: 'user', content: 'Use Outlook.' },
+      ],
+      BOTH_MAIL_PROVIDERS,
+    )).toBe('Outlook / Microsoft 365 follow-up: Check that it is in the drafts.');
+  });
+
+  it('inherits the previously selected Gmail provider for mailbox follow-ups', () => {
+    expect(applyContextualEmailProviderHint(
+      'Open the drafts folder.',
+      [
+        { role: 'user', content: 'Draft a Gmail email to alex@example.com.' },
+      ],
+      BOTH_MAIL_PROVIDERS,
+    )).toBe('Gmail / Google Workspace follow-up: Open the drafts folder.');
+  });
+
+  it('does not rewrite follow-ups when no prior provider is visible', () => {
+    expect(applyContextualEmailProviderHint(
+      'Check that it is in the drafts.',
+      [],
+      BOTH_MAIL_PROVIDERS,
+    )).toBe('Check that it is in the drafts.');
   });
 });
