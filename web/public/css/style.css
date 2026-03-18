@@ -4720,6 +4720,19 @@ tr:hover td {
   margin-left: 0.2rem;
 }
 
+.code-chat__provider-select {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.2rem 0.35rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .code-token {
   font-weight: 500;
 }
@@ -5193,6 +5206,21 @@ tr:hover td {
   display: flex;
   gap: 0.35rem;
   flex-shrink: 0;
+}
+
+.code-message__source {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 400;
+  vertical-align: middle;
 }
 
 .code-message.is-pending {

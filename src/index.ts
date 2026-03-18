@@ -853,6 +853,15 @@ class ChatAgent extends BaseAgent {
           this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
         }
         const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
+        // Ensure responseSource is present — if the worker didn't provide one,
+        // derive it from the primary provider context.
+        if (!workerMeta.responseSource) {
+          const primaryName = ctx.llm?.name ?? 'unknown';
+          workerMeta.responseSource = {
+            locality: getProviderLocalityFromName(primaryName),
+            providerName: primaryName,
+          };
+        }
         if (requestedCodeContext?.sessionId) {
           workerMeta.codeSessionResolved = !!resolvedCodeSession;
           if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;

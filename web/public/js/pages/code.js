@@ -1871,6 +1871,10 @@ function renderAssistantTabs(session) {
           </button>
         `;
       }).join('')}
+      <select class="code-chat__provider-select" data-code-provider-select title="LLM provider for this session">
+        <option value=""${!session?.agentId ? ' selected' : ''}>Auto</option>
+        ${cachedAgents.map((agent) => `<option value="${escAttr(agent.id)}"${session?.agentId === agent.id ? ' selected' : ''}>${esc(agent.name)}</option>`).join('')}
+      </select>
     </div>
   `;
 }
@@ -1901,8 +1905,11 @@ function formatCodeMessageRole(role) {
   }
 }
 
-function renderCodeMessage(role, content, extraClass = '', approvals = null) {
+function renderCodeMessage(role, content, extraClass = '', approvals = null, responseSource = null) {
   const className = `code-message ${role === 'user' ? 'is-user' : role === 'error' ? 'is-error' : 'is-agent'}${extraClass ? ` ${extraClass}` : ''}`;
+  const sourceBadge = responseSource?.locality
+    ? `<span class="code-message__source" title="${escAttr(responseSource.notice || '')}">${esc(responseSource.locality)}${responseSource.usedFallback ? ' fallback' : ''}</span>`
+    : '';
   const approvalButtons = Array.isArray(approvals) && approvals.length > 0
     ? `<div class="code-message__approvals">
         ${approvals.map((a) => `
@@ -1919,7 +1926,7 @@ function renderCodeMessage(role, content, extraClass = '', approvals = null) {
     : '';
   return `
     <div class="${className}">
-      <div class="code-message__role">${esc(formatCodeMessageRole(role))}</div>
+      <div class="code-message__role">${esc(formatCodeMessageRole(role))}${sourceBadge}</div>
       <div class="code-message__body">${esc(content)}</div>
       ${approvalButtons}
     </div>
@@ -2058,7 +2065,7 @@ function renderAssistantPanel(session) {
                 const inlineApprovals = isLastAgent && !pendingUserMessage && Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0
                   ? session.pendingApprovals
                   : null;
-                return renderCodeMessage(message.role, message.content, '', inlineApprovals);
+                return renderCodeMessage(message.role, message.content, '', inlineApprovals, message.responseSource);
               }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
         </div>
         <form class="code-chat__form" data-code-chat-form>
@@ -3314,7 +3321,8 @@ function bindEvents(container) {
       }
       appendChatMessage(liveSession, 'user', message);
       liveSession.pendingResponse = null;
-      appendChatMessage(liveSession, 'agent', response.content || 'No response content.');
+      const responseSource = response?.metadata?.responseSource || null;
+      appendChatMessage(liveSession, 'agent', response.content || 'No response content.', { responseSource });
       // Refresh file view after assistant response — the assistant may have edited the open file.
       const activeEditorTab = getActiveTab(liveSession);
       if (activeEditorTab) { activeEditorTab.dirty = false; activeEditorTab.content = null; }
@@ -3341,6 +3349,22 @@ function bindEvents(container) {
     saveState(codeState);
     rerenderFromState();
     scrollToBottom(currentContainer, '.code-chat__history');
+  });
+
+  container.querySelector('[data-code-provider-select]')?.addEventListener('change', async (e) => {
+    const session = getActiveSession();
+    if (!session) return;
+    const nextAgentId = e.currentTarget.value || null;
+    session.agentId = nextAgentId;
+    saveState(codeState);
+    try {
+      await api.codeSessionUpdate(session.id, {
+        agentId: nextAgentId,
+        channel: DEFAULT_USER_CHANNEL,
+      });
+    } catch {
+      // Best-effort persist — local state already updated.
+    }
   });
 
   container.querySelector('[data-code-reset-chat]')?.addEventListener('click', async () => {
