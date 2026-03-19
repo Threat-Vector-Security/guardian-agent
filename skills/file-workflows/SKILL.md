@@ -7,7 +7,7 @@ Use the filesystem and document tools for local file work inside allowed paths.
 1. Inspect the target location first when context is missing.
    - `fs_list` to see the folder
    - `fs_search` to find likely files
-   - `fs_read` to understand the existing document before editing
+   - `fs_read` to understand the existing document before editing, including direct text extraction from a known local PDF path
 2. Use the narrowest write tool for the job.
    - `doc_create` for new documents and reports
    - `fs_write` for writing or replacing file contents

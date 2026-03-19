@@ -409,6 +409,110 @@ assistant:
 
 ---
 
+## Integration: NDR Detection Subsystem
+
+> **Cross-reference:** [`docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md`](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md) — outlines the local detection, evidence, automation, and hub-integration uplift plan.
+
+The proposed Network Detection and Response (NDR) subsystem produces structured, enriched, evidence-backed findings from local network, host, audit, and shared-intel monitoring. That is exactly the kind of high-quality local detection the Hub requires as input, and the two systems are designed to reinforce one another.
+
+### NDR → Hub: Detection as a Submission Source
+
+The NDR subsystem's ThreatCorrelator + ThreatEnricher pipeline produces `SecurityAlert` objects with:
+- Correlation evidence (which rule fired, signal count, time window)
+- Enrichment data (resolved IPs, GeoIP country/ISP/ASN, risk classification with weighted factors)
+- Causal chain provenance (full sequence from raw signal to alert)
+
+These map directly to the Hub's indicator schema:
+
+| NDR Output | Hub Indicator Field |
+|---|---|
+| `alert.type` → `dns_beaconing` | `indicator.category` → `malware` or `exfiltration` |
+| `enrichment.resolvedIps` | `indicator.enrichment.resolved_ips` |
+| `enrichment.geoip` | `indicator.enrichment.geoip` |
+| `enrichment.riskClassification` | `indicator.severity` (mapped from risk score) |
+| `correlator.evidence[]` | `indicator.context` (operator-readable summary) |
+| `correlator.ruleId` + `signalCount` | `indicator.tags` (e.g., `dns-beaconing`, `automated`) |
+
+**Submission policy** is configurable and conservative by default:
+- Only `critical` severity alerts auto-proposed for submission
+- Must have enrichment (GeoIP/risk classification) before submitting
+- Must come from correlator (not raw single signals)
+- Approval-gated by default (operator confirms before submission)
+
+This ensures the Hub receives evidence-backed indicators, not noise — aligning with the Local-First Prerequisite (Phases 1-2 of this spec).
+
+### Hub → NDR: Feed Indicators as Detection Signals
+
+When the ThreatShareAgent pulls indicators from the Hub feed, they are injected into the NDR ThreatCorrelator as a new signal type (`hub_ioc`). This enables:
+
+1. **Real-time matching** — the DNS Monitor compares live queries against Hub IOCs. A local DNS query to a Hub-confirmed domain triggers an immediate CRITICAL alert, even if the domain's TLD isn't in the suspicious list.
+
+2. **Compound correlation** — Hub IOCs can combine with local signals in compound rules:
+   ```
+   hub_ioc(domain: evil.xyz) + dns_query(domain: evil.xyz) → hub_ioc_local_match (critical)
+   3x hub_ioc_local_match in 1h → hub_campaign_detection (critical, targeted campaign)
+   ```
+
+3. **Retroactive hunting** — when a new CONFIRMED indicator arrives, the NDR Alert Store (SQLite + FTS5) enables immediate historical search: "did we see DNS queries to this domain before it was reported?"
+
+4. **Enrichment sharing** — the NDR enrichment pipeline may already have GeoIP data cached for Hub indicators. Sharing enrichment data back reduces duplicate API calls across the network.
+
+### Trust Enhancement Loop
+
+The NDR subsystem improves Hub trust mechanics:
+
+- **Outbound quality**: NDR submissions carry pre-computed enrichment (GeoIP, ISP, risk score) and correlation evidence. Hub nodes receiving these indicators get immediate actionable context without needing to independently enrich.
+- **Corroboration acceleration**: When Hub IOCs match local NDR detections, the node reports corroboration feedback (`POST /api/v1/feedback`). This promotes indicators from RAW → CORRELATED → CONFIRMED faster.
+- **False positive reduction**: The NDR's multi-factor risk model (TLD + ISP + resolution + frequency + entropy) reduces false positive submissions compared to single-factor TLD matching — protecting node reputation.
+
+### Hardening Integration via Automations
+
+When ACTIONABLE indicators arrive from the Hub with remediation steps, the NDR automation pipeline (Phase 6 of the NDR proposal) handles execution:
+
+```
+Hub feed → ThreatShareAgent → emits 'hub:intel:actionable'
+  → Event-triggered response playbook:
+    Step 1: ndr_enrich (verify indicator locally)
+    Step 2: net_threat_check (confirm local exposure)
+    Step 3: [instruction] Assess remediation vs. local context
+    Step 4: Low-risk remediations auto-applied (watchlist — if auto_harden: true)
+    Step 5: High-risk remediations queued for approval (firewall, config changes)
+```
+
+All steps pass through Guardian enforcement (capability checks, approval gates, rate limits).
+
+### Configuration Extension
+
+```yaml
+assistant:
+  threatSharing:
+    # ... existing Hub config ...
+    ndrIntegration:
+      enabled: true
+      submissionPolicy:
+        minSeverity: critical
+        requireEnrichment: true
+        requireCorrelation: true
+        minRiskScore: 70
+        autoSubmit: false
+      feedIngestion:
+        injectToCorrelator: true
+        retroactiveHuntOnNew: true
+        enrichmentSharing: true
+```
+
+### Phase Alignment
+
+| Hub Phase | NDR Dependency | Integration |
+|---|---|---|
+| Phase 1 (Local Intel Foundation) | NDR Phase 1 (Correlator) + Phase 2 (Enrichment) | NDR provides the "real local collection" the Hub spec requires before sharing |
+| Phase 2 (Investigation Maturity) | NDR Phase 5 (Alert Persistence) | FTS5 alert store enables retroactive hunting and forensic search |
+| Phase 3 (Minimal Viable Hub) | NDR Phase 6 (Automations) | Event-triggered playbooks handle submission and feed ingestion |
+| Phase 4 (Trust Engine) | NDR Phase 2 (Enrichment) | Multi-factor risk scoring reduces false positive submissions, protecting node reputation |
+| Phase 5 (Real-Time Automation) | NDR Phase 7 (Notifications) | Hub intel triggers local notifications to operator via configured channels |
+
+---
+
 ## Open Questions
 
 1. **Hub hosting**: Central hosted service vs. self-hosted vs. federated from day one?

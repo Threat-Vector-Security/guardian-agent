@@ -183,6 +183,7 @@ That means:
 - Code uses a dedicated Code-session prompt architecture rather than inheriting the main Guardian host prompt and trying to rewrite it after the fact
 - Code sessions use a separate durable long-term memory store instead of preloading Guardian's global memory
 - repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
+- Coding-session shell execution prefers structured direct exec for simple repo-local binaries and blocks known interpreter/launcher trampoline forms instead of treating every command as an opaque shell string
 - broader Guardian capabilities remain available from within the Coding Assistant, including research, web/docs lookup, automation creation, and unrelated assistant tasks
 - using broader capabilities does not replace the session's repo identity or current focus unless the user explicitly changes sessions or retargets the work
 

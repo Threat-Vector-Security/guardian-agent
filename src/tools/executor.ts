@@ -4,11 +4,20 @@
 
 import Ajv from 'ajv';
 import { randomUUID } from 'node:crypto';
-import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { access, appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { sanitizeShellArgs, scanWriteContent, validateArgSize } from '../guardian/argument-sanitizer.js';
-import { validateShellCommand, type ParsedCommand } from '../guardian/shell-validator.js';
+import {
+  classifyParsedCommandExecution,
+  getExecutionIdentityBlockReason,
+  splitCommands,
+  tokenize,
+  validateShellCommand,
+  type ParsedCommand,
+  type ShellExecutionClass,
+} from '../guardian/shell-validator.js';
 import { normalizeHttpUrlInput, normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from '../config/input-normalization.js';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
@@ -56,6 +65,7 @@ import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudfl
 import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
 import { buildGmailRawMessage } from '../runtime/gmail-compose.js';
+import { inferMimeType, parseDocument } from '../search/document-parser.js';
 
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
@@ -73,6 +83,9 @@ const MAX_TOOL_CALLS_PER_CHAIN = 24;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const POSIX_SHELL_BUILTINS = new Set(['type']);
+const WINDOWS_SHELL_BUILTINS = new Set(['cd', 'dir', 'echo', 'type']);
+const WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS = new Set(['.com', '.exe']);
 const CODE_ASSISTANT_ALLOWED_COMMANDS = [
   'git',
   'node',
@@ -150,6 +163,31 @@ const CODE_DISALLOWED_SHELL_TOKEN_PREFIXES = new Map<string, string>([
   ['--userconfig=', 'User config overrides are blocked in the Coding Assistant.'],
   ['--globalconfig=', 'Global config overrides are blocked in the Coding Assistant.'],
 ]);
+
+type ShellExecMode = 'direct_exec' | 'shell_fallback';
+
+interface ShellCommandPlan {
+  commands: ParsedCommand[];
+  entryCommand: string;
+  argv: string[];
+  executionClass: ShellExecutionClass;
+  requestedViaShell: boolean;
+  execMode: ShellExecMode;
+  resolvedExecutable?: string;
+}
+
+interface ShellCommandCheck {
+  safe: boolean;
+  reason?: string;
+  plan?: ShellCommandPlan;
+}
+
+function normalizeShellCommandName(command: string): string {
+  const trimmed = command.trim().replace(/[\\/]+$/, '');
+  if (!trimmed) return '';
+  const basename = trimmed.split(/[\\/]/).pop();
+  return (basename || trimmed).toLowerCase();
+}
 const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
   'ssl',
   'min_tls_version',
@@ -158,6 +196,9 @@ const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
   'automatic_https_rewrites',
   'opportunistic_encryption',
 ];
+const FS_READ_EXTRACTED_MIME_TYPES = new Set([
+  'application/pdf',
+]);
 type AwsServiceName =
   | 'sts'
   | 'ec2'
@@ -191,6 +232,27 @@ function normalizeHttpUrlLikeInput(raw: string): string {
   if (!trimmed) return trimmed;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
+}
+
+function truncateTextToUtf8Bytes(value: string, maxBytes: number): { content: string; truncated: boolean } {
+  const totalBytes = Buffer.byteLength(value, 'utf-8');
+  if (totalBytes <= maxBytes) {
+    return { content: value, truncated: false };
+  }
+
+  let usedBytes = 0;
+  const parts: string[] = [];
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, 'utf-8');
+    if (usedBytes + charBytes > maxBytes) break;
+    parts.push(char);
+    usedBytes += charBytes;
+  }
+
+  return {
+    content: parts.join(''),
+    truncated: true,
+  };
 }
 
 function buildNormalizedIndexMap(original: string): number[] {
@@ -748,6 +810,8 @@ export class ToolExecutor {
       `Policy mode: ${this.policy.mode}`,
       `Allowed paths: ${effectiveAllowedPaths.join(', ') || '(workspace root only)'}`,
       `Allowed commands: ${effectiveAllowedCommands.join(', ') || '(none)'}`,
+      'Execution identity policy: inline interpreter eval, shell-expression launchers, and package launchers such as npx/npm exec are blocked even when the base command prefix is allowlisted.',
+      'Execution mode: simple direct-binary commands run without shell parsing when possible; shell fallback is reserved for shell-builtins, chained commands, redirects, and platform wrapper cases.',
       `Enabled tool categories: ${enabledCategories.join(', ') || '(none)'}`,
       policyUpdateActions,
       'Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.',
@@ -1275,15 +1339,152 @@ export class ToolExecutor {
     return undefined;
   }
 
+  private getShellBuiltinCommands(): ReadonlySet<string> {
+    return process.platform === 'win32' ? WINDOWS_SHELL_BUILTINS : POSIX_SHELL_BUILTINS;
+  }
+
+  private buildShellCommandPlan(commands: ParsedCommand[]): ShellCommandPlan {
+    const entry = commands[0]!;
+    const entryCommand = entry.command;
+    const argv = [...entry.args];
+    const requestedViaShell = commands.length > 1
+      || entry.redirects.length > 0
+      || this.getShellBuiltinCommands().has(normalizeShellCommandName(entryCommand));
+
+    return {
+      commands,
+      entryCommand,
+      argv,
+      executionClass: classifyParsedCommandExecution(entry),
+      requestedViaShell,
+      execMode: requestedViaShell ? 'shell_fallback' : 'direct_exec',
+    };
+  }
+
+  private async canExecuteResolvedPath(candidate: string): Promise<boolean> {
+    try {
+      const info = await stat(candidate);
+      if (!info.isFile()) {
+        return false;
+      }
+      if (process.platform === 'win32') {
+        return true;
+      }
+      await access(candidate, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private getEnvPathValue(env?: Record<string, string>): string {
+    return env?.PATH
+      ?? env?.Path
+      ?? env?.path
+      ?? process.env.PATH
+      ?? process.env.Path
+      ?? '';
+  }
+
+  private getWindowsPathExtensions(env?: Record<string, string>): string[] {
+    const pathExt = env?.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD';
+    return pathExt
+      .split(';')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => value.toLowerCase());
+  }
+
+  private async resolveShellExecutable(
+    entryCommand: string,
+    cwd: string,
+    env?: Record<string, string>,
+  ): Promise<string | undefined> {
+    const trimmed = entryCommand.trim();
+    if (!trimmed) return undefined;
+
+    if (this.looksLikePathToken(trimmed)) {
+      const normalized = normalizePathForHost(trimmed);
+      const candidate = isAbsolute(normalized)
+        ? resolve(normalized)
+        : resolve(cwd, normalized);
+      return await this.canExecuteResolvedPath(candidate) ? candidate : undefined;
+    }
+
+    const pathEntries = this.getEnvPathValue(env)
+      .split(delimiter)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    if (pathEntries.length === 0) {
+      return undefined;
+    }
+
+    const hasExtension = /\.[^\\/]+$/.test(trimmed);
+    const windowsExts = process.platform === 'win32'
+      ? (hasExtension ? [''] : this.getWindowsPathExtensions(env))
+      : [''];
+
+    for (const dir of pathEntries) {
+      for (const ext of windowsExts) {
+        const candidate = resolve(dir, process.platform === 'win32' ? `${trimmed}${ext}` : trimmed);
+        if (await this.canExecuteResolvedPath(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private async finalizeShellCommandPlan(
+    plan: ShellCommandPlan,
+    cwd: string,
+    env?: Record<string, string>,
+  ): Promise<ShellCommandPlan> {
+    const resolvedExecutable = await this.resolveShellExecutable(plan.entryCommand, cwd, env);
+    if (process.platform !== 'win32') {
+      return { ...plan, resolvedExecutable };
+    }
+
+    if (plan.execMode !== 'direct_exec') {
+      return { ...plan, resolvedExecutable };
+    }
+
+    const lowerResolved = resolvedExecutable?.toLowerCase() ?? '';
+    const nativeExecutable = lowerResolved && [...WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS].some((ext) => lowerResolved.endsWith(ext));
+    if (!nativeExecutable) {
+      return {
+        ...plan,
+        resolvedExecutable,
+        execMode: 'shell_fallback',
+      };
+    }
+
+    return { ...plan, resolvedExecutable };
+  }
+
   private validateShellCommandForRequest(
     command: string,
     request?: Partial<ToolExecutionRequest>,
     cwd?: string,
-  ): { safe: boolean; reason?: string } {
+  ): ShellCommandCheck {
     const allowedCommands = this.getEffectiveAllowedCommands(request);
     const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
     if (!codeWorkspaceRoot) {
-      return sanitizeShellArgs(command, allowedCommands);
+      const shellCheck = sanitizeShellArgs(command, allowedCommands);
+      if (!shellCheck.safe) {
+        return shellCheck;
+      }
+      try {
+        const commands = splitCommands(tokenize(command));
+        if (commands.length === 0) {
+          return { safe: false, reason: 'Command failed shell parsing.' };
+        }
+        return { safe: true, plan: this.buildShellCommandPlan(commands) };
+      } catch {
+        return { safe: false, reason: 'Command failed shell parsing.' };
+      }
     }
 
     const effectiveCwd = cwd ?? codeWorkspaceRoot;
@@ -1304,7 +1505,12 @@ export class ToolExecutor {
       return { safe: false, reason: tokenBlockReason };
     }
 
-    return { safe: true };
+    const executionIdentityReason = getExecutionIdentityBlockReason(validation.commands);
+    if (executionIdentityReason) {
+      return { safe: false, reason: executionIdentityReason };
+    }
+
+    return { safe: true, plan: this.buildShellCommandPlan(validation.commands) };
   }
 
   /**
@@ -1401,18 +1607,21 @@ export class ToolExecutor {
       const value = args[key];
       if (typeof value !== 'string' || !value.trim()) continue;
       const normalized = value.trim();
-      const allowed = this.policy.sandbox.allowedCommands.some((prefix) =>
-        normalized === prefix || normalized.startsWith(`${prefix} `),
-      );
-      if (allowed) continue;
-      return {
-        reason: `Command '${normalized}' is not in allowedCommands.`,
-        fix: {
-          type: 'command',
-          value: normalized,
-          description: `Add '${normalized}' to allowed commands`,
-        },
-      };
+      const shellCheck = sanitizeShellArgs(normalized, this.policy.sandbox.allowedCommands);
+      if (shellCheck.safe) continue;
+      const isAllowlistMiss = shellCheck.reason === `Command is not allowlisted: '${normalized}'.`;
+      return isAllowlistMiss
+        ? {
+          reason: `Command '${normalized}' is not in allowedCommands.`,
+          fix: {
+            type: 'command',
+            value: normalized,
+            description: `Add '${normalized}' to allowed commands`,
+          },
+        }
+        : {
+          reason: shellCheck.reason ?? `Command '${normalized}' failed shell validation.`,
+        };
     }
     return null;
   }
@@ -3884,8 +4093,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'fs_read',
-        description: 'Read a UTF-8 text file within allowed workspace paths. Max 1MB read, truncated if over limit. Security: path validated against allowedPaths roots. Requires read_files capability.',
-        shortDescription: 'Read a text file. Returns content, byte count, and truncation status.',
+        description: 'Read a file within allowed workspace paths. Text files return raw UTF-8 content. Supported document formats such as PDF return extracted text. Max 1MB returned, truncated if over limit. Security: path validated against allowedPaths roots. Requires read_files capability.',
+        shortDescription: 'Read a local file. Returns text content, byte count, truncation status, and MIME type.',
         risk: 'read_only',
         category: 'filesystem',
         parameters: {
@@ -3902,6 +4111,24 @@ export class ToolExecutor {
         const safePath = await this.resolveAllowedPath(rawPath, request);
         this.guardAction(request, 'read_file', { path: rawPath });
         const maxBytes = Math.min(MAX_READ_BYTES, Math.max(256, asNumber(args.maxBytes, 64_000)));
+        const mimeType = inferMimeType(safePath);
+
+        if (FS_READ_EXTRACTED_MIME_TYPES.has(mimeType)) {
+          const parsed = await parseDocument(safePath);
+          const truncatedContent = truncateTextToUtf8Bytes(parsed.text, maxBytes);
+          return {
+            success: true,
+            output: {
+              path: safePath,
+              bytes: (await stat(safePath)).size,
+              truncated: truncatedContent.truncated,
+              content: truncatedContent.content,
+              mimeType,
+              title: parsed.title,
+            },
+          };
+        }
+
         const content = await readFile(safePath);
         const truncated = content.byteLength > maxBytes;
         const slice = truncated ? content.subarray(0, maxBytes) : content;
@@ -3912,6 +4139,7 @@ export class ToolExecutor {
             bytes: content.byteLength,
             truncated,
             content: slice.toString('utf-8'),
+            mimeType,
           },
         };
       },
@@ -4171,7 +4399,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'shell_safe',
-        description: 'Run an allowlisted shell command from the workspace root. Command prefix must match allowedCommands list. Max 60s timeout, 1MB output buffer. Security: command validated against allowlist before execution. Mutating — requires approval. Requires execute_commands capability.',
+        description: 'Run an allowlisted shell command from the workspace root. Command prefix must match allowedCommands list. Max 60s timeout, 1MB output buffer. Security: command validated against allowlist before execution; simple direct-binary commands use structured direct exec when possible; inline interpreter eval, package launchers, and shell-expression launchers are blocked. Mutating — requires approval. Requires execute_commands capability.',
         shortDescription: 'Run an allowlisted shell command. Returns stdout, stderr, exit code.',
         risk: 'mutating',
         category: 'shell',
@@ -4201,23 +4429,64 @@ export class ToolExecutor {
             error: shellCheck.reason ?? `Command is not allowlisted: '${command}'.`,
           };
         }
-        this.guardAction(request, 'execute_command', { command, cwd });
+        if (!shellCheck.plan) {
+          return {
+            success: false,
+            error: 'Command failed execution planning.',
+          };
+        }
         const timeoutMs = Math.max(500, Math.min(60_000, asNumber(args.timeoutMs, 15_000)));
+        const env = this.getCodeWorkspaceRoot(request)
+          ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
+          : undefined;
+        const executionPlan = await this.finalizeShellCommandPlan(
+          shellCheck.plan,
+          cwd,
+          env,
+        );
+        const executionMetadata = {
+          entryCommand: executionPlan.entryCommand,
+          argv: executionPlan.argv,
+          executionClass: executionPlan.executionClass,
+          requestedViaShell: executionPlan.requestedViaShell,
+          execMode: executionPlan.execMode,
+          resolvedExecutable: executionPlan.resolvedExecutable,
+        };
+        this.guardAction(request, 'execute_command', {
+          command,
+          cwd,
+          ...executionMetadata,
+        });
         try {
-          const env = this.getCodeWorkspaceRoot(request)
-            ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
-            : undefined;
-          const { stdout, stderr } = await this.sandboxExec(command, 'workspace-write', {
-            cwd,
-            timeout: timeoutMs,
-            maxBuffer: 1_000_000,
-            env,
-          });
+          const { stdout, stderr } = executionPlan.execMode === 'direct_exec'
+            ? await this.sandboxExecFile(
+              executionPlan.resolvedExecutable ?? executionPlan.entryCommand,
+              executionPlan.argv,
+              'workspace-write',
+              {
+                cwd,
+                timeout: timeoutMs,
+                maxBuffer: 1_000_000,
+                env,
+              },
+            )
+            : await this.sandboxExec(command, 'workspace-write', {
+              cwd,
+              timeout: timeoutMs,
+              maxBuffer: 1_000_000,
+              env,
+            });
           return {
             success: true,
             output: {
               command,
               cwd,
+              entryCommand: executionPlan.entryCommand,
+              argv: executionPlan.argv,
+              executionClass: executionPlan.executionClass,
+              requestedViaShell: executionPlan.requestedViaShell,
+              execMode: executionPlan.execMode,
+              resolvedExecutable: executionPlan.resolvedExecutable,
               stdout: truncateOutput(stdout),
               stderr: truncateOutput(stderr),
             },
@@ -13491,6 +13760,7 @@ export class ToolExecutor {
           health.availability === 'strong'
             ? 'Strong sandboxing is available, but permissive mode still allows degraded fallbacks if your configuration changes.'
             : `Risky subprocess-backed tools remain available with only ${health.availability} sandbox isolation.`,
+          'Current shell execution identity coverage is app-layer only: Guardian validates the requested command and may use direct exec for simple binaries, but it does not yet enforce descendant executable identity for child processes.',
           'Use this only if you accept higher host risk.',
           'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
         ].join(' '),
@@ -13503,6 +13773,7 @@ export class ToolExecutor {
         message: [
           `Strict sandbox mode is active: risky subprocess-backed tools are disabled on ${health.platform}.`,
           health.reasons[0] ?? '',
+          'This host also lacks descendant executable identity enforcement for child processes, so strict mode fails closed for risky subprocess-backed tools.',
           'To unlock them safely, run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
           'If you still want degraded access, you must explicitly set assistant.tools.sandbox.enforcementMode: permissive.',
         ].join(' ').trim(),

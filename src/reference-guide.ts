@@ -335,6 +335,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Document Search',
                 items: [
                   'Native hybrid search combines BM25 keyword matching and vector similarity across local directories, repositories, URLs, and files.',
+                  'When you already know the exact local PDF path, use `fs_read` to extract the document text directly instead of indexing first.',
                   'Use the Search Sources configuration area to add, remove, enable, disable, or reindex document sources.',
                   'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
                 ],

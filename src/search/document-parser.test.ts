@@ -1,8 +1,38 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { inferMimeType, parseDocument } from './document-parser.js';
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+function createSimplePdf(text: string): Buffer {
+  const escapePdfString = (value: string) => value
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n',
+  ];
+  const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${escapePdfString(text)}) Tj\nET`;
+  objects.push(`4 0 obj\n<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream\nendobj\n`);
+  objects.push('5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n');
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'utf8'));
+    pdf += object;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let index = 1; index <= objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, 'utf8');
+}
 
 describe('inferMimeType', () => {
   it('maps known extensions', () => {
@@ -109,5 +139,14 @@ describe('parseDocument', () => {
     const result = await parseDocument(path);
     expect(result.mimeType).toBe('text/typescript');
     expect(result.text).toContain('export function hello');
+  });
+
+  it('parses PDF files into extracted text', async () => {
+    const path = join(tmpDir, 'test.pdf');
+    await writeFile(path, createSimplePdf('Hello PDF world'));
+    const result = await parseDocument(path);
+    expect(result.mimeType).toBe('application/pdf');
+    expect(result.text).toContain('Hello PDF world');
+    expect(result.title).toBe('Hello PDF world');
   });
 });

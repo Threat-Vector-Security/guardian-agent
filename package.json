@@ -88,7 +88,8 @@
     "pino": "^10.3.1"
   },
   "optionalDependencies": {
-    "@lightpanda/browser": "^0.2.5"
+    "@lightpanda/browser": "^0.2.5",
+    "pdf-parse": "^2.4.5"
   },
   "overrides": {
     "@appium/logger": {

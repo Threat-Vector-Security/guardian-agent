@@ -722,6 +722,22 @@ guardian:
     assert.equal(blockedShellEscape.status, 'failed');
     assert.match(String(blockedShellEscape.message ?? ''), /denied path|Coding Assistant|blocked/i);
 
+    const blockedInterpreterTrampoline = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'shell_safe',
+      args: {
+        command: 'python3 -c "import subprocess; subprocess.run([\'git\', \'status\'])"',
+        cwd: workspaceRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: codeToolMetadata,
+    });
+    assert.equal(blockedInterpreterTrampoline.success, false);
+    assert.equal(blockedInterpreterTrampoline.status, 'failed');
+    assert.equal(Boolean(blockedInterpreterTrampoline.approvalId), false);
+    assert.match(String(blockedInterpreterTrampoline.message ?? ''), /execution identity policy|inline interpreter evaluation|blocked/i);
+
     const autonomousPolicy = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/policy', {
       mode: 'autonomous',
       sandbox: {

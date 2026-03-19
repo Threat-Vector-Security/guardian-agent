@@ -2,6 +2,7 @@
  * Argument sanitizer helpers for tool execution.
  */
 
+import { getExecutionIdentityBlockReason, splitCommands, tokenize } from './shell-validator.js';
 import { PiiScanner, type PiiMatch } from './pii-scanner.js';
 import { SecretScanner, type SecretMatch } from './secret-scanner.js';
 
@@ -48,6 +49,31 @@ export function sanitizeShellArgs(
     return {
       safe: false,
       reason: 'Command contains shell control operators or command substitution.',
+    };
+  }
+
+  let commands;
+  try {
+    commands = splitCommands(tokenize(normalized));
+  } catch {
+    return {
+      safe: false,
+      reason: 'Command failed shell parsing.',
+    };
+  }
+
+  if (commands.length === 0) {
+    return {
+      safe: false,
+      reason: 'Command failed shell parsing.',
+    };
+  }
+
+  const executionIdentityReason = getExecutionIdentityBlockReason(commands);
+  if (executionIdentityReason) {
+    return {
+      safe: false,
+      reason: executionIdentityReason,
     };
   }
 

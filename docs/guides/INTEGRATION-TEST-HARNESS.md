@@ -30,6 +30,7 @@ Core harness scripts include:
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness against the dedicated Code-session API, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, focused chat, approval tab UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
+| **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.

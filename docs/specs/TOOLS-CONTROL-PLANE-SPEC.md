@@ -309,6 +309,9 @@ Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip 
 - Strict sandbox mode disables risky subprocess-backed tools when no strong sandbox backend is available and surfaces explicit disable reasons.
 - Tool arguments must stay under the executor byte budget; oversized payloads fail before approval/execution.
 - `shell_safe` rejects shell control operators and command substitution even when the command prefix is allowlisted.
+- `shell_safe` also rejects blocked indirect-exec classes such as interpreter-inline eval (`python -c`, `node --eval`), package launchers (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `uv run`), and explicit shell-expression launchers (`bash -c`, `sh -c`).
+- For simple single-command direct binaries, `shell_safe` now prefers structured direct exec (`entryCommand` + `argv`) instead of always routing through shell parsing.
+- Shell fallback remains in place for shell-builtins, chained commands, redirects, and platform wrapper cases, so the top-level command boundary is stronger but not equivalent to descendant process enforcement.
 - `fs_write` / `doc_create` content is scanned for secrets and PII before anything is persisted.
 
 ## Tool Result Scanning

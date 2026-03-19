@@ -12,6 +12,18 @@ describe('sanitizeShellArgs', () => {
     expect(result.safe).toBe(false);
     expect(result.reason).toContain('shell control operators');
   });
+
+  it('rejects inline interpreter eval even when the prefix is allowlisted', () => {
+    const result = sanitizeShellArgs('python3 -c "print(1)"', ['python3']);
+    expect(result.safe).toBe(false);
+    expect(result.reason).toContain('inline interpreter evaluation');
+  });
+
+  it('rejects package launchers even when the prefix is allowlisted', () => {
+    const result = sanitizeShellArgs('npm exec eslint .', ['npm']);
+    expect(result.safe).toBe(false);
+    expect(result.reason).toContain('package launcher');
+  });
 });
 
 describe('scanWriteContent', () => {

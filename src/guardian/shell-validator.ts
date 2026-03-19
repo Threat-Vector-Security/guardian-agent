@@ -25,8 +25,206 @@ export interface ShellValidationResult {
   commands: ParsedCommand[];
 }
 
+export type ShellExecutionClass =
+  | 'direct_binary'
+  | 'script_runner'
+  | 'interpreter_inline'
+  | 'package_launcher'
+  | 'build_or_task_runner'
+  | 'shell_expression';
+
 const CHAIN_OPS = new Set(['&&', '||', ';', '|']);
 const REDIRECT_OPS = new Set(['>', '>>', '<', '2>', '2>>']);
+const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'ash']);
+const POWERSHELL_INTERPRETERS = new Set(['pwsh', 'pwsh.exe', 'powershell', 'powershell.exe']);
+const PYTHON_INTERPRETERS = new Set(['python', 'python2', 'python3', 'py']);
+const NODE_INTERPRETERS = new Set(['node']);
+const PHP_INTERPRETERS = new Set(['php']);
+const RUBY_INTERPRETERS = new Set(['ruby']);
+const PERL_INTERPRETERS = new Set(['perl']);
+const DENO_INTERPRETERS = new Set(['deno']);
+const PACKAGE_LAUNCHERS = new Set(['npx', 'bunx']);
+
+function normalizeCommandName(command: string): string {
+  const trimmed = command.trim().replace(/[\\/]+$/, '');
+  if (!trimmed) return '';
+  const basename = trimmed.split(/[\\/]/).pop();
+  return (basename || trimmed).toLowerCase();
+}
+
+function firstArg(cmd: ParsedCommand): string {
+  return cmd.args[0]?.toLowerCase() ?? '';
+}
+
+function secondArg(cmd: ParsedCommand): string {
+  return cmd.args[1]?.toLowerCase() ?? '';
+}
+
+function hasSingleDashFlagWithChar(args: string[], char: string): boolean {
+  return args.some((arg) => /^-[a-z]+$/i.test(arg) && arg.toLowerCase().includes(char));
+}
+
+function hasAnyArg(args: string[], candidates: readonly string[]): boolean {
+  const lowerCandidates = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return args.some((arg) => lowerCandidates.has(arg.toLowerCase()));
+}
+
+function hasAnyArgPrefix(args: string[], prefixes: readonly string[]): boolean {
+  const normalizedPrefixes = prefixes.map((prefix) => prefix.toLowerCase());
+  return args.some((arg) => {
+    const lower = arg.toLowerCase();
+    return normalizedPrefixes.some((prefix) => lower.startsWith(prefix));
+  });
+}
+
+function hasNonFlagArg(args: string[]): boolean {
+  return args.some((arg) => arg !== '-' && !arg.startsWith('-'));
+}
+
+function isShellExpression(cmd: ParsedCommand, commandName: string): boolean {
+  if (SHELL_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-c', '--command']) || hasSingleDashFlagWithChar(cmd.args, 'c');
+  }
+
+  if (POWERSHELL_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-c', '-command', '-encodedcommand', '-enc'])
+      || hasAnyArgPrefix(cmd.args, ['-command=', '-encodedcommand=']);
+  }
+
+  if (commandName === 'cmd' || commandName === 'cmd.exe') {
+    return hasAnyArg(cmd.args, ['/c', '/k']);
+  }
+
+  return false;
+}
+
+function isInterpreterInline(cmd: ParsedCommand, commandName: string): boolean {
+  if (PYTHON_INTERPRETERS.has(commandName)) {
+    const initialArg = firstArg(cmd);
+    return initialArg === '-c' || initialArg === '-';
+  }
+
+  if (NODE_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-e', '--eval', '-p', '--print'])
+      || hasAnyArgPrefix(cmd.args, ['--eval=', '--print=']);
+  }
+
+  if (PHP_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-r']);
+  }
+
+  if (RUBY_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-e']);
+  }
+
+  if (PERL_INTERPRETERS.has(commandName)) {
+    return hasAnyArg(cmd.args, ['-e', '-pe', '-ne']);
+  }
+
+  if (DENO_INTERPRETERS.has(commandName)) {
+    return firstArg(cmd) === 'eval';
+  }
+
+  return false;
+}
+
+function isPackageLauncher(cmd: ParsedCommand, commandName: string): boolean {
+  if (PACKAGE_LAUNCHERS.has(commandName)) return true;
+
+  const initialArg = firstArg(cmd);
+  if (commandName === 'npm') {
+    return initialArg === 'exec' || initialArg === 'x';
+  }
+
+  if (commandName === 'pnpm' || commandName === 'yarn') {
+    return initialArg === 'exec' || initialArg === 'dlx';
+  }
+
+  if (commandName === 'bun') {
+    return initialArg === 'x';
+  }
+
+  if (commandName === 'uv') {
+    return initialArg === 'run' || (initialArg === 'tool' && secondArg(cmd) === 'run');
+  }
+
+  return false;
+}
+
+function isBuildOrTaskRunner(cmd: ParsedCommand, commandName: string): boolean {
+  const initialArg = firstArg(cmd);
+
+  if (commandName === 'npm' || commandName === 'pnpm' || commandName === 'yarn') {
+    return ['run', 'test', 'start', 'build', 'lint', 'install', 'ci', 'add'].includes(initialArg);
+  }
+
+  if (commandName === 'bun') {
+    return ['run', 'test', 'install', 'add', 'build'].includes(initialArg);
+  }
+
+  if (commandName === 'deno') {
+    return ['run', 'test', 'task', 'compile'].includes(initialArg);
+  }
+
+  return new Set([
+    'pytest',
+    'cargo',
+    'rustc',
+    'go',
+    'gofmt',
+    'gradle',
+    'mvn',
+    'dotnet',
+    'composer',
+    'bundle',
+    'gem',
+    'make',
+    'cmake',
+    'pip',
+    'pip3',
+  ]).has(commandName);
+}
+
+function isScriptRunner(cmd: ParsedCommand, commandName: string): boolean {
+  if (SHELL_INTERPRETERS.has(commandName) || POWERSHELL_INTERPRETERS.has(commandName)) {
+    return hasNonFlagArg(cmd.args);
+  }
+
+  if (commandName === 'cmd' || commandName === 'cmd.exe') {
+    return cmd.args.length > 0 && !isShellExpression(cmd, commandName);
+  }
+
+  if (PYTHON_INTERPRETERS.has(commandName)) {
+    const initialArg = firstArg(cmd);
+    return initialArg === '-m' || hasNonFlagArg(cmd.args);
+  }
+
+  if (NODE_INTERPRETERS.has(commandName)
+      || PHP_INTERPRETERS.has(commandName)
+      || RUBY_INTERPRETERS.has(commandName)
+      || PERL_INTERPRETERS.has(commandName)) {
+    return hasNonFlagArg(cmd.args);
+  }
+
+  if (DENO_INTERPRETERS.has(commandName)) {
+    return firstArg(cmd) === 'run' || hasNonFlagArg(cmd.args);
+  }
+
+  return false;
+}
+
+function executionIdentityReason(commandName: string, executionClass: ShellExecutionClass): string | undefined {
+  switch (executionClass) {
+    case 'interpreter_inline':
+      return `Command '${commandName}' uses inline interpreter evaluation, which is blocked by execution identity policy.`;
+    case 'package_launcher':
+      return `Command '${commandName}' uses a package launcher that can route around executable allowlists, which is blocked by execution identity policy.`;
+    case 'shell_expression':
+      return `Command '${commandName}' uses a shell expression launcher, which is blocked by execution identity policy.`;
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Tokenize a shell command string into tokens.
@@ -341,4 +539,43 @@ export function validateShellCommand(
   }
 
   return { valid: true, commands };
+}
+
+export function classifyParsedCommandExecution(cmd: ParsedCommand): ShellExecutionClass {
+  const commandName = normalizeCommandName(cmd.command);
+
+  if (isShellExpression(cmd, commandName)) {
+    return 'shell_expression';
+  }
+
+  if (isInterpreterInline(cmd, commandName)) {
+    return 'interpreter_inline';
+  }
+
+  if (isPackageLauncher(cmd, commandName)) {
+    return 'package_launcher';
+  }
+
+  if (isBuildOrTaskRunner(cmd, commandName)) {
+    return 'build_or_task_runner';
+  }
+
+  if (isScriptRunner(cmd, commandName)) {
+    return 'script_runner';
+  }
+
+  return 'direct_binary';
+}
+
+export function getExecutionIdentityBlockReason(commands: ParsedCommand[]): string | undefined {
+  for (const cmd of commands) {
+    const executionClass = classifyParsedCommandExecution(cmd);
+    const commandName = normalizeCommandName(cmd.command) || cmd.command;
+    const reason = executionIdentityReason(commandName, executionClass);
+    if (reason) {
+      return reason;
+    }
+  }
+
+  return undefined;
 }

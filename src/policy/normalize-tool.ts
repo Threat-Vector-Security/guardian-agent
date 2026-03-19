@@ -5,6 +5,7 @@
 
 import type { PolicyInput, PolicyPrincipal, PolicyResource } from './types.js';
 import type { ToolDefinition, ToolExecutionRequest } from '../tools/types.js';
+import { classifyParsedCommandExecution, splitCommands, tokenize } from '../guardian/shell-validator.js';
 
 /**
  * Build a PolicyInput from a tool execution request.
@@ -76,6 +77,16 @@ function extractResourceAttrs(
         attrs.firstWord = cmd.split(/\s+/)[0];
         // Flag shell operators for rule matching
         attrs.hasShellOperators = /[|;&`$()]/.test(cmd);
+        try {
+          const parsed = splitCommands(tokenize(cmd));
+          if (parsed.length > 0) {
+            const executionClass = classifyParsedCommandExecution(parsed[0]);
+            attrs.executionClass = executionClass;
+            attrs.isIndirectExecution = executionClass !== 'direct_binary';
+          }
+        } catch {
+          // Ignore parse errors here; validation happens elsewhere.
+        }
       }
       break;
 

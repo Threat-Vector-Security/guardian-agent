@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { tokenize, splitCommands, validateShellCommand } from './shell-validator.js';
+import {
+  classifyParsedCommandExecution,
+  getExecutionIdentityBlockReason,
+  tokenize,
+  splitCommands,
+  validateShellCommand,
+} from './shell-validator.js';
 
 describe('tokenize', () => {
   it('should tokenize simple command', () => {
@@ -168,5 +174,50 @@ describe('validateShellCommand', () => {
   it('should support command+arg prefix allowlist entries', () => {
     const result = validateShellCommand('git status --short', ['git status']);
     expect(result.valid).toBe(true);
+  });
+});
+
+describe('classifyParsedCommandExecution', () => {
+  it('classifies direct binaries', () => {
+    const [command] = splitCommands(tokenize('git status --short'));
+    expect(classifyParsedCommandExecution(command)).toBe('direct_binary');
+  });
+
+  it('classifies inline interpreter eval', () => {
+    const [command] = splitCommands(tokenize('python3 -c "print(1)"'));
+    expect(classifyParsedCommandExecution(command)).toBe('interpreter_inline');
+  });
+
+  it('classifies shell expression launchers', () => {
+    const [command] = splitCommands(tokenize('bash -lc "git status"'));
+    expect(classifyParsedCommandExecution(command)).toBe('shell_expression');
+  });
+
+  it('classifies package launchers', () => {
+    const [command] = splitCommands(tokenize('npm exec eslint .'));
+    expect(classifyParsedCommandExecution(command)).toBe('package_launcher');
+  });
+
+  it('classifies build and task runners', () => {
+    const [command] = splitCommands(tokenize('npm test -- --runInBand'));
+    expect(classifyParsedCommandExecution(command)).toBe('build_or_task_runner');
+  });
+
+  it('classifies script runners without blocking them', () => {
+    const [command] = splitCommands(tokenize('node scripts/check.js'));
+    expect(classifyParsedCommandExecution(command)).toBe('script_runner');
+    expect(getExecutionIdentityBlockReason([command])).toBeUndefined();
+  });
+});
+
+describe('getExecutionIdentityBlockReason', () => {
+  it('blocks inline interpreter eval', () => {
+    const commands = splitCommands(tokenize('node --eval "console.log(1)"'));
+    expect(getExecutionIdentityBlockReason(commands)).toContain('inline interpreter evaluation');
+  });
+
+  it('blocks package launchers', () => {
+    const commands = splitCommands(tokenize('npx cowsay hello'));
+    expect(getExecutionIdentityBlockReason(commands)).toContain('package launcher');
   });
 });

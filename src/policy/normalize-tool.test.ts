@@ -105,6 +105,18 @@ describe('normalizeToolRequest', () => {
       'approve_by_policy',
     );
     expect(input.resource.attrs?.hasShellOperators).toBe(false);
+    expect(input.resource.attrs?.executionClass).toBe('direct_binary');
+    expect(input.resource.attrs?.isIndirectExecution).toBe(false);
+  });
+
+  it('classifies indirect shell execution attrs', () => {
+    const input = normalizeToolRequest(
+      makeRequest({ toolName: 'shell_safe', args: { command: 'python3 -c "print(1)"' } }),
+      makeDefinition({ name: 'shell_safe', risk: 'mutating', category: 'shell' }),
+      'approve_by_policy',
+    );
+    expect(input.resource.attrs?.executionClass).toBe('interpreter_inline');
+    expect(input.resource.attrs?.isIndirectExecution).toBe(true);
   });
 
   it('extracts web_fetch url', () => {

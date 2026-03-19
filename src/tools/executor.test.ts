@@ -17,6 +17,36 @@ import { CodeSessionStore } from '../runtime/code-sessions.js';
 const testDirs: string[] = [];
 const testServers: Server[] = [];
 
+function createSimplePdf(text: string): Buffer {
+  const escapePdfString = (value: string) => value
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n',
+  ];
+  const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${escapePdfString(text)}) Tj\nET`;
+  objects.push(`4 0 obj\n<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream\nendobj\n`);
+  objects.push('5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n');
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'utf8'));
+    pdf += object;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let index = 1; index <= objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, 'utf8');
+}
+
 function createExecutorRoot(): string {
   const root = join(tmpdir(), `guardianagent-tools-${randomUUID()}`);
   mkdirSync(root, { recursive: true });
@@ -2082,10 +2112,22 @@ describe('ToolExecutor', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.output).toMatchObject({ command: cwdCommand, cwd: nested });
+    expect(result.output).toMatchObject({
+      command: cwdCommand,
+      cwd: nested,
+      entryCommand: cwdCommand,
+      argv: [],
+      executionClass: 'direct_binary',
+      requestedViaShell: process.platform === 'win32',
+      execMode: process.platform === 'win32' ? 'shell_fallback' : 'direct_exec',
+    });
     const stdout = String(result.output?.stdout || '').trim();
     // On Windows `cd` returns the Windows-style path; normalize for comparison
     expect(stdout.toLowerCase().replace(/\//g, '\\')).toBe(nested.toLowerCase().replace(/\//g, '\\'));
+    if (process.platform !== 'win32') {
+      expect(typeof result.output?.resolvedExecutable).toBe('string');
+      expect(String(result.output?.resolvedExecutable || '')).not.toHaveLength(0);
+    }
   });
 
   it('uses codeContext workspace roots instead of the global allowedPaths list', async () => {
@@ -2261,6 +2303,38 @@ describe('ToolExecutor', () => {
     expect(pathEscape.success).toBe(false);
     expect(pathEscape.status).toBe('failed');
     expect(pathEscape.message).toContain('denied path');
+  });
+
+  it('rejects code-scoped inline interpreter trampolines before approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const trampoline = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'python3 -c "import subprocess; subprocess.run([\'git\', \'status\'])"',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-trampoline' },
+    });
+
+    expect(trampoline.success).toBe(false);
+    expect(trampoline.status).toBe('failed');
+    expect(trampoline.approvalId).toBeUndefined();
+    expect(trampoline.message).toMatch(/execution identity policy|inline interpreter evaluation/i);
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(0);
   });
 
   it('applies code_edit with exact block matching', async () => {
@@ -3445,6 +3519,37 @@ describe('ToolExecutor', () => {
     expect(run.success).toBe(true);
     const output = run.output as { content: string };
     expect(output.content).toContain('backslash path');
+  });
+
+  it('extracts text when reading a PDF file path', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    const pdfPath = join(root, 'docs', 'report.pdf');
+    await writeFile(pdfPath, createSimplePdf('Guardian PDF extraction'));
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_read',
+      args: { path: pdfPath },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.output).toMatchObject({
+      path: pdfPath,
+      mimeType: 'application/pdf',
+      title: expect.stringContaining('Guardian PDF'),
+    });
+    const output = run.output as { content: string };
+    expect(output.content).toContain('Guardian PDF extraction');
   });
 
   it('accepts Windows drive-letter absolute paths in WSL-style runtimes', async () => {

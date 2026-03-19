@@ -41,7 +41,7 @@ GuardianAgent is an AI agent orchestration system where:
 | DoS via message flooding | Multi-scope sliding windows: per-agent + per-user + global |
 | Secret exfiltration via events | Payload scanning on all inter-agent communication |
 | Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
-| Shell command injection | POSIX tokenizer with whitelist validation |
+| Shell command injection / trampoline abuse | POSIX tokenizer, execution-class validation, and direct-exec-by-default for simple allowlisted binaries |
 | SSRF via tool HTTP requests | SsrfController blocks private IPs, loopback, cloud metadata, IPv4-mapped IPv6, and obfuscated IPs |
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
 | Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory |
@@ -120,7 +120,7 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  Linux uses bwrap namespace isolation when available.    │
 │  Sandbox health states control strict-mode availability  │
 │  for risky subprocess-backed tools.                      │
-│  The default enforcement mode is strict.                 │
+│  The default enforcement mode is permissive.             │
 │  Fallback behavior uses ulimit + env hardening.          │
 │  Windows and macOS support depend on platform helpers.   │
 │                                                         │
@@ -336,6 +336,8 @@ The ShellCommandController goes beyond simple string matching:
 
 - **Path whitelist**: Tools can only access configured filesystem roots
 - **Command whitelist**: Shell execution limited to explicitly allowed commands
+- **Execution classes**: `shell_safe` blocks interpreter-inline eval, package launchers, and shell-expression launchers even when the base command prefix is allowlisted
+- **Structured exec path**: simple direct-binary commands run through structured argv execution when possible; shell fallback is reserved for builtins, chained commands, redirects, and platform wrapper cases
 - **Domain whitelist**: Network requests limited to configured domains
 - **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
 - **Dry-run mode**: Preview mutating operations without execution
@@ -348,7 +350,9 @@ When a Code session sends a chat/tool request with `codeContext`:
 
 - file and coding tools are pinned to that session `workspaceRoot`, even though the global tool policy remains unchanged
 - `shell_safe` uses a Code-specific repo-work allowlist instead of the global `allowedCommands` list
+- `shell_safe` classifies commands by execution type and prefers structured direct exec for simple binaries instead of always routing through shell parsing
 - shell validation blocks repo-escape flags and global-install patterns such as `git -C`, `--git-dir`, `--work-tree`, `--prefix`, `--cwd`, `--cache*`, `--userconfig`, `--globalconfig`, `-g`, `--global`, `global`, and `--user`
+- shell validation also blocks interpreter-inline and launcher trampoline forms such as `python -c`, `node --eval`, `bash -c`, `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, and `uv run`
 - path-like shell args and redirect targets that resolve outside the active workspace root are denied before execution
 - common package/build caches are redirected under `<workspaceRoot>/.guardianagent/cache` to reduce spillover into the user profile
 
@@ -359,6 +363,7 @@ Important boundary:
 - Code chat history is separate from the main web chat for UX/session isolation
 - repo-scoped enforcement applies to assistant-driven tool calls, not to the manual PTY terminal surface
 - PTY terminals still launch as user-operated shells in the chosen cwd and currently rely on the normal OS/process sandbox plus session ownership checks, not the assistant’s repo-bound command validator
+- Guardian currently validates the requested top-level command and execution class. It does not yet provide descendant executable identity enforcement for arbitrary child processes launched beneath an allowed parent.
 
 ### Contextual Policy Enforcement
 
@@ -420,6 +425,12 @@ GuardianAgent classifies sandbox strength as `strong`, `degraded`, or `unavailab
 
 In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`. In `permissive` mode, they remain available with degraded isolation.
 
+Important boundary:
+
+- current execution-identity enforcement is app-layer and top-level only
+- Guardian can classify and constrain the requested command, and it can run simple binaries without shell parsing
+- Guardian does not yet enforce descendant executable identity for arbitrary child processes on general hosts
+
 **Risky tool classes blocked in `strict` mode:** shell execution, browser automation, MCP server processes, subprocess-backed search/indexing, and broad host-access categories (`network`, `system`).
 
 Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
@@ -440,7 +451,7 @@ assistant:
   tools:
     sandbox:
       enabled: true
-      enforcementMode: strict          # strict | permissive
+      enforcementMode: permissive      # strict | permissive
       mode: workspace-write            # Default profile
       networkAccess: false             # Default: isolate network
       additionalWritePaths: []         # Extra writable paths

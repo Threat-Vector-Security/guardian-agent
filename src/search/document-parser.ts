@@ -2,7 +2,7 @@
  * Document parser — extracts plain text from various file formats.
  *
  * Supports: plain text, markdown, HTML, PDF (optional), DOCX (optional).
- * PDF and DOCX parsing require optional peer dependencies (pdf-parse, mammoth).
+ * PDF and DOCX parsing require optional dependencies (pdf-parse, mammoth).
  */
 
 import { readFile } from 'node:fs/promises';
@@ -109,17 +109,52 @@ export async function parseDocument(filepath: string): Promise<ParsedDocument> {
 
 /** Parse PDF using optional pdf-parse dependency. */
 async function parsePdf(filepath: string, mimeType: string): Promise<ParsedDocument> {
-  const pdfParse = await tryImport<{ default: (buf: Buffer) => Promise<{ text: string; info?: { Title?: string } }> }>('pdf-parse');
+  const pdfParse = await tryImport<Record<string, unknown>>('pdf-parse');
   if (!pdfParse) {
     throw new Error('PDF parsing requires the "pdf-parse" package. Install it with: npm install pdf-parse');
   }
   const buf = await readFile(filepath);
-  const result = await pdfParse.default(buf);
-  return {
-    text: result.text,
-    title: result.info?.Title ?? extractTitle(result.text, mimeType),
-    mimeType,
-  };
+
+  const legacyParse = typeof pdfParse.default === 'function'
+    ? pdfParse.default as (buf: Buffer) => Promise<{ text?: string; info?: { Title?: string } }>
+    : null;
+  if (legacyParse) {
+    const result = await legacyParse(buf);
+    const text = typeof result.text === 'string' ? result.text : '';
+    return {
+      text,
+      title: result.info?.Title ?? extractTitle(text, mimeType),
+      mimeType,
+    };
+  }
+
+  const PDFParse = typeof pdfParse.PDFParse === 'function'
+    ? pdfParse.PDFParse as new (opts: { data: Buffer }) => {
+      getText(): Promise<{ text?: string }>;
+      getInfo(): Promise<{ info?: Record<string, unknown> }>;
+      destroy?: () => Promise<void>;
+    }
+    : null;
+  if (!PDFParse) {
+    throw new Error('Installed "pdf-parse" package does not expose a supported parser API.');
+  }
+
+  const parser = new PDFParse({ data: buf });
+  try {
+    const textResult = await parser.getText();
+    const infoResult = await parser.getInfo().catch(() => undefined);
+    const text = typeof textResult.text === 'string' ? textResult.text : '';
+    const rawTitle = infoResult?.info?.Title ?? infoResult?.info?.title;
+    return {
+      text,
+      title: typeof rawTitle === 'string' && rawTitle.trim().length > 0 ? rawTitle.trim() : extractTitle(text, mimeType),
+      mimeType,
+    };
+  } finally {
+    if (typeof parser.destroy === 'function') {
+      await parser.destroy().catch(() => undefined);
+    }
+  }
 }
 
 /** Parse DOCX using optional mammoth dependency. */
