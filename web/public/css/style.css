@@ -4181,6 +4181,31 @@ tr:hover td {
   border-color: rgba(52, 211, 153, 0.28);
 }
 
+.badge-trust-neutral {
+  color: var(--info);
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.24);
+}
+
+.badge-trust-trusted,
+.badge-trust-accepted {
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.badge-trust-caution {
+  color: var(--warning);
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.badge-trust-blocked {
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
 .code-session-form {
   display: none;
   padding: 1rem;

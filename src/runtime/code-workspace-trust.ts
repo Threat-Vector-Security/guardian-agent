@@ -473,6 +473,9 @@ function cloneCodeWorkspaceNativeProtection(
 }
 
 function serializeAssessmentForFingerprint(assessment: CodeWorkspaceTrustAssessment): string {
+  // Manual review should track the findings/operators actually accepted.
+  // Non-detection native-protection refreshes (pending/clean/unavailable)
+  // should not immediately clear that acceptance.
   return JSON.stringify({
     workspaceRoot: assessment.workspaceRoot,
     state: assessment.state,
@@ -485,16 +488,6 @@ function serializeAssessmentForFingerprint(assessment: CodeWorkspaceTrustAssessm
         evidence: finding.evidence ?? '',
       }))
       : [],
-    nativeProtection: assessment.nativeProtection
-      ? {
-        provider: assessment.nativeProtection.provider,
-        status: assessment.nativeProtection.status,
-        summary: assessment.nativeProtection.summary,
-        details: Array.isArray(assessment.nativeProtection.details)
-          ? [...assessment.nativeProtection.details]
-          : [],
-      }
-      : null,
   });
 }
 

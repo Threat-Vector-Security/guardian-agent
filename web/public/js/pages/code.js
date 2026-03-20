@@ -755,10 +755,10 @@ function isWorkspaceTrustOverrideAvailable(session) {
 }
 
 function getWorkspaceTrustBadgeClass(state) {
-  if (state === 'blocked') return 'badge-critical';
-  if (state === 'caution') return 'badge-warn';
-  if (state === 'trusted') return 'badge-idle';
-  return 'badge-info';
+  if (state === 'blocked') return 'badge-trust-blocked';
+  if (state === 'caution') return 'badge-trust-caution';
+  if (state === 'trusted') return 'badge-trust-trusted';
+  return 'badge-trust-neutral';
 }
 
 function buildWorkspaceTrustFindingViewModels(workspaceTrust) {
@@ -2822,7 +2822,7 @@ function renderSessionCard(session) {
   const effectiveTrustState = getEffectiveWorkspaceTrustState(session) || workspaceTrust?.state || null;
   const reviewActive = isWorkspaceTrustReviewActive(session);
   const trustBadgeClass = reviewActive
-    ? 'badge-accepted'
+    ? 'badge-trust-accepted'
     : getWorkspaceTrustBadgeClass(effectiveTrustState);
   const rawTrustBadgeClass = getWorkspaceTrustBadgeClass(workspaceTrust?.state || null);
   return `

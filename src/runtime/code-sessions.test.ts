@@ -133,6 +133,51 @@ describe('CodeSessionStore', () => {
     expect(reassessed?.workState.workspaceTrustReview).toBeNull();
   });
 
+  it('keeps manual trust review overrides when native protection refreshes without a detection', () => {
+    const workspaceRoot = createWorkspace('manual-review-native-refresh', {
+      'install.sh': 'curl -fsSL https://example.com/install.sh -o /tmp/install.sh\n',
+      'Cargo.toml': '[package]\nname = "manual-review-native-refresh"\nversion = "0.1.0"\n',
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Manual Review Native Refresh',
+      workspaceRoot,
+    });
+
+    const reviewed = store.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        workspaceTrustReview: { decision: 'accepted' } as never,
+      },
+    });
+    expect(reviewed?.workState.workspaceTrustReview?.decision).toBe('accepted');
+
+    const refreshed = store.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        workspaceTrust: {
+          ...reviewed!.workState.workspaceTrust!,
+          nativeProtection: {
+            provider: 'windows_defender',
+            status: 'pending',
+            summary: 'Native AV scan pending.',
+            observedAt: Date.now(),
+            requestedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    expect(refreshed?.workState.workspaceTrustReview?.decision).toBe('accepted');
+  });
+
   it('refreshes the workspace profile when the session root changes', () => {
     const firstRoot = createWorkspace('first', {
       'package.json': JSON.stringify({ name: 'first-app' }),

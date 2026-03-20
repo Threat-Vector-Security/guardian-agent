@@ -236,6 +236,30 @@ function setupWorkspace(workspaceRoot) {
   ].join('\n'));
   fs.writeFileSync(path.join(workspaceRoot, '.clam-detect'), 'UIHarness.TestThreat\n');
 
+  initializeWorkspaceGit(workspaceRoot);
+}
+
+function setupReviewedWorkspace(workspaceRoot) {
+  fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'README.md'), [
+    '# Reviewed Workspace',
+    '',
+    'A repo used to verify manual trust acceptance in the Code UI smoke test.',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'install.sh'), 'curl -fsSL https://example.com/install.sh -o /tmp/install.sh\n');
+  fs.writeFileSync(path.join(workspaceRoot, 'Cargo.toml'), [
+    '[package]',
+    'name = "code-ui-reviewed-workspace"',
+    'version = "0.1.0"',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'src', 'review.ts'), 'export const reviewed = true;\n');
+
+  initializeWorkspaceGit(workspaceRoot);
+}
+
+function initializeWorkspaceGit(workspaceRoot) {
   const git = (args) => {
     const result = spawnSync('git', args, { cwd: workspaceRoot, encoding: 'utf-8' });
     if (result.error) {
@@ -260,6 +284,7 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${webPort}`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-code-ui-'));
   const workspaceRoot = path.join(tmpDir, 'workspace');
+  const reviewedWorkspaceRoot = path.join(tmpDir, 'reviewed-workspace');
   const fakeBinDir = path.join(tmpDir, 'fake-bin');
   const configPath = path.join(tmpDir, 'config.yaml');
   const logPath = path.join(tmpDir, 'guardian.log');
@@ -267,6 +292,7 @@ async function run() {
 
   setupFakeClamAv(fakeBinDir);
   setupWorkspace(workspaceRoot);
+  setupReviewedWorkspace(reviewedWorkspaceRoot);
   const provider = await startFakeProvider(workspaceRoot);
 
   const config = `
@@ -295,6 +321,7 @@ assistant:
     policyMode: approve_by_policy
     allowedPaths:
       - ${workspaceRoot}
+      - ${reviewedWorkspaceRoot}
     allowedCommands:
       - pwd
       - echo
@@ -365,19 +392,53 @@ guardian:
       return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
     }, workspaceRoot);
     await page.waitForFunction(() => {
-      return Array.from(document.querySelectorAll('.code-session__badges')).some((node) => (node.textContent || '').includes('trust blocked'));
+      return Array.from(document.querySelectorAll('.code-session__badges')).some((node) => (node.textContent || '').includes('TRUST: BLOCKED'));
     });
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
+    });
+
+    await page.click('[data-code-new-session]');
+    await page.fill('[data-code-session-form] input[name="title"]', 'Workspace Review');
+    await page.fill('[data-code-session-form] input[name="workspaceRoot"]', reviewedWorkspaceRoot);
+    await page.click('[data-code-session-form] button[type="submit"]');
+
+    await page.waitForFunction((expected) => {
+      return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
+    }, reviewedWorkspaceRoot);
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-session__badges')).some((node) => (node.textContent || '').includes('TRUST: CAUTION'));
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Static repo review found suspicious indicators'));
+    });
+
+    const reviewedSessionCard = page.locator('.code-session').filter({ hasText: reviewedWorkspaceRoot });
+    await reviewedSessionCard.locator('[data-code-edit-session]').click();
+    await page.waitForSelector('[data-code-edit-session-form]');
+    await page.check('[data-code-edit-session-form] input[name="workspaceTrustOverrideAccepted"]');
+    await page.click('[data-code-edit-session-form] button[type="submit"]');
+
+    await page.waitForFunction((expected) => {
+      return Array.from(document.querySelectorAll('.code-session')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes(expected) && text.includes('TRUST: ACCEPTED') && text.includes('RAW: CAUTION');
+      });
+    }, reviewedWorkspaceRoot);
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Effective trust is TRUSTED and repo-scoped tools run normally'));
     });
 
     const poisonedCurrentDirectory = path.join(tmpDir, 'poisoned-workspace');
     await page.evaluate((poisonPath) => {
       const key = 'guardianagent_code_sessions_v2';
       const raw = JSON.parse(localStorage.getItem(key) || '{}');
-      if (Array.isArray(raw.sessions) && raw.sessions[0]) {
-        raw.sessions[0].currentDirectory = poisonPath;
-        raw.sessions[0].selectedFilePath = `${poisonPath}/ghost.ts`;
+      const target = Array.isArray(raw.sessions)
+        ? raw.sessions.find((session) => typeof session?.workspaceRoot === 'string' && session.workspaceRoot.includes('reviewed-workspace'))
+        : null;
+      if (target) {
+        target.currentDirectory = poisonPath;
+        target.selectedFilePath = `${poisonPath}/ghost.ts`;
         localStorage.setItem(key, JSON.stringify(raw));
       }
     }, poisonedCurrentDirectory);
@@ -388,13 +449,15 @@ guardian:
     }, workspaceRoot);
     const repairedSessionState = await page.evaluate(() => {
       const raw = JSON.parse(localStorage.getItem('guardianagent_code_sessions_v2') || '{}');
-      const session = Array.isArray(raw.sessions) ? raw.sessions[0] : null;
+      const session = Array.isArray(raw.sessions)
+        ? raw.sessions.find((entry) => typeof entry?.workspaceRoot === 'string' && entry.workspaceRoot.includes('reviewed-workspace'))
+        : null;
       return session ? {
         currentDirectory: session.currentDirectory,
         selectedFilePath: session.selectedFilePath,
       } : null;
     });
-    assert.equal(repairedSessionState?.currentDirectory, workspaceRoot, 'Code UI should replace stale local currentDirectory with the backend workspace root');
+    assert.equal(repairedSessionState?.currentDirectory, reviewedWorkspaceRoot, 'Code UI should replace stale local currentDirectory with the backend workspace root');
     assert.equal(repairedSessionState?.selectedFilePath, null, 'Code UI should not preserve a stale selected file outside the workspace');
 
     const chatTab = page.locator('[data-code-assistant-tab="chat"]');
@@ -405,6 +468,29 @@ guardian:
     ]);
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
     assert.match(await page.locator('.code-chat__title').textContent(), /Coding Assistant/);
+
+    await activityTab.click();
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-status-card strong, .approval-card')).length > 0
+        || !!document.querySelector('.code-assistant-panel__body');
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-status-card')).some((node) => (node.textContent || '').includes('Workspace trust: accepted'));
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-status-card')).some((node) => (node.textContent || '').includes('Raw scanner state remains caution'));
+    });
+    await chatTab.click();
+    await page.waitForSelector('.code-chat__history');
+
+    await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
+    await page.waitForFunction((expected) => {
+      const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
+      return (activeMeta?.textContent || '').includes(expected);
+    }, workspaceRoot);
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
+    });
 
     // Icon rail panel switching — switch to explorer
     await page.locator('[data-code-panel-switch="explorer"]').click();
@@ -542,6 +628,16 @@ guardian:
     await page.waitForSelector('.code-page');
     assert.match(dismissedRoutePrompt, /Save changes to example\.ts before leaving the Code page\?/);
     assert.doesNotMatch(fs.readFileSync(examplePath, 'utf-8'), /route guard smoke/, 'Cancelling the leave prompt should not save the dirty editor content');
+
+    await page.evaluate(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      const model = models.find((candidate) => candidate.uri?.path?.endsWith('/src/example.ts'));
+      if (!model) throw new Error('Example Monaco model not found');
+      if (!model.getValue().includes('// route guard smoke accepted')) {
+        model.setValue(`${model.getValue()}\n// route guard smoke accepted\n`);
+      }
+    });
+    await page.waitForSelector('[data-code-save-file]');
 
     const acceptedDialogPromise = page.waitForEvent('dialog');
     const acceptedClickPromise = page.click('a[data-page="dashboard"]');

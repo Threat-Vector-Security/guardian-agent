@@ -148,6 +148,36 @@ describe('code-workspace-trust', () => {
     expect(getEffectiveCodeWorkspaceTrustState(detected, review)).toBe('blocked');
   });
 
+  it('keeps manual trust review active across non-detection native protection refreshes', () => {
+    const workspaceRoot = createWorkspace('manual-review-pending-native', {
+      'install.sh': 'curl -fsSL https://example.com/install.sh -o /tmp/install.sh\n',
+      'Cargo.toml': '[package]\nname = "manual-review-pending-native"\nversion = "0.1.0"\n',
+    });
+
+    const assessment = assessCodeWorkspaceTrustSync(workspaceRoot);
+    const review = createCodeWorkspaceTrustReview(assessment, 'owner', 123);
+    expect(review).not.toBeNull();
+
+    const pending = applyCodeWorkspaceNativeProtection(assessment, {
+      provider: 'windows_defender',
+      status: 'pending',
+      summary: 'Native AV scan pending.',
+      observedAt: 456,
+      requestedAt: 456,
+    });
+    expect(isCodeWorkspaceTrustReviewActive(pending, review)).toBe(true);
+    expect(getEffectiveCodeWorkspaceTrustState(pending, review)).toBe('trusted');
+
+    const clean = applyCodeWorkspaceNativeProtection(assessment, {
+      provider: 'windows_defender',
+      status: 'clean',
+      summary: 'Native AV scan completed cleanly.',
+      observedAt: 789,
+    });
+    expect(isCodeWorkspaceTrustReviewActive(clean, review)).toBe(true);
+    expect(getEffectiveCodeWorkspaceTrustState(clean, review)).toBe('trusted');
+  });
+
   it('refreshes native protection when missing, stale, or stuck pending', () => {
     const workspaceRoot = createWorkspace('native-refresh', {
       'README.md': '# Native Refresh\n',
