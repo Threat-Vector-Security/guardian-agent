@@ -17,7 +17,7 @@ For tier-routed chat, the built-in `local` and `external` agents still share one
 Global agent memory is the normal long-term knowledge base for the assistant outside Code sessions.
 
 - keyed by assistant/agent identity
-- persisted as markdown plus sidecar metadata
+- persisted as a readable markdown view plus a canonical signed sidecar index
 - loaded into normal chat prompt context
 - written by `memory_save` outside Code or by automatic memory flush from normal chat
 
@@ -59,7 +59,10 @@ Layer 1: Persistent Memory Stores (AgentMemoryStore)
   Code-session memory:
     ~/.guardianagent/code-session-memory/{codeSessionId}.md + .index.json by default
     or <knowledgeBase.basePath>/code-sessions/ when basePath is configured
-  Only active/reviewed content is loaded into prompt context
+  Managed memory files are written with restrictive filesystem permissions on supported hosts
+  The `.index.json` file is the canonical state and is HMAC-verified through the control-plane integrity manifest
+  The `.md` file is a derived readable view rebuilt from the index
+  Only active/reviewed content from a verified index is loaded into prompt context
   Written via memory_save or automatic memory flush with trust/provenance metadata
 
 Layer 2: FTS5 Search Index (ConversationService)
@@ -121,6 +124,7 @@ assistant:
     knowledgeBase:
       enabled: true
       basePath: ~/.guardianagent/memory
+      readOnly: false
       maxContextChars: 4000
       maxFileChars: 20000
       autoFlush: true
@@ -132,6 +136,7 @@ Notes:
 - Global memory defaults to `~/.guardianagent/memory`.
 - Code-session memory defaults to `~/.guardianagent/code-session-memory`.
 - If `knowledgeBase.basePath` is set, Code-session memory is stored under `<basePath>/code-sessions`.
+- If `knowledgeBase.readOnly` is `true`, normal durable writes are frozen for both global and Code-session memory.
 - Code sessions do not preload global memory by default.
 
 Tier-routing note:
@@ -180,6 +185,7 @@ Scope rules:
 
 - outside Code: reads the current agent's global memory
 - inside Code: reads the current Code session's long-term memory
+- when an index file fails integrity verification, the scope is treated as empty instead of falling back to the markdown cache
 
 ### memory_save
 
@@ -198,6 +204,7 @@ Scope rules:
 
 - outside Code: writes to global agent memory
 - inside Code: writes to the current Code session's long-term memory
+- if `knowledgeBase.readOnly` is enabled, `memory_save` fails before approval/execution instead of creating a pending write
 
 Example usage by the agent:
 
@@ -233,10 +240,17 @@ Bridge rules:
 - quarantined entries are persisted in sidecar metadata but excluded from normal prompt context
 - verification distinguishes active writes from quarantined/unreviewed writes
 - inactive/quarantined material is only surfaced through explicit search paths
+- `knowledgeBase.readOnly` freezes normal assistant/runtime durable writes, including `memory_save` and automatic flush writes
+- suspicious memory content is stripped from prompt/context loads even when the stored entry is otherwise active
 
 ## Persistent Memory File Format
 
-Each global agent memory file and each Code-session memory file is a markdown view organized by category:
+Each global agent memory file and each Code-session memory file has:
+
+- a canonical `*.index.json` sidecar containing trust/status/provenance metadata
+- a derived markdown view organized by category for auditability
+
+The markdown view looks like:
 
 ```markdown
 ## Preferences
@@ -301,6 +315,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 - max 10 messages per flush event
 - flush failures are silently caught and never break message building
 - controlled by `knowledgeBase.autoFlush` config (default: `true`)
+- skipped entirely when `knowledgeBase.readOnly` is `true`
 
 ## Cross-Scope Behavior
 

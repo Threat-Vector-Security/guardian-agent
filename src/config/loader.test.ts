@@ -102,6 +102,10 @@ describe('validateConfig', () => {
     expect(errors).toEqual([]);
   });
 
+  it('should default knowledge base readOnly to false', () => {
+    expect(DEFAULT_CONFIG.assistant.memory.knowledgeBase?.readOnly).toBe(false);
+  });
+
   it('should reject invalid assistant security defaults', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
@@ -743,6 +747,79 @@ assistant:
     expect(config.assistant.tools.search).toBeDefined();
     expect(config.assistant.tools.search?.enabled).toBe(true);
     expect(config.assistant.tools.search?.sources).toEqual([]);
+  });
+
+  it('should load YAML scalars with JSON schema semantics', () => {
+    const configPath = join(TEST_DIR, 'json-schema.yaml');
+    writeFileSync(
+      configPath,
+      `
+assistant:
+  memory:
+    knowledgeBase:
+      basePath: 2026-03-20
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.assistant.memory.knowledgeBase?.basePath).toBe('2026-03-20');
+    expect(typeof config.assistant.memory.knowledgeBase?.basePath).toBe('string');
+  });
+
+  it('enforces the immutable security baseline on loaded config', () => {
+    const configPath = join(TEST_DIR, 'baseline.yaml');
+    writeFileSync(
+      configPath,
+      `
+guardian:
+  enabled: false
+  deniedPaths: []
+  guardianAgent:
+    enabled: false
+    failOpen: true
+  policy:
+    enabled: false
+    mode: off
+assistant:
+  tools:
+    policyMode: autonomous
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.guardian.enabled).toBe(true);
+    expect(config.guardian.guardianAgent.enabled).toBe(true);
+    expect(config.guardian.guardianAgent.failOpen).toBe(false);
+    expect(config.guardian.policy.enabled).toBe(true);
+    expect(config.guardian.policy.mode).toBe('shadow');
+    expect(config.assistant.tools.policyMode).toBe('approve_by_policy');
+    expect(config.guardian.deniedPaths).toEqual(expect.arrayContaining([
+      '(^|/)\\.env(?:$|\\.)',
+      '\\.pem$',
+      '\\.key$',
+      '(^|/)credentials\\.[^/]+$',
+      '(^|/)id_rsa(?:$|\\.)',
+    ]));
+  });
+
+  it('allows baseline relaxation only when GUARDIAN_DISABLE_BASELINE is set before load', () => {
+    vi.stubEnv('GUARDIAN_DISABLE_BASELINE', '1');
+    const configPath = join(TEST_DIR, 'baseline-override.yaml');
+    writeFileSync(
+      configPath,
+      `
+guardian:
+  enabled: false
+assistant:
+  tools:
+    policyMode: autonomous
+`,
+    );
+
+    const config = loadConfigFromFile(configPath);
+    expect(config.guardian.enabled).toBe(false);
+    expect(config.assistant.tools.policyMode).toBe('autonomous');
+    vi.unstubAllEnvs();
   });
 
   it('should throw for missing config file', () => {

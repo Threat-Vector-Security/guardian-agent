@@ -38,6 +38,8 @@ const log = createLogger('channel:web');
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const PRIVILEGED_TICKET_TTL_SECONDS = 300;
 const PRIVILEGED_TICKET_MAX_REPLAY_TRACK = 2048;
+const PRIVILEGED_TICKET_ISSUE_WINDOW_MS = 5 * 60_000;
+const PRIVILEGED_TICKET_ISSUE_LIMIT = 3;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 const AUTH_FAILURE_LIMIT = 8;
 const AUTH_BLOCK_DURATION_MS = 5 * 60_000;
@@ -65,7 +67,13 @@ type PrivilegedTicketAction =
   | 'connectors.config'
   | 'connectors.pack'
   | 'connectors.playbook'
+  | 'guardian.config'
+  | 'policy.config'
+  | 'tools.policy'
+  | 'config.security'
+  | 'memory.config'
   | 'search.pick-path'
+  | 'killswitch'
   | 'factory-reset';
 
 export interface WebAuthRuntimeConfig {
@@ -108,6 +116,11 @@ interface AuthFailureState {
   count: number;
   windowStartedAt: number;
   blockedUntil?: number;
+}
+
+interface TicketMintState {
+  count: number;
+  windowStartedAt: number;
 }
 
 const SESSION_COOKIE_NAME = 'guardianagent_sid';
@@ -215,6 +228,7 @@ export class WebChannel implements ChannelAdapter {
   private readonly usedPrivilegedTicketNonces = new Map<string, number>();
   private readonly sessions = new Map<string, CookieSession>();
   private readonly authFailures = new Map<string, AuthFailureState>();
+  private readonly ticketMintAttempts = new Map<string, TicketMintState>();
   private sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: WebChannelOptions = {}) {
@@ -245,7 +259,7 @@ export class WebChannel implements ChannelAdapter {
         res.setHeader('Access-Control-Allow-Origin', origin);
       }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Stream');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Stream, X-Guardian-Ticket');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
 
       if (req.method === 'OPTIONS') {
@@ -290,6 +304,7 @@ export class WebChannel implements ChannelAdapter {
     }
     this.sessions.clear();
     this.authFailures.clear();
+    this.ticketMintAttempts.clear();
 
     // Close all SSE connections
     for (const client of this.sseClients) {
@@ -440,6 +455,57 @@ export class WebChannel implements ChannelAdapter {
 
     sendJSON(res, invalidToken ? 403 : 401, { error: invalidToken ? 'Invalid token' : 'Authentication required' });
     return false;
+  }
+
+  private recordPrivilegedTicketMint(req: IncomingMessage): number {
+    const key = this.getClientAddress(req);
+    const now = Date.now();
+    const existing = this.ticketMintAttempts.get(key);
+    let next: TicketMintState;
+
+    if (!existing || now - existing.windowStartedAt >= PRIVILEGED_TICKET_ISSUE_WINDOW_MS) {
+      next = { count: 1, windowStartedAt: now };
+    } else {
+      next = { ...existing, count: existing.count + 1 };
+    }
+
+    this.ticketMintAttempts.set(key, next);
+    if (next.count <= PRIVILEGED_TICKET_ISSUE_LIMIT) {
+      return 0;
+    }
+    return Math.max(0, (next.windowStartedAt + PRIVILEGED_TICKET_ISSUE_WINDOW_MS) - now);
+  }
+
+  private sendPrivilegedTicketRateLimited(res: ServerResponse, retryAfterMs: number): void {
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    sendJSON(res, 429, { error: 'Too many privileged ticket requests. Try again later.' });
+  }
+
+  private hasNestedPath(value: unknown, path: readonly string[]): boolean {
+    if (path.length === 0) return true;
+    const record = asRecord(value);
+    if (!record) return false;
+    const [head, ...rest] = path;
+    if (!hasOwn(record, head)) return false;
+    return rest.length === 0
+      ? true
+      : this.hasNestedPath(record[head], rest);
+  }
+
+  private getConfigPrivilegedAction(value: unknown): PrivilegedTicketAction | null {
+    const touchesSecurity = this.hasNestedPath(value, ['guardian'])
+      || this.hasNestedPath(value, ['assistant', 'security'])
+      || this.hasNestedPath(value, ['assistant', 'tools', 'policyMode'])
+      || this.hasNestedPath(value, ['assistant', 'tools', 'toolPolicies']);
+    if (touchesSecurity) {
+      return 'config.security';
+    }
+
+    const touchesMemory = this.hasNestedPath(value, ['assistant', 'memory', 'knowledgeBase'])
+      || this.hasNestedPath(value, ['assistant', 'memory', 'semanticSearch'])
+      || this.hasNestedPath(value, ['assistant', 'memory', 'knowledgeBase', 'semanticSearch']);
+    return touchesMemory ? 'memory.config' : null;
   }
 
   setAuthConfig(auth: WebAuthRuntimeConfig): void {
@@ -605,7 +671,13 @@ export class WebChannel implements ChannelAdapter {
       || value === 'connectors.config'
       || value === 'connectors.pack'
       || value === 'connectors.playbook'
+      || value === 'guardian.config'
+      || value === 'policy.config'
+      || value === 'tools.policy'
+      || value === 'config.security'
+      || value === 'memory.config'
       || value === 'search.pick-path'
+      || value === 'killswitch'
       || value === 'factory-reset';
   }
 
@@ -806,6 +878,11 @@ export class WebChannel implements ChannelAdapter {
         const action = (parsed.action ?? '').trim();
         if (!this.isPrivilegedTicketAction(action)) {
           sendJSON(res, 400, { error: 'Invalid privileged action' });
+          return;
+        }
+        const retryAfterMs = this.recordPrivilegedTicketMint(req);
+        if (retryAfterMs > 0) {
+          this.sendPrivilegedTicketRateLimited(res, retryAfterMs);
           return;
         }
         const ticket = this.mintPrivilegedTicket(action);
@@ -1111,6 +1188,7 @@ export class WebChannel implements ChannelAdapter {
             allowedCommands?: string[];
             allowedDomains?: string[];
           };
+          ticket?: string;
         };
         try {
           parsed = body.trim()
@@ -1122,10 +1200,14 @@ export class WebChannel implements ChannelAdapter {
                 allowedCommands?: string[];
                 allowedDomains?: string[];
               };
+              ticket?: string;
             })
             : {};
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'tools.policy', parsed.ticket)) {
           return;
         }
         const result = this.dashboard.onToolsPolicyUpdate(parsed);
@@ -2247,9 +2329,18 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
+        const parsedRecord = asRecord(parsed);
+        const bodyTicket = trimOptionalString(parsedRecord?.ticket);
+        if (parsedRecord && hasOwn(parsedRecord, 'ticket')) {
+          delete parsedRecord.ticket;
+        }
+        const privilegedAction = this.getConfigPrivilegedAction(parsedRecord);
+        if (privilegedAction && !this.requirePrivilegedTicket(req, res, url, privilegedAction, bodyTicket)) {
+          return;
+        }
         try {
           const result = await this.dashboard.onConfigUpdate(parsed as Record<string, unknown>);
-          sendJSON(res, 200, result);
+          sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
           this.maybeEmitUIInvalidation(result, ['config', 'providers', 'tools', 'automations', 'network'], 'config.updated', url.pathname);
         } catch (err) {
           logInternalError('Config update failed', err);
@@ -2753,7 +2844,7 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         const result = await this.dashboard.onConfigUpdate({ defaultProvider: parsed.name });
-        sendJSON(res, result.success ? 200 : 400, result);
+        sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
         this.maybeEmitUIInvalidation(result, ['config', 'providers'], 'providers.default.updated', url.pathname);
         return;
       }
@@ -3642,9 +3733,13 @@ export class WebChannel implements ChannelAdapter {
           llmProvider?: 'local' | 'external' | 'auto';
           failOpen?: boolean;
           timeoutMs?: number;
+          ticket?: string;
         };
+        if (!this.requirePrivilegedTicket(req, res, url, 'guardian.config', input.ticket)) {
+          return;
+        }
         const result = this.dashboard.onGuardianAgentUpdate(input);
-        sendJSON(res, 200, result);
+        sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
         this.maybeEmitUIInvalidation(result, ['config', 'security'], 'guardian-agent.updated', url.pathname);
         return;
       }
@@ -3669,11 +3764,20 @@ export class WebChannel implements ChannelAdapter {
         const input = JSON.parse(body) as {
           enabled?: boolean;
           mode?: 'off' | 'shadow' | 'enforce';
-          families?: { tool?: string; admin?: string; guardian?: string; event?: string };
+          families?: {
+            tool?: 'off' | 'shadow' | 'enforce';
+            admin?: 'off' | 'shadow' | 'enforce';
+            guardian?: 'off' | 'shadow' | 'enforce';
+            event?: 'off' | 'shadow' | 'enforce';
+          };
           mismatchLogLimit?: number;
+          ticket?: string;
         };
+        if (!this.requirePrivilegedTicket(req, res, url, 'policy.config', input.ticket)) {
+          return;
+        }
         const result = this.dashboard.onPolicyUpdate(input);
-        sendJSON(res, 200, result);
+        sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
         this.maybeEmitUIInvalidation(result, ['config', 'security'], 'policy.config.updated', url.pathname);
         return;
       }
@@ -3682,6 +3786,19 @@ export class WebChannel implements ChannelAdapter {
       if (req.method === 'POST' && url.pathname === '/api/policy/reload') {
         if (!this.dashboard.onPolicyReload) {
           sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let parsed: { ticket?: string } = {};
+        try {
+          const body = await readBody(req, this.maxBodyBytes);
+          if (body.trim()) {
+            parsed = JSON.parse(body) as { ticket?: string };
+          }
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'policy.config', parsed.ticket)) {
           return;
         }
         const result = this.dashboard.onPolicyReload();
@@ -3736,13 +3853,26 @@ export class WebChannel implements ChannelAdapter {
 
       // POST /api/killswitch — Shut down the entire process
       if (req.method === 'POST' && url.pathname === '/api/killswitch') {
-        sendJSON(res, 200, { success: true, message: 'Shutting down...' });
-        if (this.dashboard.onKillswitch) {
-          // Small delay so the HTTP response is flushed before the process exits
-          setTimeout(() => this.dashboard.onKillswitch!(), 100);
-        } else {
+        if (!this.dashboard.onKillswitch) {
           sendJSON(res, 404, { error: 'Not available' });
+          return;
         }
+        let parsed: { ticket?: string } = {};
+        try {
+          const body = await readBody(req, this.maxBodyBytes);
+          if (body.trim()) {
+            parsed = JSON.parse(body) as { ticket?: string };
+          }
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'killswitch', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, { success: true, message: 'Shutting down...' });
+        // Small delay so the HTTP response is flushed before the process exits
+        setTimeout(() => this.dashboard.onKillswitch!(), 100);
         return;
       }
 
@@ -3848,7 +3978,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const sessionId = decodeURIComponent(codeSessionMessageMatch[1]);
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; content?: unknown };
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; content?: unknown; metadata?: unknown };
         const content = asNonEmptyString(parsed.content);
         if (!content) {
           sendJSON(res, 400, { error: 'content is required' });
@@ -3864,6 +3994,9 @@ export class WebChannel implements ChannelAdapter {
             channel: parsed.channel || 'web',
             surfaceId: '',
             content,
+            metadata: typeof parsed.metadata === 'object' && parsed.metadata && !Array.isArray(parsed.metadata)
+              ? parsed.metadata as Record<string, unknown>
+              : undefined,
           });
           sendJSON(res, 200, response);
         } catch (err) {

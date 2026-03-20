@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AssistantGatewayMonitoringConfig, HostMonitorSeverity } from '../config/types.js';
+import { writeSecureFile } from '../util/secure-fs.js';
 import {
   acknowledgeSecurityAlert,
   ensureSecurityAlertLifecycle,
@@ -181,8 +182,7 @@ export class GatewayFirewallMonitoringService {
       targets: [...this.targets.values()].sort((a, b) => a.id.localeCompare(b.id)),
       alerts: [...this.alerts.values()],
     };
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
   }
 
   getStatus(): GatewayMonitorStatus {

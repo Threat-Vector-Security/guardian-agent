@@ -107,6 +107,9 @@ Current behavior:
 - low-trust or tainted remote-derived writes default to `quarantined`
 - quarantined memory is excluded from default planner context
 - verification distinguishes active memory writes from quarantined ones
+- `assistant.memory.knowledgeBase.readOnly` freezes normal assistant/runtime durable writes in both global and Code-session memory
+- verified memory indexes are now the canonical durable state; prompt loads reject tampered indexes instead of trusting cached markdown
+- automatic flush skips durable writes while the freeze is enabled
 
 ## Principal-Bound Approvals
 
@@ -218,6 +221,7 @@ The harness validates:
 - quarantined context cannot directly drive filesystem mutation
 - trusted vs low-trust memory behavior
 - approval-bound low-trust memory persistence
+- privileged-ticket gating for security-sensitive config mutation used by the harness itself
 - expired schedule denial and re-approval
 - failure-driven task auto-pause
 - repeated broken-tool retries are stopped before they can continue spending

@@ -12,6 +12,8 @@ import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
+import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
+import { enforceSecurityBaseline, logSecurityBaselineEnforcement } from '../guardian/security-baseline.js';
 import { ProviderRegistry } from '../llm/provider-registry.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
@@ -308,6 +310,22 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   }
   if (assistant.memory.retentionDays < 1) {
     errors.push('assistant.memory.retentionDays must be >= 1');
+  }
+  const knowledgeBase = assistant.memory.knowledgeBase ?? {
+    enabled: true,
+    readOnly: false,
+    maxContextChars: 4000,
+    maxFileChars: 20000,
+    autoFlush: true,
+  };
+  if (knowledgeBase.maxContextChars < 1) {
+    errors.push('assistant.memory.knowledgeBase.maxContextChars must be >= 1');
+  }
+  if (knowledgeBase.maxFileChars < 1) {
+    errors.push('assistant.memory.knowledgeBase.maxFileChars must be >= 1');
+  }
+  if (knowledgeBase.maxContextChars > knowledgeBase.maxFileChars) {
+    errors.push('assistant.memory.knowledgeBase.maxContextChars must be <= assistant.memory.knowledgeBase.maxFileChars');
   }
   if (assistant.analytics.retentionDays < 1) {
     errors.push('assistant.analytics.retentionDays must be >= 1');
@@ -972,13 +990,28 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
 }
 
 /** Load configuration from a YAML file path. */
-export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
+export interface ConfigLoadOptions {
+  integrity?: ControlPlaneIntegrity;
+  adoptUntrackedIntegrity?: boolean;
+}
+
+export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions): GuardianAgentConfig {
   if (!existsSync(filePath)) {
     throw new Error(`Configuration file not found: ${filePath}`);
   }
 
+  if (options?.integrity) {
+    const verification = options.integrity.verifyFileSync(filePath, {
+      adoptUntracked: options.adoptUntrackedIntegrity === true,
+      updatedBy: 'config_load',
+    });
+    if (!verification.ok) {
+      throw new Error(verification.message);
+    }
+  }
+
   const raw = readFileSync(filePath, 'utf-8');
-  const parsed = yaml.load(raw) as Partial<GuardianAgentConfig> | null;
+  const parsed = yaml.load(raw, { schema: yaml.JSON_SCHEMA }) as Partial<GuardianAgentConfig> | null;
 
   if (!parsed || typeof parsed !== 'object') {
     throw new Error(`Invalid configuration file: ${filePath}`);
@@ -1022,6 +1055,7 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
   merged = resolveUnifiedOperatorControls(merged);
 
   merged = normalizeConfigInputs(merged);
+  logSecurityBaselineEnforcement(enforceSecurityBaseline(merged, 'config_file'));
 
   const errors = validateConfig(merged);
   if (errors.length > 0) {
@@ -1112,13 +1146,15 @@ function resolveUnifiedOperatorControls(config: GuardianAgentConfig): GuardianAg
 }
 
 /** Load configuration with fallback to defaults. */
-export function loadConfig(filePath?: string): GuardianAgentConfig {
+export function loadConfig(filePath?: string, options?: ConfigLoadOptions): GuardianAgentConfig {
   const path = filePath ?? DEFAULT_CONFIG_PATH;
 
   if (!existsSync(path)) {
     // No config file — return defaults
-    return { ...DEFAULT_CONFIG };
+    const fallback = structuredClone(DEFAULT_CONFIG);
+    enforceSecurityBaseline(fallback, 'config_file');
+    return fallback;
   }
 
-  return loadConfigFromFile(path);
+  return loadConfigFromFile(path, options);
 }

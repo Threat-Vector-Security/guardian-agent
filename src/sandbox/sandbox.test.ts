@@ -34,6 +34,9 @@ describe('buildBwrapArgs', () => {
     expect(args).toContain('--new-session');
     // Should NOT have writable workspace bind
     expect(args).not.toContain('--bind');
+    const workspaceBindIndex = args.findIndex((arg, index) =>
+      arg === '--ro-bind' && args[index + 1] === workspace && args[index + 2] === workspace);
+    expect(workspaceBindIndex).toBeGreaterThanOrEqual(0);
   });
 
   it('builds workspace-write profile with writable workspace', () => {
@@ -227,9 +230,9 @@ describe('DEFAULT_SANDBOX_CONFIG', () => {
 });
 
 describe('PROTECTED_PATHS', () => {
-  it('includes .git and .env', () => {
-    expect(PROTECTED_PATHS).toContain('.git');
+  it('includes env files', () => {
     expect(PROTECTED_PATHS).toContain('.env');
+    expect(PROTECTED_PATHS).toContain('.env.local');
   });
 });
 

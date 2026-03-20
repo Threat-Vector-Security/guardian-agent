@@ -6,9 +6,12 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
+import { detectInjection, stripInvisibleChars } from '../guardian/input-sanitizer.js';
+import { mkdirSecureSync, writeSecureFileSync } from '../util/secure-fs.js';
 
 export type MemorySourceType = 'user' | 'local_tool' | 'remote_tool' | 'system' | 'operator';
 export type MemoryTrustLevel = 'trusted' | 'untrusted' | 'reviewed';
@@ -18,14 +21,25 @@ export type MemoryStatus = 'active' | 'quarantined' | 'expired' | 'rejected';
 export interface AgentMemoryStoreConfig {
   enabled: boolean;
   basePath?: string;
+  readOnly: boolean;
   maxContextChars: number;
   maxFileChars: number;
+  integrity?: ControlPlaneIntegrity;
+  onSecurityEvent?: (event: {
+    severity: 'info' | 'warn' | 'critical';
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  }) => void;
 }
 
 export const DEFAULT_MEMORY_STORE_CONFIG: AgentMemoryStoreConfig = {
   enabled: true,
+  readOnly: false,
   maxContextChars: 4000,
   maxFileChars: 20000,
+  integrity: undefined,
+  onSecurityEvent: undefined,
 };
 
 export interface MemoryProvenance {
@@ -61,10 +75,11 @@ interface MemoryIndexFile {
 }
 
 const EMPTY_INDEX: MemoryIndexFile = { version: 1, entries: [] };
+const MEMORY_CONTEXT_BLOCK_THRESHOLD = 3;
 
 export class AgentMemoryStore {
-  private readonly basePath: string;
-  private readonly config: AgentMemoryStoreConfig;
+  private basePath: string;
+  private config: AgentMemoryStoreConfig;
   private readonly cache = new Map<string, string>();
   private readonly indexCache = new Map<string, MemoryIndexFile>();
 
@@ -73,7 +88,7 @@ export class AgentMemoryStore {
     this.basePath = this.config.basePath ?? join(homedir(), '.guardianagent', 'memory');
 
     if (this.config.enabled) {
-      mkdirSync(this.basePath, { recursive: true });
+      mkdirSecureSync(this.basePath);
     }
   }
 
@@ -95,6 +110,21 @@ export class AgentMemoryStore {
     return createHash('sha256').update(content).digest('hex');
   }
 
+  private emitSecurityEvent(event: {
+    severity: 'info' | 'warn' | 'critical';
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  }): void {
+    this.config.onSecurityEvent?.(event);
+  }
+
+  private assertWritable(): void {
+    if (this.config.readOnly) {
+      throw new Error('Persistent memory is read-only.');
+    }
+  }
+
   private readIndex(agentId: string): MemoryIndexFile {
     const cached = this.indexCache.get(agentId);
     if (cached) {
@@ -105,6 +135,28 @@ export class AgentMemoryStore {
     if (!existsSync(path)) {
       this.indexCache.set(agentId, { ...EMPTY_INDEX, entries: [] });
       return { ...EMPTY_INDEX, entries: [] };
+    }
+
+    if (this.config.integrity) {
+      const verification = this.config.integrity.verifyFileSync(path, {
+        adoptUntracked: true,
+        updatedBy: 'memory_index_load',
+      });
+      if (!verification.ok) {
+        this.indexCache.delete(agentId);
+        this.cache.delete(agentId);
+        this.emitSecurityEvent({
+          severity: 'critical',
+          code: 'memory_index_integrity_violation',
+          message: verification.message,
+          details: {
+            agentId,
+            path,
+            integrityCode: verification.code,
+          },
+        });
+        return { ...EMPTY_INDEX, entries: [] };
+      }
     }
 
     try {
@@ -124,12 +176,16 @@ export class AgentMemoryStore {
 
   private writeIndex(agentId: string, index: MemoryIndexFile): void {
     const path = this.indexPath(agentId);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(index, null, 2), 'utf-8');
+    writeSecureFileSync(path, JSON.stringify(index, null, 2));
+    this.config.integrity?.signFileSync(path, 'memory_index_write');
     this.indexCache.set(agentId, index);
   }
 
   private applyExpiry(agentId: string, index: MemoryIndexFile): MemoryIndexFile {
+    if (this.config.readOnly) {
+      return index;
+    }
+
     let changed = false;
     const now = Date.now();
     const nextEntries = index.entries.map((entry) => {
@@ -153,39 +209,95 @@ export class AgentMemoryStore {
     return next;
   }
 
-  private rebuildMarkdown(agentId: string, index?: MemoryIndexFile): void {
-    const effectiveIndex = index ?? this.readIndex(agentId);
+  private renderMarkdown(
+    agentId: string,
+    index: MemoryIndexFile,
+    options?: { sanitizeForPrompt?: boolean },
+  ): string {
+    const sanitizeForPrompt = options?.sanitizeForPrompt === true;
     const lines: string[] = [];
-    const grouped = new Map<string, StoredMemoryEntry[]>();
+    const grouped = new Map<string, string[]>();
 
-    for (const entry of effectiveIndex.entries) {
+    for (const entry of index.entries) {
       if (entry.status !== 'active') continue;
-      const heading = entry.category?.trim() || 'General';
+
+      const renderedContent = sanitizeForPrompt
+        ? this.sanitizeEntryForPrompt(agentId, entry)
+        : entry.content;
+      if (!renderedContent) continue;
+
+      const heading = sanitizeForPrompt
+        ? this.sanitizeHeadingForPrompt(entry.category)
+        : entry.category?.trim() || 'General';
       const list = grouped.get(heading) ?? [];
-      list.push(entry);
+      const trust = entry.trustLevel && entry.trustLevel !== 'trusted'
+        ? ` [${entry.trustLevel}]`
+        : '';
+      list.push(`- ${renderedContent}${trust} _(${entry.createdAt})_`);
       grouped.set(heading, list);
     }
 
     for (const [heading, entries] of grouped.entries()) {
       if (lines.length > 0) lines.push('');
       lines.push(`## ${heading}`);
-      for (const entry of entries) {
-        const trust = entry.trustLevel && entry.trustLevel !== 'trusted'
-          ? ` [${entry.trustLevel}]`
-          : '';
-        lines.push(`- ${entry.content}${trust} _(${entry.createdAt})_`);
-      }
+      lines.push(...entries);
     }
 
-    const content = lines.join('\n');
+    return lines.join('\n');
+  }
+
+  private rebuildMarkdown(agentId: string, index?: MemoryIndexFile): void {
+    const effectiveIndex = index ?? this.readIndex(agentId);
+    const content = this.renderMarkdown(agentId, effectiveIndex);
     const path = this.filePath(agentId);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content, 'utf-8');
+    writeSecureFileSync(path, content);
     this.cache.set(agentId, content);
+  }
+
+  private enforceFileBudget(agentId: string, index: MemoryIndexFile): MemoryIndexFile {
+    const renderLength = (candidate: MemoryIndexFile): number => this.renderMarkdown(agentId, candidate).length;
+    if (renderLength(index) <= this.config.maxFileChars) {
+      return index;
+    }
+
+    const nextEntries = index.entries.map((entry) => ({ ...entry }));
+    let compacted = 0;
+    for (let i = nextEntries.length - 1; i > 0 && renderLength({ ...index, entries: nextEntries }) > this.config.maxFileChars; i--) {
+      if (nextEntries[i]?.status !== 'active') continue;
+      nextEntries[i] = { ...nextEntries[i]!, status: 'expired' };
+      compacted++;
+    }
+
+    const nextIndex: MemoryIndexFile = { ...index, entries: nextEntries };
+    if (renderLength(nextIndex) > this.config.maxFileChars) {
+      throw new Error(`Persistent memory exceeds maxFileChars (${this.config.maxFileChars}).`);
+    }
+
+    if (compacted > 0) {
+      this.emitSecurityEvent({
+        severity: 'info',
+        code: 'memory_file_budget_compacted',
+        message: `Compacted older active entries to respect maxFileChars (${this.config.maxFileChars}).`,
+        details: {
+          agentId,
+          compactedEntries: compacted,
+          maxFileChars: this.config.maxFileChars,
+        },
+      });
+    }
+
+    return nextIndex;
   }
 
   load(agentId: string): string {
     if (!this.config.enabled) return '';
+
+    const indexFileExists = existsSync(this.indexPath(agentId));
+    if (indexFileExists) {
+      const rendered = this.renderMarkdown(agentId, this.readIndex(agentId), { sanitizeForPrompt: true });
+      this.cache.set(agentId, rendered);
+      return rendered;
+    }
 
     const cached = this.cache.get(agentId);
     if (cached !== undefined) return cached;
@@ -206,7 +318,10 @@ export class AgentMemoryStore {
   }
 
   loadForContext(agentId: string): string {
-    const full = this.load(agentId);
+    const indexPath = this.indexPath(agentId);
+    const full = existsSync(indexPath)
+      ? this.renderMarkdown(agentId, this.readIndex(agentId), { sanitizeForPrompt: true })
+      : this.load(agentId);
     if (!full) return '';
 
     if (full.length <= this.config.maxContextChars) return full;
@@ -215,10 +330,13 @@ export class AgentMemoryStore {
 
   save(agentId: string, content: string): void {
     if (!this.config.enabled) return;
+    this.assertWritable();
 
     const path = this.filePath(agentId);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content, 'utf-8');
+    if (content.length > this.config.maxFileChars) {
+      throw new Error(`Persistent memory exceeds maxFileChars (${this.config.maxFileChars}).`);
+    }
+    writeSecureFileSync(path, content);
     this.cache.set(agentId, content);
   }
 
@@ -232,6 +350,7 @@ export class AgentMemoryStore {
         category: entry.category,
       };
     }
+    this.assertWritable();
 
     const index = this.readIndex(agentId);
     const stored: StoredMemoryEntry = {
@@ -249,12 +368,12 @@ export class AgentMemoryStore {
       contentHash: this.computeContentHash(entry.content),
     };
 
-    index.entries.unshift(stored);
-    this.writeIndex(agentId, index);
-
-    if (stored.status === 'active') {
-      this.rebuildMarkdown(agentId, index);
-    }
+    const nextIndex = this.enforceFileBudget(agentId, {
+      ...index,
+      entries: [stored, ...index.entries],
+    });
+    this.writeIndex(agentId, nextIndex);
+    this.rebuildMarkdown(agentId, nextIndex);
 
     return stored;
   }
@@ -335,11 +454,34 @@ export class AgentMemoryStore {
 
   exists(agentId: string): boolean {
     if (!this.config.enabled) return false;
-    return existsSync(this.filePath(agentId)) || this.readIndex(agentId).entries.length > 0;
+    if (existsSync(this.indexPath(agentId))) {
+      return this.readIndex(agentId).entries.length > 0;
+    }
+    return existsSync(this.filePath(agentId));
   }
 
   size(agentId: string): number {
     return this.load(agentId).length;
+  }
+
+  isReadOnly(): boolean {
+    return this.config.readOnly;
+  }
+
+  updateConfig(next: Partial<AgentMemoryStoreConfig>): void {
+    const merged = { ...this.config, ...next };
+    const nextBasePath = merged.basePath ?? join(homedir(), '.guardianagent', 'memory');
+    const basePathChanged = nextBasePath !== this.basePath;
+    this.config = merged;
+    this.basePath = nextBasePath;
+
+    if (this.config.enabled) {
+      mkdirSecureSync(this.basePath);
+    }
+
+    if (basePathChanged) {
+      this.clearCache();
+    }
   }
 
   clearCache(): void {
@@ -356,6 +498,7 @@ export class AgentMemoryStore {
       const indexPath = this.indexPath(agentId);
       if (existsSync(markdownPath)) unlinkSync(markdownPath);
       if (existsSync(indexPath)) unlinkSync(indexPath);
+      this.config.integrity?.removeFileSync(indexPath, 'memory_index_delete');
       this.cache.delete(agentId);
       this.indexCache.delete(agentId);
       return true;
@@ -379,5 +522,34 @@ export class AgentMemoryStore {
     } catch {
       return [];
     }
+  }
+
+  private sanitizeHeadingForPrompt(category?: string): string {
+    const cleaned = stripInvisibleChars(category?.trim() || 'General').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return 'General';
+    const detection = detectInjection(cleaned);
+    return detection.score >= MEMORY_CONTEXT_BLOCK_THRESHOLD ? 'General' : cleaned;
+  }
+
+  private sanitizeEntryForPrompt(agentId: string, entry: StoredMemoryEntry): string | null {
+    const cleaned = stripInvisibleChars(entry.content).trim();
+    if (!cleaned) return null;
+    const detection = detectInjection(cleaned);
+    if (detection.score >= MEMORY_CONTEXT_BLOCK_THRESHOLD) {
+      this.emitSecurityEvent({
+        severity: 'warn',
+        code: 'memory_context_entry_blocked',
+        message: 'Blocked suspicious memory entry from prompt context.',
+        details: {
+          agentId,
+          entryId: entry.id,
+          category: entry.category,
+          score: detection.score,
+          signals: detection.signals,
+        },
+      });
+      return null;
+    }
+    return cleaned;
   }
 }

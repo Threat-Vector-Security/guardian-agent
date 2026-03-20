@@ -7,18 +7,19 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createLogger } from '../util/logging.js';
 import type { AutomationOutputHandlingConfig } from '../config/types.js';
 import type { AuditLog } from '../guardian/audit-log.js';
+import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import type { CronScheduler } from './scheduler.js';
 import type { EventBus, AgentEvent } from '../queue/event-bus.js';
 import type { DeviceInventoryService } from './device-inventory.js';
 import { promoteAutomationFindings, type AutomationPromotedFindingRef } from './automation-output.js';
 import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
+import { writeSecureFile } from '../util/secure-fs.js';
 const log = createLogger('scheduled-tasks');
 
 // ─── Types ────────────────────────────────────────────────
@@ -569,6 +570,7 @@ export interface ScheduledTaskServiceDeps {
   }) => void | Promise<void>;
   resolvePlaybookOutputHandling?: (playbookId: string) => AutomationOutputHandlingConfig | undefined;
   persistPath?: string;
+  integrity?: ControlPlaneIntegrity;
   now?: () => number;
 }
 
@@ -614,6 +616,7 @@ export class ScheduledTaskService {
   private readonly onNetworkScanComplete?: ScheduledTaskServiceDeps['onNetworkScanComplete'];
   private readonly resolvePlaybookOutputHandling?: ScheduledTaskServiceDeps['resolvePlaybookOutputHandling'];
   private readonly persistPath: string;
+  private readonly integrity?: ControlPlaneIntegrity;
   private readonly now: () => number;
   /** Run history — kept in memory, most recent first. */
   private readonly history: ScheduledTaskHistoryEntry[] = [];
@@ -633,6 +636,7 @@ export class ScheduledTaskService {
     this.onNetworkScanComplete = deps.onNetworkScanComplete;
     this.resolvePlaybookOutputHandling = deps.resolvePlaybookOutputHandling;
     this.persistPath = deps.persistPath ?? DEFAULT_PERSIST_PATH;
+    this.integrity = deps.integrity;
     this.now = deps.now ?? Date.now;
   }
 
@@ -839,6 +843,17 @@ export class ScheduledTaskService {
 
   async load(): Promise<void> {
     try {
+      if (this.integrity) {
+        const verification = this.integrity.verifyFileSync(this.persistPath, {
+          adoptUntracked: true,
+          updatedBy: 'scheduled_tasks_load',
+        });
+        if (!verification.ok) {
+          log.warn({ path: this.persistPath, reason: verification.message }, 'Scheduled task persistence failed integrity verification');
+          return;
+        }
+      }
+
       const raw = await readFile(this.persistPath, 'utf-8');
       const data = JSON.parse(raw) as ScheduledTaskDefinition[];
       if (Array.isArray(data)) {
@@ -860,9 +875,9 @@ export class ScheduledTaskService {
 
   private async persist(): Promise<void> {
     try {
-      await mkdir(dirname(this.persistPath), { recursive: true });
       const data = Array.from(this.tasks.values());
-      await writeFile(this.persistPath, JSON.stringify(data, null, 2), 'utf-8');
+      await writeSecureFile(this.persistPath, JSON.stringify(data, null, 2));
+      this.integrity?.signFileSync(this.persistPath, 'scheduled_tasks_persist');
     } catch {
       // Best effort
     }

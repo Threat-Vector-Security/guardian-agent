@@ -124,7 +124,7 @@ The **preferred method** for automated testing and bug reproduction is to write 
 1. **Create a dummy configuration:** Generate a temporary `.yaml` file within the script to configure the agent to use a `mock` LLM provider (or explicit local provider like Ollama) and an isolated port.
 2. **Spawn the backend:** Use `child_process.spawn` to launch `npx tsx src/index.ts` in the background, piping `stdout` and `stderr` to a temporary log file.
 3. **Wait for Health:** Poll the `/health` endpoint until the server is fully ready.
-4. **Setup the Environment:** Make an initial HTTP call (e.g., to `/api/tools/policy`) to configure the necessary state (like `approve_by_policy` and restricted sandbox paths).
+4. **Setup the Environment:** For security-sensitive control-plane mutations, mint a privileged ticket first via `POST /api/auth/ticket`, then make the actual HTTP call (for example `/api/tools/policy` with `action: "tools.policy"` or `/api/config` with `action: "config.security"` / `"memory.config"`).
 5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload. When validating contextual security or approval ownership, include the same principal-bearing auth path and direct tool API context fields the real UI uses.
 6. **Assert and Cleanup:** Evaluate the API responses programmatically. Regardless of pass or fail, ensure `appProcess.kill()` is called in a `finally` block or `catch` handler so the port is properly released.
 
@@ -184,6 +184,7 @@ This method is fast, removes dependencies on cross-platform shell quirks, and ca
 The contextual-security uplift harness follows this same pattern in `scripts/test-contextual-security-uplifts.mjs`. Use it when validating:
 - quarantined tool-result reinjection behavior
 - trust-aware `memory_save` outcomes
+- `knowledgeBase.readOnly` and other sensitive memory config changes go through the privileged-ticket control plane
 - principal-bound approval decisions
 - schedule approval expiry, scope drift, and auto-pause
 - tool-chain runaway and overspend suppression
@@ -372,7 +373,7 @@ Tests whether tool descriptions are clear enough for the LLM to **discover, sele
 
 Also tests the **approval flow** by switching between policy modes and approving/denying pending tool executions via the REST API.
 
-**Policy setup:** The tool exercise sections run in `autonomous` mode (set at the start via the `/api/tools/policy` API) so that mutating tools execute without approval gates. The Approval Flow section switches to `approve_by_policy` to test the approval lifecycle specifically.
+**Policy setup:** The tool exercise sections run in `autonomous` mode (set at the start via the `/api/tools/policy` API) so that mutating tools execute without approval gates. Since `/api/tools/policy` is a privileged control-plane mutation, harnesses must first obtain a `tools.policy` ticket from `/api/auth/ticket` and include it in the update body. The Approval Flow section switches to `approve_by_policy` to test the approval lifecycle specifically.
 
 **Non-blocking approvals:** Pending approvals no longer block new messages. If an approval is pending, the LLM receives a context note but continues processing new requests normally.
 

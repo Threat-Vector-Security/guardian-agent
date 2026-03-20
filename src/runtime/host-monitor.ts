@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AssistantHostMonitoringConfig, HostMonitorSeverity } from '../config/types.js';
+import { writeSecureFile } from '../util/secure-fs.js';
 import {
   acknowledgeSecurityAlert,
   ensureSecurityAlertLifecycle,
@@ -205,8 +206,7 @@ export class HostMonitoringService {
       firewallBackend: this.firewallBackend,
       alerts: [...this.alerts.values()],
     };
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
   }
 
   getStatus(): HostMonitorStatus {

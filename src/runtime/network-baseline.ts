@@ -6,11 +6,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { DiscoveredDevice } from './device-inventory.js';
 import type { DeviceType } from './network-intelligence.js';
+import { writeSecureFile } from '../util/secure-fs.js';
 import {
   acknowledgeSecurityAlert,
   ensureSecurityAlertLifecycle,
@@ -214,8 +215,7 @@ export class NetworkBaselineService {
       knownDevices: [...this.knownDevices.values()],
       alerts: [...this.alerts.values()],
     };
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf-8');
+    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2));
   }
 
   getSnapshot(): NetworkBaselineSnapshot {

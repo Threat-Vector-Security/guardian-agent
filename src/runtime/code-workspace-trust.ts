@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { detectInjection, stripInvisibleChars } from '../guardian/input-sanitizer.js';
@@ -196,6 +197,15 @@ export interface CodeWorkspaceTrustAssessment {
   truncated: boolean;
   findings: CodeWorkspaceTrustFinding[];
   nativeProtection?: CodeWorkspaceNativeProtection | null;
+}
+
+export interface CodeWorkspaceTrustReview {
+  decision: 'accepted';
+  reviewedAt: number;
+  reviewedBy: string;
+  assessmentFingerprint: string;
+  rawState: CodeWorkspaceTrustState;
+  findingCount: number;
 }
 
 interface ScanContext {
@@ -462,6 +472,32 @@ function cloneCodeWorkspaceNativeProtection(
   };
 }
 
+function serializeAssessmentForFingerprint(assessment: CodeWorkspaceTrustAssessment): string {
+  return JSON.stringify({
+    workspaceRoot: assessment.workspaceRoot,
+    state: assessment.state,
+    findings: Array.isArray(assessment.findings)
+      ? assessment.findings.map((finding) => ({
+        severity: finding.severity,
+        kind: finding.kind,
+        path: finding.path,
+        summary: finding.summary,
+        evidence: finding.evidence ?? '',
+      }))
+      : [],
+    nativeProtection: assessment.nativeProtection
+      ? {
+        provider: assessment.nativeProtection.provider,
+        status: assessment.nativeProtection.status,
+        summary: assessment.nativeProtection.summary,
+        details: Array.isArray(assessment.nativeProtection.details)
+          ? [...assessment.nativeProtection.details]
+          : [],
+      }
+      : null,
+  });
+}
+
 export function applyCodeWorkspaceNativeProtection(
   assessment: CodeWorkspaceTrustAssessment,
   nativeProtection: CodeWorkspaceNativeProtection | null | undefined,
@@ -485,6 +521,79 @@ export function applyCodeWorkspaceNativeProtection(
     findings,
     nativeProtection: clonedNativeProtection,
   };
+}
+
+export function getCodeWorkspaceTrustAssessmentFingerprint(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+): string {
+  if (!assessment) return '';
+  return createHash('sha256')
+    .update(serializeAssessmentForFingerprint(assessment))
+    .digest('hex');
+}
+
+export function isCodeWorkspaceTrustReviewEligible(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+): boolean {
+  if (!assessment) return false;
+  if (assessment.state === 'trusted') return false;
+  return !assessment.findings.some((finding) => finding.kind === 'native_av_detection');
+}
+
+export function createCodeWorkspaceTrustReview(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+  reviewedBy: string,
+  now = Date.now(),
+): CodeWorkspaceTrustReview | null {
+  if (!isCodeWorkspaceTrustReviewEligible(assessment)) return null;
+  if (!assessment) return null;
+  const eligibleAssessment = assessment;
+  return {
+    decision: 'accepted',
+    reviewedAt: now,
+    reviewedBy: reviewedBy.trim() || 'unknown',
+    assessmentFingerprint: getCodeWorkspaceTrustAssessmentFingerprint(eligibleAssessment),
+    rawState: eligibleAssessment.state,
+    findingCount: Array.isArray(eligibleAssessment.findings) ? eligibleAssessment.findings.length : 0,
+  };
+}
+
+export function cloneCodeWorkspaceTrustReview(
+  review: CodeWorkspaceTrustReview | null | undefined,
+): CodeWorkspaceTrustReview | null {
+  if (!review) return null;
+  return {
+    ...review,
+  };
+}
+
+export function isCodeWorkspaceTrustReviewActive(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+  review: CodeWorkspaceTrustReview | null | undefined,
+): boolean {
+  if (!assessment || !review) return false;
+  if (review.decision !== 'accepted') return false;
+  if (!isCodeWorkspaceTrustReviewEligible(assessment)) return false;
+  return review.assessmentFingerprint === getCodeWorkspaceTrustAssessmentFingerprint(assessment);
+}
+
+export function reconcileCodeWorkspaceTrustReview(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+  review: CodeWorkspaceTrustReview | null | undefined,
+): CodeWorkspaceTrustReview | null {
+  return isCodeWorkspaceTrustReviewActive(assessment, review)
+    ? cloneCodeWorkspaceTrustReview(review)
+    : null;
+}
+
+export function getEffectiveCodeWorkspaceTrustState(
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+  review: CodeWorkspaceTrustReview | null | undefined,
+): CodeWorkspaceTrustState | null {
+  if (!assessment) return null;
+  return isCodeWorkspaceTrustReviewActive(assessment, review)
+    ? 'trusted'
+    : assessment.state;
 }
 
 export function cloneCodeWorkspaceTrustAssessment(

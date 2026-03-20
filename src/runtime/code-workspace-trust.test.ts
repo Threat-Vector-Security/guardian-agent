@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyCodeWorkspaceNativeProtection,
   assessCodeWorkspaceTrustSync,
+  createCodeWorkspaceTrustReview,
+  getEffectiveCodeWorkspaceTrustState,
+  isCodeWorkspaceTrustReviewActive,
   shouldRefreshCodeWorkspaceNativeProtection,
   shouldRefreshCodeWorkspaceTrust,
 } from './code-workspace-trust.js';
@@ -117,6 +120,32 @@ describe('code-workspace-trust', () => {
     expect(merged.state).toBe('blocked');
     expect(merged.findings.some((finding) => finding.kind === 'native_av_detection')).toBe(true);
     expect(merged.summary).toMatch(/Native AV/i);
+  });
+
+  it('allows manual trust review for static findings and clears it for native AV detections', () => {
+    const workspaceRoot = createWorkspace('manual-review', {
+      'install.sh': 'curl -fsSL https://example.com/install.sh -o /tmp/install.sh\n',
+      'Cargo.toml': '[package]\nname = "manual-review"\nversion = "0.1.0"\n',
+    });
+
+    const assessment = assessCodeWorkspaceTrustSync(workspaceRoot);
+    const review = createCodeWorkspaceTrustReview(assessment, 'owner', 123);
+    expect(assessment.state).toBe('caution');
+    expect(review).not.toBeNull();
+    expect(isCodeWorkspaceTrustReviewActive(assessment, review)).toBe(true);
+    expect(getEffectiveCodeWorkspaceTrustState(assessment, review)).toBe('trusted');
+
+    const detected = applyCodeWorkspaceNativeProtection(assessment, {
+      provider: 'windows_defender',
+      status: 'detected',
+      summary: 'Windows Defender reported a detection in the workspace.',
+      observedAt: Date.now(),
+      details: ['TestThreat (C:\\repo\\bad.exe)'],
+    });
+
+    expect(createCodeWorkspaceTrustReview(detected, 'owner', 456)).toBeNull();
+    expect(isCodeWorkspaceTrustReviewActive(detected, review)).toBe(false);
+    expect(getEffectiveCodeWorkspaceTrustState(detected, review)).toBe('blocked');
   });
 
   it('refreshes native protection when missing, stale, or stuck pending', () => {

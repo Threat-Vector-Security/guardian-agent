@@ -460,6 +460,8 @@ export interface AssistantKnowledgeBaseConfig {
   enabled: boolean;
   /** Base directory for memory files (default: ~/.guardianagent/memory). */
   basePath?: string;
+  /** Freeze durable memory writes from normal assistant/runtime paths (default: false). */
+  readOnly: boolean;
   /** Maximum characters loaded into LLM context from the knowledge base (default: 4000). */
   maxContextChars: number;
   /** Maximum total file size in characters (default: 20000). */
@@ -1289,7 +1291,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   },
   guardian: {
     enabled: true,
-    deniedPaths: [],
+    deniedPaths: [
+      '(^|/)\\.env(?:$|\\.)',
+      '\\.pem$',
+      '\\.key$',
+      '(^|/)credentials\\.[^/]+$',
+      '(^|/)id_rsa(?:$|\\.)',
+    ],
     additionalSecretPatterns: [],
     logDenials: true,
     rateLimit: {
@@ -1405,6 +1413,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       retentionDays: 30,
       knowledgeBase: {
         enabled: true,
+        readOnly: false,
         maxContextChars: 4000,
         maxFileChars: 20000,
         autoFlush: true,

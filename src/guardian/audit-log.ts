@@ -34,6 +34,10 @@ export type AuditEventType =
   | 'policy_mode_changed'
   | 'policy_rules_reloaded'
   | 'policy_shadow_mismatch'
+  | 'control_plane_integrity_verified'
+  | 'control_plane_integrity_violation'
+  | 'security_baseline_enforced'
+  | 'security_baseline_overridden'
   | 'automation_finding'
   | 'auth_failure';
 

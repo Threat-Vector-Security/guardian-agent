@@ -1825,6 +1825,17 @@ describe('WebChannel', () => {
   const authHeaders = { Authorization: `Bearer ${TEST_TOKEN}` };
   let web: WebChannel | null = null;
 
+  async function issuePrivilegedTicket(port: number, action: string): Promise<string> {
+    const res = await fetch(`http://localhost:${port}/api/auth/ticket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ action }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ticket: string };
+    return body.ticket;
+  }
+
   afterEach(async () => {
     if (web) {
       await web.stop();
@@ -1934,6 +1945,249 @@ describe('WebChannel', () => {
 
     const res = await fetch('http://localhost:18927/unknown', { headers: authHeaders });
     expect(res.status).toBe(404);
+  });
+
+  it('requires a privileged ticket for sensitive memory config updates', async () => {
+    const updates: unknown[] = [];
+    web = new WebChannel({
+      port: 18969,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onConfigUpdate: async (u) => {
+          updates.push(u);
+          return { success: true, message: 'Saved.' };
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18969/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ assistant: { memory: { knowledgeBase: { readOnly: true } } } }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(updates).toHaveLength(0);
+
+    const ticket = await issuePrivilegedTicket(18969, 'memory.config');
+    const authorized = await fetch('http://localhost:18969/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ assistant: { memory: { knowledgeBase: { readOnly: true } } }, ticket }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(updates).toHaveLength(1);
+  });
+
+  it('requires a privileged ticket for security config updates', async () => {
+    const updates: unknown[] = [];
+    web = new WebChannel({
+      port: 18970,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onConfigUpdate: async (u) => {
+          updates.push(u);
+          return { success: true, message: 'Saved.' };
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18970/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ assistant: { security: { operatingMode: 'guarded' } } }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(updates).toHaveLength(0);
+
+    const ticket = await issuePrivilegedTicket(18970, 'config.security');
+    const authorized = await fetch('http://localhost:18970/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ assistant: { security: { operatingMode: 'guarded' } }, ticket }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(updates).toHaveLength(1);
+  });
+
+  it('requires a privileged ticket for tools policy changes', async () => {
+    const updates: unknown[] = [];
+    web = new WebChannel({
+      port: 18971,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onToolsPolicyUpdate: (u) => {
+          updates.push(u);
+          return { success: true, message: 'Updated.' };
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18971/api/tools/policy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ mode: 'autonomous' }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(updates).toHaveLength(0);
+
+    const ticket = await issuePrivilegedTicket(18971, 'tools.policy');
+    const authorized = await fetch('http://localhost:18971/api/tools/policy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ mode: 'autonomous', ticket }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(updates).toHaveLength(1);
+  });
+
+  it('propagates baseline rejections from direct config updates', async () => {
+    web = new WebChannel({
+      port: 18973,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onConfigUpdate: async () => ({
+          success: false,
+          message: 'Security baseline prevents this change.',
+          statusCode: 403,
+          errorCode: 'security_baseline_enforced',
+        }),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const ticket = await issuePrivilegedTicket(18973, 'config.security');
+    const res = await fetch('http://localhost:18973/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ guardian: { enabled: false }, ticket }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: 'security_baseline_enforced',
+    });
+  });
+
+  it('propagates baseline rejections from guardian agent updates', async () => {
+    web = new WebChannel({
+      port: 18974,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onGuardianAgentUpdate: () => ({
+          success: false,
+          message: 'Security baseline prevents this change.',
+          statusCode: 403,
+          errorCode: 'security_baseline_enforced',
+        }),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const ticket = await issuePrivilegedTicket(18974, 'guardian.config');
+    const res = await fetch('http://localhost:18974/api/guardian-agent/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ enabled: false, ticket }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: 'security_baseline_enforced',
+    });
+  });
+
+  it('propagates baseline rejections from policy engine updates', async () => {
+    web = new WebChannel({
+      port: 18975,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onPolicyUpdate: () => ({
+          success: false,
+          message: 'Security baseline prevents this change.',
+          statusCode: 403,
+          errorCode: 'security_baseline_enforced',
+        }),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const ticket = await issuePrivilegedTicket(18975, 'policy.config');
+    const res = await fetch('http://localhost:18975/api/policy/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ enabled: false, ticket }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      success: false,
+      errorCode: 'security_baseline_enforced',
+    });
+  });
+
+  it('rate limits privileged ticket minting', async () => {
+    web = new WebChannel({ port: 18972, authToken: TEST_TOKEN });
+    await web.start(async () => ({ content: 'ok' }));
+
+    for (let i = 0; i < 3; i += 1) {
+      const res = await fetch('http://localhost:18972/api/auth/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ action: 'killswitch' }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    const limited = await fetch('http://localhost:18972/api/auth/ticket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ action: 'killswitch' }),
+    });
+    expect(limited.status).toBe(429);
+  });
+
+  it('requires a privileged ticket for killswitch', async () => {
+    let killswitchCalls = 0;
+    web = new WebChannel({
+      port: 18973,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onKillswitch: () => {
+          killswitchCalls += 1;
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18973/api/killswitch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({}),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(killswitchCalls).toBe(0);
+
+    const ticket = await issuePrivilegedTicket(18973, 'killswitch');
+    const authorized = await fetch('http://localhost:18973/api/killswitch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ ticket }),
+    });
+    expect(authorized.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(killswitchCalls).toBe(1);
   });
 
   // ─── Fix #4: Web Channel Security Hardening ───────────────────

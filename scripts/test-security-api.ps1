@@ -84,11 +84,17 @@ function Get-FirstText($Primary, $Secondary, $Fallback) {
 function Invoke-ToolPolicy {
     param([hashtable]$Policy)
     try {
+        $ticket = Invoke-AuthTicket -Action "tools.policy"
+        if (-not $ticket.ticket) {
+            return @{ error = Get-FirstText $ticket.error $ticket.message "Failed to obtain privileged ticket" }
+        }
+        $payload = @{} + $Policy
+        $payload.ticket = $ticket.ticket
         return Invoke-RestMethod -Uri "$BaseUrl/api/tools/policy" `
             -Method Post `
             -Headers @{ Authorization = "Bearer $Token" } `
             -ContentType "application/json" `
-            -Body ($Policy | ConvertTo-Json -Depth 4 -Compress) `
+            -Body ($payload | ConvertTo-Json -Depth 4 -Compress) `
             -TimeoutSec 15
     }
     catch {

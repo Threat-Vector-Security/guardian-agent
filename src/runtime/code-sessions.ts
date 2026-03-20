@@ -16,8 +16,12 @@ import {
 } from './code-workspace-map.js';
 import {
   assessCodeWorkspaceTrustSync,
+  cloneCodeWorkspaceTrustReview,
   cloneCodeWorkspaceTrustAssessment,
+  createCodeWorkspaceTrustReview,
+  reconcileCodeWorkspaceTrustReview,
   type CodeWorkspaceTrustAssessment,
+  type CodeWorkspaceTrustReview,
 } from './code-workspace-trust.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 
@@ -59,6 +63,7 @@ export interface CodeSessionWorkState {
   compactedSummary: string;
   workspaceProfile: CodeWorkspaceProfile | null;
   workspaceTrust: CodeWorkspaceTrustAssessment | null;
+  workspaceTrustReview: CodeWorkspaceTrustReview | null;
   workspaceMap: CodeWorkspaceMap | null;
   workingSet: CodeWorkspaceWorkingSet | null;
   activeSkills: string[];
@@ -208,6 +213,7 @@ function defaultWorkState(): CodeSessionWorkState {
     compactedSummary: '',
     workspaceProfile: null,
     workspaceTrust: null,
+    workspaceTrustReview: null,
     workspaceMap: null,
     workingSet: null,
     activeSkills: [],
@@ -236,6 +242,51 @@ function cloneWorkspaceProfile(profile: CodeWorkspaceProfile | null | undefined)
 
 function cloneWorkspaceTrust(assessment: CodeWorkspaceTrustAssessment | null | undefined): CodeWorkspaceTrustAssessment | null {
   return cloneCodeWorkspaceTrustAssessment(assessment);
+}
+
+function cloneWorkspaceTrustReview(review: CodeWorkspaceTrustReview | null | undefined): CodeWorkspaceTrustReview | null {
+  return cloneCodeWorkspaceTrustReview(review);
+}
+
+function sameWorkspaceTrustReview(
+  left: CodeWorkspaceTrustReview | null | undefined,
+  right: CodeWorkspaceTrustReview | null | undefined,
+): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return left.decision === right.decision
+    && left.reviewedAt === right.reviewedAt
+    && left.reviewedBy === right.reviewedBy
+    && left.assessmentFingerprint === right.assessmentFingerprint
+    && left.rawState === right.rawState
+    && left.findingCount === right.findingCount;
+}
+
+function coerceWorkspaceTrustReviewInput(
+  value: unknown,
+  assessment: CodeWorkspaceTrustAssessment | null | undefined,
+  reviewedBy: string,
+  now: number,
+): CodeWorkspaceTrustReview | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') return null;
+  const decisionValue = (value as { decision?: unknown }).decision;
+  const decision = typeof decisionValue === 'string'
+    ? decisionValue.trim().toLowerCase()
+    : '';
+  if (decision === 'accepted') {
+    const existingReview = cloneWorkspaceTrustReview(value as CodeWorkspaceTrustReview | null | undefined);
+    if (
+      existingReview
+      && existingReview.assessmentFingerprint
+      && Number.isFinite(existingReview.reviewedAt)
+      && existingReview.reviewedAt > 0
+    ) {
+      return existingReview;
+    }
+    return createCodeWorkspaceTrustReview(assessment, reviewedBy, now);
+  }
+  return null;
 }
 
 function normalizePathForHost(value: string): string {
@@ -398,6 +449,10 @@ export class CodeSessionStore {
     const workspaceTrust = resolvedRootChanged || !record.workState.workspaceTrust
       ? assessCodeWorkspaceTrustSync(canonicalResolvedRoot, this.now())
       : cloneWorkspaceTrust(record.workState.workspaceTrust);
+    const workspaceTrustReview = reconcileCodeWorkspaceTrustReview(
+      workspaceTrust,
+      record.workState.workspaceTrustReview,
+    );
     const canonicalRecord: CodeSessionRecord = {
       ...record,
       resolvedRoot: canonicalResolvedRoot,
@@ -406,6 +461,7 @@ export class CodeSessionStore {
         ...record.workState,
         workspaceProfile,
         workspaceTrust,
+        workspaceTrustReview,
         workspaceMap: resolvedRootChanged || workspaceMapChanged
           ? null
           : workspaceMap,
@@ -414,7 +470,13 @@ export class CodeSessionStore {
           : cloneWorkspaceWorkingSet(record.workState.workingSet),
       },
     };
-    if (resolvedRootChanged || workspaceMapChanged || uiStateChanged || !record.workState.workspaceProfile) {
+    if (
+      resolvedRootChanged
+      || workspaceMapChanged
+      || uiStateChanged
+      || !record.workState.workspaceProfile
+      || !sameWorkspaceTrustReview(record.workState.workspaceTrustReview, workspaceTrustReview)
+    ) {
       this.persistCanonicalRecord(canonicalRecord);
     }
     return canonicalRecord;
@@ -482,6 +544,7 @@ export class CodeSessionStore {
         ...defaultWorkState(),
         workspaceProfile,
         workspaceTrust,
+        workspaceTrustReview: null,
       },
     };
 
@@ -512,6 +575,20 @@ export class CodeSessionStore {
       : (input.workspaceRoot !== undefined
         ? assessCodeWorkspaceTrustSync(nextResolvedRoot, now)
         : cloneWorkspaceTrust(existing.workState.workspaceTrust));
+    const hasWorkspaceTrustReviewInput = !!input.workState
+      && Object.prototype.hasOwnProperty.call(input.workState, 'workspaceTrustReview');
+    const requestedWorkspaceTrustReview = hasWorkspaceTrustReviewInput
+      ? coerceWorkspaceTrustReviewInput(
+        input.workState?.workspaceTrustReview,
+        nextWorkspaceTrust,
+        input.ownerUserId,
+        now,
+      )
+      : (workspaceRootChanged ? null : cloneWorkspaceTrustReview(existing.workState.workspaceTrustReview));
+    const nextWorkspaceTrustReview = reconcileCodeWorkspaceTrustReview(
+      nextWorkspaceTrust,
+      requestedWorkspaceTrustReview,
+    );
     const nextWorkspaceMap = input.workState?.workspaceMap !== undefined
       ? cloneWorkspaceMap(input.workState.workspaceMap)
       : (workspaceRootChanged ? null : cloneWorkspaceMap(existing.workState.workspaceMap));
@@ -546,6 +623,7 @@ export class CodeSessionStore {
           : (workspaceRootChanged ? '' : existing.workState.focusSummary),
         workspaceProfile: nextWorkspaceProfile,
         workspaceTrust: nextWorkspaceTrust,
+        workspaceTrustReview: nextWorkspaceTrustReview,
         workspaceMap: nextWorkspaceMap,
         workingSet: nextWorkingSet,
         activeSkills: Array.isArray(input.workState?.activeSkills)
@@ -762,6 +840,7 @@ export class CodeSessionStore {
         ...(payload.workState ?? {}),
         workspaceProfile: cloneWorkspaceProfile(payload.workState?.workspaceProfile as CodeWorkspaceProfile | null | undefined),
         workspaceTrust: cloneWorkspaceTrust(payload.workState?.workspaceTrust as CodeWorkspaceTrustAssessment | null | undefined),
+        workspaceTrustReview: cloneWorkspaceTrustReview(payload.workState?.workspaceTrustReview as CodeWorkspaceTrustReview | null | undefined),
         workspaceMap: cloneWorkspaceMap(payload.workState?.workspaceMap as CodeWorkspaceMap | null | undefined),
         workingSet: cloneWorkspaceWorkingSet(payload.workState?.workingSet as CodeWorkspaceWorkingSet | null | undefined),
       },

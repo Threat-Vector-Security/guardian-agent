@@ -670,6 +670,14 @@ export interface SSEEvent {
 /** SSE listener callback for real-time events. */
 export type SSEListener = (event: SSEEvent) => void;
 
+export interface DashboardMutationResult {
+  success: boolean;
+  message: string;
+  statusCode?: number;
+  errorCode?: string;
+  details?: Record<string, unknown>;
+}
+
 /** Dashboard API callbacks supplied by index.ts to WebChannel. */
 export interface DashboardCallbacks {
   onAgents?: () => DashboardAgentInfo[];
@@ -699,7 +707,7 @@ export interface DashboardCallbacks {
     routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string },
     options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
-  onConfigUpdate?: (updates: ConfigUpdate) => Promise<{ success: boolean; message: string }>;
+  onConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
   onConversationReset?: (args: {
     agentId: string;
     userId: string;
@@ -771,6 +779,7 @@ export interface DashboardCallbacks {
     channel: string;
     surfaceId: string;
     content: string;
+    metadata?: Record<string, unknown>;
   }) => Promise<{
     content: string;
     metadata?: Record<string, unknown>;
@@ -1138,7 +1147,7 @@ export interface DashboardCallbacks {
     llmProvider?: 'local' | 'external' | 'auto';
     failOpen?: boolean;
     timeoutMs?: number;
-  }) => { success: boolean; message: string };
+  }) => DashboardMutationResult;
   /** Policy-as-Code engine status. */
   onPolicyStatus?: () => {
     enabled: boolean;
@@ -1158,9 +1167,9 @@ export interface DashboardCallbacks {
   onPolicyUpdate?: (input: {
     enabled?: boolean;
     mode?: 'off' | 'shadow' | 'enforce';
-    families?: { tool?: string; admin?: string; guardian?: string; event?: string };
+    families?: { tool?: 'off' | 'shadow' | 'enforce'; admin?: 'off' | 'shadow' | 'enforce'; guardian?: 'off' | 'shadow' | 'enforce'; event?: 'off' | 'shadow' | 'enforce' };
     mismatchLogLimit?: number;
-  }) => { success: boolean; message: string };
+  }) => DashboardMutationResult;
   /** Reload policy rules from disk. */
   onPolicyReload?: () => { success: boolean; message: string; loaded: number; skipped: number; errors: string[] };
   /** Sentinel audit: run on-demand and return results. */
@@ -1228,6 +1237,16 @@ export interface ConfigUpdate {
         web?: boolean;
         cli?: boolean;
         telegram?: boolean;
+      };
+    };
+    memory?: {
+      knowledgeBase?: {
+        enabled?: boolean;
+        basePath?: string;
+        readOnly?: boolean;
+        maxContextChars?: number;
+        maxFileChars?: number;
+        autoFlush?: boolean;
       };
     };
     tools?: {

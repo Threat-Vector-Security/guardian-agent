@@ -52,6 +52,12 @@ function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+async function getPrivilegedTicket(baseUrl, token, action) {
+  const response = await requestJson(baseUrl, token, 'POST', '/api/auth/ticket', { action });
+  assert.equal(typeof response?.ticket, 'string');
+  return response.ticket;
+}
+
 function requestJsonNoAuth(url, method, body, timeoutMs = 2_500) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -804,12 +810,14 @@ guardian:
     assert.equal(Boolean(blockedInterpreterTrampoline.approvalId), false);
     assert.match(String(blockedInterpreterTrampoline.message ?? ''), /execution identity policy|inline interpreter evaluation|blocked/i);
 
+    const toolsPolicyTicket = await getPrivilegedTicket(baseUrl, harnessToken, 'tools.policy');
     const autonomousPolicy = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/policy', {
       mode: 'autonomous',
       sandbox: {
         allowedPaths: [workspaceRoot],
         allowedCommands: ['pwd', 'echo'],
       },
+      ticket: toolsPolicyTicket,
     });
     assert.equal(autonomousPolicy.success, true);
 
@@ -1041,6 +1049,36 @@ guardian:
         false,
         'Did not expect host-assistant or skill-level Guardian leakage in the Code-session prompt',
       );
+    }
+
+    const taggedReferenceResponse = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/message`,
+      {
+        content: 'Give me a brief overview of this repo using @README.md and @src/example.ts.',
+        userId: 'web-code-harness',
+        channel: 'web',
+        metadata: {
+          codeContext: {
+            fileReferences: [
+              { path: 'README.md' },
+              { path: 'src/example.ts' },
+            ],
+          },
+        },
+      },
+    );
+    assert.ok(String(taggedReferenceResponse.content ?? '').trim().length > 0, `Expected non-empty tagged-reference response: ${JSON.stringify(taggedReferenceResponse)}`);
+    if (provider.mode === 'fake') {
+      const taggedScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo using @README.md and @src/example.ts.');
+      assert.ok(taggedScenario, 'Expected tagged-reference scenario to be captured');
+      assert.match(taggedScenario.systemPrompt, /<tagged-file-context>/);
+      assert.match(taggedScenario.systemPrompt, /FILE README\.md/);
+      assert.match(taggedScenario.systemPrompt, /FILE src\/example\.ts/);
+      assert.match(taggedScenario.systemPrompt, /Accomplish is a habit planning dashboard/i);
+      assert.match(taggedScenario.systemPrompt, /answerValue = 42/);
     }
 
     const toolsStateBeforeMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');

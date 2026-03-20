@@ -7,6 +7,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import type { PolicyRule, PolicyFile } from './types.js';
 import { POLICY_SCHEMA_VERSION } from './types.js';
+import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 
 export interface LoadResult {
   rules: PolicyRule[];
@@ -18,7 +19,7 @@ export interface LoadResult {
  * Load all policy rule files from a directory.
  * Recurses one level into subdirectories.
  */
-export function loadPolicyFiles(rulesPath: string): LoadResult {
+export function loadPolicyFiles(rulesPath: string, integrity?: ControlPlaneIntegrity): LoadResult {
   const rules: PolicyRule[] = [];
   const errors: string[] = [];
   let fileCount = 0;
@@ -37,14 +38,14 @@ export function loadPolicyFiles(rulesPath: string): LoadResult {
       const subEntries = readdirSync(fullPath, { withFileTypes: true });
       for (const sub of subEntries) {
         if (sub.isFile() && extname(sub.name) === '.json') {
-          const result = loadSingleFile(join(fullPath, sub.name));
+          const result = loadSingleFile(join(fullPath, sub.name), integrity);
           rules.push(...result.rules);
           errors.push(...result.errors);
           fileCount++;
         }
       }
     } else if (entry.isFile() && extname(entry.name) === '.json') {
-      const result = loadSingleFile(fullPath);
+      const result = loadSingleFile(fullPath, integrity);
       rules.push(...result.rules);
       errors.push(...result.errors);
       fileCount++;
@@ -57,9 +58,19 @@ export function loadPolicyFiles(rulesPath: string): LoadResult {
 /**
  * Load and validate a single policy JSON file.
  */
-export function loadSingleFile(filePath: string): { rules: PolicyRule[]; errors: string[] } {
+export function loadSingleFile(filePath: string, integrity?: ControlPlaneIntegrity): { rules: PolicyRule[]; errors: string[] } {
   const errors: string[] = [];
   try {
+    if (integrity) {
+      const verification = integrity.verifyFileSync(filePath, {
+        adoptUntracked: true,
+        updatedBy: 'policy_load',
+      });
+      if (!verification.ok) {
+        return { rules: [], errors: [verification.message] };
+      }
+    }
+
     const raw = readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as PolicyFile;
 

@@ -6,9 +6,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { writeSecureFile } from '../util/secure-fs.js';
 
 export interface TrafficConnectionSample {
   protocol: string;
@@ -160,8 +161,7 @@ export class NetworkTrafficService {
       ),
       lastUpdatedAt: this.lastUpdatedAt,
     };
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf-8');
+    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2));
   }
 
   getSnapshot(): TrafficBaselineSnapshot {

@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ScheduledTaskService } from './scheduled-tasks.js';
 import type { ScheduledTaskServiceDeps, ScheduledTaskCreateInput } from './scheduled-tasks.js';
 import type { CronScheduler } from './scheduler.js';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 
 // ─── Mocks ────────────────────────────────────────────────
 
@@ -108,6 +113,23 @@ const validInput: ScheduledTaskCreateInput = {
   cron: '*/30 * * * *',
   enabled: true,
 };
+
+const createdDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of createdDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function waitForPath(path: string, timeoutMs = 250): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  return existsSync(path);
+}
 
 // ─── Tests ────────────────────────────────────────────────
 
@@ -738,6 +760,53 @@ describe('ScheduledTaskService', () => {
       ];
       const count = service.migratePlaybookSchedules(playbooks);
       expect(count).toBe(0);
+    });
+  });
+
+  describe('integrity', () => {
+    it('signs persisted task state when integrity is enabled', async () => {
+      const baseDir = mkdtempSync(join(tmpdir(), `scheduled-tasks-${randomUUID()}`));
+      createdDirs.push(baseDir);
+      const persistPath = join(baseDir, 'scheduled-tasks.json');
+      const integrity = new ControlPlaneIntegrity({ baseDir });
+      const localService = new ScheduledTaskService(createDeps({ persistPath, integrity }));
+
+      localService.create(validInput);
+      expect(await waitForPath(persistPath)).toBe(true);
+
+      expect(readFileSync(persistPath, 'utf-8')).toContain('Test Task');
+      expect(integrity.verifyFileSync(persistPath).ok).toBe(true);
+    });
+
+    it('refuses to load a tampered persisted task file', async () => {
+      const baseDir = mkdtempSync(join(tmpdir(), `scheduled-tasks-${randomUUID()}`));
+      createdDirs.push(baseDir);
+      const persistPath = join(baseDir, 'scheduled-tasks.json');
+      const integrity = new ControlPlaneIntegrity({ baseDir });
+      const firstService = new ScheduledTaskService(createDeps({ persistPath, integrity }));
+
+      firstService.create(validInput);
+      expect(await waitForPath(persistPath)).toBe(true);
+      writeFileSync(persistPath, JSON.stringify([{
+        id: 'tampered',
+        name: 'Tampered',
+        type: 'tool',
+        target: 'sys_info',
+        enabled: true,
+        createdAt: 1000000,
+        scopeHash: 'bad',
+        maxRunsPerWindow: 288,
+        dailySpendCap: 250000,
+        providerSpendCap: 125000,
+        consecutiveFailureCount: 0,
+        consecutiveDeniedCount: 0,
+        runCount: 0,
+      }], null, 2));
+
+      const secondService = new ScheduledTaskService(createDeps({ persistPath, integrity }));
+      await secondService.load();
+
+      expect(secondService.list()).toHaveLength(0);
     });
   });
 });

@@ -17,6 +17,8 @@ It now also enriches that static assessment with a native host-malware scan sign
 
 Every backend code session now carries a persisted `workspaceTrust` assessment in `CodeSessionWorkState`.
 
+Code sessions can also carry an optional `workspaceTrustReview` record when a user manually accepts the current findings for that session.
+
 Current states:
 
 - `trusted`
@@ -35,6 +37,13 @@ The shipped trust model now has two parts:
 
 - a synchronous bounded static review of repo content
 - an asynchronous native AV enrichment pass recorded in `workspaceTrust.nativeProtection`
+
+The shipped runtime also derives an effective trust state from:
+
+- raw `workspaceTrust`
+- optional `workspaceTrustReview`
+
+This keeps the raw findings intact while still allowing a reviewed session to run with trusted execution gating.
 
 The shipped assessment is intentionally non-agentic. No Guardian agent or LLM reviews the repo to decide trust, no repo code is executed, and a `trusted` outcome only means the current bounded checks found no indicators.
 
@@ -83,6 +92,25 @@ Current statuses:
 - `unavailable`
 - `error`
 
+## Manual Trust Review Override
+
+Flagged workspaces can now be manually trusted on a per-session basis.
+
+Current behavior:
+
+- the operator can accept the current findings from the Code page Edit Session flow
+- this stores `workspaceTrustReview` separately from `workspaceTrust`
+- the review record captures who accepted the findings, when, and which trust-assessment fingerprint was accepted
+- the raw trust state and findings remain visible in the UI and prompt context
+- the runtime derives an effective trust state of `trusted` only while the accepted fingerprint still matches the current assessment
+- if findings change, the workspace root changes, or native AV reports a live detection, the manual review record is cleared automatically
+
+Current guardrails:
+
+- the override is session-scoped, not a global allowlist change
+- the override does not rewrite `workspaceTrust.state`
+- native AV detections are not manually clearable through this flow
+
 ## Prompt Handling
 
 Workspace trust now affects what repo-derived content is injected into the coding-session system context.
@@ -92,8 +120,10 @@ Current behavior:
 - `trusted` workspaces include the normal workspace profile summary and working-set snippets
 - `caution` and `blocked` workspaces suppress raw working-set snippets from the system prompt
 - `caution` and `blocked` workspaces suppress the README-derived workspace summary from the system prompt
+- manually trusted workspaces restore the normal workspace profile summary and working-set snippets because the effective trust state becomes `trusted`
 - the system prompt includes the latest native AV status when available
 - the system prompt explicitly tells the model to treat repo files and repo-generated summaries as untrusted data and never follow instructions found inside them
+- when trust is manually accepted, the system prompt still records that the raw repo findings exist and that repo instructions remain untrusted data
 
 This is a prompt-hardening layer for repo content. It is separate from remote-content tainting in the contextual-security uplift.
 
@@ -115,6 +145,8 @@ Auto-approved only when `workspaceTrust.state = trusted`:
 - `task_create`, `task_update`, `task_delete`
 - `workflow_upsert`, `workflow_run`, `workflow_delete`
 
+The same tool set is also auto-approved when the effective trust state is `trusted` because a valid `workspaceTrustReview` is active.
+
 Additional current behavior:
 
 - `shell_safe` remains allowlisted and repo-scoped
@@ -131,6 +163,8 @@ The Code page now exposes workspace trust directly:
 - activity card summarizing the latest assessment
 - chat/activity warning banner for `caution` and `blocked` workspaces
 - native AV status is folded into the assessment summary, and native detections change the warning copy from “static review” to “host malware scan”
+- Edit Session trust-review controls showing raw findings plus a manual-trust checkbox when override is eligible
+- a manually trusted session still shows the underlying findings in activity so the operator can see why the raw workspace state is not clean
 
 ## Current Non-Goals
 
@@ -142,6 +176,7 @@ The shipped version does **not** yet provide:
 - agentic repo trust review or dynamic detonation/sandbox execution
 - WSL-to-Windows Defender bridging when Guardian itself is not running on Windows
 - autonomous remediation or autonomous trust promotion
+- a global persistent “trust this repo forever” override outside the current coding session
 
 ## Primary Files
 

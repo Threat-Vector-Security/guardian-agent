@@ -78,6 +78,7 @@ Primary persisted shape:
   - `compactedSummary`
   - `workspaceProfile`
   - `workspaceTrust`
+  - `workspaceTrustReview`
   - `workspaceMap`
   - `workingSet`
   - `activeSkills`
@@ -125,12 +126,19 @@ Each backend `CodeSession` carries durable workspace awareness state:
   - persisted trust state: `trusted`, `caution`, `blocked`
   - summary plus finding list for suspicious prompt-injection or execution indicators
   - optional `nativeProtection` sub-state for host malware scan results such as Windows Defender or ClamAV
+- `workspaceTrustReview`
+  - optional session-scoped manual acceptance of the current `workspaceTrust` findings
+  - stores who accepted the findings, when, and which assessment fingerprint was accepted
+  - does not erase or rewrite the raw trust findings; it only changes the effective trust state used by the runtime
+  - auto-clears when findings change, the workspace root changes, or a native AV detection appears
 - `focusSummary`
   - short durable summary of the current coding objective for that session
 
 Workspace profiling is still built from lightweight backend inspection of the session root, `README`, and primary manifest/config files, but Code sessions now also maintain workspace trust assessment, async native-AV scan status, a bounded repo map, and a per-turn working set. The coding-session prompt gets the repo profile plus the current working-set evidence, so the model starts from actual repo files rather than generic host-app context or ad hoc prompt wording.
 
 The shipped repo-assessment boundary is intentionally narrow: `workspaceTrust` is a bounded static heuristic review plus optional native AV enrichment. It is not an agentic repo assessment, it does not execute repo code, and a `trusted` result only means the shipped checks did not find current indicators.
+
+When a user manually accepts the current findings, the session records `workspaceTrustReview` and derives an effective trust state from `workspaceTrust + workspaceTrustReview`. This is intentionally separate from the raw assessment so the UI can still show the underlying findings and why the workspace would otherwise remain `caution` or `blocked`.
 
 When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md).
 
@@ -210,6 +218,12 @@ The Code page keeps the existing layout:
 - Monaco Editor / diff editor
 - terminal panes
 - assistant sidebar
+
+Session edit now also exposes repo-trust review controls when the active workspace is flagged:
+
+- the Edit Session form shows the current raw trust state and trust findings
+- users can acknowledge the current findings and mark the workspace as manually trusted for that session
+- the session rail still shows `TRUST: TRUSTED` only as an effective state, while activity and the edit form keep the raw findings visible
 
 ### Monaco Editor
 
@@ -394,6 +408,8 @@ Memory behavior:
 - `memory_recall` and `memory_save` bind to Code-session memory when the current request is inside a Code session
 - `memory_search` continues to search the current conversation history, which is already Code-session-scoped for Code turns
 - `memory_bridge_search` provides explicit read-only lookup across the global/code-session memory boundary without changing the current session context or objective
+- the shared `assistant.memory.knowledgeBase.readOnly` freeze also applies to Code-session durable memory, so `memory_save` and automatic flush writes are blocked while it is enabled
+- Code-session memory context is rebuilt from the verified `codeSessionId.index.json` state; if that index is tampered with, the session memory is treated as empty rather than trusting the markdown cache
 
 Built-in coding implementation tools:
 

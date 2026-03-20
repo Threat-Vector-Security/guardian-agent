@@ -7,6 +7,8 @@ const DEFAULT_USER_CHANNEL = 'web';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
+const MAX_CHAT_FILE_REFERENCES = 6;
+const MAX_CHAT_FILE_REFERENCE_SUGGESTIONS = 8;
 const ASSISTANT_TABS = ['chat', 'activity'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const MONACO_THEME_STORAGE_KEY = 'guardianagent_monaco_theme';
@@ -33,6 +35,7 @@ let sessionRefreshInterval = null;
 let sessionPersistTimers = new Map();
 let pendingTerminalFocusTabId = null;
 let deferredSelectionRerenderTimer = null;
+let activeChatReferencePicker = null;
 
 // ─── Monaco Editor state ───────────────────────────────────
 let monacoLoadPromise = null;
@@ -714,6 +717,75 @@ function summarizeTaskTitle(job) {
   return `${humanizeToolName(job.toolName)} is in progress`;
 }
 
+function humanizeWorkspaceTrustFindingKind(kind) {
+  return String(kind || '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function hasWorkspaceTrustNativeDetection(workspaceTrust) {
+  if (!workspaceTrust) return false;
+  if (workspaceTrust.nativeProtection?.status === 'detected') return true;
+  return Array.isArray(workspaceTrust.findings)
+    && workspaceTrust.findings.some((finding) => finding.kind === 'native_av_detection');
+}
+
+function isWorkspaceTrustReviewActive(session) {
+  const workspaceTrust = session?.workspaceTrust || null;
+  const workspaceTrustReview = session?.workspaceTrustReview || null;
+  if (!workspaceTrust || !workspaceTrustReview) return false;
+  if (workspaceTrust.state === 'trusted') return false;
+  if (workspaceTrustReview.decision !== 'accepted') return false;
+  return !hasWorkspaceTrustNativeDetection(workspaceTrust);
+}
+
+function getEffectiveWorkspaceTrustState(session) {
+  const workspaceTrust = session?.workspaceTrust || null;
+  if (!workspaceTrust) return null;
+  if (workspaceTrust.state === 'trusted') return 'trusted';
+  return isWorkspaceTrustReviewActive(session) ? 'trusted' : workspaceTrust.state;
+}
+
+function isWorkspaceTrustOverrideAvailable(session) {
+  const workspaceTrust = session?.workspaceTrust || null;
+  if (!workspaceTrust || workspaceTrust.state === 'trusted') return false;
+  return !hasWorkspaceTrustNativeDetection(workspaceTrust);
+}
+
+function buildWorkspaceTrustFindingViewModels(workspaceTrust) {
+  return Array.isArray(workspaceTrust?.findings)
+    ? workspaceTrust.findings.map((finding, index) => ({
+      id: `workspace-trust-finding-${index}`,
+      severity: String(finding?.severity || 'warn'),
+      kind: humanizeWorkspaceTrustFindingKind(finding?.kind),
+      path: String(finding?.path || ''),
+      summary: String(finding?.summary || ''),
+      evidence: String(finding?.evidence || ''),
+    }))
+    : [];
+}
+
+function renderWorkspaceTrustFindingsMarkup(findings) {
+  if (!Array.isArray(findings) || findings.length === 0) return '';
+  return `
+    <div class="code-status-card__findings">
+      ${findings.map((finding) => `
+        <div class="code-status-card__finding">
+          <div class="code-status-card__finding-top">
+            <span class="code-status-card__finding-badge severity-${escAttr(finding.severity)}">${esc(finding.severity.toUpperCase())}</span>
+            <span class="code-status-card__finding-kind">${esc(finding.kind || 'Indicator')}</span>
+            ${finding.path ? `<span class="code-status-card__finding-path">${esc(finding.path)}</span>` : ''}
+          </div>
+          <div class="code-status-card__finding-summary">${esc(finding.summary || '')}</div>
+          ${finding.evidence ? `<div class="code-status-card__finding-evidence">${esc(finding.evidence)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 function deriveTaskItems(session) {
   const items = [];
   const backlog = getApprovalBacklogState(session);
@@ -749,18 +821,24 @@ function deriveTaskItems(session) {
   }
 
   if (workspaceTrust?.summary) {
-    const findingPreview = Array.isArray(workspaceTrust.findings) && workspaceTrust.findings.length > 0
-      ? workspaceTrust.findings.slice(0, 2).map((finding) => `${finding.path}: ${finding.summary}`).join(' ')
-      : '';
+    const effectiveTrustState = getEffectiveWorkspaceTrustState(session) || workspaceTrust.state;
+    const reviewActive = isWorkspaceTrustReviewActive(session);
     const nativeProtectionMeta = workspaceTrust.nativeProtection?.summary
       ? ` • ${workspaceTrust.nativeProtection.summary}`
       : '';
     items.push({
       id: 'workspace-trust',
-      title: `Workspace trust: ${workspaceTrust.state}`,
-      status: workspaceTrust.state === 'trusted' ? 'completed' : workspaceTrust.state === 'blocked' ? 'blocked' : 'warn',
-      detail: findingPreview ? `${workspaceTrust.summary} ${findingPreview}` : workspaceTrust.summary,
+      title: reviewActive
+        ? 'Workspace trust: trusted (manual review)'
+        : `Workspace trust: ${effectiveTrustState}`,
+      status: reviewActive
+        ? 'info'
+        : effectiveTrustState === 'trusted' ? 'completed' : effectiveTrustState === 'blocked' ? 'blocked' : 'warn',
+      detail: reviewActive
+        ? `Manual trust override accepted for the current findings. Raw scanner state is ${workspaceTrust.state}. ${workspaceTrust.summary}`
+        : workspaceTrust.summary,
       meta: `${workspaceTrust.scannedFiles || 0} scanned file${workspaceTrust.scannedFiles === 1 ? '' : 's'}${workspaceTrust.truncated ? ' • truncated' : ''}${nativeProtectionMeta}`,
+      findings: buildWorkspaceTrustFindingViewModels(workspaceTrust),
     });
   }
 
@@ -831,6 +909,233 @@ function deriveCheckItems(session) {
     detail: summarizeJobDetail(job),
     meta: formatRelativeTime(job.createdAt),
   }));
+}
+
+function collectCachedTreeFilePaths(dirPath, results = []) {
+  const cached = treeCache.get(dirPath);
+  if (!cached || !Array.isArray(cached.entries)) return results;
+  for (const entry of cached.entries) {
+    const nextPath = joinWorkspacePath(dirPath, entry.name);
+    if (entry.type === 'file') {
+      results.push(nextPath);
+      continue;
+    }
+    collectCachedTreeFilePaths(nextPath, results);
+  }
+  return results;
+}
+
+function getCodeChatReferenceCatalog(session) {
+  const catalog = [];
+  const seen = new Set();
+  const workspaceRoot = session?.resolvedRoot || session?.workspaceRoot || '';
+  const addEntry = (pathValue, category = '', summary = '') => {
+    const normalizedPath = String(pathValue || '')
+      .trim()
+      .replace(/[\\/]+/g, '/')
+      .replace(/^\.\/+/, '');
+    if (!normalizedPath) return;
+    const key = normalizeComparablePath(normalizedPath);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    catalog.push({ path: normalizedPath, category, summary });
+  };
+
+  if (session?.selectedFilePath && workspaceRoot) {
+    addEntry(toRelativePath(session.selectedFilePath, workspaceRoot), 'selected');
+  }
+  if (Array.isArray(session?.openTabs)) {
+    session.openTabs.forEach((tab) => {
+      addEntry(workspaceRoot ? toRelativePath(tab.filePath, workspaceRoot) : tab.filePath, 'open');
+    });
+  }
+  if (Array.isArray(session?.workspaceMap?.notableFiles)) {
+    session.workspaceMap.notableFiles.forEach((pathValue) => addEntry(pathValue, 'notable'));
+  }
+  if (Array.isArray(session?.workspaceMap?.files)) {
+    session.workspaceMap.files.forEach((entry) => addEntry(entry.path, entry.category, entry.summary));
+  }
+  if (catalog.length === 0 && workspaceRoot) {
+    collectCachedTreeFilePaths(workspaceRoot).forEach((fullPath) => addEntry(toRelativePath(fullPath, workspaceRoot), 'cached'));
+  }
+  return catalog;
+}
+
+function scoreCodeChatReference(entry, normalizedQuery) {
+  if (!normalizedQuery) return 1;
+  const pathValue = normalizeComparablePath(entry.path);
+  const baseValue = basename(entry.path).toLowerCase();
+  const queryTokens = normalizedQuery.split(/[./_-]+/).filter(Boolean);
+  let score = 0;
+  if (pathValue === normalizedQuery) score += 1200;
+  else if (baseValue === normalizedQuery) score += 1100;
+  if (pathValue.startsWith(normalizedQuery)) score += 950;
+  if (baseValue.startsWith(normalizedQuery)) score += 900;
+  if (pathValue.includes(`/${normalizedQuery}`)) score += 760;
+  if (pathValue.includes(normalizedQuery)) score += 620;
+  queryTokens.forEach((token) => {
+    if (token.length < 2) return;
+    if (baseValue.includes(token)) score += 55;
+    if (pathValue.includes(token)) score += 20;
+  });
+  return score;
+}
+
+function getCodeChatReferenceSuggestions(session, query) {
+  const catalog = getCodeChatReferenceCatalog(session);
+  if (catalog.length === 0) return [];
+  const normalizedQuery = normalizeComparablePath(query || '').replace(/^@/, '');
+  const scored = catalog
+    .map((entry) => ({ ...entry, score: scoreCodeChatReference(entry, normalizedQuery) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => (
+      right.score - left.score
+      || left.path.split('/').length - right.path.split('/').length
+      || left.path.localeCompare(right.path)
+    ));
+  return scored.slice(0, MAX_CHAT_FILE_REFERENCE_SUGGESTIONS);
+}
+
+function findCodeChatMentionMatch(text, cursorIndex) {
+  if (!Number.isFinite(cursorIndex) || cursorIndex < 0) return null;
+  const beforeCursor = String(text || '').slice(0, cursorIndex);
+  const afterCursor = String(text || '').slice(cursorIndex);
+  if (/^[A-Za-z0-9_./\\-]/.test(afterCursor)) return null;
+  const match = beforeCursor.match(/(^|[\s([{])@([A-Za-z0-9_./\\-]*)$/);
+  if (!match) return null;
+  const query = match[2] || '';
+  const start = beforeCursor.length - query.length - 1;
+  return { start, end: cursorIndex, query };
+}
+
+function extractCodeChatFileReferences(session, text) {
+  const catalog = getCodeChatReferenceCatalog(session);
+  if (catalog.length === 0) return [];
+  const catalogByPath = new Map(catalog.map((entry) => [normalizeComparablePath(entry.path), entry.path]));
+  const references = [];
+  const seen = new Set();
+  const pattern = /(^|[\s([{])@([A-Za-z0-9_./\\-]+)/g;
+  let match;
+  while ((match = pattern.exec(String(text || '')))) {
+    const candidate = String(match[2] || '')
+      .trim()
+      .replace(/[)>}\],;:!?]+$/, '')
+      .replace(/[\\/]+/g, '/')
+      .replace(/^\.\/+/, '');
+    const resolved = catalogByPath.get(normalizeComparablePath(candidate));
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    references.push(resolved);
+    if (references.length >= MAX_CHAT_FILE_REFERENCES) break;
+  }
+  return references;
+}
+
+function renderCodeChatDraftReferencesMarkup(references) {
+  const normalized = normalizeDraftFileReferences(references);
+  if (normalized.length === 0) return '';
+  return `
+    <div class="code-chat__refs-label">Tagged context</div>
+    <div class="code-chat__refs-pills">
+      ${normalized.map((pathValue) => `<span class="code-chat__ref-pill" title="${escAttr(pathValue)}">@${esc(pathValue)}</span>`).join('')}
+    </div>
+  `;
+}
+
+function renderCodeChatReferencePickerMarkup(picker) {
+  if (!picker || !Array.isArray(picker.suggestions) || picker.suggestions.length === 0) return '';
+  return picker.suggestions.map((entry, index) => {
+    const isActive = index === picker.selectedIndex;
+    const secondary = entry.path === basename(entry.path)
+      ? (entry.summary || entry.category || '')
+      : entry.path;
+    return `
+      <button
+        class="code-chat__mention-item ${isActive ? 'is-active' : ''}"
+        type="button"
+        data-code-chat-ref-suggestion="${escAttr(entry.path)}"
+      >
+        <span class="code-chat__mention-primary">@${esc(basename(entry.path))}</span>
+        <span class="code-chat__mention-secondary">${esc(secondary)}</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function updateCodeChatReferenceList(form, references) {
+  const host = form?.querySelector('[data-code-chat-ref-list]');
+  if (!host) return;
+  const markup = renderCodeChatDraftReferencesMarkup(references);
+  host.innerHTML = markup;
+  host.hidden = !markup;
+}
+
+function updateCodeChatReferencePicker(form, picker) {
+  const host = form?.querySelector('[data-code-chat-mention-menu]');
+  if (!host) return;
+  const markup = renderCodeChatReferencePickerMarkup(picker);
+  host.innerHTML = markup;
+  host.hidden = !markup;
+}
+
+function syncCodeChatDraftReferences(session, form, textarea) {
+  if (!session || !textarea) return;
+  session.chatDraft = textarea.value;
+  session.draftFileReferences = extractCodeChatFileReferences(session, textarea.value);
+  updateCodeChatReferenceList(form, session.draftFileReferences);
+}
+
+function refreshCodeChatReferencePicker(session, form, textarea) {
+  if (!session || !textarea) return;
+  const mention = findCodeChatMentionMatch(textarea.value, textarea.selectionStart);
+  if (!mention) {
+    activeChatReferencePicker = null;
+    updateCodeChatReferencePicker(form, null);
+    return;
+  }
+  const suggestions = getCodeChatReferenceSuggestions(session, mention.query);
+  if (suggestions.length === 0) {
+    activeChatReferencePicker = null;
+    updateCodeChatReferencePicker(form, null);
+    return;
+  }
+  const previousPath = activeChatReferencePicker?.sessionId === session.id
+    ? activeChatReferencePicker.suggestions?.[activeChatReferencePicker.selectedIndex]?.path
+    : null;
+  let selectedIndex = 0;
+  if (previousPath) {
+    const matchIndex = suggestions.findIndex((entry) => entry.path === previousPath);
+    if (matchIndex >= 0) selectedIndex = matchIndex;
+  }
+  activeChatReferencePicker = {
+    sessionId: session.id,
+    start: mention.start,
+    end: mention.end,
+    query: mention.query,
+    suggestions,
+    selectedIndex,
+  };
+  updateCodeChatReferencePicker(form, activeChatReferencePicker);
+}
+
+function applyCodeChatReferenceSuggestion(session, form, textarea, pathValue) {
+  if (!session || !form || !textarea || !pathValue) return;
+  const picker = activeChatReferencePicker;
+  if (!picker || picker.sessionId !== session.id) return;
+  const before = textarea.value.slice(0, picker.start);
+  const after = textarea.value.slice(picker.end);
+  const insertion = `@${pathValue}`;
+  const shouldAppendSpace = !after || !/^[\s)\]}.,;:!?]/.test(after);
+  const nextValue = `${before}${insertion}${shouldAppendSpace ? ' ' : ''}${after}`;
+  const caretIndex = before.length + insertion.length + (shouldAppendSpace ? 1 : 0);
+  textarea.value = nextValue;
+  textarea.selectionStart = caretIndex;
+  textarea.selectionEnd = caretIndex;
+  activeChatReferencePicker = null;
+  syncCodeChatDraftReferences(session, form, textarea);
+  updateCodeChatReferencePicker(form, null);
+  saveState(codeState);
+  textarea.focus();
 }
 
 function getTaskBadgeCount(session) {
@@ -1078,6 +1383,18 @@ function normalizeWorkspaceTrust(trust) {
   };
 }
 
+function normalizeWorkspaceTrustReview(review) {
+  if (!review || typeof review !== 'object') return null;
+  return {
+    decision: String(review.decision || ''),
+    reviewedAt: Number(review.reviewedAt) || 0,
+    reviewedBy: String(review.reviewedBy || ''),
+    assessmentFingerprint: String(review.assessmentFingerprint || ''),
+    rawState: String(review.rawState || ''),
+    findingCount: Number(review.findingCount) || 0,
+  };
+}
+
 function normalizeWorkspaceMap(map) {
   if (!map || typeof map !== 'object') return null;
   return {
@@ -1091,6 +1408,13 @@ function normalizeWorkspaceMap(map) {
         fileCount: Number(entry?.fileCount) || 0,
         sampleFiles: Array.isArray(entry?.sampleFiles) ? entry.sampleFiles.map((value) => String(value)) : [],
       }))
+      : [],
+    files: Array.isArray(map.files)
+      ? map.files.map((entry) => ({
+        path: entry?.path ? String(entry.path) : '',
+        category: entry?.category ? String(entry.category) : '',
+        summary: entry?.summary ? String(entry.summary) : '',
+      })).filter((entry) => entry.path)
       : [],
     lastIndexedAt: Number(map.lastIndexedAt) || 0,
   };
@@ -1113,11 +1437,30 @@ function normalizeWorkspaceWorkingSet(workingSet) {
   };
 }
 
+function normalizeDraftFileReferences(value) {
+  if (!Array.isArray(value)) return [];
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of value) {
+    const normalized = String(entry || '')
+      .trim()
+      .replace(/^@/, '')
+      .replace(/[\\/]+/g, '/')
+      .replace(/^\.\/+/, '');
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+    if (deduped.length >= MAX_CHAT_FILE_REFERENCES) break;
+  }
+  return deduped;
+}
+
 function normalizeServerSession(record, existing = {}) {
   const uiState = record?.uiState || {};
   const workState = record?.workState || {};
   const hasWorkspaceProfile = Object.prototype.hasOwnProperty.call(workState, 'workspaceProfile');
   const hasWorkspaceTrust = Object.prototype.hasOwnProperty.call(workState, 'workspaceTrust');
+  const hasWorkspaceTrustReview = Object.prototype.hasOwnProperty.call(workState, 'workspaceTrustReview');
   const hasWorkspaceMap = Object.prototype.hasOwnProperty.call(workState, 'workspaceMap');
   const hasWorkingSet = Object.prototype.hasOwnProperty.call(workState, 'workingSet');
   return {
@@ -1138,6 +1481,7 @@ function normalizeServerSession(record, existing = {}) {
     expandedDirs: Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : [],
     chat: Array.isArray(existing.chat) ? existing.chat : [],
     chatDraft: existing.chatDraft || '',
+    draftFileReferences: normalizeDraftFileReferences(existing.draftFileReferences),
     pendingApprovals: normalizePendingApprovals(workState.pendingApprovals, existing.pendingApprovals),
     activeSkills: Array.isArray(workState.activeSkills) ? workState.activeSkills.map((value) => String(value)) : [],
     recentJobs: Array.isArray(workState.recentJobs) ? workState.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
@@ -1146,6 +1490,7 @@ function normalizeServerSession(record, existing = {}) {
     compactedSummary: workState.compactedSummary || '',
     workspaceProfile: hasWorkspaceProfile ? normalizeWorkspaceProfile(workState.workspaceProfile) : (existing.workspaceProfile || null),
     workspaceTrust: hasWorkspaceTrust ? normalizeWorkspaceTrust(workState.workspaceTrust) : (existing.workspaceTrust || null),
+    workspaceTrustReview: hasWorkspaceTrustReview ? normalizeWorkspaceTrustReview(workState.workspaceTrustReview) : (existing.workspaceTrustReview || null),
     workspaceMap: hasWorkspaceMap ? normalizeWorkspaceMap(workState.workspaceMap) : (existing.workspaceMap || null),
     workingSet: hasWorkingSet ? normalizeWorkspaceWorkingSet(workState.workingSet) : (existing.workingSet || null),
     activeAssistantTab: isAssistantTab(uiState.activeAssistantTab) ? uiState.activeAssistantTab : (existing.activeAssistantTab || 'chat'),
@@ -2031,12 +2376,15 @@ function renderChatNotice(session) {
 
 function renderWorkspaceTrustNotice(session) {
   const workspaceTrust = session?.workspaceTrust || null;
-  if (!workspaceTrust || workspaceTrust.state === 'trusted') return '';
-  const nativeDetection = workspaceTrust.nativeProtection?.status === 'detected'
-    || workspaceTrust.findings.some((finding) => finding.kind === 'native_av_detection');
+  const effectiveTrustState = getEffectiveWorkspaceTrustState(session);
+  const reviewActive = isWorkspaceTrustReviewActive(session);
+  if (!workspaceTrust || (effectiveTrustState === 'trusted' && !reviewActive)) return '';
+  const nativeDetection = hasWorkspaceTrustNativeDetection(workspaceTrust);
   const copy = nativeDetection
     ? 'Native host malware scanning reported a workspace detection. Guardian will require approval before repo execution or persistence actions continue.'
-    : workspaceTrust.state === 'blocked'
+    : reviewActive
+      ? `Current repo findings were manually accepted for this session. Raw scanner state remains ${workspaceTrust.state}. If the findings change, Guardian will require review again.`
+      : workspaceTrust.state === 'blocked'
       ? 'Static repo review found high-risk indicators. Guardian will require approval before repo execution or persistence actions continue.'
       : 'Static repo review found suspicious indicators. Guardian will require approval before repo execution or persistence actions continue.';
   return `
@@ -2112,6 +2460,7 @@ function renderTaskList(session) {
             ${item.meta ? `<span class="code-status-card__meta">${esc(item.meta)}</span>` : ''}
           </div>
           <div class="code-status-card__detail">${esc(item.detail || '')}</div>
+          ${renderWorkspaceTrustFindingsMarkup(item.findings)}
         </article>
       `).join('')}
     </div>
@@ -2224,7 +2573,14 @@ function renderAssistantPanel(session) {
               }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
         </div>
         <form class="code-chat__form" data-code-chat-form>
-          <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want.">${esc(session.chatDraft || '')}</textarea>
+          <div class="code-chat__refs" data-code-chat-ref-list${Array.isArray(session.draftFileReferences) && session.draftFileReferences.length > 0 ? '' : ' hidden'}>
+            ${renderCodeChatDraftReferencesMarkup(session.draftFileReferences)}
+          </div>
+          <div class="code-chat__composer">
+            <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want. Type @ to tag files or docs." title="Type @ to tag workspace files or docs and inject that context into this turn.">${esc(session.chatDraft || '')}</textarea>
+            <div class="code-chat__mention-menu" data-code-chat-mention-menu hidden></div>
+          </div>
+          <div class="code-chat__hint">Type <code>@</code> to tag files or docs into this turn's model context.</div>
           <button class="btn btn-primary" type="submit">Send</button>
         </form>
       `;
@@ -2372,9 +2728,46 @@ function renderSessionForm() {
   if (!isCreate && !isEdit) return '';
 
   const draft = isEdit ? codeState.editDraft || {} : codeState.createDraft || {};
+  const editSession = isEdit
+    ? codeState.sessions.find((session) => session.id === codeState.editingSessionId) || null
+    : null;
   const formId = isEdit ? 'data-code-edit-session-form' : 'data-code-session-form';
   const submitLabel = isEdit ? 'Save' : 'Create';
   const cancelAttr = isEdit ? 'data-code-cancel-edit' : 'data-code-cancel-create';
+  const workspaceTrust = editSession?.workspaceTrust || null;
+  const reviewActive = isWorkspaceTrustReviewActive(editSession);
+  const overrideAvailable = isWorkspaceTrustOverrideAvailable(editSession);
+  const trustFindings = buildWorkspaceTrustFindingViewModels(workspaceTrust);
+  const overrideChecked = isEdit
+    ? (draft.workspaceTrustOverrideAccepted !== undefined
+      ? !!draft.workspaceTrustOverrideAccepted
+      : reviewActive)
+    : false;
+  const trustReviewSection = isEdit && workspaceTrust && (workspaceTrust.state !== 'trusted' || reviewActive)
+    ? `
+      <div class="code-session-form__trust-review">
+        <div class="code-session-form__trust-title">Repo Trust Review</div>
+        <div class="code-session-form__trust-copy">
+          ${reviewActive
+            ? `This workspace is manually trusted for this session because you accepted the current findings ${editSession?.workspaceTrustReview?.reviewedAt ? esc(formatRelativeTime(editSession.workspaceTrustReview.reviewedAt)) : ''}. If the findings change, the override clears automatically.`
+            : overrideAvailable
+              ? `The scanner still found indicators in this repo. You can acknowledge them here and treat the workspace as trusted for this session. Raw findings remain visible in activity.`
+              : `Manual trust override is unavailable while native AV reports an active workspace detection.`}
+        </div>
+        <div class="code-session-form__trust-copy is-raw-state">Raw scanner state: ${esc(String(workspaceTrust.state || '').toUpperCase())}</div>
+        <label class="code-session-form__checkbox">
+          <input
+            name="workspaceTrustOverrideAccepted"
+            type="checkbox"
+            ${overrideChecked ? 'checked' : ''}
+            ${!overrideAvailable ? 'disabled' : ''}
+          >
+          <span>I reviewed the current findings and want this workspace treated as trusted for this session.</span>
+        </label>
+        ${renderWorkspaceTrustFindingsMarkup(trustFindings)}
+      </div>
+    `
+    : '';
 
   return `
     <form class="code-session-form is-visible" ${formId}>
@@ -2399,6 +2792,7 @@ function renderSessionForm() {
           </select>
         </label>
       ` : ''}
+      ${trustReviewSection}
       <div class="code-session-form__actions">
         <button class="btn btn-primary btn-sm" type="submit">${submitLabel}</button>
         <button class="btn btn-secondary btn-sm" type="button" ${cancelAttr}>Cancel</button>
@@ -2414,11 +2808,13 @@ function renderSessionCard(session) {
   const checkCount = getCheckBadgeCount(session);
   const taskCount = getTaskBadgeCount(session);
   const workspaceTrust = session.workspaceTrust || null;
-  const trustBadgeClass = workspaceTrust?.state === 'blocked'
+  const effectiveTrustState = getEffectiveWorkspaceTrustState(session) || workspaceTrust?.state || null;
+  const reviewActive = isWorkspaceTrustReviewActive(session);
+  const trustBadgeClass = effectiveTrustState === 'blocked'
     ? 'badge-critical'
-    : workspaceTrust?.state === 'caution'
+    : effectiveTrustState === 'caution'
       ? 'badge-warn'
-      : workspaceTrust?.state === 'trusted'
+      : effectiveTrustState === 'trusted'
         ? 'badge-idle'
         : '';
   return `
@@ -2432,7 +2828,8 @@ function renderSessionCard(session) {
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
       <div class="code-session__badges">
-        ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">trust ${esc(workspaceTrust.state)}</span>` : ''}
+        ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
+        ${reviewActive ? '<span class="badge badge-info">MANUAL REVIEW</span>' : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}
         ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
         ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}
@@ -3063,6 +3460,7 @@ function bindEvents(container) {
       ...codeState.editDraft,
       title: form.elements.title.value,
       workspaceRoot: form.elements.workspaceRoot.value,
+      workspaceTrustOverrideAccepted: !!form.elements.workspaceTrustOverrideAccepted?.checked,
     };
     saveState(codeState);
   });
@@ -3074,6 +3472,7 @@ function bindEvents(container) {
     const form = event.currentTarget;
     const nextTitle = form.elements.title.value.trim() || session.title;
     const newRoot = form.elements.workspaceRoot.value.trim() || session.workspaceRoot;
+    const workspaceTrustOverrideAccepted = !!form.elements.workspaceTrustOverrideAccepted?.checked;
     if (newRoot !== session.workspaceRoot) {
       await Promise.all((session.terminalTabs || []).map((tab) => closeTerminal(tab)));
       session.terminalTabs = (session.terminalTabs || []).map((tab, index) => ({
@@ -3095,6 +3494,9 @@ function bindEvents(container) {
           ? newRoot
           : (session.currentDirectory || session.resolvedRoot || session.workspaceRoot || '.'),
         selectedFilePath: newRoot !== session.workspaceRoot ? null : session.selectedFilePath,
+      },
+      workState: {
+        workspaceTrustReview: workspaceTrustOverrideAccepted ? { decision: 'accepted' } : null,
       },
     });
     applyCodeSessionSnapshot(snapshot);
@@ -3120,6 +3522,7 @@ function bindEvents(container) {
       codeState.editDraft = {
         title: session.title,
         workspaceRoot: session.workspaceRoot,
+        workspaceTrustOverrideAccepted: isWorkspaceTrustReviewActive(session),
       };
       saveState(codeState);
       rerenderFromState();
@@ -3470,10 +3873,13 @@ function bindEvents(container) {
     if (!session) return;
     const sessionId = session.id;
     const form = event.currentTarget;
-    const message = form.elements.message.value.trim();
+    const textarea = form.elements.message;
+    const message = textarea.value.trim();
     if (!message) return;
     session.chatDraft = '';
+    session.draftFileReferences = extractCodeChatFileReferences(session, textarea.value);
     session.pendingResponse = { message, startedAt: Date.now() };
+    activeChatReferencePicker = null;
     saveState(codeState);
     rerenderFromState();
     scrollToBottom(currentContainer, '.code-chat__history');
@@ -3486,11 +3892,23 @@ function bindEvents(container) {
         });
       }
       const outboundSessionId = outboundSession.id;
+      const fileReferences = normalizeDraftFileReferences(session.draftFileReferences);
       const response = await api.codeSessionSendMessage(outboundSessionId, {
         content: message,
         channel: DEFAULT_USER_CHANNEL,
+        ...(fileReferences.length > 0
+          ? {
+            metadata: {
+              codeContext: {
+                fileReferences: fileReferences.map((pathValue) => ({ path: pathValue })),
+              },
+            },
+          }
+          : {}),
       });
       const liveSession = resolveLiveSession(outboundSessionId, outboundSession || session);
+      liveSession.chatDraft = '';
+      liveSession.draftFileReferences = [];
       liveSession.activeSkills = Array.isArray(response?.metadata?.activeSkills)
         ? response.metadata.activeSkills.map((value) => String(value))
         : [];
@@ -3520,7 +3938,8 @@ function bindEvents(container) {
       liveSession.pendingResponse = null;
       if (isCodeSessionUnavailableError(err)) {
         liveSession.chatDraft = message;
-        form.elements.message.value = message;
+        liveSession.draftFileReferences = extractCodeChatFileReferences(liveSession, textarea.value);
+        textarea.value = message;
         appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
       } else {
         appendChatMessage(liveSession, 'user', message);
@@ -3565,12 +3984,43 @@ function bindEvents(container) {
   });
 
   const codeChatInput = container.querySelector('[data-code-chat-form] textarea[name="message"]');
+  const codeChatForm = codeChatInput?.form || container.querySelector('[data-code-chat-form]');
+  if (codeChatForm && codeChatInput) {
+    updateCodeChatReferenceList(codeChatForm, getActiveSession()?.draftFileReferences || []);
+    updateCodeChatReferencePicker(codeChatForm, null);
+  }
   codeChatInput?.addEventListener('keydown', (event) => {
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    const session = getActiveSession();
+    if (!form || !session) return;
+    if (activeChatReferencePicker?.sessionId === session.id) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const maxIndex = activeChatReferencePicker.suggestions.length - 1;
+        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        activeChatReferencePicker.selectedIndex = Math.max(0, Math.min(maxIndex, activeChatReferencePicker.selectedIndex + delta));
+        updateCodeChatReferencePicker(form, activeChatReferencePicker);
+        return;
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) {
+        event.preventDefault();
+        const selected = activeChatReferencePicker.suggestions[activeChatReferencePicker.selectedIndex];
+        if (selected) {
+          applyCodeChatReferenceSuggestion(session, form, input, selected.path);
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        activeChatReferencePicker = null;
+        updateCodeChatReferencePicker(form, null);
+        return;
+      }
+    }
     if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
     event.preventDefault();
     if (event.repeat) return;
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
     if (!form) return;
     if (typeof form.requestSubmit === 'function') {
       form.requestSubmit();
@@ -3582,8 +4032,48 @@ function bindEvents(container) {
   codeChatInput?.addEventListener('input', (event) => {
     const session = getActiveSession();
     if (!session) return;
-    session.chatDraft = event.currentTarget.value;
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    if (!form || !(input instanceof HTMLTextAreaElement)) return;
+    syncCodeChatDraftReferences(session, form, input);
+    refreshCodeChatReferencePicker(session, form, input);
     saveState(codeState);
+  });
+
+  codeChatInput?.addEventListener('click', (event) => {
+    const session = getActiveSession();
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    if (!session || !form || !(input instanceof HTMLTextAreaElement)) return;
+    refreshCodeChatReferencePicker(session, form, input);
+  });
+
+  codeChatInput?.addEventListener('keyup', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Tab') return;
+    const session = getActiveSession();
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    if (!session || !form || !(input instanceof HTMLTextAreaElement)) return;
+    refreshCodeChatReferencePicker(session, form, input);
+  });
+
+  codeChatInput?.addEventListener('blur', (event) => {
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    if (!form) return;
+    setTimeout(() => {
+      if (document.activeElement && form.contains(document.activeElement)) return;
+      activeChatReferencePicker = null;
+      updateCodeChatReferencePicker(form, null);
+    }, 0);
+  });
+
+  codeChatForm?.addEventListener('mousedown', (event) => {
+    const button = event.target.closest('[data-code-chat-ref-suggestion]');
+    const session = getActiveSession();
+    if (!button || !session || !(codeChatInput instanceof HTMLTextAreaElement)) return;
+    event.preventDefault();
+    applyCodeChatReferenceSuggestion(session, codeChatForm, codeChatInput, button.dataset.codeChatRefSuggestion);
   });
 }
 
@@ -3637,6 +4127,7 @@ function normalizeState(raw, agents) {
         expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
         chat: Array.isArray(session.chat) ? session.chat.slice(-30) : [],
         chatDraft: session.chatDraft || '',
+        draftFileReferences: normalizeDraftFileReferences(session.draftFileReferences),
         pendingApprovals: Array.isArray(session.pendingApprovals) ? session.pendingApprovals : [],
         activeSkills: Array.isArray(session.activeSkills) ? session.activeSkills : [],
         recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
@@ -3646,6 +4137,9 @@ function normalizeState(raw, agents) {
         compactedSummary: session.compactedSummary || '',
         workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
         workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
+        workspaceTrustReview: normalizeWorkspaceTrustReview(session.workspaceTrustReview),
+        workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
+        workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
         activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab
           : (session.activeAssistantTab === 'tasks' || session.activeAssistantTab === 'approvals' || session.activeAssistantTab === 'checks') ? 'activity'
           : 'chat',
@@ -3710,18 +4204,23 @@ function saveState(state) {
       ? state.sessions.map((session) => {
         const { pendingResponse: _pendingResponse, ...persistedSession } = session;
         return {
-        ...persistedSession,
-        terminalTabs: Array.isArray(session.terminalTabs)
-          ? session.terminalTabs.map((tab) => ({
-            id: tab.id,
-            name: tab.name,
-            shell: normalizeTerminalShell(tab.shell),
-            output: typeof tab.output === 'string' ? trimTerminalOutput(tab.output) : '',
-          }))
-          : [],
-        recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
-        workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
-      };
+          ...persistedSession,
+          terminalTabs: Array.isArray(session.terminalTabs)
+            ? session.terminalTabs.map((tab) => ({
+              id: tab.id,
+              name: tab.name,
+              shell: normalizeTerminalShell(tab.shell),
+              output: typeof tab.output === 'string' ? trimTerminalOutput(tab.output) : '',
+            }))
+            : [],
+          recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
+          workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+          workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
+          workspaceTrustReview: normalizeWorkspaceTrustReview(session.workspaceTrustReview),
+          workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
+          workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
+          draftFileReferences: normalizeDraftFileReferences(session.draftFileReferences),
+        };
       })
       : [],
   };

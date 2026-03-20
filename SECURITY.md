@@ -742,6 +742,7 @@ GuardianAgent is hardened against the class of attacks where a malicious website
 - Browser session cookies are `HttpOnly` and `SameSite=Strict`
 - Repeated authentication failures are rate-limited and temporarily blocked
 - Privileged state-changing operations require short-lived privileged tickets in addition to base authentication
+  - current ticket-gated web mutations include `/api/tools/policy`, `/api/guardian-agent/config`, `/api/policy/config`, `/api/policy/reload`, security-sensitive `/api/config` changes, memory-sensitive `/api/config` changes, and `/api/killswitch`
 - SSE does not accept query-string tokens
 
 **Residual risk:** Broad `allowedOrigins` settings weaken the browser boundary. Binding to non-loopback interfaces increases remote attack surface. Valid bearer tokens still grant full API access within the authorization model.
@@ -857,6 +858,10 @@ An agent should satisfy **at most two** of:
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, risk-tiered classes
 - Contextual security: trust classification, quarantined reinjection suppression, principal-bound approvals, and trust-aware memory
+- Immutable security baseline: Guardian, Guardian Agent, fail-closed action evaluation, the approval floor, and the policy-engine floor cannot be weakened through normal config/API changes
+- Control-plane integrity: HMAC-tracked config, scheduled-task state, policy files, and memory index files are verified against a signed manifest under `~/.guardianagent/`
+- Memory freeze control: `assistant.memory.knowledgeBase.readOnly` blocks normal durable memory writes, including `memory_save` and automatic flush
+- Guardian data-directory permission hardening: files under `~/.guardianagent` are created/tightened toward `0600` and directories toward `0700` on normal managed write paths and startup
 - Connector + playbook guardrails: host/path/command/capability allowlists, bounded step execution, signed/dry-run controls
 - Automation authority bounds: approval expiry, scope hashes, run/token caps, and auto-pause on repeated failures/denials
 - Secret exfiltration controls: multi-pattern scanning, response redaction/blocking, inter-agent payload blocking
@@ -865,6 +870,7 @@ An agent should satisfy **at most two** of:
 - Web auth hardening: constant-time bearer comparison plus short-lived signed privileged tickets
 - Tamper-evident policy-change trail: SHA-256 config snapshots recorded as `policy_changed` audit events
 - SQLite integrity hardening: periodic `PRAGMA quick_check`, secure permissions, and hashed integrity checkpoints
+- Memory hardening: prompt/context loads now trust the signed `*.index.json` state, not the markdown cache, and suspicious memory entries are suppressed before reinjection
 
 ---
 

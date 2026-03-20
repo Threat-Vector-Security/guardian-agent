@@ -11,7 +11,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Dashboard API endpoints:
   - `GET /api/tools`
   - `POST /api/tools/run`
-  - `POST /api/tools/policy`
+  - `POST /api/tools/policy` (privileged-ticket gated, action: `tools.policy`)
   - `POST /api/tools/approvals/decision`
 - Web Configuration > Tools tab (`#/config`) and CLI `/tools` command set
 - LLM tool-calling integration through chat/orchestrator path
@@ -39,6 +39,7 @@ Memory scope note:
 - outside Code, `memory_recall` and `memory_save` target the current agent's global memory
 - inside a backend Code session, those same tools target Code-session memory keyed by `codeSessionId`
 - `memory_bridge_search` is the explicit read-only cross-scope lookup path and does not switch the current context
+- if `assistant.memory.knowledgeBase.readOnly` is enabled, `memory_save` is rejected before approval/execution in both scopes
 
 By default, 11 tools are sent to the LLM on every request (**always-loaded**) when agent policy updates are enabled:
 `find_tools`, `update_tool_policy`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`
@@ -166,6 +167,18 @@ Contextual additions now enforced at runtime:
 - `scheduleId`
 
 These inputs are consumed by `ToolExecutor` to block quarantined-context mutation, approval-gate tainted mutation, and bind approvals to the originating principal.
+
+## Privileged Control Plane
+
+Tool execution and tool approvals remain data-plane operations, but tool policy mutation is now part of the hardened control plane:
+
+- `POST /api/tools/policy` requires a short-lived privileged ticket with action `tools.policy`
+- callers mint that ticket first via `POST /api/auth/ticket`
+- ordinary `POST /api/tools/run` calls do not require privileged tickets
+- security- or memory-sensitive `POST /api/config` mutations are ticket-gated separately under `config.security` or `memory.config`
+- Guardian-managed control-plane state written under `~/.guardianagent` is now created with restrictive permissions and tightened on startup (`0700` directories, `0600` files on normal supported hosts)
+- config, scheduled-task state, policy rule files, and memory index files are manifest-tracked with HMAC verification via `~/.guardianagent/integrity.key` and `integrity-manifest.json`
+- an immutable security baseline now rejects normal config/API attempts to disable Guardian, disable Guardian Agent, set Guardian Agent to fail-open, push assistant tool approval to `autonomous`, or lower the policy engine below `shadow`
 
 Current main-assistant defaults:
 - shipped config defaults to `approve_each` (`approval_policy: on-request`)

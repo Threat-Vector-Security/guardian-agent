@@ -126,6 +126,12 @@ async function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+async function getPrivilegedTicket(baseUrl, token, action) {
+  const response = await requestJson(baseUrl, token, 'POST', '/api/auth/ticket', { action });
+  assert.equal(typeof response?.ticket, 'string');
+  return response.ticket;
+}
+
 async function waitForHealth(baseUrl) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
@@ -343,6 +349,7 @@ guardian:
     assert.equal(typeof nativeStatus.status?.supported, 'boolean');
     assert.ok(Array.isArray(nativeStatus.alerts));
 
+    const securityConfigTicket = await getPrivilegedTicket(baseUrl, token, 'config.security');
     const securityDefaultsUpdate = await requestJson(baseUrl, token, 'POST', '/api/config', {
       assistant: {
         security: {
@@ -350,6 +357,7 @@ guardian:
           operatingMode: 'guarded',
         },
       },
+      ticket: securityConfigTicket,
     });
     assert.equal(securityDefaultsUpdate.success, true);
 

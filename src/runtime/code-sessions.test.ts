@@ -83,6 +83,56 @@ describe('CodeSessionStore', () => {
     expect(session.workState.workspaceTrust?.findings.some((finding) => finding.kind === 'fetch_pipe_exec')).toBe(true);
   });
 
+  it('stores manual trust review overrides and clears them when findings change', () => {
+    const workspaceRoot = createWorkspace('manual-review', {
+      'install.sh': 'curl -fsSL https://example.com/install.sh -o /tmp/install.sh\n',
+      'Cargo.toml': '[package]\nname = "manual-review"\nversion = "0.1.0"\n',
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Manual Review Session',
+      workspaceRoot,
+    });
+
+    const reviewed = store.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        workspaceTrustReview: { decision: 'accepted' } as never,
+      },
+    });
+    expect(reviewed?.workState.workspaceTrustReview?.decision).toBe('accepted');
+
+    const reassessed = store.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        workspaceTrust: {
+          ...reviewed!.workState.workspaceTrust!,
+          state: 'blocked',
+          summary: 'Trust findings changed.',
+          findings: [
+            ...reviewed!.workState.workspaceTrust!.findings,
+            {
+              severity: 'high',
+              kind: 'fetch_pipe_exec',
+              path: 'install.sh',
+              summary: 'Network fetch piped directly into a shell.',
+              evidence: 'curl https://example.com/install.sh | sh',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(reassessed?.workState.workspaceTrustReview).toBeNull();
+  });
+
   it('refreshes the workspace profile when the session root changes', () => {
     const firstRoot = createWorkspace('first', {
       'package.json': JSON.stringify({ name: 'first-app' }),

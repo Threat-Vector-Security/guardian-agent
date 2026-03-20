@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { loadPolicyFiles, loadSingleFile } from './rules.js';
 
 let tmpDir: string;
@@ -99,6 +100,37 @@ describe('loadSingleFile', () => {
     const result = loadSingleFile(join(tmpDir, 'nonexistent.json'));
     expect(result.rules).toHaveLength(0);
     expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it('adopts untracked files when integrity is enabled', () => {
+    const integrity = new ControlPlaneIntegrity({ baseDir: tmpDir });
+    const path = writePolicyFile(tmpDir, 'tracked.json', {
+      schemaVersion: 1,
+      rules: [{ id: 'r1', family: 'tool', enabled: true, priority: 100, match: {}, decision: { kind: 'allow', reason: 'ok' } }],
+    });
+
+    const result = loadSingleFile(path, integrity);
+    expect(result.rules).toHaveLength(1);
+    expect(result.errors).toHaveLength(0);
+    expect(integrity.verifyFileSync(path).ok).toBe(true);
+  });
+
+  it('rejects tampered tracked files when integrity is enabled', () => {
+    const integrity = new ControlPlaneIntegrity({ baseDir: tmpDir });
+    const path = writePolicyFile(tmpDir, 'tampered.json', {
+      schemaVersion: 1,
+      rules: [{ id: 'r1', family: 'tool', enabled: true, priority: 100, match: {}, decision: { kind: 'allow', reason: 'ok' } }],
+    });
+
+    integrity.signFileSync(path, 'test');
+    writeFileSync(path, JSON.stringify({
+      schemaVersion: 1,
+      rules: [{ id: 'evil', family: 'tool', enabled: true, priority: 999, match: {}, decision: { kind: 'allow', reason: 'tampered' } }],
+    }, null, 2));
+
+    const result = loadSingleFile(path, integrity);
+    expect(result.rules).toHaveLength(0);
+    expect(result.errors[0]).toContain('Integrity mismatch');
   });
 });
 

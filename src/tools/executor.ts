@@ -45,6 +45,7 @@ import { DEFAULT_TOOL_ALLOWED_COMMANDS, type AssistantCloudConfig, type Assistan
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import type { CodeSessionStore } from '../runtime/code-sessions.js';
+import { getEffectiveCodeWorkspaceTrustState } from '../runtime/code-workspace-trust.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
@@ -1264,7 +1265,10 @@ export class ToolExecutor {
 
   private getCurrentCodeSessionTrustState(request?: Partial<ToolExecutionRequest>): string | null {
     const session = this.getCurrentCodeSessionRecord(request);
-    return session?.workState.workspaceTrust?.state ?? null;
+    return getEffectiveCodeWorkspaceTrustState(
+      session?.workState.workspaceTrust,
+      session?.workState.workspaceTrustReview,
+    ) ?? null;
   }
 
   private isCodeSessionTrustCleared(request?: Partial<ToolExecutionRequest>): boolean {
@@ -2786,6 +2790,17 @@ export class ToolExecutor {
     args: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
+    if (toolName === 'memory_save') {
+      const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
+      if (codeMemory?.store?.isReadOnly()) {
+        return 'Code-session memory is read-only.';
+      }
+      const globalMemory = this.getGlobalMemoryContext(request);
+      if (!codeMemory && globalMemory.store?.isReadOnly()) {
+        return 'Persistent memory is read-only.';
+      }
+    }
+
     if (toolName === 'shell_safe') {
       const command = typeof args.command === 'string' ? args.command.trim() : '';
       if (!command) {
@@ -12388,6 +12403,9 @@ export class ToolExecutor {
           if (!codeMemory.store) {
             return { success: false, error: 'Code-session memory is not enabled.' };
           }
+          if (codeMemory.store.isReadOnly()) {
+            return { success: false, error: 'Code-session memory is read-only.' };
+          }
           const stored = codeMemory.store.append(codeMemory.sessionId, {
             content,
             createdAt: new Date().toISOString().slice(0, 10),
@@ -12426,6 +12444,9 @@ export class ToolExecutor {
         const globalMemory = this.getGlobalMemoryContext(request);
         if (!globalMemory.store) {
           return { success: false, error: 'Knowledge base is not enabled.' };
+        }
+        if (globalMemory.store.isReadOnly()) {
+          return { success: false, error: 'Persistent memory is read-only.' };
         }
 
         const stored = globalMemory.store.append(globalMemory.agentId, {

@@ -9,7 +9,6 @@ import type { SandboxProfile, SandboxResourceLimits, SandboxConfig } from './typ
 
 /** Paths that must stay read-only even when their parent is writable. */
 export const PROTECTED_PATHS = [
-  '.git',
   '.env',
   '.env.local',
   '.env.production',
@@ -112,6 +111,12 @@ export function buildBwrapArgs(
   // Network isolation (unless explicitly allowed)
   if (!opts.networkAccess) {
     args.push('--unshare-net');
+  }
+
+  // Re-bind the active workspace path explicitly so it remains visible even when
+  // the sandbox masks shared parents like /tmp with a fresh tmpfs.
+  if (profile === 'read-only') {
+    args.push('--ro-bind', workspacePath, workspacePath);
   }
 
   // Workspace write access

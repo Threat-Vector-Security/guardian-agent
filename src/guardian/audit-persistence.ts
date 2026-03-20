@@ -6,13 +6,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { AuditEvent } from './audit-log.js';
 import { createLogger } from '../util/logging.js';
+import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
 
 const log = createLogger('audit-persistence');
 
@@ -58,7 +59,7 @@ export class AuditPersistence {
 
   /** Initialize: ensure directory exists and recover lastHash from file. */
   async init(): Promise<void> {
-    await mkdir(this.auditDir, { recursive: true });
+    await mkdirSecure(this.auditDir);
 
     try {
       const stats = await stat(this.filePath);
@@ -88,7 +89,7 @@ export class AuditPersistence {
         hash,
       };
 
-      await appendFile(this.filePath, JSON.stringify(entry) + '\n', 'utf-8');
+      await appendSecureFile(this.filePath, JSON.stringify(entry) + '\n');
       this.lastHash = hash;
     });
 

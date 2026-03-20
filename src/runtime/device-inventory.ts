@@ -6,10 +6,10 @@
  * Persisted to ~/.guardianagent/device-inventory.json.
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { writeSecureFile } from '../util/secure-fs.js';
 import {
   classifyDevice,
   lookupOuiVendor,
@@ -222,9 +222,8 @@ export class DeviceInventoryService {
   /** Persist device inventory to disk. */
   async persist(): Promise<void> {
     try {
-      await mkdir(dirname(this.persistPath), { recursive: true });
       const data = Array.from(this.devices.values());
-      await writeFile(this.persistPath, JSON.stringify(data, null, 2), 'utf-8');
+      await writeSecureFile(this.persistPath, JSON.stringify(data, null, 2));
     } catch {
       // Best effort — don't crash
     }

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import type { AuditSeverity } from '../guardian/audit-log.js';
+import { writeSecureFile } from '../util/secure-fs.js';
 
 export type SecurityActivityStatus = 'started' | 'skipped' | 'completed' | 'failed';
 
@@ -92,8 +93,7 @@ export class SecurityActivityLogService {
     const payload: PersistedSecurityActivityLog = {
       entries: [...this.entries],
     };
-    await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
   }
 
   addListener(listener: (entry: SecurityActivityEntry) => void): () => void {
