@@ -466,6 +466,12 @@ export interface AssistantKnowledgeBaseConfig {
   maxContextChars: number;
   /** Maximum total file size in characters (default: 20000). */
   maxFileChars: number;
+  /** Maximum characters allowed for one stored memory entry (default: 2000). */
+  maxEntryChars: number;
+  /** Maximum number of stored entries per memory scope (default: 500). */
+  maxEntriesPerScope: number;
+  /** Maximum bytes reserved for future embedding caches per scope (default: 50 MB). */
+  maxEmbeddingCacheBytes: number;
   /** Enable automatic memory flush before context trimming (default: true). */
   autoFlush: boolean;
 }
@@ -1416,6 +1422,9 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         readOnly: false,
         maxContextChars: 4000,
         maxFileChars: 20000,
+        maxEntryChars: 2000,
+        maxEntriesPerScope: 500,
+        maxEmbeddingCacheBytes: 50_000_000,
         autoFlush: true,
       },
     },

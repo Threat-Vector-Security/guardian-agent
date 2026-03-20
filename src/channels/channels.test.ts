@@ -577,6 +577,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('/chat');
+    expect(text).toContain('/help <command>');
     expect(text).toContain('/agents');
     expect(text).toContain('/agent');
     expect(text).toContain('/approve');
@@ -591,6 +592,35 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('/models');
     expect(text).toContain('/clear');
     expect(text).toContain('/quit');
+
+    await cli.stop();
+  });
+
+  it('/help models should show model validation guidance', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/help models');
+    const text = readOutput(output);
+
+    expect(text).toContain('/models <provider>');
+    expect(text).toContain('/config set <provider> model <model>');
+    expect(text).toContain('updates Guardian config only');
+    expect(text).toContain('ollama run <model> "hello"');
+
+    await cli.stop();
+  });
+
+  it('/help should accept slash-prefixed topics', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/help /tools');
+    const text = readOutput(output);
+
+    expect(text).toContain('/tools run <tool> [jsonArgs]');
+    expect(text).toContain('jsonArgs must be a valid JSON object');
+    expect(text).toContain('/tools policy commands <comma,separated,prefixes>');
 
     await cli.stop();
   });

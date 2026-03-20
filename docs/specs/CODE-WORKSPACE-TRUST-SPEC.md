@@ -138,20 +138,21 @@ Still auto-approved inside the active workspace:
 - `memory_search`, `memory_recall`
 - `doc_create`
 
-Auto-approved only when `workspaceTrust.state = trusted`:
+Auto-approved only when the effective trust state is `trusted`:
 
+- repo-scoped mutating `shell_safe`
+- `code_git_commit`
 - `code_test`, `code_build`, `code_lint`
 - `memory_save`
 - `task_create`, `task_update`, `task_delete`
 - `workflow_upsert`, `workflow_run`, `workflow_delete`
-
-The same tool set is also auto-approved when the effective trust state is `trusted` because a valid `workspaceTrustReview` is active.
 
 Additional current behavior:
 
 - `shell_safe` remains allowlisted and repo-scoped
 - read-only shell commands such as `git status` still pass without approval
 - non-read-only shell execution in `caution` or `blocked` workspaces requires approval even under autonomous policy mode
+- once the effective trust state is `trusted`, a manual review acceptance unlocks the same repo-scoped auto-approve lane as a clean `trusted` assessment
 
 This keeps repo reading and editing low-friction while forcing a human decision before Guardian runs repo code or persists repo-derived state in a flagged workspace.
 

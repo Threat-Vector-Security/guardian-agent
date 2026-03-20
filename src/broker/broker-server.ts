@@ -1,4 +1,5 @@
 import { createLogger } from '../util/logging.js';
+import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import type { ToolExecutor } from '../tools/executor.js';
 import type { Runtime } from '../runtime/runtime.js';
 import type { CapabilityTokenManager } from './capability-token.js';
@@ -114,12 +115,11 @@ export class BrokerServer {
           const args = isRecord(request.params.args) ? request.params.args : {};
           const requestId = typeof request.params.requestId === 'string' ? request.params.requestId : undefined;
 
-          // memory_save supervisor safety net: deny unless explicitly allowed by the worker
-          if (toolName === 'memory_save' && request.params.allowImplicitMemorySave !== true) {
+          if (isMemoryMutationToolName(toolName) && request.params.allowModelMemoryMutation !== true) {
             result = {
               success: false,
               status: 'denied',
-              message: 'memory_save is reserved for explicit remember/save requests.',
+              message: getMemoryMutationIntentDeniedMessage(toolName),
             };
             break;
           }
@@ -149,6 +149,7 @@ export class BrokerServer {
               ? request.params.taintReasons.filter((value): value is string => typeof value === 'string')
               : undefined,
             derivedFromTaintedContent: request.params.derivedFromTaintedContent === true,
+            allowModelMemoryMutation: request.params.allowModelMemoryMutation === true,
             scheduleId: typeof request.params.scheduleId === 'string' ? request.params.scheduleId : undefined,
             ...(request.params.codeContext && typeof request.params.codeContext === 'object'
               ? { codeContext: request.params.codeContext as { workspaceRoot: string; sessionId?: string } }

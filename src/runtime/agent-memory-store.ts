@@ -24,6 +24,9 @@ export interface AgentMemoryStoreConfig {
   readOnly: boolean;
   maxContextChars: number;
   maxFileChars: number;
+  maxEntryChars: number;
+  maxEntriesPerScope: number;
+  maxEmbeddingCacheBytes: number;
   integrity?: ControlPlaneIntegrity;
   onSecurityEvent?: (event: {
     severity: 'info' | 'warn' | 'critical';
@@ -38,6 +41,9 @@ export const DEFAULT_MEMORY_STORE_CONFIG: AgentMemoryStoreConfig = {
   readOnly: false,
   maxContextChars: 4000,
   maxFileChars: 20000,
+  maxEntryChars: 2000,
+  maxEntriesPerScope: 500,
+  maxEmbeddingCacheBytes: 50_000_000,
   integrity: undefined,
   onSecurityEvent: undefined,
 };
@@ -53,6 +59,7 @@ export interface MemoryProvenance {
 /** A single memory entry with metadata. */
 export interface MemoryEntry {
   content: string;
+  summary?: string;
   createdAt: string;
   category?: string;
   sourceType?: MemorySourceType;
@@ -70,12 +77,13 @@ export interface StoredMemoryEntry extends MemoryEntry {
 }
 
 interface MemoryIndexFile {
-  version: 1;
+  version: 1 | 2;
   entries: StoredMemoryEntry[];
 }
 
-const EMPTY_INDEX: MemoryIndexFile = { version: 1, entries: [] };
+const EMPTY_INDEX: MemoryIndexFile = { version: 2, entries: [] };
 const MEMORY_CONTEXT_BLOCK_THRESHOLD = 3;
+const MEMORY_SUMMARY_MAX_CHARS = 200;
 
 export class AgentMemoryStore {
   private basePath: string;
@@ -108,6 +116,36 @@ export class AgentMemoryStore {
 
   private computeContentHash(content: string): string {
     return createHash('sha256').update(content).digest('hex');
+  }
+
+  private normalizeInlineText(value: string): string {
+    return stripInvisibleChars(value).replace(/\s+/g, ' ').trim();
+  }
+
+  private truncateInlineText(value: string, maxChars: number): string {
+    if (value.length <= maxChars) {
+      return value;
+    }
+    const candidate = value.slice(0, maxChars + 1);
+    const breakIndex = candidate.lastIndexOf(' ');
+    const cutIndex = breakIndex >= Math.floor(maxChars * 0.6) ? breakIndex : maxChars;
+    return `${candidate.slice(0, cutIndex).trim().replace(/[,:;\-]+$/, '')}...`;
+  }
+
+  private normalizeSummary(summary: string | undefined, content: string): string | undefined {
+    const provided = this.normalizeInlineText(summary ?? '');
+    if (provided) {
+      return this.truncateInlineText(provided, MEMORY_SUMMARY_MAX_CHARS);
+    }
+
+    const normalizedContent = this.normalizeInlineText(content);
+    if (!normalizedContent || normalizedContent.length <= MEMORY_SUMMARY_MAX_CHARS + 40) {
+      return undefined;
+    }
+
+    const firstSentenceMatch = normalizedContent.match(/^(.{1,200}?[.!?])(?:\s|$)/);
+    const candidate = firstSentenceMatch?.[1] ?? normalizedContent;
+    return this.truncateInlineText(candidate, MEMORY_SUMMARY_MAX_CHARS);
   }
 
   private emitSecurityEvent(event: {
@@ -162,7 +200,7 @@ export class AgentMemoryStore {
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<MemoryIndexFile>;
       const file: MemoryIndexFile = {
-        version: 1,
+        version: parsed.version === 1 ? 1 : 2,
         entries: Array.isArray(parsed.entries) ? parsed.entries : [],
       };
       this.indexCache.set(agentId, file);
@@ -289,6 +327,51 @@ export class AgentMemoryStore {
     return nextIndex;
   }
 
+  private enforceEntryCountBudget(agentId: string, index: MemoryIndexFile): MemoryIndexFile {
+    if (index.entries.length <= this.config.maxEntriesPerScope) {
+      return index;
+    }
+
+    const activeEntries = index.entries.filter((entry) => entry.status === 'active');
+    if (activeEntries.length > this.config.maxEntriesPerScope) {
+      throw new Error(`Persistent memory exceeds maxEntriesPerScope (${this.config.maxEntriesPerScope}).`);
+    }
+
+    const retainedIds = new Set<string>(activeEntries.map((entry) => entry.id));
+    let remainingInactiveBudget = this.config.maxEntriesPerScope - activeEntries.length;
+    let droppedInactive = 0;
+
+    for (const entry of index.entries) {
+      if (entry.status === 'active') continue;
+      if (remainingInactiveBudget > 0) {
+        retainedIds.add(entry.id);
+        remainingInactiveBudget -= 1;
+      } else {
+        droppedInactive += 1;
+      }
+    }
+
+    if (droppedInactive < 1) {
+      return index;
+    }
+
+    this.emitSecurityEvent({
+      severity: 'info',
+      code: 'memory_entry_budget_pruned_inactive',
+      message: `Pruned older inactive entries to respect maxEntriesPerScope (${this.config.maxEntriesPerScope}).`,
+      details: {
+        agentId,
+        droppedEntries: droppedInactive,
+        maxEntriesPerScope: this.config.maxEntriesPerScope,
+      },
+    });
+
+    return {
+      ...index,
+      entries: index.entries.filter((entry) => retainedIds.has(entry.id)),
+    };
+  }
+
   load(agentId: string): string {
     if (!this.config.enabled) return '';
 
@@ -320,7 +403,7 @@ export class AgentMemoryStore {
   loadForContext(agentId: string): string {
     const indexPath = this.indexPath(agentId);
     const full = existsSync(indexPath)
-      ? this.renderMarkdown(agentId, this.readIndex(agentId), { sanitizeForPrompt: true })
+      ? this.renderContextMarkdown(agentId, this.readIndex(agentId))
       : this.load(agentId);
     if (!full) return '';
 
@@ -352,10 +435,15 @@ export class AgentMemoryStore {
     }
     this.assertWritable();
 
+    if (entry.content.length > this.config.maxEntryChars) {
+      throw new Error(`Persistent memory entry exceeds maxEntryChars (${this.config.maxEntryChars}).`);
+    }
+
     const index = this.readIndex(agentId);
     const stored: StoredMemoryEntry = {
       id: randomUUID(),
       content: entry.content,
+      summary: this.normalizeSummary(entry.summary, entry.content),
       createdAt: entry.createdAt,
       category: entry.category,
       sourceType: entry.sourceType ?? 'user',
@@ -368,10 +456,13 @@ export class AgentMemoryStore {
       contentHash: this.computeContentHash(entry.content),
     };
 
-    const nextIndex = this.enforceFileBudget(agentId, {
-      ...index,
-      entries: [stored, ...index.entries],
-    });
+    const nextIndex = this.enforceFileBudget(
+      agentId,
+      this.enforceEntryCountBudget(agentId, {
+        ...index,
+        entries: [stored, ...index.entries],
+      }),
+    );
     this.writeIndex(agentId, nextIndex);
     this.rebuildMarkdown(agentId, nextIndex);
 
@@ -420,7 +511,9 @@ export class AgentMemoryStore {
       .filter((entry) => {
         const category = entry.category?.toLowerCase() ?? '';
         const tags = Array.isArray(entry.tags) ? entry.tags.join(' ').toLowerCase() : '';
+        const summary = entry.summary?.toLowerCase() ?? '';
         return entry.content.toLowerCase().includes(normalizedQuery)
+          || summary.includes(normalizedQuery)
           || category.includes(normalizedQuery)
           || tags.includes(normalizedQuery);
       })
@@ -529,6 +622,92 @@ export class AgentMemoryStore {
     if (!cleaned) return 'General';
     const detection = detectInjection(cleaned);
     return detection.score >= MEMORY_CONTEXT_BLOCK_THRESHOLD ? 'General' : cleaned;
+  }
+
+  private renderContextMarkdown(agentId: string, index: MemoryIndexFile): string {
+    const grouped = new Map<string, Array<{ fullLine: string; summaryLine?: string }>>();
+
+    for (const entry of index.entries) {
+      if (entry.status !== 'active') continue;
+
+      const renderedContent = this.sanitizeEntryForPrompt(agentId, entry);
+      if (!renderedContent) continue;
+
+      const heading = this.sanitizeHeadingForPrompt(entry.category);
+      const suffix = `${entry.trustLevel && entry.trustLevel !== 'trusted' ? ` [${entry.trustLevel}]` : ''} _(${entry.createdAt})_`;
+      const fullLine = `- ${renderedContent}${suffix}`;
+      const renderedSummary = this.sanitizeSummaryForPrompt(agentId, entry);
+      const summaryLine = renderedSummary && renderedSummary !== renderedContent
+        ? `- ${renderedSummary}${suffix}`
+        : undefined;
+      const list = grouped.get(heading) ?? [];
+      list.push({ fullLine, summaryLine });
+      grouped.set(heading, list);
+    }
+
+    let output = '';
+    let omittedEntries = 0;
+
+    for (const [heading, entries] of grouped.entries()) {
+      let headingRendered = false;
+      for (const entry of entries) {
+        const prefix = headingRendered
+          ? ''
+          : `${output ? '\n\n' : ''}## ${heading}\n`;
+        const fullChunk = `${prefix}${entry.fullLine}`;
+        if (output.length + fullChunk.length <= this.config.maxContextChars) {
+          output += fullChunk;
+          headingRendered = true;
+          continue;
+        }
+        if (entry.summaryLine) {
+          const summaryChunk = `${prefix}${entry.summaryLine}`;
+          if (output.length + summaryChunk.length <= this.config.maxContextChars) {
+            output += summaryChunk;
+            headingRendered = true;
+            continue;
+          }
+        }
+        omittedEntries += 1;
+      }
+    }
+
+    if (omittedEntries > 0) {
+      const note = `${output ? '\n\n' : ''}[... ${omittedEntries} additional memory entr${omittedEntries === 1 ? 'y' : 'ies'} omitted — use memory_recall for full details]`;
+      if (output.length + note.length <= this.config.maxContextChars) {
+        output += note;
+      }
+    }
+
+    return output;
+  }
+
+  private sanitizeSummaryForPrompt(agentId: string, entry: StoredMemoryEntry): string | null {
+    const rawSummary = entry.summary?.trim();
+    if (!rawSummary) {
+      return null;
+    }
+    const cleaned = this.normalizeInlineText(rawSummary);
+    if (!cleaned) {
+      return null;
+    }
+    const detection = detectInjection(cleaned);
+    if (detection.score >= MEMORY_CONTEXT_BLOCK_THRESHOLD) {
+      this.emitSecurityEvent({
+        severity: 'warn',
+        code: 'memory_context_summary_blocked',
+        message: 'Blocked suspicious memory summary from prompt context.',
+        details: {
+          agentId,
+          entryId: entry.id,
+          category: entry.category,
+          score: detection.score,
+          signals: detection.signals,
+        },
+      });
+      return null;
+    }
+    return cleaned;
   }
 
   private sanitizeEntryForPrompt(agentId: string, entry: StoredMemoryEntry): string | null {

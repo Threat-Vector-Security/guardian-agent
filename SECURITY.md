@@ -58,6 +58,7 @@ For the shipped local defensive overlay on top of the runtime security model, se
 | Overlapping scheduled side effects | Per-task active-run locks prevent the same scheduled automation from overlapping itself |
 | Stale automation authority | Schedule approval expiry, scope hashes, principal-bound approval ownership, budget caps |
 | Script drift during automation creation | Native automation authoring compiler prefers `task_create` / `workflow_upsert`, hard-bans script/code-file authoring when the user requested native Guardian automation, and now intercepts those requests before both direct and brokered worker tool loops |
+| Suspicious repo/workspace content in coding sessions | Bounded workspace trust review, native AV enrichment, approval gating for execution/persistence, and session-scoped manual trust review with automatic drift invalidation |
 | Host drift or suspicious local activity | Host monitor baselines processes, persistence, paths, and network; critical findings can block risky actions |
 | Gateway firewall drift | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
 

@@ -119,6 +119,63 @@ describe('AgentMemoryStore', () => {
     expect(store.exists('agent1')).toBe(false);
   });
 
+  it('rejects entries that exceed maxEntryChars', () => {
+    const store = makeStore({ maxEntryChars: 24 });
+
+    expect(() => store.append('agent1', {
+      content: 'This memory entry is too long to fit.',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    })).toThrow('Persistent memory entry exceeds maxEntryChars');
+  });
+
+  it('prunes inactive entries before enforcing maxEntriesPerScope', () => {
+    const store = makeStore({ maxEntriesPerScope: 2 });
+
+    store.append('agent1', {
+      content: 'Active memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    });
+    const inactive = store.append('agent1', {
+      content: 'Quarantined memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+      status: 'quarantined',
+      trustLevel: 'untrusted',
+    });
+    store.append('agent1', {
+      content: 'Newest active memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    });
+
+    expect(store.findEntry('agent1', inactive.id)).toBeUndefined();
+    expect(store.getEntries('agent1', true)).toHaveLength(2);
+    expect(store.getEntries('agent1')).toHaveLength(2);
+  });
+
+  it('rejects new active entries when maxEntriesPerScope would be exceeded', () => {
+    const store = makeStore({ maxEntriesPerScope: 2 });
+
+    store.append('agent1', {
+      content: 'First active memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    });
+    store.append('agent1', {
+      content: 'Second active memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    });
+
+    expect(() => store.append('agent1', {
+      content: 'Third active memory',
+      createdAt: '2026-03-20',
+      category: 'Notes',
+    })).toThrow('Persistent memory exceeds maxEntriesPerScope');
+  });
+
   it('can toggle readOnly at runtime', () => {
     const store = makeStore();
     store.append('agent1', {

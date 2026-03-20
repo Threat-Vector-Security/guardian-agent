@@ -4175,6 +4175,12 @@ tr:hover td {
   background: rgba(251, 191, 36, 0.12);
 }
 
+.badge-accepted {
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
 .code-session-form {
   display: none;
   padding: 1rem;
@@ -4244,6 +4250,16 @@ tr:hover td {
 .code-session-form__trust-copy.is-raw-state {
   color: var(--warning);
   font-family: var(--font-mono);
+}
+
+.code-session-form__trust-copy.is-effective-state {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.code-session-form__trust-copy.is-effective-state.is-accepted {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .code-session-form__checkbox {
@@ -5069,6 +5085,11 @@ tr:hover td {
 .code-chat__notice.is-warning,
 .code-tab-banner.is-warning {
   background: rgba(251, 191, 36, 0.12);
+}
+
+.code-chat__notice.is-info,
+.code-tab-banner.is-info {
+  background: rgba(52, 211, 153, 0.12);
 }
 
 .code-status-list {

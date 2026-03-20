@@ -13,7 +13,7 @@ import {
 import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
-import { shouldAllowImplicitMemorySave } from '../util/memory-intent.js';
+import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
@@ -375,7 +375,7 @@ export class BrokeredWorkerSession {
       };
     }
 
-    const allowImplicit = shouldAllowImplicitMemorySave(message.content);
+    const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
 
     const result = await runLlmLoop(
       llmMessages,
@@ -418,7 +418,7 @@ export class BrokeredWorkerSession {
         }
       },
       {
-        allowImplicitMemorySave: allowImplicit,
+        allowModelMemoryMutation,
         fallbackChatFn,
       },
     );

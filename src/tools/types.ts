@@ -198,6 +198,11 @@ export interface ToolExecutionRequest {
   contentTrustLevel?: ContentTrustLevel;
   taintReasons?: string[];
   derivedFromTaintedContent?: boolean;
+  /**
+   * Trusted runtime hint that the user explicitly requested a durable memory mutation.
+   * Only planner/runtime flows should set this.
+   */
+  allowModelMemoryMutation?: boolean;
   scheduleId?: string;
   /**
    * Optional agent context from runtime dispatch.

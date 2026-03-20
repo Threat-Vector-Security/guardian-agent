@@ -316,6 +316,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     readOnly: false,
     maxContextChars: 4000,
     maxFileChars: 20000,
+    maxEntryChars: 2000,
+    maxEntriesPerScope: 500,
+    maxEmbeddingCacheBytes: 50_000_000,
     autoFlush: true,
   };
   if (knowledgeBase.maxContextChars < 1) {
@@ -324,8 +327,20 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (knowledgeBase.maxFileChars < 1) {
     errors.push('assistant.memory.knowledgeBase.maxFileChars must be >= 1');
   }
+  if (knowledgeBase.maxEntryChars < 1) {
+    errors.push('assistant.memory.knowledgeBase.maxEntryChars must be >= 1');
+  }
+  if (knowledgeBase.maxEntriesPerScope < 1) {
+    errors.push('assistant.memory.knowledgeBase.maxEntriesPerScope must be >= 1');
+  }
+  if (knowledgeBase.maxEmbeddingCacheBytes < 0) {
+    errors.push('assistant.memory.knowledgeBase.maxEmbeddingCacheBytes must be >= 0');
+  }
   if (knowledgeBase.maxContextChars > knowledgeBase.maxFileChars) {
     errors.push('assistant.memory.knowledgeBase.maxContextChars must be <= assistant.memory.knowledgeBase.maxFileChars');
+  }
+  if (knowledgeBase.maxEntryChars > knowledgeBase.maxFileChars) {
+    errors.push('assistant.memory.knowledgeBase.maxEntryChars must be <= assistant.memory.knowledgeBase.maxFileChars');
   }
   if (assistant.analytics.retentionDays < 1) {
     errors.push('assistant.analytics.retentionDays must be >= 1');

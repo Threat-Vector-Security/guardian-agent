@@ -131,6 +131,18 @@ async function waitForPath(path: string, timeoutMs = 250): Promise<boolean> {
   return existsSync(path);
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  return predicate();
+}
+
 // ─── Tests ────────────────────────────────────────────────
 
 describe('ScheduledTaskService', () => {
@@ -773,6 +785,7 @@ describe('ScheduledTaskService', () => {
 
       localService.create(validInput);
       expect(await waitForPath(persistPath)).toBe(true);
+      expect(await waitForCondition(() => integrity.verifyFileSync(persistPath).ok)).toBe(true);
 
       expect(readFileSync(persistPath, 'utf-8')).toContain('Test Task');
       expect(integrity.verifyFileSync(persistPath).ok).toBe(true);
@@ -787,6 +800,7 @@ describe('ScheduledTaskService', () => {
 
       firstService.create(validInput);
       expect(await waitForPath(persistPath)).toBe(true);
+      expect(await waitForCondition(() => integrity.verifyFileSync(persistPath).ok)).toBe(true);
       writeFileSync(persistPath, JSON.stringify([{
         id: 'tampered',
         name: 'Tampered',

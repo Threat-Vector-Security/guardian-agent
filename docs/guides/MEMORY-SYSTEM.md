@@ -127,6 +127,9 @@ assistant:
       readOnly: false
       maxContextChars: 4000
       maxFileChars: 20000
+      maxEntryChars: 2000
+      maxEntriesPerScope: 500
+      maxEmbeddingCacheBytes: 50000000
       autoFlush: true
 ```
 
@@ -150,7 +153,7 @@ Four tools are registered in the `memory` category.
 
 ### memory_search
 
-Search conversation history using FTS5 full-text search with BM25 ranking.
+Search conversation history, persistent memory, or both.
 
 ```text
 Tool: memory_search
@@ -158,14 +161,20 @@ Risk: read_only
 Category: memory
 Parameters:
   query (required): Search query — words, phrases, FTS5 syntax
+  scope (optional): "conversation", "persistent", or "both" (default)
   limit (optional): Max results (default 10, max 50)
 ```
 
 Important behavior:
 
-- searches conversation history, not the persistent markdown memory store
-- in Code, the active conversation is already Code-session-scoped
-- falls back to substring search if FTS5 is unavailable
+- `scope: "conversation"` searches conversation history only
+- `scope: "persistent"` searches the current persistent memory scope only
+- `scope: "both"` merges both sources into one ranked list
+- outside Code, persistent search targets the current agent's global memory
+- inside Code, persistent search targets the current Code session's long-term memory
+- conversation results use FTS5 BM25 ordering when available, with substring fallback otherwise
+- persistent results use deterministic field-aware ranking across content, summary, category, and tags
+- merged results are fused source-by-source rather than comparing raw BM25 and substring scores directly
 
 `memory_search` results are treated as untrusted tool output when they are fed back into the model. Before reinjection, Guardian strips invisible Unicode, checks for prompt-injection signals, and redacts detected secrets and configured PII entities.
 
@@ -186,6 +195,7 @@ Scope rules:
 - outside Code: reads the current agent's global memory
 - inside Code: reads the current Code session's long-term memory
 - when an index file fails integrity verification, the scope is treated as empty instead of falling back to the markdown cache
+- output includes per-entry metadata, including stored `summary` when available, alongside rendered markdown content
 
 ### memory_save
 
@@ -197,6 +207,7 @@ Risk: mutating
 Category: memory
 Parameters:
   content (required): The fact, preference, or summary to remember
+  summary (optional): Short gist used for prompt-time memory packing
   category (optional): Heading for organization (for example "Preferences", "Decisions", "Facts", "Project Notes")
 ```
 
@@ -205,6 +216,8 @@ Scope rules:
 - outside Code: writes to global agent memory
 - inside Code: writes to the current Code session's long-term memory
 - if `knowledgeBase.readOnly` is enabled, `memory_save` fails before approval/execution instead of creating a pending write
+- trusted direct `memory_save` requests auto-run without approval; assistant-origin writes still require explicit remember intent
+- long entries get a deterministic derived summary when no summary is supplied
 
 Example usage by the agent:
 
@@ -238,6 +251,8 @@ Bridge rules:
 - trusted/user-local memory writes can become `active`
 - low-trust or tainted remote-derived writes default to `quarantined`
 - quarantined entries are persisted in sidecar metadata but excluded from normal prompt context
+- assistant-origin memory mutations are denied unless the user explicitly asked to remember something
+- trusted direct/operator memory writes can proceed without a separate approval prompt
 - verification distinguishes active writes from quarantined/unreviewed writes
 - inactive/quarantined material is only surfaced through explicit search paths
 - `knowledgeBase.readOnly` freezes normal assistant/runtime durable writes, including `memory_save` and automatic flush writes
@@ -304,7 +319,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 2. When the character budget is exhausted, earlier messages are identified as dropped.
 3. If substantive content is being dropped, the `onMemoryFlush` callback fires.
 4. The callback extracts preview lines.
-5. Those lines are appended to either global memory or Code-session memory, depending on the conversation scope.
+5. Those lines are written as a bounded summary entry in either global memory or Code-session memory, depending on the conversation scope.
 
 ### Flush behavior
 
@@ -313,6 +328,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 - only fires when substantive content is being dropped
 - each message preview is capped at 200 characters
 - max 10 messages per flush event
+- flush writes carry `sourceType: system` and a short derived summary
 - flush failures are silently caught and never break message building
 - controlled by `knowledgeBase.autoFlush` config (default: `true`)
 - skipped entirely when `knowledgeBase.readOnly` is `true`

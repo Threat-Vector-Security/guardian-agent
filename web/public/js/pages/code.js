@@ -754,6 +754,13 @@ function isWorkspaceTrustOverrideAvailable(session) {
   return !hasWorkspaceTrustNativeDetection(workspaceTrust);
 }
 
+function getWorkspaceTrustBadgeClass(state) {
+  if (state === 'blocked') return 'badge-critical';
+  if (state === 'caution') return 'badge-warn';
+  if (state === 'trusted') return 'badge-idle';
+  return 'badge-info';
+}
+
 function buildWorkspaceTrustFindingViewModels(workspaceTrust) {
   return Array.isArray(workspaceTrust?.findings)
     ? workspaceTrust.findings.map((finding, index) => ({
@@ -829,15 +836,15 @@ function deriveTaskItems(session) {
     items.push({
       id: 'workspace-trust',
       title: reviewActive
-        ? 'Workspace trust: trusted (manual review)'
+        ? 'Workspace trust: accepted'
         : `Workspace trust: ${effectiveTrustState}`,
       status: reviewActive
-        ? 'info'
+        ? 'completed'
         : effectiveTrustState === 'trusted' ? 'completed' : effectiveTrustState === 'blocked' ? 'blocked' : 'warn',
       detail: reviewActive
-        ? `Manual trust override accepted for the current findings. Raw scanner state is ${workspaceTrust.state}. ${workspaceTrust.summary}`
+        ? `Manual trust acceptance is active for this session. Effective trust is trusted for repo-scoped tools. Raw scanner state remains ${workspaceTrust.state}. ${workspaceTrust.summary}`
         : workspaceTrust.summary,
-      meta: `${workspaceTrust.scannedFiles || 0} scanned file${workspaceTrust.scannedFiles === 1 ? '' : 's'}${workspaceTrust.truncated ? ' • truncated' : ''}${nativeProtectionMeta}`,
+      meta: `${reviewActive ? `raw ${String(workspaceTrust.state || '').toUpperCase()} • ` : ''}${workspaceTrust.scannedFiles || 0} scanned file${workspaceTrust.scannedFiles === 1 ? '' : 's'}${workspaceTrust.truncated ? ' • truncated' : ''}${nativeProtectionMeta}`,
       findings: buildWorkspaceTrustFindingViewModels(workspaceTrust),
     });
   }
@@ -2383,12 +2390,12 @@ function renderWorkspaceTrustNotice(session) {
   const copy = nativeDetection
     ? 'Native host malware scanning reported a workspace detection. Guardian will require approval before repo execution or persistence actions continue.'
     : reviewActive
-      ? `Current repo findings were manually accepted for this session. Raw scanner state remains ${workspaceTrust.state}. If the findings change, Guardian will require review again.`
+      ? `Manual trust acceptance is active for this session. Effective trust is TRUSTED and repo-scoped tools run normally. Raw scanner state remains ${String(workspaceTrust.state || '').toUpperCase()}. If the findings change, the acceptance clears automatically.`
       : workspaceTrust.state === 'blocked'
       ? 'Static repo review found high-risk indicators. Guardian will require approval before repo execution or persistence actions continue.'
       : 'Static repo review found suspicious indicators. Guardian will require approval before repo execution or persistence actions continue.';
   return `
-    <div class="code-chat__notice is-warning">
+    <div class="code-chat__notice ${reviewActive ? 'is-info' : 'is-warning'}">
       <span>${esc(copy)}</span>
     </div>
   `;
@@ -2735,6 +2742,7 @@ function renderSessionForm() {
   const submitLabel = isEdit ? 'Save' : 'Create';
   const cancelAttr = isEdit ? 'data-code-cancel-edit' : 'data-code-cancel-create';
   const workspaceTrust = editSession?.workspaceTrust || null;
+  const effectiveTrustState = getEffectiveWorkspaceTrustState(editSession) || workspaceTrust?.state || null;
   const reviewActive = isWorkspaceTrustReviewActive(editSession);
   const overrideAvailable = isWorkspaceTrustOverrideAvailable(editSession);
   const trustFindings = buildWorkspaceTrustFindingViewModels(workspaceTrust);
@@ -2753,6 +2761,9 @@ function renderSessionForm() {
             : overrideAvailable
               ? `The scanner still found indicators in this repo. You can acknowledge them here and treat the workspace as trusted for this session. Raw findings remain visible in activity.`
               : `Manual trust override is unavailable while native AV reports an active workspace detection.`}
+        </div>
+        <div class="code-session-form__trust-copy is-effective-state ${reviewActive ? 'is-accepted' : ''}">
+          Effective session state: ${reviewActive ? 'ACCEPTED (trusted for repo-scoped tools)' : esc(String(effectiveTrustState || '').toUpperCase())}
         </div>
         <div class="code-session-form__trust-copy is-raw-state">Raw scanner state: ${esc(String(workspaceTrust.state || '').toUpperCase())}</div>
         <label class="code-session-form__checkbox">
@@ -2810,13 +2821,10 @@ function renderSessionCard(session) {
   const workspaceTrust = session.workspaceTrust || null;
   const effectiveTrustState = getEffectiveWorkspaceTrustState(session) || workspaceTrust?.state || null;
   const reviewActive = isWorkspaceTrustReviewActive(session);
-  const trustBadgeClass = effectiveTrustState === 'blocked'
-    ? 'badge-critical'
-    : effectiveTrustState === 'caution'
-      ? 'badge-warn'
-      : effectiveTrustState === 'trusted'
-        ? 'badge-idle'
-        : '';
+  const trustBadgeClass = reviewActive
+    ? 'badge-accepted'
+    : getWorkspaceTrustBadgeClass(effectiveTrustState);
+  const rawTrustBadgeClass = getWorkspaceTrustBadgeClass(workspaceTrust?.state || null);
   return `
     <button class="code-session ${isActive ? 'is-active' : ''}" type="button" data-code-session-id="${escAttr(session.id)}">
       <div class="code-session__top">
@@ -2828,8 +2836,8 @@ function renderSessionCard(session) {
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
       <div class="code-session__badges">
-        ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
-        ${reviewActive ? '<span class="badge badge-info">MANUAL REVIEW</span>' : ''}
+        ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
+        ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}
         ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
         ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}

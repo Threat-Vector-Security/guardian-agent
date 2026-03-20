@@ -38,6 +38,7 @@ Memory scope note:
 
 - outside Code, `memory_recall` and `memory_save` target the current agent's global memory
 - inside a backend Code session, those same tools target Code-session memory keyed by `codeSessionId`
+- `memory_search` now supports `scope: conversation|persistent|both`; persistent search follows the same current-scope binding as `memory_recall`
 - `memory_bridge_search` is the explicit read-only cross-scope lookup path and does not switch the current context
 - if `assistant.memory.knowledgeBase.readOnly` is enabled, `memory_save` is rejected before approval/execution in both scopes
 

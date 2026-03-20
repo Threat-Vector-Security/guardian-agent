@@ -1246,6 +1246,9 @@ export interface ConfigUpdate {
         readOnly?: boolean;
         maxContextChars?: number;
         maxFileChars?: number;
+        maxEntryChars?: number;
+        maxEntriesPerScope?: number;
+        maxEmbeddingCacheBytes?: number;
         autoFlush?: boolean;
       };
     };

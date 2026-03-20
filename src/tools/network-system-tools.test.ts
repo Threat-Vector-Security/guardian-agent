@@ -125,6 +125,34 @@ describe('Network & System Tools', () => {
       expect(output.reachable).toBe(true);
     });
 
+    it('falls back for loopback when ICMP sockets are unavailable', async () => {
+      const executor = makeExecutor();
+      (executor as unknown as {
+        sandboxExec: () => Promise<{ stdout: string; stderr: string }>;
+      }).sandboxExec = async () => {
+        throw new Error('ping: socktype: SOCK_DGRAM\nping: socket: Operation not permitted');
+      };
+
+      const result = await executor.runTool(makeRequest('net_ping', { host: '127.0.0.1', count: 2 }));
+      expect(result.success).toBe(true);
+      const output = result.output as {
+        host: string;
+        reachable: boolean;
+        packetsSent: number;
+        packetsReceived: number;
+        packetLossPercent: number;
+        rttAvgMs: number | null;
+        method?: string;
+      };
+      expect(output.host).toBe('127.0.0.1');
+      expect(output.reachable).toBe(true);
+      expect(output.packetsSent).toBe(2);
+      expect(output.packetsReceived).toBe(2);
+      expect(output.packetLossPercent).toBe(0);
+      expect(output.rttAvgMs).toBeNull();
+      expect(output.method).toBe('loopback_fallback');
+    });
+
     it('blocks external host', async () => {
       const executor = makeExecutor();
       const result = await executor.runTool(makeRequest('net_ping', { host: '8.8.8.8' }));

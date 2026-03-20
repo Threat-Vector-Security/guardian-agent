@@ -2,12 +2,13 @@ import type { ChatMessage, ChatResponse, ChatOptions } from '../llm/types.js';
 import type { ToolCaller } from '../broker/types.js';
 import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
+import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import { isResponseDegraded } from '../util/response-quality.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 
 export interface LlmLoopOptions {
-  /** When true, memory_save tool calls are allowed (user explicitly asked to remember). */
-  allowImplicitMemorySave?: boolean;
+  /** When true, model-authored memory mutation tool calls are allowed. */
+  allowModelMemoryMutation?: boolean;
   /** Optional fallback chat function for quality-based retry with an external provider. */
   fallbackChatFn?: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>;
 }
@@ -98,13 +99,12 @@ export async function runLlmLoop(
           try { parsedArgs = JSON.parse(tc.arguments); } catch { /* empty */ }
         }
 
-        // memory_save suppression: deny unless user explicitly asked to remember
-        if (tc.name === 'memory_save' && options?.allowImplicitMemorySave !== true) {
+        if (isMemoryMutationToolName(tc.name) && options?.allowModelMemoryMutation !== true) {
           const denied: ToolRunResponse = {
             success: false,
             status: 'denied',
             jobId: `denied:${tc.id}`,
-            message: 'memory_save is reserved for explicit remember/save requests from the user.',
+            message: getMemoryMutationIntentDeniedMessage(tc.name),
           };
           if (onToolCalled) {
             onToolCalled(tc, denied as unknown as Record<string, unknown>);
@@ -121,6 +121,7 @@ export async function runLlmLoop(
           contentTrustLevel: currentContextTrustLevel,
           taintReasons: [...currentTaintReasons],
           derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
+          allowModelMemoryMutation: options?.allowModelMemoryMutation === true,
         });
 
         if (onToolCalled) {

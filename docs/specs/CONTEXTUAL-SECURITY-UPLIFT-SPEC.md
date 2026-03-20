@@ -77,6 +77,8 @@ This trust state follows subsequent tool decisions in the same run.
 Implemented enforcement rules:
 - quarantined content cannot directly drive non-read-only tools
 - tainted content driving mutating tools requires approval
+- assistant-origin memory mutation tools are denied unless the user explicitly established remember/save intent
+- trusted direct memory writes auto-allow by default, even in `approve_each`, unless a stronger explicit policy overrides them
 - `memory_save` from tainted content is approval-gated or denied depending on trust level
 - direct tool API and brokered tool calls both carry these contextual inputs
 - repeated identical failed tool calls in one chain are blocked before retry loops can overspend
@@ -110,6 +112,8 @@ Current behavior:
 - `assistant.memory.knowledgeBase.readOnly` freezes normal assistant/runtime durable writes in both global and Code-session memory
 - verified memory indexes are now the canonical durable state; prompt loads reject tampered indexes instead of trusting cached markdown
 - automatic flush skips durable writes while the freeze is enabled
+- persistent memory enforces `maxEntryChars`, `maxEntriesPerScope`, and `maxFileChars`
+- prompt-time persistent memory injection is entry-aware and summary-aware instead of raw string slicing
 
 ## Principal-Bound Approvals
 

@@ -175,6 +175,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'New code sessions no longer assume a cloned repo is automatically safe. Guardian first stores a bounded static repo review and then, when available, schedules a background native malware scan of the workspace root.',
                   'Windows code sessions consume Windows Defender custom-path scans. Unix-like hosts consume `clamscan` or `clamdscan` when installed.',
                   'The Code page exposes trust state directly through session badges, activity cards, and warning banners. Trust states are `trusted`, `caution`, and `blocked`, and native AV status is folded into the trust summary.',
+                  'Operators can manually trust the current findings from Edit Session. That override is session-scoped, keeps the raw findings visible, and clears automatically if the assessment changes.',
                   'When workspace trust is not cleared, README-derived summaries and raw working-set snippets are suppressed from the model prompt so repo content is treated as untrusted data rather than instructions.',
                   'A `trusted` result means the shipped static review and optional native AV scan did not find current indicators. It is not an agentic repo review or a proof that the repo is safe.',
                 ],
@@ -183,7 +184,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Coding Approvals',
                 items: [
                   'Safe repo-local coding tools such as `code_edit`, `code_patch`, `code_create`, `code_plan`, `code_git_diff`, and repo-scoped file operations remain auto-approved inside the active workspace.',
-                  'Execution and persistence actions such as `code_test`, `code_build`, `code_lint`, `memory_save`, and workflow or task mutations only auto-approve when `workspaceTrust.state` is `trusted`.',
+                  'Execution and persistence actions such as `code_test`, `code_build`, `code_lint`, `memory_save`, and workflow or task mutations only auto-approve when the effective workspace trust state is `trusted`.',
                   'Read-only shell commands such as `git status` stay low-friction. Non-read-only shell execution in a `caution` or `blocked` workspace requires approval even under autonomous policy mode.',
                 ],
               },

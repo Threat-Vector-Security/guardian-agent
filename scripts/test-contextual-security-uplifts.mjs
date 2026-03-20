@@ -23,15 +23,26 @@ async function readJsonBody(req) {
   });
 }
 
-function createChatCompletionResponse({ model, content = '' }) {
+function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
+  const message = { role: 'assistant', content };
+  if (toolCalls?.length) {
+    message.tool_calls = toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      type: 'function',
+      function: {
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      },
+    }));
+  }
   return {
     id: `chatcmpl-${Date.now()}`,
     model,
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content },
-        finish_reason: 'stop',
+        message,
+        finish_reason: finishReason,
       },
     ],
     usage: {
@@ -51,7 +62,47 @@ async function startFakeProvider() {
     }
 
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
-      await readJsonBody(req);
+      const body = await readJsonBody(req);
+      const messages = Array.isArray(body?.messages) ? body.messages : [];
+      const lastMessage = messages[messages.length - 1];
+      const lastUserContent = [...messages]
+        .reverse()
+        .find((message) => message?.role === 'user' && typeof message.content === 'string')
+        ?.content ?? '';
+      const sawToolResult = messages.some((message) => message?.role === 'tool');
+
+      if (
+        typeof lastUserContent === 'string'
+        && /remember that i prefer concise status updates/i.test(lastUserContent)
+        && !sawToolResult
+      ) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'contextual-harness-model',
+          content: '',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'tool-call-memory-save',
+            name: 'memory_save',
+            arguments: JSON.stringify({
+              content: 'User prefers concise status updates',
+              category: 'Preferences',
+              summary: 'Concise status updates',
+            }),
+          }],
+        })));
+        return;
+      }
+
+      if (lastMessage?.role === 'tool') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'contextual-harness-model',
+          content: 'Stored that preference for later.',
+        })));
+        return;
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatCompletionResponse({
         model: 'contextual-harness-model',
@@ -240,6 +291,18 @@ guardian:
 
     await waitForHealth(baseUrl);
 
+    const rememberedViaChat = await requestJson(baseUrl, token, 'POST', '/api/message', {
+      userId: 'harness',
+      content: 'remember that I prefer concise status updates',
+    });
+    assert.match(String(rememberedViaChat?.content ?? ''), /stored|concise status updates|preference/i);
+    const rememberedJob = await waitForJob(
+      baseUrl,
+      token,
+      (job) => job.toolName === 'memory_save' && job.status === 'succeeded',
+    );
+    assert.equal(rememberedJob.approvalId, undefined);
+
     const quarantinedWrite = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
       toolName: 'fs_write',
       agentId: 'default',
@@ -265,9 +328,9 @@ guardian:
       },
       contentTrustLevel: 'trusted',
     });
-    assert.equal(trustedMemorySave.status, 'pending_approval');
-    const trustedMemoryJob = await approveAndWait(baseUrl, token, trustedMemorySave.approvalId, 'memory_save');
-    assert.equal(trustedMemoryJob.verificationStatus, 'verified');
+    assert.equal(trustedMemorySave.status, 'succeeded');
+    assert.equal(trustedMemorySave.approvalId, undefined);
+    assert.equal(trustedMemorySave.verificationStatus, 'verified');
 
     const trustedRecall = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
       toolName: 'memory_recall',

@@ -62,6 +62,7 @@ export class SecurityActivityLogService {
   private readonly now: () => number;
   private readonly entries: SecurityActivityEntry[] = [];
   private readonly listeners = new Set<(entry: SecurityActivityEntry) => void>();
+  private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(options?: SecurityActivityLogOptions) {
     this.persistPath = options?.persistPath ?? DEFAULT_PERSIST_PATH;
@@ -93,7 +94,11 @@ export class SecurityActivityLogService {
     const payload: PersistedSecurityActivityLog = {
       entries: [...this.entries],
     };
-    await writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+    const writeOperation = this.persistQueue
+      .catch(() => {})
+      .then(() => writeSecureFile(this.persistPath, JSON.stringify(payload, null, 2), 'utf8'));
+    this.persistQueue = writeOperation.catch(() => {});
+    await writeOperation;
   }
 
   addListener(listener: (entry: SecurityActivityEntry) => void): () => void {

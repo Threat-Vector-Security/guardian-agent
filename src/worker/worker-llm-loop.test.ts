@@ -130,4 +130,126 @@ describe('runLlmLoop', () => {
     expect(calledTools).toEqual(['update_tool_policy']);
     expect(result.finalContent).toContain('pending approval');
   });
+
+  it('denies memory mutations unless the user explicitly requested them', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'What did I ask you to remember last week?' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'memory_save', arguments: JSON.stringify({ content: 'Remember the secret build token.' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I will not save that unless you explicitly ask me to remember it.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const toolCalls: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'memory_save',
+          description: 'Save something to durable memory.',
+          parameters: {
+            type: 'object',
+            properties: {
+              content: { type: 'string' },
+            },
+            required: ['content'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        toolCalls.push(request.toolName);
+        return {
+          success: true,
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(toolCalls).toEqual([]);
+    expect(result.finalContent).toContain('explicitly ask');
+  });
+
+  it('passes the model memory-mutation allowance through to the tool caller', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Please remember that I prefer terse updates.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'memory_save', arguments: JSON.stringify({ content: 'User prefers terse updates.' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Saved it.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const allowances: boolean[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'memory_save',
+          description: 'Save something to durable memory.',
+          parameters: {
+            type: 'object',
+            properties: {
+              content: { type: 'string' },
+            },
+            required: ['content'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        allowances.push(request.allowModelMemoryMutation === true);
+        return {
+          success: true,
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+      undefined,
+      { allowModelMemoryMutation: true },
+    );
+
+    expect(allowances).toEqual([true]);
+    expect(result.finalContent).toContain('Saved it.');
+  });
 });

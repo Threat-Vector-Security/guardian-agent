@@ -63,6 +63,12 @@ import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprin
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { assessSecurityPosture, isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
 import {
+  getMemoryMutationIntentDeniedMessage,
+  isDirectMemoryMutationToolName,
+  isElevatedMemoryMutationToolName,
+  isMemoryMutationToolName,
+} from '../util/memory-intent.js';
+import {
   acknowledgeUnifiedSecurityAlert,
   availableSecurityAlertSources,
   collectUnifiedSecurityAlerts,
@@ -112,6 +118,45 @@ const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
 const POSIX_SHELL_BUILTINS = new Set(['type']);
 const WINDOWS_SHELL_BUILTINS = new Set(['cd', 'dir', 'echo', 'type']);
 const WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS = new Set(['.com', '.exe']);
+type PersistentMemorySearchMatch = {
+  id: string;
+  createdAt: string;
+  category?: string;
+  summary?: string;
+  content: string;
+  trustLevel?: string;
+  status?: string;
+  tags?: string[];
+  provenance?: Record<string, unknown>;
+  matchScore: number;
+};
+type ConversationMemorySearchCandidate = {
+  key: string;
+  source: 'conversation';
+  type: 'conversation_message';
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  channel: string;
+  sessionId: string;
+  scoreHint: number;
+};
+type PersistentMemorySearchCandidate = {
+  key: string;
+  source: 'global' | 'code_session';
+  type: 'memory_entry';
+  entryId: string;
+  createdAt: string;
+  category?: string;
+  summary?: string;
+  content: string;
+  trustLevel?: string;
+  status?: string;
+  tags?: string[];
+  provenance?: Record<string, unknown>;
+  scoreHint: number;
+};
+type UnifiedMemorySearchCandidate = ConversationMemorySearchCandidate | PersistentMemorySearchCandidate;
 const CODE_ASSISTANT_ALLOWED_COMMANDS = [
   'git',
   'node',
@@ -209,10 +254,11 @@ const CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS = new Set([
   'doc_create',
 ]);
 const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
+  'shell_safe',
+  'code_git_commit',
   'code_test',
   'code_build',
   'code_lint',
-  'memory_save',
   'task_create',
   'task_update',
   'task_delete',
@@ -1234,7 +1280,13 @@ export class ToolExecutor {
   ): boolean {
     if (!this.getCodeWorkspaceRoot(request)) return false;
     return CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS.has(definition.name)
-      || (this.isCodeSessionTrustCleared(request) && CODE_SESSION_TRUSTED_EXECUTION_TOOLS.has(definition.name));
+      || (
+        this.isCodeSessionTrustCleared(request)
+        && (
+          CODE_SESSION_TRUSTED_EXECUTION_TOOLS.has(definition.name)
+          || isDirectMemoryMutationToolName(definition.name)
+        )
+      );
   }
 
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
@@ -1301,6 +1353,10 @@ export class ToolExecutor {
       return this.isReadOnlyShellCommand(command) ? 'allow' : 'require_approval';
     }
 
+    if (isMemoryMutationToolName(definition.name)) {
+      return 'require_approval';
+    }
+
     return CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS.has(definition.name)
       ? 'require_approval'
       : null;
@@ -1359,26 +1415,97 @@ export class ToolExecutor {
     targetId: string,
     query: string,
     limit: number,
-  ): Array<{
-    id: string;
-    createdAt: string;
-    category?: string;
-    content: string;
-    trustLevel?: string;
-    status?: string;
-    tags?: string[];
-    provenance?: Record<string, unknown>;
-  }> {
-    return store.searchEntries(targetId, query, { limit }).map((entry) => ({
-      id: entry.id,
-      createdAt: entry.createdAt,
-      category: entry.category,
-      content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}...` : entry.content,
-      trustLevel: entry.trustLevel,
-      status: entry.status,
-      tags: entry.tags ? [...entry.tags] : undefined,
-      provenance: entry.provenance ? { ...entry.provenance } as Record<string, unknown> : undefined,
-    }));
+  ): PersistentMemorySearchMatch[] {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
+    const preview = (value: string) => value.length > 500 ? `${value.slice(0, 500)}...` : value;
+
+    const matches: Array<PersistentMemorySearchMatch & { recencyIndex: number }> = [];
+    store.getEntries(targetId).forEach((entry, index) => {
+      const content = entry.content.toLowerCase();
+      const summary = entry.summary?.toLowerCase() ?? '';
+      const category = entry.category?.toLowerCase() ?? '';
+      const tags = Array.isArray(entry.tags) ? entry.tags.join(' ').toLowerCase() : '';
+
+      let matchScore = 0;
+      if (content.includes(normalizedQuery)) matchScore += 120;
+      if (summary.includes(normalizedQuery)) matchScore += 150;
+      if (category.includes(normalizedQuery)) matchScore += 90;
+      if (tags.includes(normalizedQuery)) matchScore += 60;
+      if (content.startsWith(normalizedQuery) || summary.startsWith(normalizedQuery)) matchScore += 20;
+
+      for (const term of queryTerms) {
+        if (term.length < 2) continue;
+        if (content.includes(term)) matchScore += 12;
+        if (summary.includes(term)) matchScore += 18;
+        if (category.includes(term)) matchScore += 10;
+        if (tags.includes(term)) matchScore += 6;
+      }
+
+      if (matchScore < 1) {
+        return;
+      }
+
+      matches.push({
+        id: entry.id,
+        createdAt: entry.createdAt,
+        category: entry.category,
+        summary: entry.summary,
+        content: preview(entry.content),
+        trustLevel: entry.trustLevel,
+        status: entry.status,
+        tags: entry.tags ? [...entry.tags] : undefined,
+        provenance: entry.provenance ? { ...entry.provenance } as Record<string, unknown> : undefined,
+        matchScore,
+        recencyIndex: index,
+      });
+    });
+
+    return matches
+      .sort((a, b) => b.matchScore - a.matchScore || a.recencyIndex - b.recencyIndex)
+      .slice(0, limit)
+      .map(({ recencyIndex: _recencyIndex, ...entry }) => entry);
+  }
+
+  private normalizeMemorySearchScope(input: unknown): 'conversation' | 'persistent' | 'both' | null {
+    const scope = asString(input, 'both').trim().toLowerCase();
+    if (scope === 'conversation' || scope === 'persistent' || scope === 'both') {
+      return scope;
+    }
+    return null;
+  }
+
+  private fuseRankedMemorySearchResults(
+    sources: UnifiedMemorySearchCandidate[][],
+    limit: number,
+  ): Array<UnifiedMemorySearchCandidate & { score: number; rank: number }> {
+    const fused = new Map<string, { item: UnifiedMemorySearchCandidate; score: number }>();
+    const reciprocalRankOffset = 60;
+
+    for (const source of sources) {
+      source.forEach((item, index) => {
+        const contribution = 1 / (reciprocalRankOffset + index + 1);
+        const existing = fused.get(item.key);
+        if (existing) {
+          existing.score += contribution;
+        } else {
+          fused.set(item.key, { item, score: contribution });
+        }
+      });
+    }
+
+    return [...fused.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((entry, index) => ({
+        ...entry.item,
+        score: Number(entry.score.toFixed(6)),
+        rank: index + 1,
+      }));
   }
 
   private summarizeCodeSession(session: {
@@ -1736,11 +1863,17 @@ export class ToolExecutor {
 
   private describePreflightDecision(definition: ToolDefinition, name: string, decision: ToolDecision): string {
     if (decision === 'allow') {
+      if (isDirectMemoryMutationToolName(name)) {
+        return 'Direct memory writes auto-approve after explicit remember intent and trust checks.';
+      }
       return definition.risk === 'read_only' ? 'Read-only tool, auto-approved' : 'Approved by current policy';
     }
     if (decision === 'deny') {
       const explicit = this.policy.toolPolicies[name];
       return explicit === 'deny' ? 'Explicitly denied by per-tool policy' : 'Blocked by tool policy';
+    }
+    if (isElevatedMemoryMutationToolName(name)) {
+      return 'Elevated memory mutations require approval.';
     }
     if (definition.risk === 'external_post') {
       return 'External post tools always require approval';
@@ -2129,6 +2262,21 @@ export class ToolExecutor {
       };
     }
 
+    const memoryMutationIntentError = this.getMemoryMutationIntentError(entry.definition.name, request);
+    if (memoryMutationIntentError) {
+      job.status = 'denied';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(memoryMutationIntentError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: memoryMutationIntentError,
+      };
+    }
+
     const preApprovalError = await this.validateBeforeApproval(entry.definition.name, args, request);
     if (preApprovalError) {
       job.status = 'failed';
@@ -2441,27 +2589,34 @@ export class ToolExecutor {
 
     const contentTrustLevel = request.contentTrustLevel ?? 'trusted';
     const derivedFromTaintedContent = request.derivedFromTaintedContent === true;
+    const memoryMutationDecision = this.decideMemoryMutationTrust(definition.name, request);
+
+    if (memoryMutationDecision) {
+      return memoryMutationDecision;
+    }
 
     if (contentTrustLevel === 'quarantined' && definition.risk !== 'read_only') {
       return 'deny';
     }
     if (derivedFromTaintedContent) {
-      if (definition.name === 'memory_save') {
-        return contentTrustLevel === 'quarantined' ? 'deny' : 'require_approval';
-      }
       if (definition.risk !== 'read_only') {
         return 'require_approval';
       }
     }
 
     const explicit = this.policy.toolPolicies[definition.name];
-    if (explicit) {
-      if (explicit === 'deny') return 'deny';
+    if (explicit === 'deny') {
+      return 'deny';
     }
 
     const codeSessionTrustDecision = this.decideCodeSessionTrust(definition, args, request);
     if (codeSessionTrustDecision) {
       return codeSessionTrustDecision;
+    }
+
+    const defaultMemoryMutationDecision = this.decideDefaultMemoryMutationPolicy(definition.name);
+    if (defaultMemoryMutationDecision) {
+      return defaultMemoryMutationDecision;
     }
 
     if (explicit) {
@@ -2517,6 +2672,30 @@ export class ToolExecutor {
         if (definition.risk === 'network') return 'allow';
         return 'require_approval';
     }
+  }
+
+  private decideMemoryMutationTrust(
+    toolName: string,
+    request: Partial<ToolExecutionRequest>,
+  ): ToolDecision | null {
+    if (!isMemoryMutationToolName(toolName)) {
+      return null;
+    }
+    const contentTrustLevel = request.contentTrustLevel ?? 'trusted';
+    if (contentTrustLevel === 'quarantined') {
+      return 'deny';
+    }
+    return request.derivedFromTaintedContent === true ? 'require_approval' : null;
+  }
+
+  private decideDefaultMemoryMutationPolicy(toolName: string): ToolDecision | null {
+    if (isDirectMemoryMutationToolName(toolName)) {
+      return 'allow';
+    }
+    if (isElevatedMemoryMutationToolName(toolName)) {
+      return 'require_approval';
+    }
+    return null;
   }
 
   private decideGwsTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
@@ -2790,15 +2969,8 @@ export class ToolExecutor {
     args: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
-    if (toolName === 'memory_save') {
-      const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
-      if (codeMemory?.store?.isReadOnly()) {
-        return 'Code-session memory is read-only.';
-      }
-      const globalMemory = this.getGlobalMemoryContext(request);
-      if (!codeMemory && globalMemory.store?.isReadOnly()) {
-        return 'Persistent memory is read-only.';
-      }
+    if (isMemoryMutationToolName(toolName)) {
+      return this.getMemoryMutationReadOnlyError(request);
     }
 
     if (toolName === 'shell_safe') {
@@ -3437,6 +3609,35 @@ export class ToolExecutor {
       }
     }
 
+    return null;
+  }
+
+  private getMemoryMutationIntentError(
+    toolName: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): string | null {
+    if (!isMemoryMutationToolName(toolName)) {
+      return null;
+    }
+    if (request?.origin !== 'assistant') {
+      return null;
+    }
+    return request.allowModelMemoryMutation === true
+      ? null
+      : getMemoryMutationIntentDeniedMessage(toolName);
+  }
+
+  private getMemoryMutationReadOnlyError(
+    request?: Partial<ToolExecutionRequest>,
+  ): string | null {
+    const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
+    if (codeMemory?.store?.isReadOnly()) {
+      return 'Code-session memory is read-only.';
+    }
+    const globalMemory = this.getGlobalMemoryContext(request);
+    if (!codeMemory && globalMemory.store?.isReadOnly()) {
+      return 'Persistent memory is read-only.';
+    }
     return null;
   }
 
@@ -6332,6 +6533,20 @@ export class ToolExecutor {
           const message = err instanceof Error ? err.message : String(err);
           if (message.includes('100% packet loss') || message.includes('100.0% packet loss')) {
             return { success: true, output: { host, reachable: false, packetsSent: count, packetsReceived: 0, packetLossPercent: 100, rttAvgMs: null } };
+          }
+          if (isLoopbackTarget(host) && isPingPermissionDenied(message)) {
+            return {
+              success: true,
+              output: {
+                host,
+                reachable: true,
+                packetsSent: count,
+                packetsReceived: count,
+                packetLossPercent: 0,
+                rttAvgMs: null,
+                method: 'loopback_fallback',
+              },
+            };
           }
           return { success: false, error: `Ping failed: ${message}` };
         }
@@ -12261,14 +12476,19 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_search',
-        description: 'Search conversation history using full-text search (FTS5 BM25 ranking when available, substring fallback otherwise). Returns relevant past messages scored by relevance. Use to recall previous discussions, find facts mentioned earlier, or locate context from past sessions.',
-        shortDescription: 'Search conversation history using full-text search.',
+        description: 'Search conversation history, persistent memory, or both. Conversation results use FTS5 BM25 ranking when available; persistent-memory results use deterministic field-aware ranking. Results are merged into one ranked list.',
+        shortDescription: 'Search conversation history and persistent memory.',
         risk: 'read_only',
         category: 'memory',
         parameters: {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Search query (words, phrases). Supports FTS5 syntax when available.' },
+            scope: {
+              type: 'string',
+              enum: ['conversation', 'persistent', 'both'],
+              description: 'Which memory surface to search. Defaults to both.',
+            },
             limit: { type: 'number', description: 'Maximum results to return (default: 10, max: 50).' },
           },
           required: ['query'],
@@ -12277,36 +12497,132 @@ export class ToolExecutor {
       async (args, request) => {
         const query = asString(args.query).trim();
         if (!query) return { success: false, error: 'Query is required.' };
-
-        this.guardAction(request, 'read_file', { path: 'memory:conversation_search', query });
-
-        const conversationService = this.options.conversationService;
-        if (!conversationService) {
-          return { success: false, error: 'Conversation memory is not enabled.' };
+        const scope = this.normalizeMemorySearchScope(args.scope);
+        if (!scope) {
+          return { success: false, error: 'scope must be one of "conversation", "persistent", or "both".' };
         }
 
+        const conversationService = this.options.conversationService;
         const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 50);
+        const searchConversation = scope === 'conversation' || scope === 'both';
+        const searchPersistent = scope === 'persistent' || scope === 'both';
         const requestAgentId = asString(request.agentId);
         const stateAgentId = this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId;
-        const results = conversationService.searchMessages(query, {
-          userId: asString(request.userId),
-          agentId: stateAgentId,
+
+        const conversationRanked: ConversationMemorySearchCandidate[] = [];
+        if (searchConversation && conversationService) {
+          this.guardAction(request, 'read_file', { path: 'memory:conversation_search', query });
+          const results = conversationService.searchMessages(query, {
+            userId: asString(request.userId),
+            agentId: stateAgentId,
+            limit: Math.min(limit * 2, 100),
+          });
+          results.forEach((row, index) => {
+            conversationRanked.push({
+              key: `conversation:${row.sessionId}:${row.timestamp}:${row.role}:${index}`,
+              source: 'conversation',
+              type: 'conversation_message',
+              role: row.role,
+              content: row.content.length > 500 ? `${row.content.slice(0, 500)}...` : row.content,
+              timestamp: row.timestamp,
+              channel: row.channel,
+              sessionId: row.sessionId,
+              scoreHint: row.score,
+            });
+          });
+        }
+
+        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
+        const persistentContext = codeMemory
+          ? {
+            source: 'code_session' as const,
+            id: codeMemory.sessionId,
+            store: codeMemory.store,
+            guardPath: `memory:code_session:${codeMemory.sessionId}`,
+          }
+          : {
+            source: 'global' as const,
+            id: this.getGlobalMemoryContext(request).agentId,
+            store: this.getGlobalMemoryContext(request).store,
+            guardPath: 'memory:knowledge_base',
+          };
+
+        const persistentRanked: PersistentMemorySearchCandidate[] = [];
+        if (searchPersistent && persistentContext.store) {
+          this.guardAction(request, 'read_file', { path: persistentContext.guardPath, query });
+          const results = this.searchPersistentMemoryEntries(
+            persistentContext.store,
+            persistentContext.id,
+            query,
+            Math.min(limit * 2, 100),
+          );
+          results.forEach((entry) => {
+            persistentRanked.push({
+              key: `${persistentContext.source}:${entry.id}`,
+              source: persistentContext.source,
+              type: 'memory_entry',
+              entryId: entry.id,
+              createdAt: entry.createdAt,
+              category: entry.category,
+              summary: entry.summary,
+              content: entry.content,
+              trustLevel: entry.trustLevel,
+              status: entry.status,
+              tags: entry.tags,
+              provenance: entry.provenance,
+              scoreHint: entry.matchScore,
+            });
+          });
+        }
+
+        if (scope === 'conversation' && !conversationService) {
+          return { success: false, error: 'Conversation memory is not enabled.' };
+        }
+        if (scope === 'persistent' && !persistentContext.store) {
+          return { success: false, error: 'Persistent memory is not enabled.' };
+        }
+
+        const fusedResults = this.fuseRankedMemorySearchResults(
+          [
+            ...(searchConversation ? [conversationRanked] : []),
+            ...(searchPersistent ? [persistentRanked] : []),
+          ],
           limit,
-        });
+        );
 
         return {
           success: true,
           output: {
             query,
-            resultCount: results.length,
-            hasFTS: conversationService.hasFTS,
-            results: results.map((r) => ({
-              score: r.score,
-              role: r.role,
-              content: r.content.length > 500 ? r.content.slice(0, 500) + '...' : r.content,
-              timestamp: r.timestamp,
-              channel: r.channel,
-              sessionId: r.sessionId,
+            scope,
+            hasFTS: conversationService?.hasFTS ?? false,
+            currentPersistentScope: persistentContext.store ? persistentContext.source : null,
+            resultCount: fusedResults.length,
+            results: fusedResults.map((result) => ({
+              rank: result.rank,
+              score: result.score,
+              source: result.source,
+              type: result.type,
+              content: result.content,
+              ...(result.type === 'conversation_message'
+                ? {
+                  role: result.role,
+                  timestamp: result.timestamp,
+                  channel: result.channel,
+                  sessionId: result.sessionId,
+                  sourceScore: result.scoreHint,
+                }
+                : {
+                  entryId: result.entryId,
+                  createdAt: result.createdAt,
+                  category: result.category,
+                  summary: result.summary,
+                  trustLevel: result.trustLevel,
+                  status: result.status,
+                  tags: result.tags,
+                  provenance: result.provenance,
+                  sourceScore: result.scoreHint,
+                }),
             })),
           },
         };
@@ -12343,6 +12659,15 @@ export class ToolExecutor {
               codeSessionId: codeMemory.sessionId,
               exists: codeMemory.store.exists(codeMemory.sessionId),
               sizeChars: codeMemory.store.size(codeMemory.sessionId),
+              entries: codeMemory.store.getEntries(codeMemory.sessionId).map((entry) => ({
+                id: entry.id,
+                createdAt: entry.createdAt,
+                category: entry.category,
+                summary: entry.summary,
+                content: entry.content,
+                trustLevel: entry.trustLevel,
+                status: entry.status,
+              })),
               content: content || '(empty — no coding memories stored yet)',
             },
           };
@@ -12365,6 +12690,15 @@ export class ToolExecutor {
             agentId: globalMemory.agentId,
             exists: globalMemory.store.exists(globalMemory.agentId),
             sizeChars: size,
+            entries: globalMemory.store.getEntries(globalMemory.agentId).map((entry) => ({
+              id: entry.id,
+              createdAt: entry.createdAt,
+              category: entry.category,
+              summary: entry.summary,
+              content: entry.content,
+              trustLevel: entry.trustLevel,
+              status: entry.status,
+            })),
             content: content || '(empty — no memories stored yet)',
           },
         };
@@ -12382,6 +12716,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             content: { type: 'string', description: 'The fact, preference, or summary to remember.' },
+            summary: { type: 'string', description: 'Optional short gist used when memory is packed back into prompt context.' },
             category: { type: 'string', description: 'Optional category heading (e.g., "Preferences", "Decisions", "Facts", "Project Notes").' },
           },
           required: ['content'],
@@ -12390,7 +12725,12 @@ export class ToolExecutor {
       async (args, request) => {
         const content = asString(args.content).trim();
         if (!content) return { success: false, error: 'Content is required.' };
+        const summary = asString(args.summary).trim() || undefined;
         const category = asString(args.category).trim() || undefined;
+        const readOnlyError = this.getMemoryMutationReadOnlyError(request);
+        if (readOnlyError) {
+          return { success: false, error: readOnlyError };
+        }
         const requestTrustLevel = request.contentTrustLevel ?? 'trusted';
         const trustLevel = requestTrustLevel === 'trusted' ? 'trusted' : 'untrusted';
         const status = requestTrustLevel === 'trusted' && !request.derivedFromTaintedContent
@@ -12403,11 +12743,9 @@ export class ToolExecutor {
           if (!codeMemory.store) {
             return { success: false, error: 'Code-session memory is not enabled.' };
           }
-          if (codeMemory.store.isReadOnly()) {
-            return { success: false, error: 'Code-session memory is read-only.' };
-          }
           const stored = codeMemory.store.append(codeMemory.sessionId, {
             content,
+            summary,
             createdAt: new Date().toISOString().slice(0, 10),
             category,
             sourceType: requestTrustLevel === 'trusted' ? 'user' : 'remote_tool',
@@ -12427,6 +12765,7 @@ export class ToolExecutor {
               codeSessionId: codeMemory.sessionId,
               entryId: stored.id,
               saved: content,
+              summary: stored.summary,
               category: category ?? '(uncategorized)',
               status: stored.status,
               trustLevel: stored.trustLevel,
@@ -12445,12 +12784,10 @@ export class ToolExecutor {
         if (!globalMemory.store) {
           return { success: false, error: 'Knowledge base is not enabled.' };
         }
-        if (globalMemory.store.isReadOnly()) {
-          return { success: false, error: 'Persistent memory is read-only.' };
-        }
 
         const stored = globalMemory.store.append(globalMemory.agentId, {
           content,
+          summary,
           createdAt: new Date().toISOString().slice(0, 10),
           category,
           sourceType: requestTrustLevel === 'trusted' ? 'user' : 'remote_tool',
@@ -12470,6 +12807,7 @@ export class ToolExecutor {
             agentId: globalMemory.agentId,
             entryId: stored.id,
             saved: content,
+            summary: stored.summary,
             category: category ?? '(uncategorized)',
             status: stored.status,
             trustLevel: stored.trustLevel,
@@ -15560,6 +15898,21 @@ function isLocalNetworkTarget(host: string): boolean {
   if (!h.includes('.') && !h.includes(':')) return true;
 
   return false;
+}
+
+function isLoopbackTarget(host: string): boolean {
+  const h = host.toLowerCase().trim();
+  if (h === 'localhost' || h === '::1') return true;
+  if (h.endsWith('.localhost')) return true;
+  return /^127(?:\.\d{1,3}){3}$/.test(h);
+}
+
+function isPingPermissionDenied(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('operation not permitted')
+    || lower.includes('permission denied')
+    || lower.includes('lacking privilege')
+    || lower.includes('raw socket');
 }
 
 /**
