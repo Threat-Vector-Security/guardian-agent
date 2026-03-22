@@ -6,10 +6,13 @@
  */
 
 import { api } from '../api.js';
+import { onSSE, offSSE } from '../app.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let currentContainer = null;
+let runTimelineHandler = null;
+let runTimelineRefreshTimer = null;
 const automationUiState = {
   clonePlacement: null,
 };
@@ -63,7 +66,7 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, tasks, presets, history, templates, agentsState] = await Promise.all([
+    const [connState, toolsState, tasks, presets, history, templates, agentsState, assistantRuns] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
       api.scheduledTasks().catch(() => []),
@@ -71,6 +74,7 @@ export async function renderAutomations(container) {
       api.scheduledTaskHistory().catch(() => []),
       api.connectorsTemplates().catch(() => []),
       api.agents().catch(() => []),
+      api.assistantRuns({ limit: 15 }).catch(() => ({ runs: [] })),
     ]);
 
     const summary = connState.summary || {};
@@ -81,6 +85,7 @@ export async function renderAutomations(container) {
     const studio = connState.studio || {};
     const tools = Array.isArray(toolsState?.tools) ? toolsState.tools : [];
     const agents = Array.isArray(agentsState) ? agentsState : [];
+    const recentAssistantRuns = Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [];
 
     const automations = reorderAutomationsForUi(
       buildAutomationList(playbooks, tasks, tools, templates, presets),
@@ -180,6 +185,16 @@ export async function renderAutomations(container) {
       </div>
 
       <div class="table-container">
+        <div class="table-header"><h3>Execution Timeline</h3></div>
+        <table>
+          <thead><tr><th>Time</th><th>Run</th><th>Kind</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
+          <tbody>
+            ${renderExecutionTimeline(recentAssistantRuns)}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
         <div class="table-header" style="cursor:pointer" id="auto-engine-toggle">
           <h3>Engine Settings</h3>
           <span id="auto-engine-arrow" style="font-size:0.85rem;color:var(--text-muted)">&#9654; Show</span>
@@ -191,6 +206,7 @@ export async function renderAutomations(container) {
     `;
 
     bindEvents(container, { automations, playbooks, tasks, presets, tools, packs, templates, workflowConfig, summary, studio, runs, history, agents });
+    bindRunTimelineUpdates();
     focusRequestedRun(container);
     applyInputTooltips(container);
     enhanceSectionHelp(container, AUTOMATION_HELP, createGenericHelpFactory('Automations'));
@@ -202,6 +218,23 @@ export async function renderAutomations(container) {
 
 export async function updateAutomations() {
   if (currentContainer) await renderAutomations(currentContainer);
+}
+
+function bindRunTimelineUpdates() {
+  if (runTimelineHandler) {
+    offSSE('run.timeline', runTimelineHandler);
+  }
+  runTimelineHandler = () => {
+    if (!currentContainer || !window.location.hash.startsWith('#/automations')) return;
+    if (runTimelineRefreshTimer) {
+      window.clearTimeout(runTimelineRefreshTimer);
+    }
+    runTimelineRefreshTimer = window.setTimeout(() => {
+      runTimelineRefreshTimer = null;
+      void renderAutomationsPreserveScroll(currentContainer);
+    }, 400);
+  };
+  onSSE('run.timeline', runTimelineHandler);
 }
 
 function focusRequestedRun(container) {
@@ -1130,6 +1163,60 @@ function renderRunHistory(playbookRuns, taskHistory) {
     </tr>
     ` : ''}
   `).join('');
+}
+
+function renderExecutionTimeline(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent agent runs yet.</td></tr>';
+  }
+
+  return runs.slice(0, 20).map((entry) => {
+    const summary = entry?.summary || {};
+    const items = Array.isArray(entry?.items) ? entry.items : [];
+    const owner = summary.agentId || summary.channel || '-';
+    return `
+      <tr>
+        <td>${formatTime(summary.lastUpdatedAt || summary.startedAt || 0)}</td>
+        <td>
+          <div style="font-weight:600">${esc(summary.title || summary.runId || 'Run')}</div>
+          <div class="ops-task-sub">${esc(summary.subtitle || summary.runId || '')}</div>
+        </td>
+        <td><span class="badge badge-info">${esc(formatRunKind(summary.kind))}</span></td>
+        <td>
+          <span style="color:${statusColor(summary.status)}">${esc(summary.status || 'unknown')}</span>
+          <div class="ops-task-sub">
+            ${summary.pendingApprovalCount > 0 ? `${summary.pendingApprovalCount} approval${summary.pendingApprovalCount === 1 ? '' : 's'}` : formatDuration(summary.durationMs)}
+          </div>
+        </td>
+        <td>${esc(owner)}</td>
+        <td>${renderExecutionTimelineItems(items)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderExecutionTimelineItems(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '<span class="ops-history-message">No visible events.</span>';
+  }
+  const recent = items.slice(-8);
+  return `
+    <details>
+      <summary>${recent.length} event${recent.length === 1 ? '' : 's'}</summary>
+      <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.45rem">
+        ${recent.map((item) => `
+          <div style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">
+            <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between">
+              <strong>${esc(item.title || item.type || 'Event')}</strong>
+              <span style="color:${timelineStatusColor(item.status)}">${esc(item.status || 'info')}</span>
+            </div>
+            <div class="ops-task-sub">${esc(formatTime(item.timestamp))}</div>
+            ${item.detail ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(item.detail)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </details>
+  `;
 }
 
 function renderStepResults(steps) {
@@ -2831,9 +2918,52 @@ function generateCloneId(originalId, automations) {
 
 function statusColor(status) {
   if (status === 'succeeded') return 'var(--success)';
+  if (status === 'completed') return 'var(--success)';
   if (status === 'failed') return 'var(--error)';
+  if (status === 'blocked') return 'var(--warning)';
+  if (status === 'running') return 'var(--accent)';
+  if (status === 'awaiting_approval') return 'var(--warning)';
   if (status === 'pending_approval') return 'var(--warning)';
   return 'var(--text-muted)';
+}
+
+function timelineStatusColor(status) {
+  switch ((status || '').toLowerCase()) {
+    case 'succeeded':
+      return 'var(--success)';
+    case 'failed':
+      return 'var(--error)';
+    case 'blocked':
+      return 'var(--warning)';
+    case 'running':
+      return 'var(--accent)';
+    case 'warning':
+      return 'var(--warning)';
+    default:
+      return 'var(--text-muted)';
+  }
+}
+
+function formatRunKind(kind) {
+  switch (kind) {
+    case 'assistant_dispatch':
+      return 'assistant';
+    case 'workflow_run':
+      return 'workflow';
+    case 'scheduled_task':
+      return 'scheduled';
+    case 'code_session':
+      return 'code';
+    default:
+      return String(kind || 'run');
+  }
+}
+
+function formatDuration(durationMs) {
+  const value = Number(durationMs) || 0;
+  if (value <= 0) return '-';
+  if (value < 1000) return `${value}ms`;
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}s`;
 }
 
 function formatTime(ts) {

@@ -3001,6 +3001,47 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/assistant/runs — recent assistant/orchestration runs
+      if (req.method === 'GET' && url.pathname === '/api/assistant/runs') {
+        if (!this.dashboard.onAssistantRuns) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const limit = Number.parseInt(url.searchParams.get('limit') || '20', 10);
+        const status = trimOptionalString(url.searchParams.get('status')) as import('../runtime/run-timeline.js').DashboardRunStatus | undefined;
+        const kind = trimOptionalString(url.searchParams.get('kind')) as import('../runtime/run-timeline.js').DashboardRunKind | undefined;
+        const channel = trimOptionalString(url.searchParams.get('channel'));
+        const agentId = trimOptionalString(url.searchParams.get('agentId'));
+        const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
+        sendJSON(res, 200, this.dashboard.onAssistantRuns({
+          limit: Number.isFinite(limit) ? limit : 20,
+          ...(status ? { status } : {}),
+          ...(kind ? { kind } : {}),
+          ...(channel ? { channel } : {}),
+          ...(agentId ? { agentId } : {}),
+          ...(codeSessionId ? { codeSessionId } : {}),
+        }));
+        return;
+      }
+
+      const assistantRunMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/api\/assistant\/runs\/([^/]+)$/)
+        : null;
+      if (assistantRunMatch) {
+        if (!this.dashboard.onAssistantRunDetail) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const runId = decodeURIComponent(assistantRunMatch[1]);
+        const result = this.dashboard.onAssistantRunDetail(runId);
+        if (!result) {
+          sendJSON(res, 404, { error: 'Run not found' });
+          return;
+        }
+        sendJSON(res, 200, result);
+        return;
+      }
+
       // GET /api/routing/mode — Current tier routing mode
       if (req.method === 'GET' && url.pathname === '/api/routing/mode') {
         if (!this.dashboard.onRoutingMode) {
@@ -4219,6 +4260,35 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           channel: parsed.channel || 'web',
         });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      const codeSessionTimelineMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/timeline$/)
+        : null;
+      if (codeSessionTimelineMatch) {
+        if (!this.dashboard.onCodeSessionTimeline) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionTimelineMatch[1]);
+        const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') || 'web-user';
+        const channel = url.searchParams.get('channel') || 'web';
+        const limit = Number.parseInt(url.searchParams.get('limit') || '12', 10);
+        const result = this.dashboard.onCodeSessionTimeline({
+          sessionId,
+          userId,
+          principalId: principal.principalId,
+          channel,
+          surfaceId: '',
+          limit: Number.isFinite(limit) ? limit : 12,
+        });
+        if (!result) {
+          sendJSON(res, 404, { error: 'Code session not found' });
+          return;
+        }
         sendJSON(res, 200, result);
         return;
       }

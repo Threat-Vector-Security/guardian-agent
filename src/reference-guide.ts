@@ -100,8 +100,10 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Web Control Surfaces',
                 items: [
                   'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
+                  'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
+                  'Use the execution timeline when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed.',
                   'Configuration > Tools exposes tool enablement, routing, approvals, and recent jobs. Configuration > Security owns sandbox enforcement, allowlists, degraded-backend overrides, browser risk controls, and policy posture.',
-                  'Security is the main operator surface for posture, unified alerts, agentic activity history, audit evidence, threat-intel workflows, and native Windows Defender state.',
+                  'Security is the main operator surface for posture, unified alerts, agentic activity history, audit evidence, threat-intel workflows, and native Windows Defender state. It is not the main home for generic run playback.',
                 ],
               },
               {
@@ -169,13 +171,23 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'The Code page combines a session rail, explorer, Monaco editor and diff view, manual terminal panes, an assistant sidebar for chat and activity, and an editor-owned code inspector for guided investigation, local flow, and repo impact views.',
                   'The assistant sidebar uses backend session state rather than browser-only state, so workspace profile, indexed repo map, working set, pending approvals, recent jobs, and checks survive refreshes and cross-surface reuse.',
+                  'The `Activity` view now starts with a session-scoped run timeline. It shows the most recent coding runs for that code session, including tool steps, approval pauses, and verification milestones before the lower-level approvals, task, and check cards.',
+                  'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
-                  'Use the `Inspect` button or Monaco CodeLens in supported TypeScript and JavaScript files to open the detachable code inspector. It starts on the `Investigate` tab and explains what the current code does, what it talks to, which deterministic risks or quality issues stand out, and where to inspect next.',
-                  'The inspector also includes `Flow` for symbol-level caller and callee explanations inside the active file or current large-file section, and `Impact` for cross-file imports, importers, nearby files, and working-set blast radius using the deterministic workspace map.',
-                  'Large files are inspected section by section instead of failing outright, so the inspector can anchor the analysis to the current cursor or a chosen section without parsing the whole file at once.',
-                  'Structure insights update live from the unsaved Monaco buffer after a short debounce, so the inspector can track edits before you save.',
                   'Terminal panes remain operator-controlled PTY sessions. Assistant-driven file edits, shell execution, tests, builds, and linting still go through the guarded tool path instead of taking over a PTY.',
                   'Manual terminal sessions inherit a hardened environment and open/exit events land in audit history, but they are still operator terminals rather than a substitute for guarded tool execution.',
+                ],
+              },
+              {
+                title: 'Code Inspector',
+                items: [
+                  'Use the `Inspect` button or Monaco CodeLens in supported TypeScript and JavaScript files to open the code inspector for the selected symbol, current cursor region, or active file section.',
+                  'The inspector can stay inline in the Code page or be detached into its own popup window when you want a larger parallel investigation surface while still editing.',
+                  'The `Investigate` tab explains what the current code does, what it depends on, which deterministic risks or quality issues stand out, and where to inspect next.',
+                  'The `Flow` tab focuses on symbol-level callers, callees, and local execution flow inside the active file or selected large-file section.',
+                  'The `Impact` tab shows cross-file blast radius using the workspace map, including imports, importers, nearby files, and working-set relevance.',
+                  'Large files are inspected section by section instead of failing outright, so the inspector can anchor analysis to the current cursor or a chosen section without parsing the whole file at once.',
+                  'Structure insights update live from the unsaved Monaco buffer after a short debounce, so the inspector can follow edits before you save.',
                 ],
               },
               {
@@ -450,6 +462,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Run history now keeps per-step output, not just status text.',
                   'Approval-gated playbooks keep one stable run record and resume after the approval decision instead of starting over from scratch.',
                   'Scheduled tool runs, scheduled playbook runs, and scheduled assistant runs can be expanded in Automations to inspect captured output.',
+                  'Automations now also includes an `Execution Timeline` view for recent runs across assistant dispatch, coding sessions, workflows, and scheduled jobs. It is the main global playback surface for run status, approvals, tool progression, and verification events.',
+                  'Use `Execution Timeline` when you need to answer "what happened in this run?" and use `Run History` when you need automation-specific step output and artifacts.',
                   'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
                   'Live UI invalidation updates the Automations page when runs finish, schedules change, or playbooks are edited.',
                 ],

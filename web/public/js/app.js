@@ -143,6 +143,7 @@ const sseListeners = {
   'ui.invalidate': [],
   'terminal.output': [],
   'terminal.exit': [],
+  'run.timeline': [],
 };
 
 export function onSSE(type, fn) {

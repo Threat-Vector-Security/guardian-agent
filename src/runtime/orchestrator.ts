@@ -136,6 +136,8 @@ export interface AssistantOrchestratorOptions {
   maxTrackedTraces?: number;
 }
 
+export type AssistantOrchestratorListener = (trace: AssistantDispatchTrace) => void;
+
 interface SessionRecord {
   sessionId: string;
   agentId: string;
@@ -193,6 +195,7 @@ function createRequestId(now: number): string {
 export class AssistantOrchestrator {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly traces: AssistantDispatchTrace[] = [];
+  private readonly listeners = new Set<AssistantOrchestratorListener>();
   private readonly startedAt = Date.now();
   private readonly previewChars: number;
   private readonly maxTrackedSessions: number;
@@ -247,6 +250,7 @@ export class AssistantOrchestrator {
     };
     this.traces.unshift(trace);
     this.enforceTraceLimit();
+    this.emitTrace(trace);
 
     const promise = new Promise<T>((resolve, reject) => {
       session.queue.push({
@@ -268,6 +272,13 @@ export class AssistantOrchestrator {
     this.drainSession(session);
     this.pruneSessions();
     return promise;
+  }
+
+  subscribe(listener: AssistantOrchestratorListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   getState(): AssistantOrchestratorState {
@@ -330,6 +341,7 @@ export class AssistantOrchestrator {
         ...node,
         id: node.id ?? `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       });
+      this.emitTrace(trace);
     }
   }
 
@@ -503,6 +515,7 @@ export class AssistantOrchestrator {
       durationMs: queueWaitMs,
       detail: `${queueWaitMs}ms`,
     });
+    this.emitTrace(trace);
 
     const dispatchContext: AssistantDispatchContext = {
       requestId: pending.requestId,
@@ -518,6 +531,7 @@ export class AssistantOrchestrator {
           detail,
         };
         trace.steps.push(step);
+        this.emitTrace(trace);
 
         try {
           const value = await run();
@@ -525,6 +539,7 @@ export class AssistantOrchestrator {
           step.status = 'succeeded';
           step.completedAt = completedAt;
           step.durationMs = Math.max(0, completedAt - stepStartedAt);
+          this.emitTrace(trace);
           return value;
         } catch (err) {
           const completedAt = Date.now();
@@ -532,6 +547,7 @@ export class AssistantOrchestrator {
           step.completedAt = completedAt;
           step.durationMs = Math.max(0, completedAt - stepStartedAt);
           step.error = err instanceof Error ? err.message : String(err);
+          this.emitTrace(trace);
           throw err;
         }
       },
@@ -545,12 +561,14 @@ export class AssistantOrchestrator {
           durationMs: 0,
           detail,
         });
+        this.emitTrace(trace);
       },
       addNode: (node) => {
         trace.nodes.push({
           ...node,
           id: node.id ?? `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         });
+        this.emitTrace(trace);
       },
     };
 
@@ -579,6 +597,7 @@ export class AssistantOrchestrator {
       trace.executionMs = executionMs;
       trace.endToEndMs = endToEndMs;
       trace.responsePreview = responsePreview;
+      this.emitTrace(trace);
 
       this.completedRequests += 1;
       pending.resolve(result);
@@ -601,6 +620,7 @@ export class AssistantOrchestrator {
       trace.executionMs = executionMs;
       trace.endToEndMs = endToEndMs;
       trace.error = errorText;
+      this.emitTrace(trace);
 
       this.failedRequests += 1;
       pending.reject(err);
@@ -608,6 +628,20 @@ export class AssistantOrchestrator {
       session.running = false;
       session.status = session.queueDepth > 0 ? 'queued' : 'idle';
       this.pruneSessions();
+    }
+  }
+
+  private emitTrace(trace: AssistantDispatchTrace): void {
+    const snapshot: AssistantDispatchTrace = {
+      ...trace,
+      steps: trace.steps.map((step) => ({ ...step })),
+      nodes: trace.nodes.map((node) => ({
+        ...node,
+        metadata: node.metadata ? { ...node.metadata } : undefined,
+      })),
+    };
+    for (const listener of this.listeners) {
+      listener(snapshot);
     }
   }
 }

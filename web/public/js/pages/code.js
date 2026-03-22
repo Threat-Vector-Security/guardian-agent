@@ -8,6 +8,7 @@ const DEFAULT_USER_CHANNEL = 'web';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
+const MAX_TIMELINE_RUNS = 12;
 const MAX_CHAT_FILE_REFERENCES = 6;
 const MAX_CHAT_FILE_REFERENCE_SUGGESTIONS = 8;
 const ASSISTANT_TABS = ['chat', 'activity'];
@@ -43,6 +44,7 @@ let codeViewLifecycleId = 0;
 let detectedPlatform = 'linux'; // populated on first render from server
 let shellOptionsCache = [];
 let terminalListenersBound = false;
+let runTimelineListenersBound = false;
 let terminalRenderTimer = null;
 let terminalUnloadBound = false;
 let terminalLibPromise = null;
@@ -1491,6 +1493,38 @@ function bindTerminalListeners() {
   });
 }
 
+function bindRunTimelineListeners() {
+  if (runTimelineListenersBound) return;
+  runTimelineListenersBound = true;
+
+  onSSE('run.timeline', (payload) => {
+    const run = normalizeTimelineRun(payload);
+    const codeSessionId = run?.summary?.codeSessionId;
+    if (!run || !codeSessionId) return;
+    const session = getSessionById(codeSessionId);
+    if (!session) return;
+    session.timelineRuns = mergeTimelineRuns(session.timelineRuns, run);
+    saveState(codeState);
+    const activeSession = getActiveSession();
+    if (
+      window.location.hash.startsWith('#/code')
+      && activeSession?.id === codeSessionId
+      && normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'activity'
+    ) {
+      rerenderFromState();
+    }
+  });
+}
+
+function mergeTimelineRuns(existingRuns, nextRun) {
+  const normalizedExisting = normalizeTimelineRuns(existingRuns);
+  const byRunId = new Map(normalizedExisting.map((run) => [run.summary.runId, run]));
+  byRunId.set(nextRun.summary.runId, nextRun);
+  return [...byRunId.values()]
+    .sort((left, right) => (right.summary.lastUpdatedAt || 0) - (left.summary.lastUpdatedAt || 0))
+    .slice(0, MAX_TIMELINE_RUNS);
+}
+
 function findTerminalTabByRuntimeId(runtimeTerminalId) {
   if (!runtimeTerminalId) return null;
   for (const session of codeState.sessions) {
@@ -2799,6 +2833,7 @@ function normalizeServerSession(record, existing = {}) {
     workspaceTrustReview: hasWorkspaceTrustReview ? normalizeWorkspaceTrustReview(workState.workspaceTrustReview) : (existing.workspaceTrustReview || null),
     workspaceMap: hasWorkspaceMap ? normalizeWorkspaceMap(workState.workspaceMap) : (existing.workspaceMap || null),
     workingSet: hasWorkingSet ? normalizeWorkspaceWorkingSet(workState.workingSet) : (existing.workingSet || null),
+    timelineRuns: normalizeTimelineRuns(existing.timelineRuns),
     structureView: normalizeStructureView(existing.structureView, existing.structureView),
     activeAssistantTab: normalizeAssistantTabValue(uiState.activeAssistantTab || existing.activeAssistantTab),
     inspectorOpen: !!existing.inspectorOpen,
@@ -2825,6 +2860,66 @@ function normalizeVerificationEntries(value, fallback = []) {
       return { id, kind, status, summary, timestamp };
     })
     .filter(Boolean);
+}
+
+function normalizeTimelineItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = typeof item.id === 'string' ? item.id : '';
+  const runId = typeof item.runId === 'string' ? item.runId : '';
+  const timestamp = Number(item.timestamp) || 0;
+  const title = typeof item.title === 'string' ? item.title : '';
+  if (!id || !runId || !timestamp || !title) return null;
+  return {
+    id,
+    runId,
+    timestamp,
+    type: typeof item.type === 'string' ? item.type : 'note',
+    status: typeof item.status === 'string' ? item.status : 'info',
+    source: typeof item.source === 'string' ? item.source : 'system',
+    title,
+    detail: typeof item.detail === 'string' ? item.detail : '',
+  };
+}
+
+function normalizeTimelineSummary(summary) {
+  if (!summary || typeof summary !== 'object') return null;
+  const runId = typeof summary.runId === 'string' ? summary.runId : '';
+  if (!runId) return null;
+  return {
+    runId,
+    kind: typeof summary.kind === 'string' ? summary.kind : 'assistant_dispatch',
+    status: typeof summary.status === 'string' ? summary.status : 'queued',
+    title: typeof summary.title === 'string' ? summary.title : runId,
+    subtitle: typeof summary.subtitle === 'string' ? summary.subtitle : '',
+    channel: typeof summary.channel === 'string' ? summary.channel : '',
+    agentId: typeof summary.agentId === 'string' ? summary.agentId : '',
+    codeSessionId: typeof summary.codeSessionId === 'string' ? summary.codeSessionId : '',
+    lastUpdatedAt: Number(summary.lastUpdatedAt) || 0,
+    startedAt: Number(summary.startedAt) || 0,
+    completedAt: Number(summary.completedAt) || 0,
+    durationMs: Number(summary.durationMs) || 0,
+    pendingApprovalCount: Number(summary.pendingApprovalCount) || 0,
+    verificationPendingCount: Number(summary.verificationPendingCount) || 0,
+  };
+}
+
+function normalizeTimelineRun(run) {
+  if (!run || typeof run !== 'object') return null;
+  const summary = normalizeTimelineSummary(run.summary);
+  if (!summary) return null;
+  const items = Array.isArray(run.items)
+    ? run.items.map((item) => normalizeTimelineItem(item)).filter(Boolean)
+    : [];
+  return { summary, items };
+}
+
+function normalizeTimelineRuns(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((run) => normalizeTimelineRun(run))
+    .filter(Boolean)
+    .sort((left, right) => (right.summary.lastUpdatedAt || 0) - (left.summary.lastUpdatedAt || 0))
+    .slice(0, MAX_TIMELINE_RUNS);
 }
 
 function mergeCodeSessionRecord(snapshot, existing = {}) {
@@ -2962,6 +3057,7 @@ export async function renderCode(container) {
   renderInFlight = true;
   currentContainer = container;
   bindTerminalListeners();
+  bindRunTimelineListeners();
 
   // Start loading Monaco in parallel with data fetches
   loadMonaco().catch(() => {});
@@ -3825,6 +3921,68 @@ function renderTaskList(session) {
       `).join('')}
     </div>
   `;
+}
+
+function renderSessionRunTimeline(session) {
+  const runs = normalizeTimelineRuns(session?.timelineRuns);
+  if (runs.length === 0) {
+    return '<div class="empty-state">Live run activity will appear here when this coding session dispatches work.</div>';
+  }
+
+  return `
+    <div class="code-status-list">
+      ${runs.map((run, index) => `
+        <details class="code-status-card status-${escAttr(mapTimelineRunTone(run.summary.status))}"${index === 0 ? ' open' : ''}>
+          <summary class="code-status-card__top">
+            <strong>${esc(run.summary.title)}</strong>
+            <span class="code-status-card__meta">${esc(formatTimelineRunMeta(run.summary))}</span>
+          </summary>
+          ${run.summary.subtitle ? `<div class="code-status-card__detail">${esc(run.summary.subtitle)}</div>` : ''}
+          <div class="code-status-list" style="margin-top:0.75rem">
+            ${run.items.slice(-6).map((item) => `
+              <article class="code-status-card status-${escAttr(mapTimelineItemTone(item.status))}">
+                <div class="code-status-card__top">
+                  <strong>${esc(item.title)}</strong>
+                  <span class="code-status-card__meta">${esc(formatRelativeTime(item.timestamp))}</span>
+                </div>
+                ${item.detail ? `<div class="code-status-card__detail">${esc(item.detail)}</div>` : ''}
+              </article>
+            `).join('')}
+          </div>
+        </details>
+      `).join('')}
+    </div>
+  `;
+}
+
+function mapTimelineRunTone(status) {
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'blocked';
+  if (status === 'blocked' || status === 'awaiting_approval' || status === 'verification_pending') return 'warn';
+  if (status === 'running') return 'info';
+  return 'info';
+}
+
+function mapTimelineItemTone(status) {
+  if (status === 'succeeded') return 'completed';
+  if (status === 'failed') return 'blocked';
+  if (status === 'blocked' || status === 'warning') return 'warn';
+  if (status === 'running') return 'info';
+  return 'info';
+}
+
+function formatTimelineRunMeta(summary) {
+  const parts = [];
+  if (summary.status) parts.push(summary.status.replace(/_/g, ' '));
+  if (summary.kind) parts.push(summary.kind.replace(/_/g, ' '));
+  const time = formatRelativeTime(summary.lastUpdatedAt || summary.startedAt);
+  if (time) parts.push(time);
+  if (summary.pendingApprovalCount > 0) {
+    parts.push(`${summary.pendingApprovalCount} approval${summary.pendingApprovalCount === 1 ? '' : 's'}`);
+  } else if (summary.durationMs > 0) {
+    parts.push(`${summary.durationMs}ms`);
+  }
+  return parts.join(' • ');
 }
 
 function renderApprovalList(session) {
@@ -4867,6 +5025,7 @@ function renderAssistantPanel(session) {
           </div>
           ${renderWorkspaceTrustNotice(session)}
           <div class="code-assistant-panel__scroll">
+            ${renderSessionRunTimeline(session)}
             ${renderApprovalList(session)}
             ${renderTaskList(session)}
             ${renderCheckList(session)}
@@ -5778,18 +5937,26 @@ async function loadAssistantState(session) {
       pendingApprovals: normalizePendingApprovals(session.pendingApprovals, session.pendingApprovals),
       recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
       verification: normalizeVerificationEntries(session.verification, session.verification),
+      timelineRuns: normalizeTimelineRuns(session.timelineRuns),
     };
   }
-  const snapshot = await api.codeSessionGet(session.id, {
-    channel: DEFAULT_USER_CHANNEL,
-    historyLimit: 1,
-  });
+  const [snapshot, timeline] = await Promise.all([
+    api.codeSessionGet(session.id, {
+      channel: DEFAULT_USER_CHANNEL,
+      historyLimit: 1,
+    }),
+    api.codeSessionTimeline(session.id, {
+      channel: DEFAULT_USER_CHANNEL,
+      limit: MAX_TIMELINE_RUNS,
+    }).catch(() => ({ runs: [] })),
+  ]);
   const refreshedSession = mergeCodeSessionRecord(snapshot, resolveLiveSession(session.id, session) || session) || session;
 
   return {
     pendingApprovals: normalizePendingApprovals(refreshedSession.pendingApprovals, session.pendingApprovals),
     recentJobs: Array.isArray(refreshedSession.recentJobs) ? refreshedSession.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
     verification: normalizeVerificationEntries(refreshedSession.verification, session.verification),
+    timelineRuns: normalizeTimelineRuns(timeline?.runs),
   };
 }
 
@@ -5801,6 +5968,7 @@ async function refreshAssistantState(session, { rerender = true, fallbackPending
     : normalizePendingApprovals(fallbackPendingApprovals, session.pendingApprovals);
   session.recentJobs = nextState.recentJobs;
   session.verification = nextState.verification;
+  session.timelineRuns = nextState.timelineRuns;
   saveState(codeState);
   if (rerender) rerenderFromState();
 }
@@ -5838,6 +6006,9 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
       }
       if (Array.isArray(refreshed.recentJobs)) {
         session.recentJobs = refreshed.recentJobs;
+      }
+      if (Array.isArray(refreshed.timelineRuns)) {
+        session.timelineRuns = refreshed.timelineRuns;
       }
       saveState(codeState);
     }
@@ -6942,6 +7113,7 @@ function saveState(state) {
             : [],
           recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
           verification: normalizeVerificationEntries(session.verification),
+          timelineRuns: [],
           workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
           workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
           workspaceTrustReview: normalizeWorkspaceTrustReview(session.workspaceTrustReview),

@@ -43,6 +43,8 @@ export interface CodeSessionPendingApproval {
   createdAt?: number | null;
   risk?: string;
   origin?: string;
+  jobId?: string;
+  requestId?: string;
 }
 
 export interface CodeSessionRecentJob {
@@ -50,11 +52,26 @@ export interface CodeSessionRecentJob {
   toolName: string;
   status: string;
   createdAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
   resultPreview?: string;
   argsPreview?: string;
   error?: string;
   verificationStatus?: string;
   verificationEvidence?: string;
+  approvalId?: string;
+  requestId?: string;
+}
+
+export interface CodeSessionVerificationEntry {
+  id: string;
+  kind: 'test' | 'lint' | 'build' | 'manual';
+  status: 'pass' | 'warn' | 'fail' | 'not_run';
+  summary: string;
+  timestamp: number;
+  requestId?: string;
+  jobId?: string;
 }
 
 export interface CodeSessionWorkState {
@@ -70,13 +87,7 @@ export interface CodeSessionWorkState {
   pendingApprovals: CodeSessionPendingApproval[];
   recentJobs: CodeSessionRecentJob[];
   changedFiles: string[];
-  verification: Array<{
-    id: string;
-    kind: 'test' | 'lint' | 'build' | 'manual';
-    status: 'pass' | 'warn' | 'fail' | 'not_run';
-    summary: string;
-    timestamp: number;
-  }>;
+  verification: CodeSessionVerificationEntry[];
 }
 
 export interface CodeSessionUiState {
@@ -130,6 +141,13 @@ export interface ResolvedCodeSessionContext {
   session: CodeSessionRecord;
   attachment?: CodeSessionAttachmentRecord;
 }
+
+export type CodeSessionStoreEvent =
+  | { type: 'created'; session: CodeSessionRecord }
+  | { type: 'updated'; session: CodeSessionRecord }
+  | { type: 'deleted'; sessionId: string; ownerUserId: string };
+
+export type CodeSessionStoreListener = (event: CodeSessionStoreEvent) => void;
 
 export interface CodeSessionStoreOptions {
   enabled?: boolean;
@@ -369,6 +387,7 @@ export class CodeSessionStore {
   private readonly enabled: boolean;
   private readonly sqlitePath: string;
   private readonly onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+  private readonly listeners = new Set<CodeSessionStoreListener>();
   private readonly mode: 'sqlite' | 'memory';
   private db: SQLiteDatabase | null = null;
   private securityMonitor: SQLiteSecurityMonitor | null = null;
@@ -420,6 +439,13 @@ export class CodeSessionStore {
     this.db?.close();
     this.db = null;
     this.securityMonitor = null;
+  }
+
+  subscribe(listener: CodeSessionStoreListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private persistCanonicalRecord(record: CodeSessionRecord): void {
@@ -566,11 +592,15 @@ export class CodeSessionStore {
     if (this.mode === 'sqlite' && this.db && this.insertSessionStmt) {
       this.insertSessionStmt.run(...this.toStoredValues(record));
       this.securityMonitor?.maybeCheck();
-      return clone(record);
+      const created = clone(record);
+      this.emit({ type: 'created', session: created });
+      return created;
     }
 
     this.memory.sessions.set(record.id, clone(record));
-    return clone(record);
+    const created = clone(record);
+    this.emit({ type: 'created', session: created });
+    return created;
   }
 
   updateSession(input: UpdateCodeSessionInput): CodeSessionRecord | null {
@@ -662,11 +692,15 @@ export class CodeSessionStore {
     if (this.mode === 'sqlite' && this.db && this.updateSessionStmt) {
       this.updateSessionStmt.run(...this.toUpdateStoredValues(next));
       this.securityMonitor?.maybeCheck();
-      return clone(next);
+      const updated = clone(next);
+      this.emit({ type: 'updated', session: updated });
+      return updated;
     }
 
     this.memory.sessions.set(next.id, clone(next));
-    return clone(next);
+    const updated = clone(next);
+    this.emit({ type: 'updated', session: updated });
+    return updated;
   }
 
   deleteSession(sessionId: string, ownerUserId: string): boolean {
@@ -676,6 +710,7 @@ export class CodeSessionStore {
     if (this.mode === 'sqlite' && this.db && this.deleteSessionStmt) {
       this.deleteSessionStmt.run(sessionId, ownerUserId);
       this.securityMonitor?.maybeCheck();
+      this.emit({ type: 'deleted', sessionId, ownerUserId });
       return true;
     }
 
@@ -685,6 +720,7 @@ export class CodeSessionStore {
         this.memory.attachments.delete(key);
       }
     }
+    this.emit({ type: 'deleted', sessionId, ownerUserId });
     return true;
   }
 
@@ -1031,5 +1067,11 @@ export class CodeSessionStore {
       SET last_seen_at = ?
       WHERE id = ? AND user_id = ? AND channel = ? AND surface_id = ?
     `);
+  }
+
+  private emit(event: CodeSessionStoreEvent): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
   }
 }

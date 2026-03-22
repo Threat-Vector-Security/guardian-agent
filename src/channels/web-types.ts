@@ -74,6 +74,13 @@ import type {
   CodeSessionUiState,
   CodeSessionWorkState,
 } from '../runtime/code-sessions.js';
+import type {
+  DashboardCodeSessionTimelineResponse,
+  DashboardRunDetail,
+  DashboardRunKind,
+  DashboardRunListResponse,
+  DashboardRunStatus,
+} from '../runtime/run-timeline.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -720,7 +727,7 @@ export interface DashboardWindowsDefenderActionResult {
 
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'security.triage' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate' | 'terminal.output' | 'terminal.exit';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'security.triage' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate' | 'terminal.output' | 'terminal.exit' | 'run.timeline';
   data: unknown;
 }
 
@@ -750,6 +757,15 @@ export interface DashboardCallbacks {
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
   onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
   onAssistantState?: () => DashboardAssistantState;
+  onAssistantRuns?: (args: {
+    limit?: number;
+    status?: DashboardRunStatus;
+    kind?: DashboardRunKind;
+    channel?: string;
+    agentId?: string;
+    codeSessionId?: string;
+  }) => DashboardRunListResponse;
+  onAssistantRunDetail?: (runId: string) => DashboardRunDetail | null;
   onSSESubscribe?: (listener: SSEListener) => () => void;
   onDispatch?: (
     agentId: string,
@@ -784,6 +800,14 @@ export interface DashboardCallbacks {
     surfaceId: string;
     historyLimit?: number;
   }) => DashboardCodeSessionSnapshot | null;
+  onCodeSessionTimeline?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    limit?: number;
+  }) => DashboardCodeSessionTimelineResponse | null;
   onCodeTerminalAccessCheck?: () => {
     allowed: boolean;
     reason?: string;

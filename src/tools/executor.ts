@@ -2202,6 +2202,8 @@ export class ToolExecutor {
     createdAt: number;
     risk: ToolDefinition['risk'];
     origin: ToolApprovalRequest['origin'];
+    jobId?: string;
+    requestId?: string;
   }> {
     const normalizedCodeSessionId = codeSessionId.trim();
     if (!normalizedCodeSessionId) return [];
@@ -2217,6 +2219,8 @@ export class ToolExecutor {
           createdAt: approval.createdAt,
           risk: approval.risk,
           origin: approval.origin,
+          jobId: approval.jobId,
+          requestId: job?.requestId,
         };
       });
   }

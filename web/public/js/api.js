@@ -241,6 +241,8 @@ export const api = {
     body: JSON.stringify({ name }),
   }),
   assistantState: () => request('/api/assistant/state'),
+  assistantRuns: (params = {}) => request(`/api/assistant/runs${buildQueryString(params)}`),
+  assistantRun: (runId) => request(`/api/assistant/runs/${encodeURIComponent(runId)}`),
   toolsState: (limit = 50) => request(`/api/tools?limit=${limit}`),
   runTool: (payload) => request('/api/tools/run', {
     method: 'POST',
@@ -520,6 +522,7 @@ export const api = {
     }
     return request(`/api/code/sessions/${encodeURIComponent(sessionId)}${qs.toString() ? `?${qs.toString()}` : ''}`);
   },
+  codeSessionTimeline: (sessionId, params = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/timeline${buildQueryString(params)}`),
   codeSessionCreate: (payload) => request('/api/code/sessions', {
     method: 'POST',
     body: JSON.stringify(payload),

@@ -132,6 +132,7 @@ import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
+import { RunTimelineStore } from './runtime/run-timeline.js';
 import { NotificationService, notificationDestinationEnabled } from './runtime/notifications.js';
 import { promoteAutomationFindings } from './runtime/automation-output.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
@@ -2242,11 +2243,16 @@ class ChatAgent extends BaseAgent {
         toolName: job.toolName,
         status: job.status,
         createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        durationMs: job.durationMs,
         resultPreview: job.resultPreview,
         argsPreview: job.argsPreview,
         error: job.error,
         verificationStatus: job.verificationStatus,
         verificationEvidence: job.verificationEvidence,
+        approvalId: job.approvalId,
+        requestId: job.requestId,
       }));
     const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
     const status = pendingApprovals.length > 0
@@ -4625,6 +4631,8 @@ function buildDashboardCallbacks(
   conversations: ConversationService,
   identity: IdentityService,
   analytics: AnalyticsService,
+  runTimeline: RunTimelineStore,
+  refreshRunTimelineSnapshots: () => void,
   orchestrator: AssistantOrchestrator,
   jobTracker: AssistantJobTracker,
   aiSecurity: AiSecurityService,
@@ -4824,11 +4832,16 @@ function buildDashboardCallbacks(
         toolName: job.toolName,
         status: job.status,
         createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        durationMs: job.durationMs,
         resultPreview: job.resultPreview,
         argsPreview: job.argsPreview,
         error: job.error,
         verificationStatus: job.verificationStatus,
         verificationEvidence: job.verificationEvidence,
+        approvalId: job.approvalId,
+        requestId: job.requestId,
       }));
     const nextStatus = pendingApprovals.length > 0
       ? 'awaiting_approval'
@@ -4849,6 +4862,9 @@ function buildDashboardCallbacks(
     });
     return updated ?? session;
   };
+  for (const session of codeSessionStore.listAllSessions()) {
+    runTimeline.ingestCodeSession(hydrateCodeSessionRuntimeState(session));
+  }
   const ensureCodeSessionWorkspaceAwareness = (session: CodeSessionRecord): CodeSessionRecord => {
     const now = Date.now();
     const updates: Partial<CodeSessionRecord['workState']> = {};
@@ -5781,6 +5797,25 @@ function buildDashboardCallbacks(
       };
     },
 
+    onAssistantRuns: ({ limit, status, kind, channel, agentId, codeSessionId }) => {
+      refreshRunTimelineSnapshots();
+      return {
+        runs: runTimeline.listRuns({
+          limit,
+          ...(status ? { status } : {}),
+          ...(kind ? { kind } : {}),
+          ...(channel ? { channel } : {}),
+          ...(agentId ? { agentId } : {}),
+          ...(codeSessionId ? { codeSessionId } : {}),
+        }),
+      };
+    },
+
+    onAssistantRunDetail: (runId) => {
+      refreshRunTimelineSnapshots();
+      return runTimeline.getRun(runId);
+    },
+
     onToolsState: ({ limit } = {}) => ({
       enabled: toolExecutor.isEnabled(),
       tools: toolExecutor.listToolDefinitions(),
@@ -6603,6 +6638,11 @@ function buildDashboardCallbacks(
       });
       cleanups.push(unsubSecurityTriage);
 
+      const unsubRunTimeline = runTimeline.subscribe((detail) => {
+        listener({ type: 'run.timeline', data: detail });
+      });
+      cleanups.push(unsubRunTimeline);
+
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
         const agents = runtime.registry.getAll().map((inst) => toDashboardAgentInfo(inst));
@@ -6677,6 +6717,20 @@ function buildDashboardCallbacks(
         surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
         historyLimit,
       });
+    },
+
+    onCodeSessionTimeline: ({ sessionId, userId, channel, principalId: _principalId, limit }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
+      if (!session) return null;
+      const hydrated = hydrateCodeSessionRuntimeState(session);
+      refreshRunTimelineSnapshots();
+      return {
+        codeSessionId: hydrated.id,
+        runs: runTimeline.listRunsForCodeSession(hydrated.id, limit ?? 12),
+      };
     },
 
     onCodeSessionCreate: ({ userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, attach }) => {
@@ -9014,6 +9068,13 @@ async function main(): Promise<void> {
     sqlitePath: codeSessionDbPath,
     onSecurityEvent: onSQLiteSecurityEvent,
   });
+  const runTimeline = new RunTimelineStore();
+  let refreshRunTimelineSnapshots: () => void = () => {};
+  codeSessionStore.subscribe((event) => {
+    if (event.type === 'created' || event.type === 'updated') {
+      runTimeline.ingestCodeSession(event.session);
+    }
+  });
   analytics = new AnalyticsService({
     enabled: config.assistant.analytics.enabled,
     sqlitePath: analyticsDbPath,
@@ -10641,6 +10702,16 @@ async function main(): Promise<void> {
   });
   await scheduledTasks.load().catch(() => {});
 
+  refreshRunTimelineSnapshots = (): void => {
+    runTimeline.syncPlaybookRuns(connectors.getState(50).runs);
+    runTimeline.syncScheduledTaskHistory(scheduledTasks.getHistory());
+  };
+  refreshRunTimelineSnapshots();
+  const runTimelineRefreshInterval = setInterval(() => {
+    refreshRunTimelineSnapshots();
+  }, 5_000);
+  runTimelineRefreshInterval.unref?.();
+
   // Auto-install all preset scheduled tasks on first run (no existing tasks)
   if (scheduledTasks.list().length === 0) {
     scheduledTasks.autoInstallAllPresets();
@@ -10814,6 +10885,9 @@ async function main(): Promise<void> {
 
   let threatIntelInterval: NodeJS.Timeout | null = null;
   const orchestrator = new AssistantOrchestrator();
+  orchestrator.subscribe((trace) => {
+    runTimeline.ingestAssistantTrace(trace);
+  });
   const jobTracker = new AssistantJobTracker();
 
   // ─── Model fallback chain ─────────────────────────────────
@@ -11419,6 +11493,8 @@ async function main(): Promise<void> {
     conversations,
     identity,
     analytics,
+    runTimeline,
+    refreshRunTimelineSnapshots,
     orchestrator,
     jobTracker,
     aiSecurity,
