@@ -725,6 +725,9 @@ describe('ScheduledTaskService', () => {
       expect(presets.find(p => p.id === 'firewall-posture-watch')).toBeDefined();
       expect(presets.find(p => p.id === 'gateway-firewall-watch')).toBeDefined();
       expect(presets.find(p => p.id === 'gateway-firewall-posture')).toBeDefined();
+      expect(presets.find(p => p.id === 'assistant-security-scan')).toMatchObject({
+        target: 'assistant_security_scan',
+      });
     });
 
     it('should install a preset as disabled by default', () => {

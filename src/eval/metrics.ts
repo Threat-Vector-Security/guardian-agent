@@ -8,10 +8,12 @@
 
 import type {
   ContentMatcher,
+  EvidenceExpectation,
   EvalActualResponse,
   EvalAssertionResult,
   ExpectedToolCall,
   SafetyExpectation,
+  WorkflowExpectation,
 } from './types.js';
 import { SecretScanner } from '../guardian/secret-scanner.js';
 import { detectInjection } from '../guardian/input-sanitizer.js';
@@ -175,6 +177,108 @@ export function evaluateMetadata(
   };
 }
 
+export function evaluateWorkflow(
+  actual: EvalActualResponse,
+  expectation: WorkflowExpectation,
+): EvalAssertionResult {
+  const metadata = actual.metadata ?? {};
+  const mismatches: string[] = [];
+
+  if (expectation.orchestration && metadata.orchestration !== expectation.orchestration) {
+    mismatches.push(`orchestration expected ${expectation.orchestration}, got ${String(metadata.orchestration ?? 'undefined')}`);
+  }
+
+  if (expectation.branchSelected && metadata.branchSelected !== expectation.branchSelected) {
+    mismatches.push(`branchSelected expected ${expectation.branchSelected}, got ${String(metadata.branchSelected ?? 'undefined')}`);
+  }
+
+  if (expectation.minCompletedSteps !== undefined) {
+    const completedSteps = typeof metadata.completedSteps === 'number' ? metadata.completedSteps : 0;
+    if (completedSteps < expectation.minCompletedSteps) {
+      mismatches.push(`completedSteps expected >= ${expectation.minCompletedSteps}, got ${completedSteps}`);
+    }
+  }
+
+  if (expectation.maxFailedSteps !== undefined) {
+    const failedSteps = typeof metadata.failed === 'number'
+      ? metadata.failed
+      : typeof metadata.errors === 'number'
+        ? metadata.errors
+        : 0;
+    if (failedSteps > expectation.maxFailedSteps) {
+      mismatches.push(`failed/error steps expected <= ${expectation.maxFailedSteps}, got ${failedSteps}`);
+    }
+  }
+
+  if (expectation.requireStateKeys?.length) {
+    const state = isRecord(metadata.state) ? metadata.state : {};
+    for (const key of expectation.requireStateKeys) {
+      if (!(key in state)) {
+        mismatches.push(`state key '${key}' was not present`);
+      }
+    }
+  }
+
+  return {
+    passed: mismatches.length === 0,
+    metric: 'workflow_expectation',
+    reason: mismatches.length === 0
+      ? 'Workflow metadata matched expected orchestration shape'
+      : `Workflow mismatches: ${mismatches.join('; ')}`,
+    expected: expectation,
+    actual: metadata,
+  };
+}
+
+export function evaluateEvidence(
+  actual: EvalActualResponse,
+  expectation: EvidenceExpectation,
+): EvalAssertionResult {
+  const metadata = actual.metadata ?? {};
+  const citations = extractEvidenceEntries(metadata.citations).concat(extractEvidenceEntries(metadata.sources));
+  const evidence = extractEvidenceEntries(metadata.evidence);
+  const urls = [
+    ...citations.map((entry) => entry.url).filter((value): value is string => !!value),
+    ...evidence.map((entry) => entry.url).filter((value): value is string => !!value),
+  ];
+  const mismatches: string[] = [];
+
+  if (expectation.minCitations !== undefined && citations.length < expectation.minCitations) {
+    mismatches.push(`citations expected >= ${expectation.minCitations}, got ${citations.length}`);
+  }
+
+  if (expectation.minEvidenceItems !== undefined && evidence.length < expectation.minEvidenceItems) {
+    mismatches.push(`evidence items expected >= ${expectation.minEvidenceItems}, got ${evidence.length}`);
+  }
+
+  if (expectation.requireUrls && urls.length === 0) {
+    mismatches.push('expected at least one URL-backed citation or evidence item');
+  }
+
+  if (expectation.requireCitationMentionsInContent) {
+    const hasContentCitation = /\[Source\s+\d+\]/i.test(actual.content)
+      || /^Sources:/im.test(actual.content)
+      || urls.some((url) => actual.content.includes(url));
+    if (!hasContentCitation) {
+      mismatches.push('response content did not include citation markers or supporting URLs');
+    }
+  }
+
+  return {
+    passed: mismatches.length === 0,
+    metric: 'evidence_expectation',
+    reason: mismatches.length === 0
+      ? 'Evidence and citation expectations were met'
+      : `Evidence mismatches: ${mismatches.join('; ')}`,
+    expected: expectation,
+    actual: {
+      citationCount: citations.length,
+      evidenceCount: evidence.length,
+      urls,
+    },
+  };
+}
+
 // ─── Safety Checks ────────────────────────────────────────────
 
 /** Evaluate response against safety expectations. */
@@ -265,4 +369,33 @@ function checkSubsetMatch(
 function truncate(str: string, maxLen: number = 100): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + '...';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function extractEvidenceEntries(
+  value: unknown,
+): Array<{ label: string; url?: string }> {
+  if (!Array.isArray(value)) return [];
+  const entries: Array<{ label: string; url?: string }> = [];
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim()) {
+      entries.push({ label: entry.trim(), url: entry.startsWith('http') ? entry.trim() : undefined });
+      continue;
+    }
+    if (isRecord(entry)) {
+      const url = typeof entry.url === 'string' && entry.url.trim() ? entry.url.trim() : undefined;
+      const label = typeof entry.title === 'string' && entry.title.trim()
+        ? entry.title.trim()
+        : typeof entry.summary === 'string' && entry.summary.trim()
+          ? entry.summary.trim()
+          : url ?? '';
+      if (label) {
+        entries.push({ label, url });
+      }
+    }
+  }
+  return entries;
 }

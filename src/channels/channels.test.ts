@@ -1977,6 +1977,31 @@ describe('WebChannel', () => {
     expect(res.status).toBe(404);
   });
 
+  it('blocks manual code terminals when dashboard policy denies them', async () => {
+    web = new WebChannel({
+      port: 18928,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onCodeTerminalAccessCheck: () => ({
+          allowed: false,
+          reason: 'Manual code terminals are disabled by security policy.',
+        }),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18928/api/code/terminals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({}),
+    });
+    const body = await res.json() as { error: string };
+
+    expect(res.status).toBe(403);
+    expect(body.error).toContain('disabled by security policy');
+  });
+
   it('requires a privileged ticket for sensitive memory config updates', async () => {
     const updates: unknown[] = [];
     web = new WebChannel({
@@ -2642,7 +2667,7 @@ describe('WebChannel', () => {
         returned: 1,
         searchedSources: ['network'],
         includeAcknowledged: false,
-        bySource: { host: 0, network: 1, gateway: 0, native: 0 },
+        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0 },
         bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
       }),
       onSecurityAlertAcknowledge: ({ alertId, source }) => ({ success: true, message: `security-acked:${source || 'auto'}:${alertId}`, source: source || 'network' }),
@@ -2654,7 +2679,7 @@ describe('WebChannel', () => {
         summary: "Profile 'personal' has 1 active alerts. Escalate from 'monitor' to 'guarded'.",
         reasons: ['A high-severity alert is active and should tighten approvals and outbound actions.'],
         counts: { total: 1, low: 0, medium: 1, high: 0, critical: 0 },
-        bySource: { host: 0, network: 1, gateway: 0, native: 0 },
+        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0 },
         availableSources: ['network'],
         topAlerts: [{
           id: 'net-alert-1',
@@ -2817,6 +2842,261 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as Array<{ name: string; type: string }>;
       expect(body[0].name).toBe('ollama');
+    });
+
+    it('GET /api/code/sessions/:id/structure should return deterministic structure data for the selected file', async () => {
+      const workspaceRoot = join(process.cwd(), `__test_code_structure_${randomUUID()}`);
+      const sourceDir = join(workspaceRoot, 'src');
+      const sourcePath = join(sourceDir, 'example.ts');
+      mkdirSync(sourceDir, { recursive: true });
+      writeFileSync(sourcePath, [
+        'export function getAnswer() {',
+        '  return computeAnswer();',
+        '}',
+        '',
+        'function computeAnswer() {',
+        '  return 42;',
+        '}',
+      ].join('\n'));
+
+      try {
+        const dashboard: DashboardCallbacks = {
+          ...mockDashboard,
+          onCodeSessionGet: () => ({
+            session: {
+              id: 'code-session-structure',
+              ownerUserId: 'web-user',
+              ownerPrincipalId: 'owner-principal',
+              title: 'Structure Test',
+              workspaceRoot,
+              resolvedRoot: workspaceRoot,
+              agentId: 'agent-1',
+              status: 'active',
+              attachmentPolicy: 'same_principal',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastActivityAt: Date.now(),
+              conversationUserId: 'web-user',
+              conversationChannel: 'code-session',
+              uiState: {
+                currentDirectory: workspaceRoot,
+                selectedFilePath: sourcePath,
+                showDiff: false,
+                expandedDirs: [],
+                activeAssistantTab: 'chat',
+                terminalCollapsed: false,
+                terminalTabs: [],
+              },
+              workState: {
+                focusSummary: '',
+                planSummary: '',
+                compactedSummary: '',
+                workspaceProfile: null,
+                workspaceTrust: null,
+                workspaceTrustReview: null,
+                workspaceMap: null,
+                workingSet: null,
+                activeSkills: [],
+                pendingApprovals: [],
+                recentJobs: [],
+                changedFiles: [],
+                verification: [],
+              },
+            },
+            history: [],
+            attachments: [],
+          }),
+        };
+
+        web = new WebChannel({ port: 18975, authToken: TEST_TOKEN, dashboard });
+        await web.start(async () => ({ content: 'ok' }));
+
+        const res = await fetch('http://localhost:18975/api/code/sessions/code-session-structure/structure', {
+          headers: authHeaders,
+        });
+        expect(res.status).toBe(200);
+        const body = await res.json() as {
+          success: boolean;
+          path: string;
+          supported: boolean;
+          language: string;
+          symbols: Array<{
+            name: string;
+            kind: string;
+            callers: string[];
+            callees: string[];
+          }>;
+        };
+        expect(body.success).toBe(true);
+        expect(body.path).toBe('src/example.ts');
+        expect(body.supported).toBe(true);
+        expect(body.language).toBe('TypeScript');
+        expect(body.symbols.map((symbol) => symbol.name)).toEqual(['getAnswer', 'computeAnswer']);
+        expect(body.symbols[0]).toMatchObject({
+          name: 'getAnswer',
+          kind: 'function',
+          callees: ['computeAnswer'],
+        });
+        expect(body.symbols[1]).toMatchObject({
+          name: 'computeAnswer',
+          callers: ['getAnswer'],
+        });
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('POST /api/code/sessions/:id/structure-preview should analyze unsaved editor content', async () => {
+      const workspaceRoot = join(process.cwd(), `__test_code_structure_preview_${randomUUID()}`);
+      const sourceDir = join(workspaceRoot, 'src');
+      const sourcePath = join(sourceDir, 'example.ts');
+      mkdirSync(sourceDir, { recursive: true });
+      writeFileSync(sourcePath, 'export function getAnswer() {\n  return 42;\n}\n');
+
+      try {
+        const dashboard: DashboardCallbacks = {
+          ...mockDashboard,
+          onCodeSessionGet: () => ({
+            session: {
+              id: 'code-session-structure-preview',
+              ownerUserId: 'web-user',
+              ownerPrincipalId: 'owner-principal',
+              title: 'Structure Preview Test',
+              workspaceRoot,
+              resolvedRoot: workspaceRoot,
+              agentId: 'agent-1',
+              status: 'active',
+              attachmentPolicy: 'same_principal',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastActivityAt: Date.now(),
+              conversationUserId: 'web-user',
+              conversationChannel: 'code-session',
+              uiState: {
+                currentDirectory: workspaceRoot,
+                selectedFilePath: sourcePath,
+                showDiff: false,
+                expandedDirs: [],
+                activeAssistantTab: 'chat',
+                terminalCollapsed: false,
+                terminalTabs: [],
+              },
+              workState: {
+                focusSummary: '',
+                planSummary: '',
+                compactedSummary: '',
+                workspaceProfile: null,
+                workspaceTrust: null,
+                workspaceTrustReview: null,
+                workspaceMap: null,
+                workingSet: null,
+                activeSkills: [],
+                pendingApprovals: [],
+                recentJobs: [],
+                changedFiles: [],
+                verification: [],
+              },
+            },
+            history: [],
+            attachments: [],
+          }),
+        };
+
+        web = new WebChannel({ port: 18977, authToken: TEST_TOKEN, dashboard });
+        await web.start(async () => ({ content: 'ok' }));
+
+        const res = await fetch('http://localhost:18977/api/code/sessions/code-session-structure-preview/structure-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify({
+            path: sourcePath,
+            content: 'export function getAnswer(seed: number) {\n  return seed + 1;\n}\n',
+          }),
+        });
+        expect(res.status).toBe(200);
+        const body = await res.json() as {
+          success: boolean;
+          path: string;
+          symbols: Array<{ name: string; params: string[]; summary: string }>;
+        };
+        expect(body.success).toBe(true);
+        expect(body.path).toBe('src/example.ts');
+        expect(body.symbols[0]).toMatchObject({
+          name: 'getAnswer',
+          params: ['seed'],
+          summary: expect.stringContaining('accepts 1 parameter (seed)'),
+        });
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('GET /api/code/sessions/:id/structure should reject paths outside the workspace root', async () => {
+      const workspaceRoot = join(process.cwd(), `__test_code_structure_denied_${randomUUID()}`);
+      mkdirSync(workspaceRoot, { recursive: true });
+
+      try {
+        const dashboard: DashboardCallbacks = {
+          ...mockDashboard,
+          onCodeSessionGet: () => ({
+            session: {
+              id: 'code-session-structure-denied',
+              ownerUserId: 'web-user',
+              ownerPrincipalId: 'owner-principal',
+              title: 'Structure Denied Test',
+              workspaceRoot,
+              resolvedRoot: workspaceRoot,
+              agentId: 'agent-1',
+              status: 'active',
+              attachmentPolicy: 'same_principal',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastActivityAt: Date.now(),
+              conversationUserId: 'web-user',
+              conversationChannel: 'code-session',
+              uiState: {
+                currentDirectory: workspaceRoot,
+                selectedFilePath: null,
+                showDiff: false,
+                expandedDirs: [],
+                activeAssistantTab: 'chat',
+                terminalCollapsed: false,
+                terminalTabs: [],
+              },
+              workState: {
+                focusSummary: '',
+                planSummary: '',
+                compactedSummary: '',
+                workspaceProfile: null,
+                workspaceTrust: null,
+                workspaceTrustReview: null,
+                workspaceMap: null,
+                workingSet: null,
+                activeSkills: [],
+                pendingApprovals: [],
+                recentJobs: [],
+                changedFiles: [],
+                verification: [],
+              },
+            },
+            history: [],
+            attachments: [],
+          }),
+        };
+
+        web = new WebChannel({ port: 18976, authToken: TEST_TOKEN, dashboard });
+        await web.start(async () => ({ content: 'ok' }));
+
+        const res = await fetch('http://localhost:18976/api/code/sessions/code-session-structure-denied/structure?path=../outside.ts', {
+          headers: authHeaders,
+        });
+        expect(res.status).toBe(403);
+        const body = await res.json() as { success: boolean; error: string };
+        expect(body.success).toBe(false);
+        expect(body.error).toMatch(/coding session workspace/i);
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
     });
 
     it('GET /api/assistant/state should return orchestrator state', async () => {

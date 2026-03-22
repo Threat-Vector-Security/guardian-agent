@@ -18,6 +18,9 @@ import { ProviderRegistry } from '../llm/provider-registry.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
 import {
+  isAssistantSecurityAutoContainmentCategory,
+  isAssistantSecurityAutoContainmentSeverity,
+  isAssistantSecurityMonitoringProfile,
   isDeploymentProfile,
   isSecurityOperatingMode,
   isSecurityTriageLlmProvider,
@@ -268,6 +271,39 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     && !isSecurityTriageLlmProvider(assistant.security.triageLlmProvider)
   ) {
     errors.push("assistant.security.triageLlmProvider must be one of: auto, local, external");
+  }
+  if (assistant.security?.continuousMonitoring) {
+    const monitoring = assistant.security.continuousMonitoring;
+    if (typeof monitoring.enabled !== 'boolean') {
+      errors.push('assistant.security.continuousMonitoring.enabled must be a boolean');
+    }
+    if (!isAssistantSecurityMonitoringProfile(monitoring.profileId)) {
+      errors.push('assistant.security.continuousMonitoring.profileId must be one of: quick, runtime-hardening, workspace-boundaries');
+    }
+    if (!monitoring.cron?.trim()) {
+      errors.push('assistant.security.continuousMonitoring.cron is required');
+    }
+  }
+  if (assistant.security?.autoContainment) {
+    const autoContainment = assistant.security.autoContainment;
+    if (typeof autoContainment.enabled !== 'boolean') {
+      errors.push('assistant.security.autoContainment.enabled must be a boolean');
+    }
+    if (!isAssistantSecurityAutoContainmentSeverity(autoContainment.minSeverity)) {
+      errors.push('assistant.security.autoContainment.minSeverity must be one of: high, critical');
+    }
+    if (!Number.isFinite(autoContainment.minConfidence) || autoContainment.minConfidence < 0 || autoContainment.minConfidence > 1) {
+      errors.push('assistant.security.autoContainment.minConfidence must be between 0 and 1');
+    }
+    if (!Array.isArray(autoContainment.categories)) {
+      errors.push('assistant.security.autoContainment.categories must be an array');
+    } else {
+      for (const category of autoContainment.categories) {
+        if (!isAssistantSecurityAutoContainmentCategory(category)) {
+          errors.push(`assistant.security.autoContainment.categories contains unknown category '${category}'`);
+        }
+      }
+    }
   }
 
   const soul = assistant.soul;
@@ -705,6 +741,22 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {
     errors.push("assistant.tools.sandbox.enforcementMode must be 'permissive' or 'strict'");
   }
+  if (sandbox?.degradedFallback) {
+    const degradedFallback = sandbox.degradedFallback;
+    const booleanFields = [
+      'allowNetworkTools',
+      'allowBrowserTools',
+      'allowMcpServers',
+      'allowPackageManagers',
+      'allowManualCodeTerminals',
+    ] as const;
+    for (const field of booleanFields) {
+      const value = degradedFallback[field];
+      if (value !== undefined && typeof value !== 'boolean') {
+        errors.push(`assistant.tools.sandbox.degradedFallback.${field} must be a boolean`);
+      }
+    }
+  }
   if (sandbox?.windowsHelper?.enabled) {
     if (sandbox.windowsHelper.command !== undefined && !sandbox.windowsHelper.command.trim()) {
       errors.push('assistant.tools.sandbox.windowsHelper.command must be a non-empty string when provided');
@@ -742,6 +794,20 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         }
         if (server.timeoutMs !== undefined && server.timeoutMs < 1000) {
           errors.push(`assistant.tools.mcp server '${server.id}' timeoutMs must be >= 1000`);
+        }
+        if (server.startupApproved !== undefined && typeof server.startupApproved !== 'boolean') {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' startupApproved must be a boolean`);
+        }
+        if (server.networkAccess !== undefined && typeof server.networkAccess !== 'boolean') {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' networkAccess must be a boolean`);
+        }
+        if (server.inheritEnv !== undefined && typeof server.inheritEnv !== 'boolean') {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' inheritEnv must be a boolean`);
+        }
+        if (server.allowedEnvKeys !== undefined) {
+          if (!Array.isArray(server.allowedEnvKeys) || server.allowedEnvKeys.some((value) => typeof value !== 'string' || !value.trim())) {
+            errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' allowedEnvKeys must be an array of non-empty strings`);
+          }
         }
         if (server.trustLevel && !['read_only', 'mutating', 'network', 'external_post'].includes(server.trustLevel)) {
           errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' trustLevel is invalid`);
@@ -967,6 +1033,12 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (!step.instruction?.trim()) {
           errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' instruction is required`);
         }
+        if (step.evidenceMode && !['none', 'grounded', 'strict'].includes(step.evidenceMode)) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' evidenceMode must be none, grounded, or strict`);
+        }
+        if (step.citationStyle && !['sources_list', 'inline_markers'].includes(step.citationStyle)) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' citationStyle must be sources_list or inline_markers`);
+        }
       } else if (stepType === 'delay') {
         if (typeof step.delayMs !== 'number' || step.delayMs <= 0) {
           errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' delayMs must be > 0`);
@@ -974,6 +1046,15 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (playbook.mode === 'parallel') {
           errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' delay steps are only allowed in sequential mode`);
         }
+        if (step.evidenceMode) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' evidenceMode is only valid for instruction steps`);
+        }
+        if (step.citationStyle) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' citationStyle is only valid for instruction steps`);
+        }
+      }
+      if (stepType === 'tool' && (step.evidenceMode || step.citationStyle)) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' evidenceMode/citationStyle are only valid for instruction steps`);
       }
       if (step.timeoutMs !== undefined && step.timeoutMs < 1000) {
         errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id}' timeoutMs must be >= 1000`);

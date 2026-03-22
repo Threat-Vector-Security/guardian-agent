@@ -27,10 +27,16 @@ import {
   isSecurityAlertSeverity,
   isSecurityAlertSource,
   normalizeSecurityAlertSources,
+  type SecurityAlertSource,
 } from '../runtime/security-alerts.js';
 import { isSecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
 import { isSecurityActivityStatus } from '../runtime/security-activity-log.js';
 import { isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
+import { buildHardenedEnv } from '../sandbox/index.js';
+import {
+  inspectCodeWorkspaceFileStructureSync,
+  inspectCodeWorkspaceFileStructureTextSync,
+} from '../runtime/code-workspace-structure.js';
 
 const log = createLogger('channel:web');
 
@@ -1736,11 +1742,11 @@ export class WebChannel implements ChannelAdapter {
         const rawSeverity = trimOptionalString(url.searchParams.get('severity'))?.toLowerCase();
 
         if (rawSource && !isSecurityAlertSource(rawSource.toLowerCase())) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
           return;
         }
         if (rawSources.some((value) => !isSecurityAlertSource(value))) {
-          sendJSON(res, 400, { error: "sources must contain only 'host', 'network', 'gateway', or 'native'" });
+          sendJSON(res, 400, { error: "sources must contain only 'host', 'network', 'gateway', 'native', or 'assistant'" });
           return;
         }
         if (rawSeverity && !isSecurityAlertSeverity(rawSeverity)) {
@@ -1755,7 +1761,7 @@ export class WebChannel implements ChannelAdapter {
         const sources = normalizeSecurityAlertSources(rawSource, rawSources);
         sendJSON(res, 200, this.dashboard.onSecurityAlerts({
           query,
-          source: rawSource?.toLowerCase() as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          source: rawSource?.toLowerCase() as SecurityAlertSource | undefined,
           sources,
           severity: rawSeverity as 'low' | 'medium' | 'high' | 'critical' | undefined,
           status: rawStatus as 'active' | 'acknowledged' | 'resolved' | 'suppressed' | undefined,
@@ -1794,12 +1800,12 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertAcknowledge({
           alertId: parsed.alertId.trim(),
-          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          source: source as SecurityAlertSource | undefined,
         });
         sendJSON(res, 200, result);
         const topics = result.source === 'network' ? ['network', 'security'] : ['security'];
@@ -1834,12 +1840,12 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertResolve({
           alertId: parsed.alertId.trim(),
-          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          source: source as SecurityAlertSource | undefined,
           reason: trimOptionalString(parsed.reason),
         });
         sendJSON(res, 200, result);
@@ -1879,12 +1885,12 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertSuppress({
           alertId: parsed.alertId.trim(),
-          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          source: source as SecurityAlertSource | undefined,
           reason: trimOptionalString(parsed.reason),
           suppressedUntil: Number(parsed.suppressedUntil),
         });
@@ -1913,6 +1919,142 @@ export class WebChannel implements ChannelAdapter {
           status: rawStatus && isSecurityActivityStatus(rawStatus) ? rawStatus : undefined,
           agentId,
         }));
+        return;
+      }
+
+      // GET /api/security/ai/summary — Assistant Security high-level summary
+      if (req.method === 'GET' && url.pathname === '/api/security/ai/summary') {
+        if (!this.dashboard.onAiSecuritySummary) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAiSecuritySummary());
+        return;
+      }
+
+      // GET /api/security/ai/profiles — Assistant Security scan profiles
+      if (req.method === 'GET' && url.pathname === '/api/security/ai/profiles') {
+        if (!this.dashboard.onAiSecurityProfiles) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAiSecurityProfiles());
+        return;
+      }
+
+      // GET /api/security/ai/targets — scan targets
+      if (req.method === 'GET' && url.pathname === '/api/security/ai/targets') {
+        if (!this.dashboard.onAiSecurityTargets) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAiSecurityTargets());
+        return;
+      }
+
+      // GET /api/security/ai/runs — recent scan runs
+      if (req.method === 'GET' && url.pathname === '/api/security/ai/runs') {
+        if (!this.dashboard.onAiSecurityRuns) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '20', 10);
+        const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 20;
+        sendJSON(res, 200, this.dashboard.onAiSecurityRuns(limit));
+        return;
+      }
+
+      // POST /api/security/ai/scan — run Assistant Security scan
+      if (req.method === 'POST' && url.pathname === '/api/security/ai/scan') {
+        if (!this.dashboard.onAiSecurityScan) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { profileId?: string; targetIds?: string[]; source?: string };
+        try {
+          parsed = body.trim()
+            ? (JSON.parse(body) as { profileId?: string; targetIds?: string[]; source?: string })
+            : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        const result = await this.dashboard.onAiSecurityScan({
+          profileId: trimOptionalString(parsed.profileId),
+          targetIds: Array.isArray(parsed.targetIds)
+            ? parsed.targetIds.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+            : undefined,
+          source: parsed.source as Parameters<NonNullable<DashboardCallbacks['onAiSecurityScan']>>[0]['source'],
+        });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'ai-security'], 'security.ai.scan.completed', url.pathname);
+        return;
+      }
+
+      // GET /api/security/ai/findings — list findings
+      if (req.method === 'GET' && url.pathname === '/api/security/ai/findings') {
+        if (!this.dashboard.onAiSecurityFindings) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '50', 10);
+        const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
+        const status = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
+        sendJSON(res, 200, this.dashboard.onAiSecurityFindings({
+          limit,
+          status: status as Parameters<NonNullable<DashboardCallbacks['onAiSecurityFindings']>>[0]['status'],
+        }));
+        return;
+      }
+
+      // POST /api/security/ai/findings/status — update finding status
+      if (req.method === 'POST' && url.pathname === '/api/security/ai/findings/status') {
+        if (!this.dashboard.onAiSecurityUpdateFindingStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const statusCode = message.includes('too large') ? 413 : 400;
+          sendJSON(res, statusCode, { error: message });
+          return;
+        }
+
+        let parsed: { findingId?: string; status?: string };
+        try {
+          parsed = JSON.parse(body) as { findingId?: string; status?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.findingId?.trim() || !parsed.status?.trim()) {
+          sendJSON(res, 400, { error: 'findingId and status are required' });
+          return;
+        }
+
+        const result = this.dashboard.onAiSecurityUpdateFindingStatus({
+          findingId: parsed.findingId.trim(),
+          status: parsed.status.trim().toLowerCase() as Parameters<NonNullable<DashboardCallbacks['onAiSecurityUpdateFindingStatus']>>[0]['status'],
+        });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'ai-security'], 'security.ai.finding.updated', url.pathname);
         return;
       }
 
@@ -4166,6 +4308,140 @@ export class WebChannel implements ChannelAdapter {
         }
       }
 
+      const codeSessionStructureMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/structure$/)
+        : null;
+      if (codeSessionStructureMatch) {
+        if (!this.dashboard.onCodeSessionGet) {
+          sendJSON(res, 404, { success: false, error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionStructureMatch[1]);
+        const principal = this.resolveRequestPrincipal(req);
+        const snapshot = this.dashboard.onCodeSessionGet({
+          sessionId,
+          userId: url.searchParams.get('userId') || 'web-user',
+          principalId: principal.principalId,
+          channel: url.searchParams.get('channel') || 'web',
+          surfaceId: '',
+          historyLimit: 1,
+        });
+        if (!snapshot) {
+          sendJSON(res, 404, { success: false, error: 'Code session not found' });
+          return;
+        }
+
+        const requestedPath = trimOptionalString(url.searchParams.get('path'));
+        const requestedSectionId = trimOptionalString(url.searchParams.get('sectionId'));
+        const requestedLine = Number(url.searchParams.get('line')) || 0;
+        const fallbackPath = trimOptionalString(snapshot.session.uiState.selectedFilePath);
+        if (!requestedPath && !fallbackPath) {
+          sendJSON(res, 400, { success: false, error: 'A file path is required for structure inspection.' });
+          return;
+        }
+
+        let targetPath: string;
+        try {
+          targetPath = resolveCodeSessionPath(
+            snapshot.session.resolvedRoot,
+            requestedPath ?? fallbackPath ?? undefined,
+          );
+        } catch (err) {
+          sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+          return;
+        }
+
+        try {
+          const structure = inspectCodeWorkspaceFileStructureSync(
+            snapshot.session.resolvedRoot,
+            targetPath,
+            Date.now(),
+            {
+              ...(requestedLine > 0 ? { lineNumber: requestedLine } : {}),
+              ...(requestedSectionId ? { sectionId: requestedSectionId } : {}),
+            },
+          );
+          sendJSON(res, 200, { success: true, ...structure });
+        } catch (err) {
+          sendJSON(res, 200, {
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to inspect file structure',
+          });
+        }
+        return;
+      }
+
+      const codeSessionStructurePreviewMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/structure-preview$/)
+        : null;
+      if (codeSessionStructurePreviewMatch) {
+        if (!this.dashboard.onCodeSessionGet) {
+          sendJSON(res, 404, { success: false, error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionStructurePreviewMatch[1]);
+        const principal = this.resolveRequestPrincipal(req);
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as {
+          userId?: string;
+          channel?: string;
+          path?: string;
+          content?: string;
+          line?: number;
+          sectionId?: string;
+        };
+        const snapshot = this.dashboard.onCodeSessionGet({
+          sessionId,
+          userId: parsed.userId || 'web-user',
+          principalId: principal.principalId,
+          channel: parsed.channel || 'web',
+          surfaceId: '',
+          historyLimit: 1,
+        });
+        if (!snapshot) {
+          sendJSON(res, 404, { success: false, error: 'Code session not found' });
+          return;
+        }
+
+        const requestedPath = trimOptionalString(parsed.path);
+        if (!requestedPath) {
+          sendJSON(res, 400, { success: false, error: 'A file path is required for structure preview.' });
+          return;
+        }
+        if (typeof parsed.content !== 'string') {
+          sendJSON(res, 400, { success: false, error: 'Structure preview content must be a string.' });
+          return;
+        }
+
+        let targetPath: string;
+        try {
+          targetPath = resolveCodeSessionPath(snapshot.session.resolvedRoot, requestedPath);
+        } catch (err) {
+          sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+          return;
+        }
+
+        try {
+          const structure = inspectCodeWorkspaceFileStructureTextSync(
+            snapshot.session.resolvedRoot,
+            targetPath,
+            parsed.content,
+            Date.now(),
+            {
+              ...(Number(parsed.line) > 0 ? { lineNumber: Number(parsed.line) } : {}),
+              ...(trimOptionalString(parsed.sectionId) ? { sectionId: trimOptionalString(parsed.sectionId)! } : {}),
+            },
+          );
+          sendJSON(res, 200, { success: true, ...structure });
+        } catch (err) {
+          sendJSON(res, 200, {
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to inspect file structure preview',
+          });
+        }
+        return;
+      }
+
       // POST /api/code/fs/list — direct user directory listing for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/fs/list') {
         const body = await readBody(req, this.maxBodyBytes);
@@ -4533,6 +4809,11 @@ export class WebChannel implements ChannelAdapter {
 
       // POST /api/code/terminals — Open a PTY-backed terminal session
       if (req.method === 'POST' && url.pathname === '/api/code/terminals') {
+        const terminalAccess = this.dashboard.onCodeTerminalAccessCheck?.();
+        if (terminalAccess && terminalAccess.allowed === false) {
+          sendJSON(res, 403, { success: false, error: terminalAccess.reason || 'Manual code terminals are disabled by policy.' });
+          return;
+        }
         const body = await readBody(req, this.maxBodyBytes);
         const parsed = JSON.parse(body || '{}') as {
           cwd?: string;
@@ -4581,10 +4862,10 @@ export class WebChannel implements ChannelAdapter {
             cols,
             rows,
             cwd: ptyCwd,
-            env: {
+            env: buildHardenedEnv({
               ...process.env,
               ...launch.env,
-            },
+            }),
           });
           const session: TerminalSessionRecord = {
             id: terminalId,
@@ -4597,6 +4878,15 @@ export class WebChannel implements ChannelAdapter {
             ...(codeSessionId ? { codeSessionId } : {}),
           };
           this.terminalSessions.set(terminalId, session);
+          this.dashboard.onCodeTerminalEvent?.({
+            action: 'opened',
+            terminalId,
+            shell: shellType,
+            cwd: session.cwd,
+            cols: session.cols,
+            rows: session.rows,
+            codeSessionId: session.codeSessionId ?? null,
+          });
           pty.onData((data) => {
             this.emitSSE({
               type: 'terminal.output',
@@ -4605,6 +4895,17 @@ export class WebChannel implements ChannelAdapter {
           });
           pty.onExit((event) => {
             this.terminalSessions.delete(terminalId);
+            this.dashboard.onCodeTerminalEvent?.({
+              action: 'exited',
+              terminalId,
+              shell: session.shell,
+              cwd: session.cwd,
+              cols: session.cols,
+              rows: session.rows,
+              codeSessionId: session.codeSessionId ?? null,
+              exitCode: event.exitCode,
+              signal: event.signal,
+            });
             this.emitSSE({
               type: 'terminal.exit',
               data: { terminalId, exitCode: event.exitCode, signal: event.signal },

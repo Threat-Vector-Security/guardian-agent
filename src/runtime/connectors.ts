@@ -16,16 +16,31 @@ import type {
   ConnectorExecutionMode,
 } from '../config/types.js';
 import type { ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
+import type { ToolApprovalDecisionResult } from '../tools/executor.js';
 import type { AutomationPromotedFindingRef } from './automation-output.js';
 import { GraphRunner } from './graph-runner.js';
 import type { GraphNodeExecutionResult, PlaybookGraphDefinition } from './graph-types.js';
 import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
-import { InMemoryRunStateStore } from './run-state-store.js';
+import { InMemoryRunStateStore, type RunStateStore } from './run-state-store.js';
 
 const MAX_RUN_HISTORY = 200;
 
-type PlaybookStepStatus = 'succeeded' | 'failed' | 'pending_approval';
+type PlaybookStepStatus = 'succeeded' | 'failed' | 'pending_approval' | 'denied';
 type PlaybookRunStatus = 'succeeded' | 'failed' | 'awaiting_approval';
+
+export interface PlaybookCitation {
+  title: string;
+  url: string;
+  snippet?: string;
+  sourceStepId?: string;
+}
+
+export interface PlaybookEvidenceItem {
+  kind: 'search_result' | 'citation' | 'page_excerpt' | 'structured_output';
+  summary: string;
+  url?: string;
+  sourceStepId?: string;
+}
 
 export interface PlaybookStepRunResult {
   stepId: string;
@@ -37,6 +52,8 @@ export interface PlaybookStepRunResult {
   approvalId?: string;
   durationMs: number;
   output?: unknown;
+  citations?: PlaybookCitation[];
+  evidence?: PlaybookEvidenceItem[];
 }
 
 export interface PlaybookRunRecord {
@@ -119,6 +136,17 @@ export type RunInstructionFn = (
   maxTokens?: number,
 ) => Promise<string>;
 
+interface PlaybookResumeContext {
+  playbookId: string;
+  dryRun: boolean;
+  origin: ToolExecutionRequest['origin'];
+  agentId?: string;
+  userId?: string;
+  channel?: string;
+  requestedBy?: string;
+  bypassApprovals?: boolean;
+}
+
 interface ConnectorPlaybookServiceOptions {
   config: AssistantConnectorsConfig;
   runTool: (request: ToolExecutionRequest) => Promise<ToolRunResponse>;
@@ -127,7 +155,7 @@ interface ConnectorPlaybookServiceOptions {
   /** Optional output scanner (e.g. OutputGuardian) for instruction step responses. */
   scanOutput?: (text: string) => Promise<string>;
   now?: () => number;
-  runStateStore?: InMemoryRunStateStore<PlaybookStepRunResult>;
+  runStateStore?: RunStateStore<PlaybookStepRunResult>;
 }
 
 export class ConnectorPlaybookService {
@@ -179,7 +207,11 @@ export class ConnectorPlaybookService {
       playbooks,
       runs: this.runs.slice(0, Math.max(1, limitRuns)).map((run) => ({
         ...run,
-        steps: run.steps.map((step) => ({ ...step })),
+        steps: run.steps.map((step) => ({
+          ...step,
+          citations: step.citations ? step.citations.map((citation) => ({ ...citation })) : undefined,
+          evidence: step.evidence ? step.evidence.map((item) => ({ ...item })) : undefined,
+        })),
         events: run.events.map((event) => ({ ...event })),
       })),
       playbooksConfig: {
@@ -258,6 +290,93 @@ export class ConnectorPlaybookService {
     return { success: true, message: `Deleted playbook '${playbookId}'.` };
   }
 
+  private buildGraphHandlers(
+    playbook: AssistantConnectorPlaybookDefinition,
+    input: ConnectorPlaybookRunInput,
+  ): {
+    executeStep: (node: Extract<import('./graph-types.js').PlaybookGraphNode, { type: 'step' }>, priorResults: PlaybookStepRunResult[]) => Promise<GraphNodeExecutionResult<PlaybookStepRunResult>>;
+    executeParallel: (node: Extract<import('./graph-types.js').PlaybookGraphNode, { type: 'parallel' }>, priorResults: PlaybookStepRunResult[]) => Promise<GraphNodeExecutionResult<PlaybookStepRunResult>>;
+  } {
+    return {
+      executeStep: async (node, priorResults) => {
+        const result = await this.executeStep(node.step, input, priorResults);
+        return {
+          status: result.status === 'denied' ? 'failed' : result.status,
+          results: [result],
+          message: result.message,
+        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
+      },
+      executeParallel: async (node, priorResults) => {
+        const results = await Promise.all(node.steps.map((step) => this.executeStep(step, input, priorResults)));
+        const hasPending = results.some((result) => result.status === 'pending_approval');
+        const hasHardFailure = results.some((result) => {
+          if (result.status !== 'failed' && result.status !== 'denied') return false;
+          const def = node.steps.find((item) => item.id === result.stepId);
+          return !def?.continueOnError;
+        });
+        return {
+          status: hasPending ? 'pending_approval' : hasHardFailure ? 'failed' : 'succeeded',
+          results,
+          message: hasPending
+            ? `Playbook '${playbook.id}' paused for approval.`
+            : hasHardFailure
+              ? `Playbook '${playbook.id}' completed with failures.`
+              : `Playbook '${playbook.id}' completed successfully.`,
+        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
+      },
+    };
+  }
+
+  private upsertRun(run: PlaybookRunRecord): void {
+    const existingIndex = this.runs.findIndex((entry) => entry.runId === run.runId);
+    if (existingIndex >= 0) {
+      this.runs.splice(existingIndex, 1);
+    }
+    this.runs.unshift(run);
+    if (this.runs.length > MAX_RUN_HISTORY) {
+      this.runs.length = MAX_RUN_HISTORY;
+    }
+  }
+
+  private buildRunRecord(
+    playbook: AssistantConnectorPlaybookDefinition,
+    input: ConnectorPlaybookRunInput,
+    graphResult: Awaited<ReturnType<GraphRunner<PlaybookStepRunResult>['run']>>,
+    startedAt: number,
+    existingRunId?: string,
+  ): PlaybookRunRecord {
+    const status: PlaybookRunStatus = graphResult.status === 'awaiting_approval'
+      ? 'awaiting_approval'
+      : graphResult.status === 'failed'
+        ? 'failed'
+        : 'succeeded';
+
+    const completedAt = this.now();
+    return {
+      id: existingRunId ?? randomUUID(),
+      runId: graphResult.runId,
+      graphId: graphResult.graphId,
+      playbookId: playbook.id,
+      playbookName: playbook.name,
+      createdAt: startedAt,
+      startedAt,
+      completedAt,
+      durationMs: completedAt - startedAt,
+      dryRun: !!input.dryRun,
+      status,
+      message: graphResult.message,
+      steps: graphResult.results.map((step) => ({
+        ...step,
+        citations: step.citations ? step.citations.map((citation) => ({ ...citation })) : undefined,
+        evidence: step.evidence ? step.evidence.map((item) => ({ ...item })) : undefined,
+      })),
+      outputHandling: playbook.outputHandling,
+      requestedBy: input.requestedBy,
+      origin: input.origin,
+      events: graphResult.events.map((event) => ({ ...event })),
+    };
+  }
+
   async runPlaybook(input: ConnectorPlaybookRunInput): Promise<ConnectorPlaybookRunResult> {
     const playbook = this.config.playbooks.definitions.find((candidate) => candidate.id === input.playbookId);
     if (!this.config.enabled) {
@@ -304,73 +423,246 @@ export class ConnectorPlaybookService {
 
     const startedAt = this.now();
     const graph = compilePlaybookToGraph(playbook);
-    const graphResult = await this.graphRunner.run(graph, {
-      executeStep: async (node, priorResults) => {
-        const result = await this.executeStep(node.step, input, priorResults);
-        return {
-          status: result.status,
-          results: [result],
-          message: result.message,
-        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
-      },
-      executeParallel: async (node, priorResults) => {
-        const results = await Promise.all(node.steps.map((step) => this.executeStep(step, input, priorResults)));
-        const hasPending = results.some((result) => result.status === 'pending_approval');
-        const hasHardFailure = results.some((result) => {
-          if (result.status !== 'failed') return false;
-          const def = node.steps.find((item) => item.id === result.stepId);
-          return !def?.continueOnError;
-        });
-        return {
-          status: hasPending ? 'pending_approval' : hasHardFailure ? 'failed' : 'succeeded',
-          results,
-          message: hasPending
-            ? `Playbook '${playbook.id}' paused for approval.`
-            : hasHardFailure
-              ? `Playbook '${playbook.id}' completed with failures.`
-              : `Playbook '${playbook.id}' completed successfully.`,
-        } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
-      },
+    const graphResult = await this.graphRunner.run(graph, this.buildGraphHandlers(playbook, input), {
+      resumeContext: {
+        playbookId: input.playbookId,
+        dryRun: !!input.dryRun,
+        origin: input.origin,
+        agentId: input.agentId,
+        userId: input.userId,
+        channel: input.channel,
+        requestedBy: input.requestedBy,
+        bypassApprovals: input.bypassApprovals === true,
+      } satisfies PlaybookResumeContext,
     });
 
-    const steps = graphResult.results;
-    const status: PlaybookRunStatus = graphResult.status === 'awaiting_approval'
-      ? 'awaiting_approval'
-      : graphResult.status === 'failed'
-        ? 'failed'
-        : 'succeeded';
-    const message = graphResult.message;
+    const run = this.buildRunRecord(playbook, input, graphResult, startedAt);
+    this.upsertRun(run);
 
-    const completedAt = this.now();
-    const run: PlaybookRunRecord = {
-      id: randomUUID(),
-      runId: graphResult.runId,
-      graphId: graphResult.graphId,
-      playbookId: playbook.id,
-      playbookName: playbook.name,
-      createdAt: startedAt,
-      startedAt,
-      completedAt,
-      durationMs: completedAt - startedAt,
-      dryRun: !!input.dryRun,
-      status,
-      message,
-      steps,
-      outputHandling: playbook.outputHandling,
-      requestedBy: input.requestedBy,
-      origin: input.origin,
-      events: graphResult.events.map((event) => ({ ...event })),
-    };
-    this.recordRun(run);
-
-    if (input.dryRun && status === 'succeeded') {
+    if (input.dryRun && run.status === 'succeeded') {
       this.dryRunQualified.add(playbook.id);
     }
 
     return {
-      success: status === 'succeeded',
-      status,
-      message,
+      success: run.status === 'succeeded',
+      status: run.status,
+      message: run.message,
+      run,
+    };
+  }
+
+  async continueAfterApprovalDecision(
+    approvalId: string,
+    decision: 'approved' | 'denied',
+    decisionResult: ToolApprovalDecisionResult,
+  ): Promise<ConnectorPlaybookRunResult | null> {
+    const normalizedApprovalId = approvalId.trim();
+    if (!normalizedApprovalId) return null;
+
+    const checkpoint = this.graphRunner.getStore()
+      .list(MAX_RUN_HISTORY)
+      .find((entry) => entry.pendingApprovalIds?.includes(normalizedApprovalId));
+    if (!checkpoint) {
+      return null;
+    }
+
+    const resumeContext = parseResumeContext(checkpoint.resumeContext);
+    if (!resumeContext) {
+      return null;
+    }
+
+    const playbook = this.config.playbooks.definitions.find((candidate) => candidate.id === resumeContext.playbookId);
+    if (!playbook) {
+      return null;
+    }
+
+    const graph = compilePlaybookToGraph(playbook);
+    const liveCheckpoint = this.graphRunner.getStore().get(checkpoint.runId);
+    if (!liveCheckpoint) {
+      return null;
+    }
+
+    const updatedResults = liveCheckpoint.results.map((step) => {
+      if (step.approvalId !== normalizedApprovalId) {
+        return step;
+      }
+      if (decision === 'denied') {
+        return {
+          ...step,
+          status: 'denied' as const,
+          message: decisionResult.message,
+          citations: step.citations ? step.citations.map((citation) => ({ ...citation })) : undefined,
+          evidence: step.evidence ? step.evidence.map((item) => ({ ...item })) : undefined,
+        };
+      }
+      return {
+        ...step,
+        status: decisionResult.result?.success ? 'succeeded' as const : 'failed' as const,
+        message: decisionResult.message,
+        jobId: decisionResult.result?.jobId ?? step.jobId,
+        durationMs: decisionResult.job?.durationMs ?? step.durationMs,
+        output: decisionResult.result?.output ?? step.output,
+        citations: extractEvidenceBundle(decisionResult.result?.output, step.stepId).citations,
+        evidence: extractEvidenceBundle(decisionResult.result?.output, step.stepId).evidence,
+      };
+    });
+    const remainingApprovalIds = (liveCheckpoint.pendingApprovalIds ?? []).filter((id) => id !== normalizedApprovalId);
+    const nextEvents = liveCheckpoint.events.map((event) => ({ ...event }));
+
+    if (decision === 'denied') {
+      nextEvents.push(createRunEvent(liveCheckpoint.runId, 'approval_denied', this.now(), {
+        nodeId: liveCheckpoint.currentNodeId,
+        message: `Approval '${normalizedApprovalId}' was denied.`,
+        metadata: { approvalId: normalizedApprovalId },
+      }));
+    }
+
+    const updatedCheckpoint = {
+      ...liveCheckpoint,
+      results: updatedResults,
+      pendingApprovalIds: remainingApprovalIds,
+      events: nextEvents,
+      status: remainingApprovalIds.length === 0 ? 'running' as const : 'awaiting_approval' as const,
+    };
+    this.graphRunner.getStore().save(updatedCheckpoint);
+
+    if (remainingApprovalIds.length > 0) {
+      const existingRun = this.runs.find((run) => run.runId === liveCheckpoint.runId);
+      const run = this.buildRunRecord(
+        playbook,
+        toRunInput(resumeContext),
+        {
+          runId: liveCheckpoint.runId,
+          graphId: liveCheckpoint.graphId,
+          graphName: liveCheckpoint.graphName,
+          status: 'awaiting_approval',
+          message: 'Playbook is still awaiting additional approvals.',
+          results: updatedResults,
+          events: nextEvents,
+          checkpoint: updatedCheckpoint,
+        },
+        existingRun?.startedAt ?? liveCheckpoint.createdAt,
+        existingRun?.id,
+      );
+      this.upsertRun(run);
+      return {
+        success: false,
+        status: 'awaiting_approval',
+        message: run.message,
+        run,
+      };
+    }
+
+    const currentNode = graph.nodes.find((node) => node.id === liveCheckpoint.currentNodeId);
+    if (currentNode && currentNode.type === 'step') {
+      const stepResult = updatedResults.find((result) => result.stepId === currentNode.step.id);
+      if (stepResult && (stepResult.status === 'failed' || stepResult.status === 'denied') && !currentNode.step.continueOnError) {
+        const failureEvents = [...nextEvents];
+        failureEvents.push(createRunEvent(liveCheckpoint.runId, 'run_failed', this.now(), {
+          nodeId: currentNode.id,
+          message: stepResult.message,
+        }));
+        const failedCheckpoint = {
+          ...updatedCheckpoint,
+          status: 'failed' as const,
+          events: failureEvents,
+          nextNodeId: undefined,
+        };
+        this.graphRunner.getStore().save(failedCheckpoint);
+        const existingRun = this.runs.find((run) => run.runId === liveCheckpoint.runId);
+        const run = this.buildRunRecord(
+          playbook,
+          toRunInput(resumeContext),
+          {
+            runId: liveCheckpoint.runId,
+            graphId: liveCheckpoint.graphId,
+            graphName: liveCheckpoint.graphName,
+            status: 'failed',
+            message: stepResult.message,
+            results: updatedResults,
+            events: failureEvents,
+            checkpoint: failedCheckpoint,
+          },
+          existingRun?.startedAt ?? liveCheckpoint.createdAt,
+          existingRun?.id,
+        );
+        this.upsertRun(run);
+        return {
+          success: false,
+          status: 'failed',
+          message: run.message,
+          run,
+        };
+      }
+    }
+
+    if (currentNode && currentNode.type === 'parallel') {
+      const hardFailure = currentNode.steps.some((step) => {
+        const result = updatedResults.find((entry) => entry.stepId === step.id);
+        return !!result && (result.status === 'failed' || result.status === 'denied') && !step.continueOnError;
+      });
+      if (hardFailure) {
+        const failureMessage = `Playbook '${playbook.id}' completed with failures.`;
+        const failureEvents = [...nextEvents];
+        failureEvents.push(createRunEvent(liveCheckpoint.runId, 'run_failed', this.now(), {
+          nodeId: currentNode.id,
+          message: failureMessage,
+        }));
+        const failedCheckpoint = {
+          ...updatedCheckpoint,
+          status: 'failed' as const,
+          events: failureEvents,
+          nextNodeId: undefined,
+        };
+        this.graphRunner.getStore().save(failedCheckpoint);
+        const existingRun = this.runs.find((run) => run.runId === liveCheckpoint.runId);
+        const run = this.buildRunRecord(
+          playbook,
+          toRunInput(resumeContext),
+          {
+            runId: liveCheckpoint.runId,
+            graphId: liveCheckpoint.graphId,
+            graphName: liveCheckpoint.graphName,
+            status: 'failed',
+            message: failureMessage,
+            results: updatedResults,
+            events: failureEvents,
+            checkpoint: failedCheckpoint,
+          },
+          existingRun?.startedAt ?? liveCheckpoint.createdAt,
+          existingRun?.id,
+        );
+        this.upsertRun(run);
+        return {
+          success: false,
+          status: 'failed',
+          message: run.message,
+          run,
+        };
+      }
+    }
+
+    const resumed = await this.graphRunner.resume(
+      graph,
+      liveCheckpoint.runId,
+      this.buildGraphHandlers(playbook, toRunInput(resumeContext)),
+    );
+    const existingRun = this.runs.find((run) => run.runId === resumed.runId);
+    const run = this.buildRunRecord(
+      playbook,
+      toRunInput(resumeContext),
+      resumed,
+      existingRun?.startedAt ?? liveCheckpoint.createdAt,
+      existingRun?.id,
+    );
+    this.upsertRun(run);
+    if (resumeContext.dryRun && run.status === 'succeeded') {
+      this.dryRunQualified.add(playbook.id);
+    }
+    return {
+      success: run.status === 'succeeded',
+      status: run.status,
+      message: run.message,
       run,
     };
   }
@@ -475,9 +767,12 @@ export class ConnectorPlaybookService {
 
       const status: PlaybookStepStatus = toolResult.status === 'pending_approval'
         ? 'pending_approval'
-        : toolResult.success
-          ? 'succeeded'
-          : 'failed';
+        : toolResult.status === 'denied'
+          ? 'denied'
+          : toolResult.success
+            ? 'succeeded'
+            : 'failed';
+      const evidenceBundle = extractEvidenceBundle(toolResult.output, step.id);
 
       return {
         stepId: step.id,
@@ -489,6 +784,8 @@ export class ConnectorPlaybookService {
         approvalId: toolResult.approvalId,
         durationMs: this.now() - startedAt,
         output: toolResult.output,
+        citations: evidenceBundle.citations,
+        evidence: evidenceBundle.evidence,
       };
     } catch (err) {
       return {
@@ -549,15 +846,42 @@ export class ConnectorPlaybookService {
       .filter((r) => r.output != null)
       .map((r) => `### Step "${r.stepId}" (${r.toolName}) — ${r.status}\n${formatStepOutput(r.output)}`)
       .join('\n\n');
+    const evidenceMode = step.evidenceMode ?? 'none';
+    const citationStyle = step.citationStyle ?? 'sources_list';
+    const evidenceBundle = collectPriorEvidence(priorResults);
+
+    if (evidenceMode === 'strict' && evidenceBundle.citations.length === 0 && evidenceBundle.evidence.length === 0) {
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
+        status: 'failed',
+        message: 'Instruction step requires evidence grounding, but prior steps did not capture citations or evidence.',
+        durationMs: this.now() - startedAt,
+      };
+    }
 
     const prompt = [
       'You are processing an automation pipeline step.',
       'Below are the outputs from prior steps in this automation:\n',
       context || '(no prior step outputs)',
+      evidenceBundle.promptSection,
       '\n---\n',
       'Your instruction for this step:\n',
       step.instruction,
-      '\nRespond with the requested output only. Do not explain the automation or reference these instructions.',
+      evidenceMode === 'none'
+        ? '\nRespond with the requested output only. Do not explain the automation or reference these instructions.'
+        : [
+          '\nEvidence-grounding requirements:',
+          '- Treat the evidence section as the factual boundary for consequential claims.',
+          evidenceMode === 'strict'
+            ? '- If the evidence is insufficient, say that the evidence is insufficient instead of filling gaps.'
+            : '- Prefer evidence-backed wording and clearly mark uncertainty.',
+          citationStyle === 'inline_markers'
+            ? '- Cite supported claims inline using [Source N] markers.'
+            : '- End with a short "Sources:" section that names the supporting sources or URLs you used.',
+          'Respond with the requested output only. Do not explain the automation or reference these instructions.',
+        ].join('\n'),
     ].join('\n');
 
     const timeoutMs = step.timeoutMs ?? this.config.playbooks.defaultStepTimeoutMs;
@@ -569,6 +893,21 @@ export class ConnectorPlaybookService {
 
       // Optionally scan LLM output (e.g. OutputGuardian secret/PII redaction).
       const output = this.scanOutput ? await this.scanOutput(raw) : raw;
+      if (evidenceMode !== 'none' && !hasCitationReferences(output, evidenceBundle.citations, citationStyle)) {
+        return {
+          stepId: step.id,
+          toolName: '_instruction',
+          packId: '',
+          status: evidenceMode === 'strict' ? 'failed' : 'succeeded',
+          message: evidenceMode === 'strict'
+            ? 'Instruction output omitted required citations for evidence-grounded mode.'
+            : 'Instruction completed, but no explicit citations were detected in the response.',
+          durationMs: this.now() - startedAt,
+          output,
+          citations: evidenceBundle.citations,
+          evidence: evidenceBundle.evidence,
+        };
+      }
 
       return {
         stepId: step.id,
@@ -578,6 +917,8 @@ export class ConnectorPlaybookService {
         message: 'Instruction completed.',
         durationMs: this.now() - startedAt,
         output,
+        citations: evidenceBundle.citations,
+        evidence: evidenceBundle.evidence,
       };
     } catch (err) {
       return {
@@ -668,16 +1009,41 @@ export class ConnectorPlaybookService {
         }),
       ],
     };
-    this.recordRun(run);
+    this.upsertRun(run);
     return { success: false, status: 'failed', message: reason, run };
   }
+}
 
-  private recordRun(run: PlaybookRunRecord): void {
-    this.runs.unshift(run);
-    while (this.runs.length > MAX_RUN_HISTORY) {
-      this.runs.pop();
-    }
-  }
+function parseResumeContext(value: Record<string, unknown> | undefined): PlaybookResumeContext | null {
+  if (!value) return null;
+  const playbookId = typeof value.playbookId === 'string' ? value.playbookId.trim() : '';
+  const origin = value.origin === 'assistant' || value.origin === 'cli' || value.origin === 'web'
+    ? value.origin
+    : null;
+  if (!playbookId || !origin) return null;
+  return {
+    playbookId,
+    dryRun: value.dryRun === true,
+    origin,
+    agentId: typeof value.agentId === 'string' ? value.agentId : undefined,
+    userId: typeof value.userId === 'string' ? value.userId : undefined,
+    channel: typeof value.channel === 'string' ? value.channel : undefined,
+    requestedBy: typeof value.requestedBy === 'string' ? value.requestedBy : undefined,
+    bypassApprovals: value.bypassApprovals === true,
+  };
+}
+
+function toRunInput(context: PlaybookResumeContext): ConnectorPlaybookRunInput {
+  return {
+    playbookId: context.playbookId,
+    dryRun: context.dryRun,
+    origin: context.origin,
+    agentId: context.agentId,
+    userId: context.userId,
+    channel: context.channel,
+    requestedBy: context.requestedBy,
+    bypassApprovals: context.bypassApprovals,
+  };
 }
 
 function compilePlaybookToGraph(playbook: AssistantConnectorPlaybookDefinition): PlaybookGraphDefinition {
@@ -933,4 +1299,170 @@ function formatStepOutput(output: unknown): string {
   } catch {
     return String(output);
   }
+}
+
+function collectPriorEvidence(
+  priorResults: PlaybookStepRunResult[],
+): { citations: PlaybookCitation[]; evidence: PlaybookEvidenceItem[]; promptSection: string } {
+  const citations: PlaybookCitation[] = [];
+  const evidence: PlaybookEvidenceItem[] = [];
+
+  for (const result of priorResults) {
+    if (result.citations?.length) {
+      citations.push(...result.citations.map((citation) => ({ ...citation })));
+    }
+    if (result.evidence?.length) {
+      evidence.push(...result.evidence.map((item) => ({ ...item })));
+    }
+  }
+
+  if (citations.length === 0 && evidence.length === 0) {
+    return {
+      citations,
+      evidence,
+      promptSection: '',
+    };
+  }
+
+  const lines = ['\nStructured evidence captured from prior steps:'];
+  citations.slice(0, 8).forEach((citation, index) => {
+    lines.push(`- Source ${index + 1}: ${citation.title || citation.url} (${citation.url})${citation.snippet ? ` — ${citation.snippet}` : ''}`);
+  });
+  evidence.slice(0, 8).forEach((item, index) => {
+    lines.push(`- Evidence ${index + 1}: ${item.summary}${item.url ? ` (${item.url})` : ''}`);
+  });
+
+  return {
+    citations,
+    evidence,
+    promptSection: lines.join('\n'),
+  };
+}
+
+function extractEvidenceBundle(
+  output: unknown,
+  sourceStepId: string,
+): { citations: PlaybookCitation[]; evidence: PlaybookEvidenceItem[] } {
+  const citations: PlaybookCitation[] = [];
+  const evidence: PlaybookEvidenceItem[] = [];
+
+  if (isRecord(output)) {
+    const explicitCitations = output.citations;
+    if (Array.isArray(explicitCitations)) {
+      for (const entry of explicitCitations) {
+        if (typeof entry === 'string' && entry.trim()) {
+          citations.push({
+            title: entry.trim(),
+            url: entry.trim(),
+            sourceStepId,
+          });
+          evidence.push({
+            kind: 'citation',
+            summary: entry.trim(),
+            url: entry.trim(),
+            sourceStepId,
+          });
+        } else if (isRecord(entry) && typeof entry.url === 'string' && entry.url.trim()) {
+          const title = typeof entry.title === 'string' ? entry.title : entry.url;
+          const snippet = typeof entry.snippet === 'string' ? entry.snippet : undefined;
+          citations.push({
+            title,
+            url: entry.url.trim(),
+            snippet,
+            sourceStepId,
+          });
+          evidence.push({
+            kind: 'citation',
+            summary: snippet ? `${title}: ${snippet}` : title,
+            url: entry.url.trim(),
+            sourceStepId,
+          });
+        }
+      }
+    }
+
+    const results = output.results;
+    if (Array.isArray(results)) {
+      for (const entry of results) {
+        if (!isRecord(entry) || typeof entry.url !== 'string' || !entry.url.trim()) continue;
+        const title = typeof entry.title === 'string' ? entry.title : entry.url;
+        const snippet = typeof entry.snippet === 'string' ? entry.snippet : undefined;
+        citations.push({
+          title,
+          url: entry.url.trim(),
+          snippet,
+          sourceStepId,
+        });
+        evidence.push({
+          kind: 'search_result',
+          summary: snippet ? `${title}: ${snippet}` : title,
+          url: entry.url.trim(),
+          sourceStepId,
+        });
+      }
+    }
+
+    const explicitEvidence = output.evidence;
+    if (Array.isArray(explicitEvidence)) {
+      for (const entry of explicitEvidence) {
+        if (!isRecord(entry)) continue;
+        const summary = typeof entry.summary === 'string'
+          ? entry.summary
+          : formatStepOutput(entry);
+        evidence.push({
+          kind: entry.kind === 'search_result' || entry.kind === 'citation' || entry.kind === 'page_excerpt'
+            ? entry.kind
+            : 'structured_output',
+          summary,
+          url: typeof entry.url === 'string' ? entry.url : undefined,
+          sourceStepId,
+        });
+      }
+    }
+  }
+
+  return {
+    citations: dedupeCitations(citations),
+    evidence: dedupeEvidence(evidence),
+  };
+}
+
+function dedupeCitations(citations: PlaybookCitation[]): PlaybookCitation[] {
+  const seen = new Set<string>();
+  const result: PlaybookCitation[] = [];
+  for (const citation of citations) {
+    const signature = `${citation.url}|${citation.title}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    result.push(citation);
+  }
+  return result;
+}
+
+function dedupeEvidence(evidence: PlaybookEvidenceItem[]): PlaybookEvidenceItem[] {
+  const seen = new Set<string>();
+  const result: PlaybookEvidenceItem[] = [];
+  for (const item of evidence) {
+    const signature = `${item.kind}|${item.url ?? ''}|${item.summary}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    result.push(item);
+  }
+  return result;
+}
+
+function hasCitationReferences(
+  output: string,
+  citations: PlaybookCitation[],
+  citationStyle: NonNullable<AssistantConnectorPlaybookStepDefinition['citationStyle']>,
+): boolean {
+  const trimmed = output.trim();
+  if (!trimmed) return false;
+  if (citationStyle === 'inline_markers' && /\[Source\s+\d+\]/i.test(trimmed)) {
+    return true;
+  }
+  if (/^Sources:/im.test(trimmed)) {
+    return true;
+  }
+  return citations.some((citation) => trimmed.includes(citation.url));
 }

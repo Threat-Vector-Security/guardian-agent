@@ -10,9 +10,9 @@ Current runtime hardening also treats content trust and authority as first-class
 
 Conversational automation creation is now compiler-driven. Clear automation requests are turned into a typed `AutomationIR`, repaired and validated, and only then compiled into native Guardian control-plane mutations before the generic chat/tool loop runs. That means "create a Guardian workflow" resolves to `workflow_upsert` / `task_create` instead of drifting into ad hoc scripts or file writes. This compiler-first interception is shared by both the direct runtime path and the brokered worker path, so agent isolation does not change authoring behavior.
 
-Deterministic workflows are also no longer just stored step arrays at execution time. The playbook runtime now compiles them into a graph-backed run model with stable `runId`s, node-level orchestration events, and checkpointed state transitions. This gives Guardian a cleaner foundation for approval interrupts, richer run history, and future replay-safe workflow execution.
+Deterministic workflows are also no longer just stored step arrays at execution time. The playbook runtime now compiles them into a graph-backed run model with stable `runId`s, node-level orchestration events, checkpointed state transitions, and persisted resume context for approval-gated runs. This gives Guardian a cleaner foundation for approval interrupts, richer run history, and replay-safe deterministic resume.
 
-Multi-agent delegation is now contract-bound instead of implicit. Orchestration steps can declare handoff contracts, and runtime dispatch validates those contracts, filters context, preserves taint deliberately, and blocks approval-gated or capability-invalid handoffs before the target agent executes. Scheduled/background execution also keeps a per-task active-run lock so the same automation cannot overlap itself and duplicate side effects.
+Multi-agent delegation is now contract-bound instead of implicit. Orchestration steps can declare handoff contracts, and runtime dispatch validates those contracts, filters context, preserves taint deliberately, and blocks approval-gated or capability-invalid handoffs before the target agent executes. Guardian also ships reusable orchestration recipes for role-separated flows such as `planner -> executor -> validator` and `research -> draft -> verify`. Scheduled/background execution keeps a per-task active-run lock so the same automation cannot overlap itself and duplicate side effects.
 
 Core principles:
 - **Actively protect users from security mistakes** rather than providing opt-in guardrails
@@ -150,7 +150,8 @@ Runtime (src/runtime/runtime.ts)
 ├── Guardian Agent (src/runtime/sentinel.ts) — inline LLM action evaluation (Layer 2)
 ├── Sentinel Audit (src/runtime/sentinel.ts) — retrospective anomaly detection (Layer 4)
 ├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
-│   └── ConditionalAgent (src/agent/conditional.ts) — conditional branching orchestration
+│   ├── ConditionalAgent (src/agent/conditional.ts) — conditional branching orchestration
+│   └── Recipes (src/agent/recipes.ts) — reusable planner/executor/reviewer workflow templates
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
 ├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
@@ -158,7 +159,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws` CLI (legacy)
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types
-│   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
+│   ├── metrics.ts                      — content, trajectory, metadata, workflow, evidence, and safety metrics
 │   └── runner.ts                       — test runner with real Runtime dispatch
 ├── Sentinel (src/agents/sentinel.ts)   — legacy agent (kept for test compat, see src/runtime/sentinel.ts)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking, schedule caps, and budget exhaustion decisions
@@ -271,13 +272,17 @@ await manager.addServer({
   id: 'filesystem', name: 'FS Tools',
   transport: 'stdio',
   command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+  source: 'third_party',
+  startupApproved: true,
+  networkAccess: false,
+  inheritEnv: false,
 });
 
-// Tool names are namespaced: mcp:filesystem:read_file
-const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.txt' });
+// Tool names are namespaced: mcp-filesystem-read_file
+const result = await manager.callTool('mcp-filesystem-read_file', { path: '/a.txt' });
 ```
 
-MCP tools are classified as `network` risk and all calls pass through Guardian. See [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md).
+Third-party MCP servers are conservative by default: startup is blocked until explicitly approved, server metadata is treated as untrusted, parent environment inheritance is off, and network access is off unless the operator opts in. Managed browser MCP remains available through the browser tool path. See [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md).
 
 ## Native Skills Layer
 
@@ -286,6 +291,7 @@ GuardianAgent includes a native skills foundation to package reusable procedural
 Design intent:
 
 - skills influence planning and prompt context
+- routing and orchestration decide which agent runs; skills only shape how that agent plans
 - tools and MCP remain the only execution surfaces
 - Guardian and sandboxing remain the enforcement boundary
 

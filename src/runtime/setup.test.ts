@@ -77,6 +77,7 @@ describe('evaluateSetupStatus', () => {
 
     expect(sandboxStep?.status).toBe('warning');
     expect(sandboxStep?.detail).toContain('Permissive mode is explicitly enabled');
+    expect(sandboxStep?.detail).toContain('stay blocked until you explicitly enable them');
     expect(sandboxStep?.detail).toContain('higher host risk');
   });
 });

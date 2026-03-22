@@ -232,7 +232,7 @@ export class TelegramChannel implements ChannelAdapter {
         const actionId = parts[1]?.toLowerCase();
         const details = parts.slice(2).join(' ').trim();
         if (!actionId || !details) {
-          await this.replyInChunks(ctx, 'Usage: /quick <email|task|calendar> <details>');
+          await this.replyInChunks(ctx, 'Usage: /quick <action> <details>\nBuilt-in actions: email, task, calendar, security');
           return;
         }
 
@@ -421,7 +421,7 @@ export class TelegramChannel implements ChannelAdapter {
       '/help - Show this help',
       '/guide - Open reference guide',
       '/reset [agentId] - Reset conversation memory',
-      '/quick <action> <details> - Run quick action (email/task/calendar)',
+      '/quick <action> <details> - Run quick action (email, task, calendar, security)',
       '/approve [approvalId ...] - Approve pending tool action(s)',
       '/deny [approvalId ...] - Deny pending tool action(s)',
       '/intel [status|scan|findings] - Threat intel status + quick scan',

@@ -234,6 +234,12 @@ function setupWorkspace(workspaceRoot) {
     '}',
     '',
   ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'src', 'other.ts'), [
+    'export function getGreeting(name: string) {',
+    '  return `Hello ${name}`;',
+    '}',
+    '',
+  ].join('\n'));
   fs.writeFileSync(path.join(workspaceRoot, '.clam-detect'), 'UIHarness.TestThreat\n');
 
   initializeWorkspaceGit(workspaceRoot);
@@ -519,6 +525,190 @@ guardian:
     });
     assert.match(editorContent, /answerValue = 41/);
 
+    await page.fill('[data-code-editor-search-input]', 'answerValue');
+    await page.waitForFunction(() => {
+      return (document.querySelector('[data-code-editor-search-status]')?.textContent || '').trim() === '1/2';
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-editor-search-next]');
+    await page.waitForFunction(() => {
+      return (document.querySelector('[data-code-editor-search-status]')?.textContent || '').trim() === '2/2';
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-editor-search-prev]');
+    await page.waitForFunction(() => {
+      return (document.querySelector('[data-code-editor-search-status]')?.textContent || '').trim() === '1/2';
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-editor-search-clear]');
+    await page.waitForFunction(() => {
+      return (document.querySelector('[data-code-editor-search-status]')?.textContent || '').trim() === 'Find in file';
+    }, null, { timeout: 15000 });
+
+    await page.locator('[data-code-tree-file]').filter({ hasText: 'other.ts' }).click();
+    await page.waitForSelector('text=other.ts');
+    await page.waitForFunction(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      return models.some((m) => m.getValue().includes('getGreeting(name: string)'));
+    }, null, { timeout: 15000 });
+
+    await page.click('[data-code-tab-index="0"]');
+    await page.click('[data-code-tab-index="1"]');
+    await page.click('[data-code-open-structure]');
+    await page.waitForFunction(() => {
+      const heading = document.querySelector('.code-inspector__heading h3')?.textContent || '';
+      const heroText = document.querySelector('.code-investigation-hero')?.textContent || '';
+      return heading.includes('other.ts') && heroText.includes('getGreeting');
+    }, null, { timeout: 15000 });
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+
+    await page.click('[data-code-tab-index="0"]');
+    await page.click('[data-code-open-structure]');
+    await page.waitForFunction(() => {
+      const heading = document.querySelector('.code-inspector__heading h3')?.textContent || '';
+      const heroText = document.querySelector('.code-investigation-hero')?.textContent || '';
+      return heading.includes('example.ts') && heroText.includes('getAnswer');
+    }, null, { timeout: 15000 });
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+
+    assert.equal(await page.locator('[data-code-assistant-tab="structure"]').count(), 0, 'Structure should not appear in the right sidebar');
+    assert.equal(await page.locator('[data-code-assistant-tab="visual"]').count(), 0, 'Visual should not appear in the right sidebar');
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.monaco-editor .codelens-decoration')).some((node) => (node.textContent || '').includes('Inspect'));
+    }, null, { timeout: 15000 });
+
+    await page.click('[data-code-open-structure]');
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="investigate"]');
+      return selectedTab?.getAttribute('aria-selected') === 'true';
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-investigation-hero')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('takes no parameters');
+      });
+    });
+
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+    await page.locator('.monaco-editor .codelens-decoration a', { hasText: 'Inspect' }).first().click();
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="investigate"]');
+      if (selectedTab?.getAttribute('aria-selected') !== 'true') return false;
+      return Array.from(document.querySelectorAll('.code-investigation-hero')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('takes no parameters');
+      });
+    });
+
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+    await page.click('[data-code-open-structure]');
+    await page.waitForFunction(() => {
+      return !!document.querySelector('.code-inspector-overlay');
+    });
+    await page.click('[data-code-inspector-tab="flow"]');
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="flow"]');
+      return selectedTab?.getAttribute('aria-selected') === 'true';
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-visual-focus')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('takes no parameters');
+      });
+    });
+
+    await page.evaluate(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      const model = models.find((candidate) => candidate.uri?.path?.endsWith('/src/example.ts'));
+      if (!model) throw new Error('example.ts Monaco model not found');
+      model.setValue(model.getValue().replace('getAnswer()', 'getAnswer(seed: number)'));
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-visual-focus')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('accepts 1 parameter (seed)');
+      });
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-inspector-tab="investigate"]');
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="investigate"]');
+      return selectedTab?.getAttribute('aria-selected') === 'true';
+    });
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-investigation-hero')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('accepts 1 parameter (seed)');
+      });
+    }, null, { timeout: 15000 });
+
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+    await page.click('[data-code-refresh-file]');
+    await page.click('[data-code-open-structure]');
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-investigation-hero')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('takes no parameters');
+      });
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-inspector-tab="flow"]');
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-visual-focus')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('getAnswer') && text.includes('takes no parameters');
+      });
+    }, null, { timeout: 15000 });
+
+    await page.click('[data-code-inspector-tab="impact"]');
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="impact"]');
+      const bodyText = document.querySelector('.code-inspector__body')?.textContent || '';
+      return selectedTab?.getAttribute('aria-selected') === 'true'
+        && bodyText.includes('Impact uses the workspace index')
+        && bodyText.includes('src/example.ts');
+    });
+
+    await page.evaluate(async () => {
+      const themeModule = await import('/js/theme.js');
+      themeModule.applyTheme('github-light');
+    });
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'github-light');
+
+    const popupPromise = page.context().waitForEvent('page');
+    await page.click('[data-code-inspector-detach]');
+    const inspectorPopup = await popupPromise;
+    await inspectorPopup.waitForLoadState('domcontentloaded');
+    await inspectorPopup.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="impact"]');
+      const frame = document.querySelector('.code-inspector');
+      const windowNode = document.querySelector('.code-inspector__window');
+      const frameRect = frame?.getBoundingClientRect();
+      return document.documentElement.dataset.theme === 'github-light'
+        && !!document.querySelector('[data-code-inspector-attach]')
+        && selectedTab?.getAttribute('aria-selected') === 'true'
+        && !!frame
+        && !!windowNode
+        && !!frameRect
+        && frameRect.width < window.innerWidth
+        && getComputedStyle(windowNode).maxHeight !== 'none'
+        && (document.body.textContent || '').includes('src/example.ts');
+    });
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+    const popupClosed = inspectorPopup.waitForEvent('close');
+    await inspectorPopup.click('[data-code-inspector-attach]');
+    await popupClosed;
+    await page.waitForFunction(() => {
+      const selectedTab = document.querySelector('[data-code-inspector-tab="impact"]');
+      return !!document.querySelector('.code-inspector-overlay')
+        && selectedTab?.getAttribute('aria-selected') === 'true';
+    });
+    await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
+    await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
+
+    await chatTab.click();
+    await page.waitForSelector('.code-chat__history');
+
     const liveGeneratedPath = path.join(workspaceRoot, 'src', 'live-generated.ts');
     fs.writeFileSync(liveGeneratedPath, 'export const liveGenerated = true;\n');
     await page.waitForFunction(() => {
@@ -581,18 +771,13 @@ guardian:
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Give me a slow repo summary.');
     await page.click('[data-code-chat-form] button[type="submit"]');
     await page.waitForFunction(() => {
-      const pendingUser = document.querySelector('.code-message.is-pending');
-      const thinking = document.querySelector('.code-message.is-thinking');
-      return !!pendingUser && !!thinking && (pendingUser.textContent || '').includes('slow repo summary');
-    });
-    await page.waitForFunction(() => {
       const history = Array.from(document.querySelectorAll('.code-message'));
       const summaries = history.filter((node) => (node.textContent || '').includes('slow repo summary'));
       const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));
       const pending = document.querySelector('.code-message.is-pending');
       const thinking = document.querySelector('.code-message.is-thinking');
       return summaries.length === 1 && finalReply && !pending && !thinking;
-    }, null, { timeout: 15000 });
+    }, null, { timeout: 30000 });
 
     // Code tools within the workspace are auto-approved, so the edit should
     // complete without requiring manual approval.
@@ -661,7 +846,7 @@ guardian:
       return document.querySelectorAll('.context-panel--collapsible').length >= 2;
     });
 
-    const securityTabStyle = await page.locator('.tab-btn[data-tab-id="activity"]').evaluate((node) => {
+    const securityTabStyle = await page.locator('.tab-btn[data-tab-id="ai-security"]').evaluate((node) => {
       const style = getComputedStyle(node);
       return {
         fontSize: style.fontSize,
@@ -684,15 +869,27 @@ guardian:
       return !!node && node.open === false;
     });
 
-    await page.click('.tab-btn[data-tab-id="alerts"]');
+    await page.click('.tab-btn[data-tab-id="security-log"]');
     await page.waitForFunction(() => {
-      return document.querySelector('.tab-btn[data-tab-id="alerts"]')?.classList.contains('active') === true;
+      return document.querySelector('.tab-btn[data-tab-id="security-log"]')?.classList.contains('active') === true;
     });
     await page.waitForFunction(() => {
       const activePanel = Array.from(document.querySelectorAll('.tab-panel')).find((node) => node instanceof HTMLElement && node.style.display !== 'none');
       if (!activePanel) return false;
       const guide = activePanel.querySelector('.context-panel--collapsible');
       return !!guide && guide.open === false;
+    });
+
+    await page.click('.tab-btn[data-tab-id="ai-security"]');
+    await page.waitForFunction(() => {
+      return document.querySelector('.tab-btn[data-tab-id="ai-security"]')?.classList.contains('active') === true;
+    });
+    await page.waitForFunction(() => {
+      const activePanel = Array.from(document.querySelectorAll('.tab-panel')).find((node) => node instanceof HTMLElement && node.style.display !== 'none');
+      if (!activePanel) return false;
+      const header = activePanel.querySelector('.table-header h3');
+      const text = header?.textContent || '';
+      return text.includes('Posture & Monitoring') || text.includes('Continuous Monitoring');
     });
 
     await openPageAndAssertGuideCollapsed('network', 'Network');

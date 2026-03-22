@@ -212,6 +212,27 @@ async function waitForJob(baseUrl, token, predicate, timeoutMs = 10_000) {
   throw new Error('Timed out waiting for matching job.');
 }
 
+async function waitForMemorySearch(baseUrl, token, query, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
+      toolName: 'memory_search',
+      agentId: 'default',
+      userId: 'harness',
+      args: {
+        query,
+        scope: 'persistent',
+        limit: 5,
+      },
+    });
+    if (/concise status updates|preference/i.test(JSON.stringify(result ?? {}))) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error('Timed out waiting for remembered preference to appear in persistent memory search.');
+}
+
 async function approveAndWait(baseUrl, token, approvalId, toolName) {
   const approval = await requestJson(baseUrl, token, 'POST', '/api/tools/approvals/decision', {
     approvalId,
@@ -296,12 +317,9 @@ guardian:
       content: 'remember that I prefer concise status updates',
     });
     assert.match(String(rememberedViaChat?.content ?? ''), /stored|concise status updates|preference/i);
-    const rememberedJob = await waitForJob(
-      baseUrl,
-      token,
-      (job) => job.toolName === 'memory_save' && job.status === 'succeeded',
-    );
-    assert.equal(rememberedJob.approvalId, undefined);
+    const pendingApprovals = await requestJson(baseUrl, token, 'GET', '/api/tools/approvals/pending?userId=harness&channel=web&limit=20');
+    assert.equal(Array.isArray(pendingApprovals) ? pendingApprovals.some((approval) => approval.toolName === 'memory_save') : false, false);
+    await waitForMemorySearch(baseUrl, token, 'concise status updates');
 
     const quarantinedWrite = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
       toolName: 'fs_write',

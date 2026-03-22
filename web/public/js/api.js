@@ -25,6 +25,28 @@ export function hasToken() {
 /** Whether we have an active HttpOnly session cookie (server-side token custody). */
 let cookieSessionActive = false;
 
+async function readErrorBody(res) {
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    return res.json().catch(() => ({ error: res.statusText }));
+  }
+  const text = await res.text().catch(() => '');
+  return { error: text || res.statusText };
+}
+
+function isAuthFailureResponse(status, body) {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  const errorText = typeof body?.error === 'string' ? body.error.trim() : '';
+  const errorCode = typeof body?.errorCode === 'string' ? body.errorCode.trim().toUpperCase() : '';
+  if (errorCode === 'AUTH_FAILED' || errorCode === 'AUTH_REQUIRED' || errorCode === 'AUTH_INVALID_TOKEN') {
+    return true;
+  }
+  return errorText === 'Invalid token'
+    || errorText === 'Authentication required'
+    || errorText.startsWith('Authentication required.');
+}
+
 async function request(path, options = {}) {
   const token = getToken();
   const headers = { ...options.headers };
@@ -37,12 +59,16 @@ async function request(path, options = {}) {
 
   const res = await fetch(path, { ...options, headers, credentials: 'same-origin' });
 
-  if (res.status === 401 || res.status === 403) {
-    throw new Error('AUTH_FAILED');
-  }
-
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
+    const body = await readErrorBody(res);
+    if (isAuthFailureResponse(res.status, body)) {
+      const error = new Error('AUTH_FAILED');
+      error.status = res.status;
+      if (typeof body.errorCode === 'string' && body.errorCode.trim()) {
+        error.code = body.errorCode.trim();
+      }
+      throw error;
+    }
     const error = new Error(body.error || `HTTP ${res.status}`);
     error.status = res.status;
     if (typeof body.errorCode === 'string' && body.errorCode.trim()) {
@@ -153,6 +179,19 @@ export const api = {
   budget:       () => request('/api/budget'),
   watchdog:     () => request('/api/watchdog'),
   analyticsSummary: (windowMs = 3600000) => request(`/api/analytics/summary?windowMs=${windowMs}`),
+  aiSecuritySummary: () => request('/api/security/ai/summary'),
+  aiSecurityProfiles: () => request('/api/security/ai/profiles'),
+  aiSecurityTargets: () => request('/api/security/ai/targets'),
+  aiSecurityRuns: (limit = 20) => request(`/api/security/ai/runs?limit=${limit}`),
+  aiSecurityScan: (payload = {}) => request('/api/security/ai/scan', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  aiSecurityFindings: (params = {}) => request(`/api/security/ai/findings${buildQueryString(params)}`),
+  aiSecuritySetFindingStatus: (findingId, status) => request('/api/security/ai/findings/status', {
+    method: 'POST',
+    body: JSON.stringify({ findingId, status }),
+  }),
   threatIntelSummary: () => request('/api/threat-intel/summary'),
   threatIntelPlan: () => request('/api/threat-intel/plan'),
   threatIntelWatchlist: () => request('/api/threat-intel/watchlist'),
@@ -510,6 +549,20 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   codeSessionResetConversation: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/reset`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionStructure: (sessionId, params = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        query.set(key, String(value));
+      }
+    });
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return request(`/api/code/sessions/${encodeURIComponent(sessionId)}/structure${suffix}`);
+  },
+  codeSessionStructurePreview: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/structure-preview`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }),

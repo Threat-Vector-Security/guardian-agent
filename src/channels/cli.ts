@@ -463,10 +463,11 @@ const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
     title: '/quick',
     summary: 'Run a quick action workflow without writing a long prompt.',
     usage: [
-      '/quick <email|task|calendar> <details>',
+      '/quick <action> <details>',
     ],
     examples: [
       '/quick task Draft the follow-up checklist for the outage review',
+      '/quick security Review the current runtime and workspace for MCP and sandbox exposure',
     ],
   },
   {
@@ -1291,7 +1292,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /reset [agentId]                       Reset conversation memory\n');
     this.write('  /factory-reset data|config|all         ' + this.red('Factory reset (data/config/all)') + '\n');
     this.write('  /session [list|use|new] ...            Session controls\n');
-    this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
+    this.write('  /quick <action> <details>              Run quick action workflow\n');
     this.write('  /analytics [minutes]                   Interaction analytics summary\n');
     this.write('  /guide                                 Show reference guide\n');
     this.write('  /version                               Show version\n');
@@ -3855,7 +3856,8 @@ export class CLIChannel implements ChannelAdapter {
     }
 
     if (args.length < 2) {
-      this.write('\nUsage: /quick <email|task|calendar> <details>\n\n');
+      this.write('\nUsage: /quick <action> <details>\n');
+      this.write('Built-in actions: email, task, calendar, security\n\n');
       return;
     }
 

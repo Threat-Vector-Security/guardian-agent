@@ -273,6 +273,16 @@ This metadata is intended for diagnostics and UI surfaces rather than mandatory 
 
 Skill enable/disable persists back to `assistant.skills.disabledSkills` in `config.yaml`.
 
+### Skills vs Agent Roles
+
+Skills and agent roles are intentionally separate:
+
+- orchestration or routing decides *which* agent runs, for example planner, researcher, writer, reviewer, or validator
+- skills shape *how* that agent plans, what references it reads, and what procedural guidance it follows
+- a skill does not create a researcher/reviewer agent, add new tool authority, or bypass Guardian controls
+
+In practice, a researcher agent may activate a research-oriented skill for one request, but execution authority still comes from the runtime, tool registry, approvals, and sandboxing.
+
 ---
 
 ## Relationship to MCP

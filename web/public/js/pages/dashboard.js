@@ -115,7 +115,7 @@ export async function renderDashboard(container) {
       summary ? `${criticalCount} critical / ${warnCount} warn in last 5m` : 'No recent audit summary',
       criticalCount > 0 ? 'error' : totalActiveAlerts > 0 ? 'warning' : 'success',
     );
-    setCardTooltip(cards.alerts, 'Count of current warning and critical security events. Opens Security > Alerts.');
+    setCardTooltip(cards.alerts, 'Count of current warning and critical security events. Opens Security > Security Log.');
     cards.llm = createStatusCard(
       'Primary Provider',
       primaryProvider ? (primaryProvider.connected !== false ? 'Connected' : 'Disconnected') : 'None',
@@ -140,7 +140,7 @@ export async function renderDashboard(container) {
     );
     setCardTooltip(cards.agents, 'High-level agent count and availability. Opens Automations.');
 
-    bindCard(cards.alerts, '#/security?tab=alerts');
+    bindCard(cards.alerts, '#/security?tab=security-log');
     bindCard(cards.llm, '#/config?tab=ai-search');
     bindCard(cards.readiness, '#/config?tab=system');
     bindCard(cards.agents, '#/automations');
@@ -173,13 +173,13 @@ export async function renderDashboard(container) {
       'Needs Attention': {
         whatItIs: 'This section is the short-form attention queue for the most recent warning and critical events that may need operator review.',
         whatSeeing: 'You are seeing a mixed feed of recent high-severity items pulled from audit, monitoring, and automation activity, including their source and short detail text.',
-        whatCanDo: 'Use it to spot what is hot right now, then open Security > Alerts when you need acknowledgement, triage, or a fuller incident view.',
+        whatCanDo: 'Use it to spot what is hot right now, then open Security > Security Log when you need acknowledgement, triage, or a fuller incident view.',
         howLinks: 'It is a dashboard preview of urgent activity. The actual incident queue and acknowledgement workflow remain in Security.',
       },
       'Agent Runtime': {
         whatItIs: 'This section summarizes whether the agent layer and job system are healthy enough to keep up with work.',
         whatSeeing: 'You are seeing compact metrics for orchestrator load, queued or recent jobs, and shortcut links into the pages that own the underlying runtime detail.',
-        whatCanDo: 'Use it to determine whether Guardian is falling behind, stuck, or healthy, then jump into Automations, Audit, Cloud, or Configuration for the relevant fix.',
+        whatCanDo: 'Use it to determine whether Guardian is falling behind, stuck, or healthy, then jump into Automations, Security Log, Cloud, or Configuration for the relevant fix.',
         howLinks: 'It is a runtime summary and navigation surface, not a replacement for the deeper operational tables on the owner pages.',
       },
       'Quick Links': {
@@ -223,7 +223,7 @@ function createAttentionSection(items) {
   section.innerHTML = `
     <div class="table-header">
       <h3>Needs Attention</h3>
-      <a class="btn btn-secondary btn-sm" href="#/security?tab=alerts">Open Alerts</a>
+      <a class="btn btn-secondary btn-sm" href="#/security?tab=security-log">Open Security Log</a>
     </div>
     <table>
       <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Source</th><th>Detail</th></tr></thead>
@@ -277,7 +277,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summar
       <thead><tr><th>Area</th><th>Summary</th><th>Destination</th></tr></thead>
       <tbody>
         <tr><td>Agents</td><td>${agents.length} total • ${agents.filter((agent) => agent.state === 'running').length} running • ${agents.filter((agent) => agent.state === 'idle').length} idle</td><td><a href="#/automations">Open Automations</a></td></tr>
-        <tr><td>Security</td><td>${summary ? summary.totalEvents : 0} audit events in the last 5 minutes</td><td><a href="#/security?tab=audit">Open Audit</a></td></tr>
+        <tr><td>Security</td><td>${summary ? summary.totalEvents : 0} audit events in the last 5 minutes</td><td><a href="#/security?tab=security-log">Open Security Log</a></td></tr>
         <tr><td>Cloud</td><td>Connections, activity, and cloud automations live in the dedicated Cloud hub</td><td><a href="#/cloud">Open Cloud</a></td></tr>
         <tr><td>Configuration</td><td>Provider setup, integrations, system policy, and appearance live in Config</td><td><a href="#/config">Open Config</a></td></tr>
       </tbody>
@@ -324,7 +324,7 @@ function createQuickLinksSection() {
   section.innerHTML = `
     <div class="table-header"><h3>Quick Links</h3></div>
     <div class="cards-grid" style="padding:1rem;">
-      ${renderQuickLink('Security Alerts', 'Unified alert queue and triage', '#/security?tab=alerts', 'warning', 'Open Security > Alerts for triage, acknowledgement, and source filtering.')}
+      ${renderQuickLink('Security Log', 'Unified alert queue, triage, and audit evidence', '#/security?tab=security-log', 'warning', 'Open Security > Security Log for triage, acknowledgement, source filtering, and audit review.')}
       ${renderQuickLink('Cloud Hub', 'Connections, activity, and cloud-focused automations', '#/cloud', 'info', 'Open Cloud for provider connections, activity, and cloud automation entry points.')}
       ${renderQuickLink('Automations', 'Workflows, schedules, runs, and output routing', '#/automations', 'accent', 'Open Automations for workflow editing, scheduling, run history, and output routing.')}
       ${renderQuickLink('AI & Search', 'Provider setup, embeddings, and retrieval settings', '#/config?tab=ai-search', 'success', 'Open Configuration > AI & Search for provider, search, and retrieval setup.')}

@@ -7,7 +7,14 @@
 
 import { DEFAULT_PII_ENTITIES, type PiiEntityType, type PiiRedactionMode } from '../guardian/pii-scanner.js';
 import type { ToolCategory, ToolRisk } from '../tools/types.js';
-import type { DeploymentProfile, SecurityOperatingMode, SecurityTriageLlmProvider } from '../runtime/security-controls.js';
+import type {
+  AssistantSecurityAutoContainmentCategory,
+  AssistantSecurityAutoContainmentSeverity,
+  AssistantSecurityMonitoringProfile,
+  DeploymentProfile,
+  SecurityOperatingMode,
+  SecurityTriageLlmProvider,
+} from '../runtime/security-controls.js';
 
 /** Top-level configuration. */
 export interface GuardianAgentConfig {
@@ -517,7 +524,7 @@ export type AutomationArtifactPersistenceMode = 'run_history_only' | 'run_histor
 export interface AutomationOutputHandlingConfig {
   /** Whether normalized findings should trigger operator notifications. */
   notify: AutomationOutputRoutingMode;
-  /** Whether normalized findings should appear in Security > Alerts. */
+  /** Whether normalized findings should appear in Security > Security Log. */
   sendToSecurity: AutomationOutputRoutingMode;
   /** Where artifacts should be persisted. */
   persistArtifacts: AutomationArtifactPersistenceMode;
@@ -765,6 +772,10 @@ export interface AssistantConnectorPlaybookStepDefinition {
   args?: Record<string, unknown>;
   /** Natural language prompt for the LLM (required for instruction steps). Prior step outputs injected as context. */
   instruction?: string;
+  /** Evidence grounding mode for instruction steps. `grounded` asks for citations, `strict` fails when evidence is missing or uncited. */
+  evidenceMode?: 'none' | 'grounded' | 'strict';
+  /** Citation style for evidence-grounded instruction steps. */
+  citationStyle?: 'sources_list' | 'inline_markers';
   /** LLM provider override for instruction steps (e.g. 'anthropic', 'ollama'). Falls back to default. */
   llmProvider?: string;
   /** Max tokens for the LLM response in instruction steps. Default: 2048. */
@@ -839,7 +850,15 @@ export interface MCPServerEntry {
   cwd?: string;
   /** Request timeout in milliseconds (default: 30000). */
   timeoutMs?: number;
-  /** Optional trust-level override for all tools exposed by this server. */
+  /** Explicit operator approval required before third-party MCP server startup. */
+  startupApproved?: boolean;
+  /** Allow outbound network access for this MCP server process. Default: false. */
+  networkAccess?: boolean;
+  /** Inherit the parent process environment. Default: false for hardened MCP startup. */
+  inheritEnv?: boolean;
+  /** Additional environment variable names to inherit from the parent process. */
+  allowedEnvKeys?: string[];
+  /** Optional minimum risk floor for all tools exposed by this server. Never lowers inferred risk. */
   trustLevel?: ToolRisk;
   /** Optional per-server call rate limit. */
   maxCallsPerMinute?: number;
@@ -1222,6 +1241,28 @@ export interface AssistantToolsConfig {
 }
 
 /** Personal assistant feature configuration. */
+export interface AssistantSecurityContinuousMonitoringConfig {
+  /** Whether the managed Assistant Security schedule should remain active. */
+  enabled: boolean;
+  /** Built-in Assistant Security profile to run on the managed schedule. */
+  profileId: AssistantSecurityMonitoringProfile;
+  /** Cron cadence for the managed Assistant Security scan task. */
+  cron: string;
+}
+
+/** Automatic containment tuning for high-confidence Assistant Security findings. */
+export interface AssistantSecurityAutoContainmentConfig {
+  /** Whether matching Assistant Security findings can temporarily tighten containment. */
+  enabled: boolean;
+  /** Minimum finding severity required before a match counts toward auto-containment. */
+  minSeverity: AssistantSecurityAutoContainmentSeverity;
+  /** Minimum finding confidence required before a match counts toward auto-containment. */
+  minConfidence: number;
+  /** Finding categories that are allowed to influence containment automatically. */
+  categories: AssistantSecurityAutoContainmentCategory[];
+}
+
+/** Personal assistant feature configuration. */
 export interface AssistantSecurityConfig {
   /** Deployment profile used to choose environment defaults. */
   deploymentProfile: DeploymentProfile;
@@ -1229,6 +1270,10 @@ export interface AssistantSecurityConfig {
   operatingMode: SecurityOperatingMode;
   /** LLM provider mode for the dedicated agentic security triage loop. */
   triageLlmProvider: SecurityTriageLlmProvider;
+  /** Managed continuous Assistant Security monitoring settings. */
+  continuousMonitoring: AssistantSecurityContinuousMonitoringConfig;
+  /** Conservative auto-containment rules for Assistant Security findings. */
+  autoContainment: AssistantSecurityAutoContainmentConfig;
 }
 
 /** Personal assistant feature configuration. */
@@ -1444,12 +1489,27 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'policy_changed',
         'policy_mode_changed',
         'policy_shadow_mismatch',
-        'automation_finding',
         'auth_failure',
         'agent_error',
         'agent_stalled',
       ],
-      suppressedDetailTypes: ['new_external_destination'],
+      suppressedDetailTypes: [
+        'new_external_destination',
+        'new_listening_port',
+        'sensitive_path_change',
+        'firewall_change',
+        'defender_controlled_folder_access_disabled',
+        'degraded_backend_manual_terminals_disabled',
+        'strict_sandbox_lockdown',
+        'restrict_browser_mutation',
+        'pause_scheduled_mutations',
+        'restrict_outbound_mutation',
+        'restrict_command_execution',
+        'restrict_network_egress',
+        'restrict_mcp_tooling',
+        'freeze_mutating_tools',
+        'ir_assist_read_only',
+      ],
       cooldownMs: 60_000,
       deliveryMode: 'selected',
       destinations: {
@@ -1464,12 +1524,24 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         email: 'Draft a concise, professional email based on these details:\n{details}\n\nInclude: subject, greeting, body, and sign-off.',
         task: 'Turn this into a clear prioritized task list with owner/time suggestions:\n{details}',
         calendar: 'Create a calendar-ready event plan from these details:\n{details}\n\nInclude: title, agenda, time estimate, and follow-ups.',
+        security: 'Run an Assistant Security review using the built-in `assistant_security_scan` tool. Use the `quick` profile unless these details clearly call for `runtime-hardening` or `workspace-boundaries`. If the user names a specific workspace target, include that target when you scan.\n\nAfter running the scan, summarize the highest-risk findings, whether anything was promoted into Security Log, and the next actions.\n\nDetails:\n{details}',
       },
     },
     security: {
       deploymentProfile: 'personal',
       operatingMode: 'monitor',
       triageLlmProvider: 'auto',
+      continuousMonitoring: {
+        enabled: true,
+        profileId: 'quick',
+        cron: '15 */12 * * *',
+      },
+      autoContainment: {
+        enabled: true,
+        minSeverity: 'high',
+        minConfidence: 0.95,
+        categories: ['sandbox', 'trust_boundary', 'mcp'],
+      },
     },
     threatIntel: {
       enabled: true,
@@ -1633,10 +1705,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         azureProfiles: [],
       },
       agentPolicyUpdates: {
-        allowedPaths: true,
+        allowedPaths: false,
         allowedCommands: false,
-        allowedDomains: true,
-        toolPolicies: true,
+        allowedDomains: false,
+        toolPolicies: false,
       },
       deferredLoading: {
         enabled: true,
@@ -1656,6 +1728,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         networkAccess: false,
         additionalWritePaths: [],
         additionalReadPaths: [],
+        degradedFallback: {
+          allowNetworkTools: false,
+          allowBrowserTools: false,
+          allowMcpServers: false,
+          allowPackageManagers: false,
+          allowManualCodeTerminals: false,
+        },
         resourceLimits: {
           maxMemoryMb: 512,
           maxCpuSeconds: 60,

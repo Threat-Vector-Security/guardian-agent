@@ -172,6 +172,18 @@ const CONFIG_HELP = {
       whatCanDo: 'Tune how aggressively Guardian reviews actions, what model path performs those reviews, and what should happen if the evaluator is unavailable.',
       howLinks: 'This directly affects pre-execution safety checks for tools, approvals, and autonomous workflows.',
     },
+    'Assistant Security Monitoring': {
+      whatItIs: 'This section owns the managed background schedule for Assistant Security posture reviews.',
+      whatSeeing: 'You are seeing whether the built-in scan stays enabled, which profile it runs, and the cron cadence used by the managed scheduler task.',
+      whatCanDo: 'Keep recurring posture reviews on, slow them down, tighten the profile, or disable the managed scan entirely when you only want manual runs.',
+      howLinks: 'This drives the read-only continuous-monitoring status shown in Security > Assistant Security and keeps the built-in schedule aligned with config.',
+    },
+    'Automatic Containment': {
+      whatItIs: 'This section controls whether high-confidence Assistant Security findings may temporarily tighten runtime controls automatically.',
+      whatSeeing: 'You are seeing the severity threshold, confidence floor, and allowed finding categories that can influence temporary guarded controls.',
+      whatCanDo: 'Keep containment conservative to avoid false positives, or widen it deliberately when you want Assistant Security to clamp risky surfaces sooner.',
+      howLinks: 'These settings do not replace Guardian inline checks; they let recurring posture findings feed the same containment system used by the rest of Security.',
+    },
     'Policy-as-Code Engine': {
       whatItIs: 'This section controls the rule-based policy engine that can enforce or shadow-test declarative rules alongside the rest of the runtime.',
       whatSeeing: 'You are seeing engine enablement, enforcement mode, per-family overrides, and shadow-run statistics.',
@@ -218,8 +230,8 @@ export async function renderConfig(container, options = {}) {
       ${renderGuidancePanel({
         kicker: 'Configuration Guide',
         title: 'Product setup and policy ownership',
-        whatItIs: 'Configuration is the home for product setup, tool policy, integrations, system controls, and appearance.',
-        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, tools, policy, integration-system controls, and visual preferences.',
+        whatItIs: 'Configuration is the home for product setup, tool policy, security controls, integrations, system controls, and appearance.',
+        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, live tool operations, security boundaries, integration-system controls, and visual preferences.',
         whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
         howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
       })}
@@ -229,7 +241,7 @@ export async function renderConfig(container, options = {}) {
       { id: 'ai-providers', label: 'AI Providers', render: renderAiProvidersTab },
       { id: 'search-providers', label: 'Search Providers', render: renderSearchProvidersTab },
       { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
-      { id: 'policy', label: 'Policy', render: renderPolicyOnlyTab },
+      { id: 'security', label: 'Security', render: renderSecurityTab },
       { id: 'integration-system', label: 'Integration System', render: renderIntegrationSystemTab },
       { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
     ], normalizeConfigTab(options?.tab));
@@ -250,7 +262,8 @@ function normalizeConfigTab(tab) {
   if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
   if (tab === 'search-sources') return 'search-providers';
   if (tab === 'tools-policy') return 'tools';
-  if (tab === 'integrations' || tab === 'system' || tab === 'settings' || tab === 'cloud') return 'integration-system';
+  if (tab === 'policy' || tab === 'settings') return 'security';
+  if (tab === 'integrations' || tab === 'system' || tab === 'cloud') return 'integration-system';
   return tab;
 }
 
@@ -266,7 +279,7 @@ function renderAiProvidersTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'AI Providers',
     compact: true,
-    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing.',
+    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama profiles and hosted provider APIs.',
     whatSeeing: 'You are seeing provider editors, configured provider status, and shared credential-reference management.',
     whatCanDo: 'Add local or hosted providers, test connectivity, choose models, and manage the credential refs those providers can use.',
     howLinks: 'These provider profiles drive the model paths used across the rest of the product.',
@@ -297,7 +310,7 @@ function renderSearchProvidersTab(panel) {
     whatItIs: 'This tab configures external search behavior, model fallback for search-heavy work, and document retrieval sources.',
     whatSeeing: 'You are seeing search-provider controls, fallback settings, and document-source management.',
     whatCanDo: 'Tune web search behavior, configure search credentials, and manage indexed sources for retrieval-backed answers.',
-    howLinks: 'These settings shape research, retrieval, and grounded-answer behavior across chat and automations.',
+    howLinks: 'These settings shape research, retrieval, and grounded-answer behavior across chat and automations. LLM provider details such as Ollama and hosted model profiles stay in AI Providers.',
   }));
 
   panel.appendChild(createWebSearchPanel(sharedConfig, panel));
@@ -336,34 +349,40 @@ function renderToolsOnlyTab(panel) {
   void renderToolsTab(toolsPanel);
 }
 
-function renderPolicyOnlyTab(panel) {
+function renderSecurityTab(panel) {
   panel.innerHTML = '';
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
-    kicker: 'Policy',
+    kicker: 'Security',
     compact: true,
-    whatItIs: 'This tab contains the policy and enforcement surfaces that constrain what Guardian and its tools are allowed to do.',
-    whatSeeing: 'You are seeing sandbox mode, allowlists, Guardian evaluation, policy-engine controls, and trust posture settings.',
-    whatCanDo: 'Adjust boundaries, enforcement layers, and approval-related policy without mixing them into the live tools catalog.',
-    howLinks: 'These controls decide whether requested actions are allowed, blocked, or routed into approval.',
+    whatItIs: 'This tab consolidates sandbox enforcement, degraded-backend risk overrides, assistant policy-widening gates, browser security, Assistant Security monitoring and containment, allowlists, trust posture, and alert delivery.',
+    whatSeeing: 'You are seeing sandbox mode, degraded-backend opt-ins, assistant policy access gates, browser automation controls, managed Assistant Security scans, containment thresholds, allowlists, Guardian evaluation, policy-engine controls, trust posture, and security alert delivery.',
+    whatCanDo: 'Tighten host boundaries by default, keep the built-in monitoring visible and conservative, then selectively re-enable higher-risk features only when you explicitly accept the tradeoff.',
+    howLinks: 'These settings decide how much real host, network, browser, MCP, and policy surface Guardian can touch and how quickly recurring security findings can tighten controls.',
   }));
 
   panel.appendChild(createSandboxPanel(sharedConfig));
+  panel.appendChild(createBrowserPanel(sharedConfig, panel));
   const policyPanel = document.createElement('div');
   panel.appendChild(policyPanel);
   void renderPolicyTab(policyPanel);
   panel.appendChild(createGuardianAgentPanel());
+  panel.appendChild(createAssistantSecurityMonitoringPanel(sharedConfig));
+  panel.appendChild(createAssistantSecurityAutoContainmentPanel(sharedConfig));
   panel.appendChild(createPolicyEnginePanel());
   panel.appendChild(createTrustPresetPanel(sharedConfig));
+  panel.appendChild(createNotificationsPanel(sharedConfig, panel));
+  panel.appendChild(createSentinelAuditPanel());
 
   applyInputTooltips(panel);
   enhanceSectionHelp(
     panel,
     {
       ...pickHelpSections(CONFIG_HELP.toolsPolicy, ['Allowed Paths', 'Allowed Commands', 'Allowed Domains']),
-      ...pickHelpSections(CONFIG_HELP.system, ['Guardian Agent', 'Policy-as-Code Engine', 'Trust Preset']),
+      ...pickHelpSections(CONFIG_HELP.integrations, ['Browser Automation']),
+      ...pickHelpSections(CONFIG_HELP.system, ['Guardian Agent', 'Assistant Security Monitoring', 'Automatic Containment', 'Policy-as-Code Engine', 'Trust Preset', 'Security Alerts', 'Sentinel Audit']),
       'Sandbox Status': CONFIG_HELP.toolsPolicy['Sandbox Status'],
     },
-    createGenericHelpFactory('Configuration Policy'),
+    createGenericHelpFactory('Configuration Security'),
   );
   activateContextHelp(panel);
 }
@@ -373,26 +392,23 @@ function renderIntegrationSystemTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'Integration System',
     compact: true,
-    whatItIs: 'This tab groups the product-level integration and system controls that sit outside the model, search, tool, and policy tabs.',
-    whatSeeing: 'You are seeing auth, notifications, operator-channel integrations, browser integration, audit analysis, and reset controls.',
-    whatCanDo: 'Configure how Guardian connects outward, authenticates access, notifies operators, and exposes system-level controls.',
-    howLinks: 'These settings affect how the product is operated and integrated, rather than how model or tool execution is authored.',
+    whatItIs: 'This tab groups operator channels, access controls, and maintenance actions that sit outside the model, search, tool, and security tabs.',
+    whatSeeing: 'You are seeing integration-specific summaries, auth, operator-channel setup, and reset controls.',
+    whatCanDo: 'Configure how Guardian exposes access to operators, authenticates the web surface, and handles destructive maintenance actions.',
+    howLinks: 'This tab does not own AI provider, search-provider, or cloud-connection setup. It stays focused on operator-facing integrations and product access.',
   }));
 
-  panel.appendChild(createOverview(sharedConfig, sharedProviders, sharedSetupStatus));
+  panel.appendChild(createIntegrationOverview(sharedConfig, sharedAuthStatus));
   panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
-  panel.appendChild(createNotificationsPanel(sharedConfig, panel));
   panel.appendChild(createTelegramPanel(sharedConfig, panel));
-  panel.appendChild(createBrowserPanel(sharedConfig, panel));
-  panel.appendChild(createSentinelAuditPanel());
   panel.appendChild(createDangerZonePanel());
 
   applyInputTooltips(panel);
   enhanceSectionHelp(
     panel,
     {
-      ...pickHelpSections(CONFIG_HELP.integrations, ['Telegram Channel', 'Browser Automation']),
-      ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication', 'Security Alerts', 'Sentinel Audit', 'Danger Zone']),
+      ...pickHelpSections(CONFIG_HELP.integrations, ['Telegram Channel']),
+      ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication', 'Danger Zone']),
     },
     createGenericHelpFactory('Configuration Integration System'),
   );
@@ -1441,7 +1457,7 @@ async function renderToolsTab(panel) {
           ${sandbox.enforcementMode === 'strict' && sandbox.availability !== 'strong' ? `
             <div style="font-size:0.78rem;color:var(--warning);margin-top:0.25rem;">
               Strict mode is active but native sandboxing is unavailable — some tools (shell, browser, network) are disabled.
-              To allow these tools, go to <strong>Tools &amp; Policy</strong> and set Sandbox Mode to <strong>Permissive</strong>.
+              To re-open them, go to <strong>Security &gt; Sandbox &amp; Policy Access</strong> and switch <strong>Enforcement Mode</strong> to <strong>Permissive</strong>.
             </div>
           ` : ''}
         </div>
@@ -1753,7 +1769,7 @@ async function renderPolicyTab(panel) {
       });
 
       applyInputTooltips(panel);
-      enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Policy'));
+      enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Security'));
       activateContextHelp(panel);
     }
 
@@ -1843,7 +1859,7 @@ function renderSearchSourcesTab(panel) {
   };
 
   panel.innerHTML = `
-    <div class="intel-summary-grid search-summary-grid" id="search-summary-grid"></div>
+    <div class="search-runtime-summary-wrap" id="search-summary-grid"></div>
     <div class="search-feedback search-feedback-muted" id="search-feedback"></div>
 
     <div class="table-container">
@@ -1983,37 +1999,34 @@ function renderSearchSourcesTab(panel) {
   }
 
   function renderSummary() {
-    const installed = state.enabled
-      ? (state.status?.installed === true ? 'Yes' : state.status?.installed === false ? 'No' : 'Unknown')
-      : 'Disabled';
-    const installedTone = state.enabled
-      ? (state.status?.installed === true ? 'success' : state.status?.installed === false ? 'error' : 'warning')
-      : 'warning';
     const collections = Array.isArray(state.status?.collections) ? state.status.collections.length : 0;
     const sourceCount = state.sources.length;
     const enabledCount = state.sources.filter((source) => source.enabled !== false).length;
-    const versionValue = state.status?.version ? esc(state.status.version) : 'n/a';
+    const runtimeState = !state.enabled
+      ? 'Disabled in config'
+      : state.runtimeAvailable
+        ? (state.status?.installed === true ? 'Available' : state.status?.installed === false ? 'Unavailable' : 'Checking')
+        : 'Unavailable';
+    const toneClass = !state.enabled
+      ? 'is-disabled'
+      : state.runtimeAvailable && state.status?.installed === true
+        ? 'is-ready'
+        : 'is-warning';
+    const versionValue = state.status?.version ? `Runtime ${String(state.status.version)}` : '';
+    const secondaryCopy = !state.enabled
+      ? 'Enable Document Search to manage indexed sources and runtime indexing from this tab.'
+      : state.runtimeAvailable
+        ? `${collections} indexed collection${collections === 1 ? '' : 's'}${versionValue ? ` • ${versionValue}` : ''}`
+        : 'Config is enabled, but the runtime search endpoints are currently unavailable. Saved sources will apply when search becomes active again.';
 
     summaryEl.innerHTML = `
-      <div class="status-card ${installedTone}">
-        <div class="card-title">Search Active</div>
-        <div class="card-value">${esc(installed)}</div>
-        <div class="card-subtitle">${state.enabled ? 'Runtime availability' : 'Service is not active in current config'}</div>
-      </div>
-      <div class="status-card info">
-        <div class="card-title">Search Version</div>
-        <div class="card-value">${versionValue}</div>
-        <div class="card-subtitle">Reported by runtime status</div>
-      </div>
-      <div class="status-card accent">
-        <div class="card-title">Collections</div>
-        <div class="card-value">${collections}</div>
-        <div class="card-subtitle">Known in search index</div>
-      </div>
-      <div class="status-card warning">
-        <div class="card-title">Configured Sources</div>
-        <div class="card-value">${sourceCount}</div>
-        <div class="card-subtitle">${enabledCount} enabled</div>
+      <div class="search-runtime-summary ${toneClass}">
+        <div class="search-runtime-summary__primary">
+          <span><strong>Document Search:</strong> ${state.enabled ? 'Enabled' : 'Disabled'}</span>
+          <span><strong>Runtime:</strong> ${esc(runtimeState)}</span>
+          <span><strong>Sources:</strong> ${sourceCount} total, ${enabledCount} enabled</span>
+        </div>
+        <div class="search-runtime-summary__secondary">${esc(secondaryCopy)}</div>
       </div>
     `;
   }
@@ -2787,8 +2800,6 @@ function renderSettingsTab(panel) {
   // ── Build summaries ──
   const telegramEnabled = config.channels?.telegram?.enabled;
   const sandboxMode = config.assistant?.tools?.sandbox?.enforcementMode || 'strict';
-  const apu = config.assistant?.tools?.agentPolicyUpdates || {};
-  const apuCount = [apu.allowedPaths !== false, !!apu.allowedCommands, apu.allowedDomains !== false].filter(Boolean).length;
   const gaConfig = config.guardian?.guardianAgent;
   const trustPreset = config.guardian?.trustPreset || 'custom';
   const authMode = authStatus?.tokenConfigured ? 'Configured' : 'Not set';
@@ -2864,7 +2875,7 @@ function renderSettingsTab(panel) {
       panel: createNotificationsPanel(config, panel),
     },
     {
-      title: 'Sandbox Enforcement',
+      title: 'Sandbox & Policy Access',
       badge: sandboxMode,
       panel: createSandboxPanel(config),
     },
@@ -2872,11 +2883,6 @@ function renderSettingsTab(panel) {
       title: 'Trust Preset',
       badge: trustPreset,
       panel: createTrustPresetPanel(config),
-    },
-    {
-      title: 'Agent Policy Access',
-      badge: `${apuCount}/3 enabled`,
-      panel: createAgentPolicyAccessPanel(config, panel),
     },
   ], true));
 
@@ -2925,6 +2931,38 @@ function createOverview(config, providers, setupStatus) {
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
   cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Integrations', config.channels?.telegram?.enabled ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Cloud', cloud?.enabled ? 'Enabled' : 'Disabled', `${cloud?.profileCounts?.total || 0} profiles`, cloud?.enabled ? 'success' : 'warning'));
+  wrap.appendChild(cards);
+
+  return wrap;
+}
+
+function createIntegrationOverview(config, authStatus) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cfg-settings-overview';
+  const cards = document.createElement('div');
+  cards.className = 'cfg-overview-grid';
+  const telegram = config.channels?.telegram || {};
+  const telegramEnabled = !!telegram.enabled;
+  const telegramChats = Array.isArray(telegram.allowedChatIds) ? telegram.allowedChatIds.length : 0;
+  const telegramSubtitle = telegramEnabled
+    ? `${telegramChats} allowed chat${telegramChats === 1 ? '' : 's'}`
+    : (telegram.botTokenConfigured ? 'Token configured but channel disabled' : 'Bot token not configured');
+  const authConfigured = !!authStatus?.tokenConfigured;
+  const authSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
+  const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? null;
+
+  cards.appendChild(createMiniCard(
+    'Telegram',
+    telegramEnabled ? 'Enabled' : 'Disabled',
+    telegramSubtitle,
+    telegramEnabled ? 'success' : 'warning',
+  ));
+  cards.appendChild(createMiniCard(
+    'Web Auth',
+    authConfigured ? 'Configured' : 'Not set',
+    `${authSource}${ttl ? ` • ${ttl} min TTL` : ''}`,
+    authConfigured ? 'success' : 'warning',
+  ));
   wrap.appendChild(cards);
 
   return wrap;
@@ -3098,7 +3136,7 @@ function createNotificationsPanel(config, settingsPanel) {
         </div>
         <div class="cfg-field" style="grid-column: 1 / -1;">
           <label>Suppressed Detail Types</label>
-          <input id="cfg-notify-suppressed-details" type="text" value="${esc(suppressedDetailTypes.join(', '))}" placeholder="new_external_destination, new_listening_port">
+          <input id="cfg-notify-suppressed-details" type="text" value="${esc(suppressedDetailTypes.join(', '))}" placeholder="new_external_destination, degraded_backend_manual_terminals_disabled, restrict_command_execution">
         </div>
       </div>
 
@@ -3115,7 +3153,7 @@ function createNotificationsPanel(config, settingsPanel) {
       </div>
 
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Defaults are CLI-only. Web alerts appear as a live tray in the dashboard shell. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
+        Defaults are CLI-only and limited to primary security events. Low-confidence drift signals and expected guardrail denials are muted by default so the notification stream stays focused on primary detections. Web alerts appear as a live tray in the dashboard shell. Add <code>automation_finding</code> only if you want follow-up triage or automation summaries to notify. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="cfg-notify-save" type="button">Save Alert Settings</button>
@@ -3322,6 +3360,7 @@ function createBrowserPanel(config, panel) {
   const playwrightBrowser = browser.playwrightBrowser || 'chromium';
   const playwrightCaps = browser.playwrightCaps || 'network,storage';
   const domains = (browser.allowedDomains || config.assistant?.tools?.allowedDomains || []).join(', ');
+  const degradedBrowserAllowed = config.assistant?.tools?.sandbox?.degradedFallback?.allowBrowserTools === true;
 
   const browserEngines = ['chromium', 'firefox', 'webkit', 'chrome', 'msedge'];
   const browserOptions = browserEngines.map(b => `<option value="${b}" ${playwrightBrowser === b ? 'selected' : ''}>${b}</option>`).join('');
@@ -3340,7 +3379,13 @@ function createBrowserPanel(config, panel) {
         <div class="cfg-field"><label>Capabilities</label><input id="browser-playwright-caps" type="text" value="${esc(playwrightCaps)}" placeholder="network,storage"></div>
         <div class="cfg-field"><label>Allowed Domains</label><input id="browser-domains" type="text" value="${esc(domains)}" placeholder="example.com, github.com"></div>
       </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">Changes require a restart to take effect. Playwright provides full browser automation; Lightpanda is a lightweight reader (beta).</div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Playwright provides full browser automation; Lightpanda is a lightweight reader. Browser tools stay inside the allowed-domain boundary but can still access authenticated web sessions, upload files, and drive outbound requests.
+      </div>
+      <div style="margin-top:0.4rem;padding:0.55rem 0.7rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+        <strong>Degraded backend warning:</strong> when native sandboxing falls back to a degraded backend, browser automation remains blocked by default until <code>Allow browser automation</code> is enabled in <strong>Configuration &gt; Security &gt; Sandbox &amp; Policy Access</strong>.
+        ${degradedBrowserAllowed ? 'That degraded-backend override is currently enabled.' : 'That degraded-backend override is currently disabled.'}
+      </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="browser-save" type="button">Save Browser Config</button>
         <span id="browser-save-status" class="cfg-save-status"></span>
@@ -3370,6 +3415,10 @@ function createBrowserPanel(config, panel) {
       });
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) sharedConfig = nextConfig;
+      }
     } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }
   });
 
@@ -3381,30 +3430,113 @@ function createSandboxPanel(config) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const sandbox = config.assistant?.tools?.sandbox || {};
-  const mode = sandbox.enforcementMode || 'strict';
+  const mode = sandbox.enforcementMode || 'permissive';
+  const degradedFallback = sandbox.degradedFallback || {};
+  const apu = config.assistant?.tools?.agentPolicyUpdates || {};
+  const pathsEnabled = apu.allowedPaths === true;
+  const commandsEnabled = !!apu.allowedCommands;
+  const domainsEnabled = apu.allowedDomains === true;
+  const toolPoliciesEnabled = !!apu.toolPolicies;
 
   section.innerHTML = `
     <div class="table-header">
-      <h3>Sandbox Enforcement</h3>
-      <span class="cfg-header-note">OS-level process isolation for tool execution</span>
+      <h3>Sandbox &amp; Policy Access</h3>
+      <span class="cfg-header-note">Host isolation rules plus assistant policy-widening gates in one place</span>
     </div>
     <div class="cfg-center-body">
+      <div style="margin-bottom:0.65rem;font-size:0.72rem;color:var(--text-muted);">
+        <strong>Sandbox Enforcement</strong> controls what Guardian itself may do when strong host isolation is missing.
+        <strong>Assistant Policy Access</strong> controls whether chat may ask to widen persistent allowlists or tool policy, and those requests still always require explicit approval.
+      </div>
       <div class="cfg-form-grid">
         <div class="cfg-field">
           <label>Enforcement Mode</label>
           <select id="sandbox-enforcement-mode">
-            <option value="strict" ${mode === 'strict' ? 'selected' : ''}>Strict — disable risky tools when native sandbox unavailable</option>
-            <option value="permissive" ${mode === 'permissive' ? 'selected' : ''}>Permissive — allow all tools even without native sandbox</option>
+            <option value="strict" ${mode === 'strict' ? 'selected' : ''}>Strict — keep risky tools off if the strong sandbox is unavailable</option>
+            <option value="permissive" ${mode === 'permissive' ? 'selected' : ''}>Permissive — keep Guardian running, but degraded risky tools stay off until enabled</option>
           </select>
         </div>
       </div>
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        <strong>Strict</strong> disables shell, browser, and network tools when native sandboxing (bwrap) is not available.
-        <strong>Permissive</strong> allows these tools to run unsandboxed. Use permissive if you trust your environment (e.g. local dev machine).
-        Restart required after changes.
+        <strong>Strict</strong> means Guardian fails closed for risky process-backed tools when native sandboxing is unavailable.
+        <strong>Permissive</strong> means Guardian can keep running on the degraded fallback backend, but risky degraded-backend capabilities still start <strong>off</strong>.
+      </div>
+      <div style="margin-top:0.75rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+        <strong>The switches below only do anything when all of these are true:</strong>
+        <ol style="margin:0.45rem 0 0 1.1rem;padding:0;">
+          <li><strong>Enforcement Mode</strong> is set to <strong>Permissive</strong>.</li>
+          <li>Native sandboxing is unavailable, so Guardian is using a <strong>degraded</strong> backend.</li>
+          <li>You intentionally want to re-enable one specific high-risk capability.</li>
+        </ol>
+        <div style="margin-top:0.45rem;">If strong sandboxing is available, these switches have no effect. They all default to <strong>off</strong>.</div>
+      </div>
+      <div style="display:grid;gap:0.75rem;margin-top:0.8rem;">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
+            <input id="sandbox-allow-network-tools" type="checkbox" ${degradedFallback.allowNetworkTools ? 'checked' : ''}>
+            <span><strong>Allow network and web search tools</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: outbound requests can leave the host over the real network path instead of a strong sandbox boundary.</span></span>
+          </label>
+        </div>
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
+            <input id="sandbox-allow-browser-tools" type="checkbox" ${degradedFallback.allowBrowserTools ? 'checked' : ''}>
+            <span><strong>Allow browser automation</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: browser tools can drive authenticated sessions, upload files, and interact with rendered pages on the live host.</span></span>
+          </label>
+        </div>
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
+            <input id="sandbox-allow-mcp-servers" type="checkbox" ${degradedFallback.allowMcpServers ? 'checked' : ''}>
+            <span><strong>Allow third-party MCP servers</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: MCP servers are extra local processes with their own code and dependencies, so degraded fallback gives them more host reach.</span></span>
+          </label>
+        </div>
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
+            <input id="sandbox-allow-package-managers" type="checkbox" ${degradedFallback.allowPackageManagers ? 'checked' : ''}>
+            <span><strong>Allow install-like package manager commands</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: install and remote package-launch commands execute third-party code and can fetch new dependencies onto the real host.</span></span>
+          </label>
+        </div>
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
+            <input id="sandbox-allow-manual-terminals" type="checkbox" ${degradedFallback.allowManualCodeTerminals ? 'checked' : ''}>
+            <span><strong>Allow manual code terminals</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: PTY terminals are operator-controlled shells and sit outside the assistant&apos;s repo-bound command validator.</span></span>
+          </label>
+        </div>
+      </div>
+      <div class="cfg-divider"></div>
+      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
+        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Assistant Policy Change Requests</h3>
+        <span class="cfg-header-note">Still approval-gated, but exposed through chat and remote channels when enabled</span>
+      </div>
+      <div style="margin-top:0.1rem;font-size:0.72rem;color:var(--text-muted);">
+        Use these only if you want the assistant to be able to request persistent allowlist or per-tool policy changes from chat.
+        This does <strong>not</strong> re-enable degraded-backend capabilities by itself; it only opens the policy-edit request surface.
+      </div>
+      <div style="display:grid;gap:0.6rem;padding:0.5rem 0 0.25rem;">
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-paths" ${pathsEnabled ? 'checked' : ''}>
+          <span>Let chat request filesystem path allowlist changes</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-commands" ${commandsEnabled ? 'checked' : ''}>
+          <span>Let chat request shell command allowlist changes</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-domains" ${domainsEnabled ? 'checked' : ''}>
+          <span>Let chat request network domain allowlist changes</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-tool-policies" ${toolPoliciesEnabled ? 'checked' : ''}>
+          <span>Let chat request per-tool policy overrides</span>
+        </label>
+      </div>
+      <div style="margin-top:0.3rem;font-size:0.72rem;color:var(--text-muted);">
+        These controls are <strong>off by default</strong>. Every policy change request still pauses for explicit approval before it applies.
+      </div>
+      <div style="margin-top:0.65rem;font-size:0.72rem;color:var(--text-muted);">
+        Restart required after changing enforcement mode, degraded-backend overrides, or assistant policy access.
       </div>
       <div class="cfg-actions">
-        <button class="btn btn-primary" id="sandbox-save" type="button">Save Sandbox Config</button>
+        <button class="btn btn-primary" id="sandbox-save" type="button">Save Sandbox &amp; Policy Access</button>
         <span id="sandbox-save-status" class="cfg-save-status"></span>
       </div>
     </div>
@@ -3417,78 +3549,33 @@ function createSandboxPanel(config) {
     statusEl.style.color = 'var(--text-muted)';
     try {
       const result = await api.updateConfig({
-        assistant: { tools: { sandbox: { enforcementMode: modeVal } } },
-      });
-      statusEl.textContent = result.message || 'Saved';
-      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      statusEl.style.color = 'var(--error)';
-    }
-  });
-
-  return section;
-}
-
-function createAgentPolicyAccessPanel(config, settingsPanel) {
-  const section = document.createElement('div');
-  section.className = 'table-container';
-  const apu = config.assistant?.tools?.agentPolicyUpdates || {};
-  const pathsEnabled = apu.allowedPaths !== false;
-  const commandsEnabled = !!apu.allowedCommands;
-  const domainsEnabled = apu.allowedDomains !== false;
-
-  section.innerHTML = `
-    <div class="table-header">
-      <h3>Agent Policy Access</h3>
-      <span class="cfg-header-note">Allow the assistant to modify sandbox policy via chat (always requires user approval)</span>
-    </div>
-    <div class="cfg-center-body">
-      <div style="display:grid;gap:0.6rem;padding:0.25rem 0;">
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
-          <input type="checkbox" id="apu-paths" ${pathsEnabled ? 'checked' : ''}>
-          <span>Manage filesystem paths</span>
-        </label>
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
-          <input type="checkbox" id="apu-commands" ${commandsEnabled ? 'checked' : ''}>
-          <span>Manage shell commands</span>
-        </label>
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
-          <input type="checkbox" id="apu-domains" ${domainsEnabled ? 'checked' : ''}>
-          <span>Manage network domains</span>
-        </label>
-      </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        When enabled, the assistant can use the <code>update_tool_policy</code> tool to add or remove paths, commands, or domains from the sandbox allowlist.
-        Every change <strong>always requires explicit user approval</strong> regardless of policy mode.
-        Useful for remote control via Telegram or other channels where the web UI is not accessible.
-        Restart required after changes.
-      </div>
-      <div class="cfg-actions">
-        <button class="btn btn-primary" id="apu-save" type="button">Save</button>
-        <span id="apu-save-status" class="cfg-save-status"></span>
-      </div>
-    </div>
-  `;
-
-  const statusEl = section.querySelector('#apu-save-status');
-  section.querySelector('#apu-save')?.addEventListener('click', async () => {
-    statusEl.textContent = 'Saving...';
-    statusEl.style.color = 'var(--text-muted)';
-    try {
-      const result = await api.updateConfig({
         assistant: {
           tools: {
+            sandbox: {
+              enforcementMode: modeVal,
+              degradedFallback: {
+                allowNetworkTools: section.querySelector('#sandbox-allow-network-tools').checked,
+                allowBrowserTools: section.querySelector('#sandbox-allow-browser-tools').checked,
+                allowMcpServers: section.querySelector('#sandbox-allow-mcp-servers').checked,
+                allowPackageManagers: section.querySelector('#sandbox-allow-package-managers').checked,
+                allowManualCodeTerminals: section.querySelector('#sandbox-allow-manual-terminals').checked,
+              },
+            },
             agentPolicyUpdates: {
               allowedPaths: section.querySelector('#apu-paths').checked,
               allowedCommands: section.querySelector('#apu-commands').checked,
               allowedDomains: section.querySelector('#apu-domains').checked,
+              toolPolicies: section.querySelector('#apu-tool-policies').checked,
             },
           },
         },
       });
       statusEl.textContent = result.message || 'Saved';
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) sharedConfig = nextConfig;
+      }
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       statusEl.style.color = 'var(--error)';
@@ -3572,6 +3659,207 @@ function createGuardianAgentPanel() {
     }
   }
   load();
+  return section;
+}
+
+function createAssistantSecurityMonitoringPanel(config) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const security = config.assistant?.security || {};
+  const monitoring = security.continuousMonitoring || {};
+  const enabled = monitoring.enabled !== false;
+  const profileId = monitoring.profileId || 'quick';
+  const cron = monitoring.cron || '15 */12 * * *';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Assistant Security Monitoring</h3>
+      <span class="cfg-header-note">Managed background posture review schedule</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Continuous Monitoring</label>
+          <select id="assistant-security-monitoring-enabled">
+            <option value="true" ${enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Scan Profile</label>
+          <select id="assistant-security-monitoring-profile">
+            <option value="quick" ${profileId === 'quick' ? 'selected' : ''}>Quick Scan</option>
+            <option value="runtime-hardening" ${profileId === 'runtime-hardening' ? 'selected' : ''}>Runtime Hardening</option>
+            <option value="workspace-boundaries" ${profileId === 'workspace-boundaries' ? 'selected' : ''}>Workspace Boundaries</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Cron Cadence</label>
+          <input id="assistant-security-monitoring-cron" type="text" value="${esc(cron)}" placeholder="15 */12 * * *">
+        </div>
+      </div>
+      <div style="margin-top:0.55rem;font-size:0.72rem;color:var(--text-muted);">
+        This managed scan is <strong>scheduler-driven infrastructure work</strong>. It runs the built-in <code>assistant_security_scan</code> path directly and does <strong>not</strong> create a user chat turn or coding-assistant conversation.
+      </div>
+      <div style="margin-top:0.4rem;font-size:0.72rem;color:var(--text-muted);">
+        The Security page shows the current read-only monitoring status, last run, and whether the managed schedule is healthy.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="assistant-security-monitoring-save" type="button">Save Monitoring</button>
+        <span id="assistant-security-monitoring-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#assistant-security-monitoring-status');
+  section.querySelector('#assistant-security-monitoring-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          security: {
+            continuousMonitoring: {
+              enabled: section.querySelector('#assistant-security-monitoring-enabled').value === 'true',
+              profileId: section.querySelector('#assistant-security-monitoring-profile').value,
+              cron: section.querySelector('#assistant-security-monitoring-cron').value.trim() || '15 */12 * * *',
+            },
+          },
+        },
+      });
+      statusEl.textContent = result.message || 'Saved';
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) sharedConfig = nextConfig;
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
+function createAssistantSecurityAutoContainmentPanel(config) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const security = config.assistant?.security || {};
+  const autoContainment = security.autoContainment || {};
+  const enabled = autoContainment.enabled !== false;
+  const minSeverity = autoContainment.minSeverity || 'high';
+  const minConfidence = Number.isFinite(autoContainment.minConfidence) ? autoContainment.minConfidence : 0.95;
+  const categories = new Set(Array.isArray(autoContainment.categories) ? autoContainment.categories : ['sandbox', 'trust_boundary', 'mcp']);
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Automatic Containment</h3>
+      <span class="cfg-header-note">Conservative temporary guarded controls from recurring posture findings</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Automatic Containment</label>
+          <select id="assistant-security-autocontain-enabled">
+            <option value="true" ${enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Minimum Severity</label>
+          <select id="assistant-security-autocontain-severity">
+            <option value="high" ${minSeverity === 'high' ? 'selected' : ''}>High or Critical</option>
+            <option value="critical" ${minSeverity === 'critical' ? 'selected' : ''}>Critical only</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Minimum Confidence</label>
+          <input id="assistant-security-autocontain-confidence" type="number" min="0" max="1" step="0.01" value="${esc(minConfidence)}">
+        </div>
+      </div>
+      <div style="display:grid;gap:0.6rem;margin-top:0.8rem;">
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-sandbox" type="checkbox" ${categories.has('sandbox') ? 'checked' : ''}>
+          <span>Sandbox failures and degraded isolation</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-trust-boundary" type="checkbox" ${categories.has('trust_boundary') ? 'checked' : ''}>
+          <span>Trust-boundary and boundary-widening issues</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-mcp" type="checkbox" ${categories.has('mcp') ? 'checked' : ''}>
+          <span>MCP server exposure findings</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-browser" type="checkbox" ${categories.has('browser') ? 'checked' : ''}>
+          <span>Browser automation exposure findings</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-policy" type="checkbox" ${categories.has('policy') ? 'checked' : ''}>
+          <span>Policy-widening findings</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input id="assistant-security-autocontain-workspace" type="checkbox" ${categories.has('workspace') ? 'checked' : ''}>
+          <span>Workspace trust findings</span>
+        </label>
+      </div>
+      <div style="margin-top:0.65rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+        To reduce false positives, Assistant Security only auto-elevates from <strong>monitor</strong> to <strong>guarded</strong> when a matching <strong>critical</strong> finding is active, or when <strong>two or more</strong> matching findings meet your configured severity and confidence threshold.
+      </div>
+      <div style="margin-top:0.45rem;font-size:0.72rem;color:var(--text-muted);">
+        In guarded mode, matching sandbox or trust-boundary findings temporarily block command execution, and matching MCP findings temporarily block MCP tool calls.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="assistant-security-autocontain-save" type="button">Save Containment</button>
+        <span id="assistant-security-autocontain-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#assistant-security-autocontain-status');
+  section.querySelector('#assistant-security-autocontain-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const selectedCategories = [
+        ['sandbox', '#assistant-security-autocontain-sandbox'],
+        ['trust_boundary', '#assistant-security-autocontain-trust-boundary'],
+        ['mcp', '#assistant-security-autocontain-mcp'],
+        ['browser', '#assistant-security-autocontain-browser'],
+        ['policy', '#assistant-security-autocontain-policy'],
+        ['workspace', '#assistant-security-autocontain-workspace'],
+      ].filter(([, selector]) => section.querySelector(selector).checked).map(([category]) => category);
+      const rawConfidence = parseFloat(section.querySelector('#assistant-security-autocontain-confidence').value);
+      const minConfidenceValue = Number.isFinite(rawConfidence)
+        ? Math.max(0, Math.min(1, rawConfidence))
+        : 0.95;
+      const result = await api.updateConfig({
+        assistant: {
+          security: {
+            autoContainment: {
+              enabled: section.querySelector('#assistant-security-autocontain-enabled').value === 'true',
+              minSeverity: section.querySelector('#assistant-security-autocontain-severity').value,
+              minConfidence: minConfidenceValue,
+              categories: selectedCategories,
+            },
+          },
+        },
+      });
+      statusEl.textContent = result.message || 'Saved';
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) sharedConfig = nextConfig;
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
   return section;
 }
 

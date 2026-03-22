@@ -37,30 +37,55 @@ For the shipped local defensive overlay on top of the runtime security model, se
 
 ### Threats Addressed
 
-| Threat | Mitigation |
-|--------|-----------|
-| Prompt injection | InputSanitizer with 18 weighted signal patterns |
-| Credential leakage via LLM | OutputGuardian + GuardedLLMProvider (mandatory wrapping) |
-| Unauthorized file access | Allowed path roots + denied-path patterns + path normalization on managed file/tool actions |
-| Capability escalation | Frozen per-agent capability grants + Guardian checks on framework-managed actions |
-| DoS via message flooding | Multi-scope sliding windows: per-agent + per-user + global |
-| Secret exfiltration via events | Payload scanning on all inter-agent communication |
-| Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
-| Shell command injection / trampoline abuse | POSIX tokenizer, execution-class validation, and direct-exec-by-default for simple allowlisted binaries |
-| SSRF via tool HTTP requests | SsrfController blocks private IPs, loopback, cloud metadata, IPv4-mapped IPv6, and obfuscated IPs |
-| LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
-| Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory |
-| Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
-| Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
-| Indirect prompt injection via remote/tool output | OutputGuardian trust classification, quarantined reinjection suppression, taint-aware tool gating |
-| Memory poisoning / durable backdoors | Trust-aware memory store, quarantined entries excluded from default planner context |
-| Broken-tool overspend / runaway retries | Per-chain tool-call budgets, repeated-failure retry suppression, schedule token/run caps, auto-pause |
-| Overlapping scheduled side effects | Per-task active-run locks prevent the same scheduled automation from overlapping itself |
-| Stale automation authority | Schedule approval expiry, scope hashes, principal-bound approval ownership, budget caps |
-| Script drift during automation creation | Native automation authoring compiler prefers `task_create` / `workflow_upsert`, hard-bans script/code-file authoring when the user requested native Guardian automation, and now intercepts those requests before both direct and brokered worker tool loops |
-| Suspicious repo/workspace content in coding sessions | Bounded workspace trust review, native AV enrichment, approval gating for execution/persistence, and session-scoped manual trust review with automatic drift invalidation |
-| Host drift or suspicious local activity | Host monitor baselines processes, persistence, paths, and network; critical findings can block risky actions |
-| Gateway firewall drift | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
+| Threat / failure mode | Implemented controls | Default posture | Current boundary |
+|---|---|---|---|
+| Prompt injection in direct user input | `InputSanitizer`, invisible-character stripping, weighted injection scoring, admission before `agent.onMessage()` | Enabled by default | semantic jailbreaks still rely on the runtime/model stack to behave correctly |
+| Indirect prompt injection via remote or tool output | `OutputGuardian` trust classification, quarantined reinjection suppression, taint reminders, taint-aware tool gating | Enabled by default | low-trust summaries can still be misleading evidence even when they are no longer active instructions |
+| Credential leakage through model output | `GuardedLLMProvider`, recursive secret scanning, redaction/blocking, audit trail | Enabled by default | credentials are still resolved in-process, not through a separate secret broker |
+| Secret leakage through inter-agent events | event-payload secret scanning, source validation, audit logging | Enabled by default | events are mediated only on managed framework paths |
+| Unauthorized managed file access | `allowedPaths`, denied-path patterns, path normalization, symlink resolution, code-session workspace scoping | Restricted by default | manual PTY shells remain a separate operator surface |
+| Capability escalation by an agent | frozen per-agent capabilities, Guardian action checks, no raw `ctx.fs` / `ctx.http` / `ctx.exec` | Enabled by default | supervisor/runtime code is still the trusted computing base |
+| Tool-policy widening from chat or remote channels | `update_tool_policy` approval flow plus `assistant.tools.agentPolicyUpdates.*` gates | Disabled by default for paths, commands, domains, and per-tool policy changes | if operators enable these gates, each change still needs explicit approval |
+| Shell command injection and shell-expression abuse | tokenizer, shell chain splitting, redirect validation, execution-class checks, direct exec for simple binaries | Restricted by default | descendant executable identity is not fully enforced after the allowed top-level launch |
+| Package-manager or remote-launch trampoline abuse on degraded hosts | degraded-backend package-manager block, coding-session launcher bans, explicit allowlist requirements | Disabled by default on degraded backends | once explicitly enabled, package managers can still execute third-party code on the real host |
+| Descendant child-process abuse | strict-mode fail-closed on weak hosts, degraded-backend locks on browser/MCP/package-manager/manual-terminal surfaces | Partially reduced by default | Guardian does not yet provide full descendant executable identity enforcement on general hosts |
+| SSRF through managed HTTP or browser targets | `SsrfController`, private-IP blocking, cloud-metadata blocking, obfuscated-IP detection, domain allowlists | Enabled by default | raw non-managed processes with network access remain outside SSRF mediation |
+| Data exfiltration from degraded sandbox hosts | strict mode, `allowedDomains`, network-off worker, degraded-backend network/browser/MCP defaults | Network and browser-style degraded fallback is disabled by default | permissive degraded hosts still have more host exposure than strong sandbox backends |
+| Browser-session abuse | domain allowlists, browser containment, alert-driven containment, degraded-backend browser block | Disabled by default on degraded backends | Guardian does not control the operator's normal browser outside managed browser tools |
+| Over-broad third-party MCP servers | MCP startup admission (`startupApproved`), MCP namespacing, Guardian/tool policy checks, conservative third-party risk defaults, risk-floor-only `trustLevel`, call limits, degraded-backend MCP block | Third-party MCP is restricted by default | MCP server code still runs as a local process when operators explicitly trust and enable it |
+| Manual PTY abuse in Code | session ownership checks plus degraded-backend terminal block | Disabled by default on degraded backends | PTY remains outside the assistant's repo-bound command validator if enabled |
+| Dangerous non-read-only tool actions | approval workflows, per-tool policies, Guardian Agent inline LLM evaluation, host/gateway containment hooks | `approve_each` by default for the main assistant | if operators switch to looser policy modes, more risk moves to runtime boundaries and approvals |
+| Memory poisoning / durable backdoors | trust-aware memory, quarantined memory status, provenance, low-trust writes quarantined by default | Enabled by default | reviewed but incorrect content can still be promoted by an operator |
+| Broken-tool overspend / runaway retries | per-chain tool budgets, repeated-failure suppression, schedule caps, auto-pause | Enabled by default | expensive but varied failure patterns can still consume approved budget |
+| Overlapping scheduled side effects | per-task active-run locks, approval expiry, principal binding, scope hash drift checks | Enabled by default | different schedules can still target overlapping real-world systems if operators configure them that way |
+| Script drift during automation creation | native automation compiler, intercepted automation-intent path, script/code-file authoring bans for native Guardian automations | Enabled by default | generic chat outside automation-authoring intent still requires normal tool governance |
+| Suspicious repo/workspace content in coding sessions | bounded repo trust review, native AV enrichment, approval gating for execution/persistence, trust invalidation on drift | Enabled by default | a `trusted` result is not a proof the repo is safe |
+| Host drift or suspicious local activity | host monitor, unified alerts, containment recommendations, risk-action blocking under critical or stacked alerts | Available but operator-configurable | this is practical host monitoring, not full EDR-grade telemetry |
+| Gateway firewall drift | gateway monitor, unified alerts, containment recommendations, risky-network-action blocking | Available but operator-configurable | relies on operator-supplied collectors and normalized gateway state |
+| Browser-to-localhost attacks against the web UI | bearer auth, HttpOnly `SameSite=Strict` cookies, CORS validation, privileged tickets, auth-failure rate limiting, SSE auth | Enabled by default | a valid bearer token still grants web access within the authorization model |
+| LLM provider failure or degraded model routing | circuit breaker, provider failover, guarded fallback chain | Enabled by default | failover preserves availability, not correctness |
+
+### Default-Safe Posture
+
+The shipped security posture is intentionally restrictive on the paths that widen blast radius:
+
+| Surface | Shipped default | Why it matters |
+|---|---|---|
+| `assistant.tools.policyMode` | `approve_each` | non-read-only tool actions stop at an approval boundary by default |
+| `assistant.tools.agentPolicyUpdates.allowedPaths` | `false` | the assistant cannot widen filesystem scope from chat unless the operator opts in |
+| `assistant.tools.agentPolicyUpdates.allowedCommands` | `false` | the assistant cannot widen shell scope from chat unless the operator opts in |
+| `assistant.tools.agentPolicyUpdates.allowedDomains` | `false` | the assistant cannot widen outbound host scope from chat unless the operator opts in |
+| `assistant.tools.agentPolicyUpdates.toolPolicies` | `false` | the assistant cannot loosen per-tool policy from chat unless the operator opts in |
+| `assistant.tools.sandbox.networkAccess` | `false` | sandboxed child processes start network-isolated by default |
+| `assistant.tools.sandbox.enforcementMode` | `permissive` | broad host compatibility is preserved, but degraded high-risk surfaces stay shut unless explicitly re-enabled |
+| `assistant.tools.sandbox.degradedFallback.allowNetworkTools` | `false` | degraded hosts do not expose network and web-search tooling by default |
+| `assistant.tools.sandbox.degradedFallback.allowBrowserTools` | `false` | degraded hosts do not expose browser automation by default |
+| `assistant.tools.sandbox.degradedFallback.allowMcpServers` | `false` | degraded hosts do not expose third-party MCP server processes by default |
+| `assistant.tools.sandbox.degradedFallback.allowPackageManagers` | `false` | degraded hosts do not allow install-like package-manager commands by default |
+| `assistant.tools.sandbox.degradedFallback.allowManualCodeTerminals` | `false` | degraded hosts keep manual code PTYs closed unless the operator opts in |
+| `assistant.tools.mcp.servers[].startupApproved` | `false` unless the operator explicitly sets it | third-party MCP commands do not auto-launch from config until they are explicitly trusted |
+| `assistant.tools.mcp.servers[].networkAccess` | `false` unless the operator explicitly sets it | third-party MCP subprocesses do not get broad outbound egress by default |
+| `assistant.tools.mcp.servers[].inheritEnv` | `false` unless the operator explicitly sets it | third-party MCP subprocesses start from a minimal inherited environment instead of the full parent env |
 
 ---
 
@@ -126,7 +151,9 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  Linux uses bwrap namespace isolation when available.    │
 │  Sandbox health states control strict-mode availability  │
 │  for risky subprocess-backed tools.                      │
-│  The default enforcement mode is permissive.             │
+│  The default enforcement mode is permissive, but weak    │
+│  backends keep high-risk degraded-fallback surfaces      │
+│  disabled unless the operator explicitly enables them.   │
 │  Fallback behavior uses ulimit + env hardening.          │
 │  Windows and macOS support depend on platform helpers.   │
 │                                                         │
@@ -197,7 +224,7 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • Network baseline anomalies + traffic threat signals  │
 │                                                         │
 │  Available via POST /api/sentinel/audit and in the      │
-│  web UI Settings > Sentinel Audit panel.                │
+│  web UI Configuration > Security > Sentinel Audit panel.│
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -322,6 +349,8 @@ Current default operator posture for the main assistant:
 - shipped config defaults to `approval_policy: on-request` / `assistant.tools.policyMode: approve_each`
 - the default main-assistant shell allowlist is read-oriented: `git status`, `git diff`, `git log`, `ls`, `dir`, `pwd`, `echo`, `cat`, `head`, `tail`, `whoami`, `hostname`, `uname`, `date`
 - broad package-manager and interpreter entry points such as bare `node`, `npm`, and `npx` are not in the main default allowlist; Coding Assistant code sessions continue to use their separate repo-scoped command policy
+- agent-driven policy expansion (`allowedPaths`, `allowedCommands`, `allowedDomains`, and per-tool policy edits through chat) is disabled by default
+- on degraded sandbox backends, network/search tools, browser automation, third-party MCP servers, install-like package manager commands, and manual code terminals all remain disabled until the operator explicitly enables them
 - approved workspace-local JS dependency mutations are recorded in `.guardianagent/dependency-awareness.json` and surfaced back into workspace tool context; dependency state is not persisted through the global memory store
 
 ### Risk Classification
@@ -374,6 +403,7 @@ Important boundary:
 
 - Code chat history is separate from the main web chat for UX/session isolation
 - repo-scoped enforcement applies to assistant-driven tool calls, not to the manual PTY terminal surface
+- on degraded sandbox backends, web PTY code terminals now stay blocked unless the operator explicitly enables `assistant.tools.sandbox.degradedFallback.allowManualCodeTerminals`
 - PTY terminals still launch as user-operated shells in the chosen cwd and currently rely on the normal OS/process sandbox plus session ownership checks, not the assistant’s repo-bound command validator
 - Guardian currently validates the requested top-level command and execution class. It does not yet provide descendant executable identity enforcement for arbitrary child processes launched beneath an allowed parent.
 
@@ -435,7 +465,21 @@ GuardianAgent classifies sandbox strength as `strong`, `degraded`, or `unavailab
 - macOS → currently reports `degraded`
 - Windows → reports `strong` only when a configured native helper is enabled and detected; otherwise `unavailable`
 
-In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`. In `permissive` mode, they remain available with degraded isolation.
+In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`.
+
+In `permissive` mode:
+
+- broad host compatibility is preserved
+- but degraded or unavailable backends do **not** automatically reopen every risky surface
+- the following degraded-fallback allowances are explicit operator opt-ins and are **disabled by default**:
+
+| Degraded-backend allowance | Default | Effect when enabled |
+|---|---|---|
+| `allowNetworkTools` | off | re-enables network tools and `web_search` on degraded hosts |
+| `allowBrowserTools` | off | re-enables browser automation and browser-like job tooling on degraded hosts |
+| `allowMcpServers` | off | re-enables third-party MCP server processes on degraded hosts |
+| `allowPackageManagers` | off | re-enables install-like package-manager commands on degraded hosts |
+| `allowManualCodeTerminals` | off | re-enables manual web PTY code terminals on degraded hosts |
 
 Important boundary:
 
@@ -461,6 +505,11 @@ See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md` for packaging details.
 ```yaml
 assistant:
   tools:
+    agentPolicyUpdates:
+      allowedPaths: false           # Disabled by default
+      allowedCommands: false        # Disabled by default
+      allowedDomains: false         # Disabled by default
+      toolPolicies: false           # Disabled by default
     sandbox:
       enabled: true
       enforcementMode: permissive      # strict | permissive
@@ -468,6 +517,12 @@ assistant:
       networkAccess: false             # Default: isolate network
       additionalWritePaths: []         # Extra writable paths
       additionalReadPaths: []          # Extra read-only paths
+      degradedFallback:
+        allowNetworkTools: false       # Disabled by default
+        allowBrowserTools: false       # Disabled by default
+        allowMcpServers: false         # Disabled by default
+        allowPackageManagers: false    # Disabled by default
+        allowManualCodeTerminals: false # Disabled by default
       resourceLimits:
         maxMemoryMb: 512
         maxCpuSeconds: 60
@@ -791,8 +846,12 @@ Integration with Gmail, Calendar, Drive, Docs, and Sheets. Two backends:
 
 - Tool names namespaced (`mcp-<serverId>-<toolName>`) to prevent collisions
 - All MCP tool calls pass through Guardian admission
-- Risk inferred from MCP metadata (`read_only`, `mutating`, `external_post`)
-- Optional per-server `trustLevel` and `maxCallsPerMinute` overrides
+- Third-party MCP servers require explicit `startupApproved: true` before Guardian launches the configured command
+- Third-party MCP subprocesses default to `networkAccess: false` and `inheritEnv: false`; operators must opt in to broader egress or parent-env inheritance
+- Third-party MCP tool metadata is treated as untrusted input; descriptions/schemas are sanitized before registration and risk defaults conservatively to approval-gated behavior
+- Managed browser MCP stays on a bounded fast path, but Playwright startup is pinned to the installed package path rather than `@latest`
+- `trustLevel` is a stricter risk floor, not a downgrade override
+- Optional per-server `maxCallsPerMinute` limits still apply
 
 ### Orchestration Security
 

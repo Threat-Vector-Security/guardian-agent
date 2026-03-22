@@ -34,6 +34,19 @@ export interface SandboxResourceLimits {
   maxProcesses: number;
 }
 
+export interface SandboxDegradedFallbackConfig {
+  /** Allow network/search tools when the host falls back to degraded sandboxing. */
+  allowNetworkTools: boolean;
+  /** Allow browser automation tools when the host falls back to degraded sandboxing. */
+  allowBrowserTools: boolean;
+  /** Allow third-party MCP server processes when the host falls back to degraded sandboxing. */
+  allowMcpServers: boolean;
+  /** Allow install-like package manager commands when the host falls back to degraded sandboxing. */
+  allowPackageManagers: boolean;
+  /** Allow web PTY code terminals when the host falls back to degraded sandboxing. */
+  allowManualCodeTerminals: boolean;
+}
+
 /** Top-level sandbox configuration stored in config.yaml. */
 export interface SandboxConfig {
   /** Enable OS-level process isolation. When false, all commands run unsandboxed. */
@@ -50,6 +63,8 @@ export interface SandboxConfig {
   additionalReadPaths: string[];
   /** Resource limits for child processes. */
   resourceLimits: SandboxResourceLimits;
+  /** Explicit opt-ins for higher-risk features on degraded fallback backends. */
+  degradedFallback?: SandboxDegradedFallbackConfig;
   /** Optional native Windows sandbox helper configuration. */
   windowsHelper?: WindowsSandboxHelperConfig;
 }
@@ -68,6 +83,10 @@ export interface SandboxExecOptions {
   maxBuffer?: number;
   /** Environment variables to pass through. */
   env?: Record<string, string>;
+  /** Whether to inherit the parent process environment before hardening. Default: true. */
+  inheritEnv?: boolean;
+  /** When inheritEnv is false, copy only these parent env keys before applying overrides. */
+  allowedEnvKeys?: string[];
 }
 
 /** Per-invocation options for sandboxedSpawn. */
@@ -80,6 +99,10 @@ export interface SandboxSpawnOptions {
   cwd?: string;
   /** Environment variables to pass through. */
   env?: Record<string, string>;
+  /** Whether to inherit the parent process environment before hardening. Default: true. */
+  inheritEnv?: boolean;
+  /** When inheritEnv is false, copy only these parent env keys before applying overrides. */
+  allowedEnvKeys?: string[];
   /** stdio configuration for the spawned process. */
   stdio?: import('node:child_process').StdioOptions;
   /** On Windows, force shell wrapping for .cmd/.bat shims unless explicitly disabled. */
@@ -117,6 +140,14 @@ export const DEFAULT_RESOURCE_LIMITS: SandboxResourceLimits = {
   maxProcesses: 0, // 0 = unlimited (ulimit -u not set); bwrap provides PID namespace isolation instead
 };
 
+export const DEFAULT_DEGRADED_FALLBACK_CONFIG: SandboxDegradedFallbackConfig = {
+  allowNetworkTools: false,
+  allowBrowserTools: false,
+  allowMcpServers: false,
+  allowPackageManagers: false,
+  allowManualCodeTerminals: false,
+};
+
 /** Default sandbox configuration. */
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   enabled: true,
@@ -126,6 +157,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   additionalWritePaths: [],
   additionalReadPaths: [],
   resourceLimits: { ...DEFAULT_RESOURCE_LIMITS },
+  degradedFallback: { ...DEFAULT_DEGRADED_FALLBACK_CONFIG },
   windowsHelper: {
     enabled: false,
     args: [],

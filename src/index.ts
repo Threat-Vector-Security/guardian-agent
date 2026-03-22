@@ -80,9 +80,11 @@ import { IdentityService } from './runtime/identity.js';
 import { AnalyticsService } from './runtime/analytics.js';
 import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
 import { evaluateSetupStatus } from './runtime/setup.js';
+import { AiSecurityService, createAiSecuritySessionSnapshot } from './runtime/ai-security.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
-import { ConnectorPlaybookService } from './runtime/connectors.js';
+import { ConnectorPlaybookService, type PlaybookStepRunResult } from './runtime/connectors.js';
+import { JsonFileRunStateStore } from './runtime/run-state-store.js';
 import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/network-baseline.js';
@@ -103,6 +105,11 @@ import {
 } from './runtime/security-alerts.js';
 import { isSecurityAlertStatus } from './runtime/security-alert-lifecycle.js';
 import {
+  DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES,
+  DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CONFIDENCE,
+  DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_SEVERITY,
+  DEFAULT_ASSISTANT_SECURITY_MONITORING_CRON,
+  DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
   DEFAULT_DEPLOYMENT_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
@@ -125,7 +132,7 @@ import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
-import { NotificationService } from './runtime/notifications.js';
+import { NotificationService, notificationDestinationEnabled } from './runtime/notifications.js';
 import { promoteAutomationFindings } from './runtime/automation-output.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import {
@@ -142,10 +149,12 @@ import {
 } from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
+
+let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot, ToolExecutionRequest } from './tools/types.js';
-import { MCPClientManager } from './tools/mcp-client.js';
+import { MCPClientManager, assessMcpStartupAdmission } from './tools/mcp-client.js';
 import { normalizeCpanelConnectionConfig } from './tools/cloud/cpanel-profile.js';
 import { CpanelClient } from './tools/cloud/cpanel-client.js';
 import { VercelClient } from './tools/cloud/vercel-client.js';
@@ -165,6 +174,12 @@ import type { OutputGuardian } from './guardian/output-guardian.js';
 import { createProviders, getProviderRegistry } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
+import {
+  isDegradedSandboxFallbackActive,
+  isStrictSandboxLockdown,
+  listEnabledDegradedFallbackAllowances,
+  resolveDegradedFallbackConfig,
+} from './sandbox/security-controls.js';
 import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
@@ -1652,7 +1667,16 @@ class ChatAgent extends BaseAgent {
       // response and we have a fallback chain with an external provider, retry.
       // Pass tool definitions (re-mapped for external provider) so the fallback
       // LLM can call tools, not just produce text.
-      if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
+      if (
+        this.qualityFallbackEnabled
+        && this.isResponseDegraded(finalContent)
+        && this.fallbackChain
+        && providerLocality === 'local'
+        // If the tool round already produced concrete results or a real approval,
+        // prefer the local structured fallback paths below over cross-provider retry.
+        && pendingIds.length === 0
+        && lastToolRoundResults.length === 0
+      ) {
         log.warn({ agent: this.id, contentPreview: finalContent?.slice(0, 100) },
           'Local LLM produced degraded response, retrying with fallback chain');
         try {
@@ -4412,6 +4436,17 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         deploymentProfile: config.assistant.security?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE,
         operatingMode: config.assistant.security?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE,
         triageLlmProvider: config.assistant.security?.triageLlmProvider ?? DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+        continuousMonitoring: {
+          enabled: config.assistant.security?.continuousMonitoring?.enabled !== false,
+          profileId: config.assistant.security?.continuousMonitoring?.profileId ?? DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
+          cron: config.assistant.security?.continuousMonitoring?.cron?.trim() || DEFAULT_ASSISTANT_SECURITY_MONITORING_CRON,
+        },
+        autoContainment: {
+          enabled: config.assistant.security?.autoContainment?.enabled !== false,
+          minSeverity: config.assistant.security?.autoContainment?.minSeverity ?? DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_SEVERITY,
+          minConfidence: config.assistant.security?.autoContainment?.minConfidence ?? DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CONFIDENCE,
+          categories: [...(config.assistant.security?.autoContainment?.categories ?? DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES)],
+        },
       },
       credentials: {
         refs: Object.fromEntries(
@@ -4510,6 +4545,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         allowedPathsCount: config.assistant.tools.allowedPaths.length,
         allowedCommandsCount: config.assistant.tools.allowedCommands.length,
         allowedDomainsCount: config.assistant.tools.allowedDomains.length,
+        allowedDomains: [...config.assistant.tools.allowedDomains],
         preferredProviders: config.assistant.tools.preferredProviders,
         webSearch: {
           provider: config.assistant.tools.webSearch?.provider ?? 'auto',
@@ -4525,6 +4561,18 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           sourceCount: searchSources.length,
           defaultMode: searchConfig.defaultMode ?? 'keyword',
         } : undefined,
+        sandbox: {
+          enforcementMode: config.assistant.tools.sandbox?.enforcementMode ?? 'permissive',
+          degradedFallback: resolveDegradedFallbackConfig(config.assistant.tools.sandbox),
+        },
+        browser: {
+          enabled: config.assistant.tools.browser?.enabled ?? true,
+          allowedDomains: config.assistant.tools.browser?.allowedDomains ?? config.assistant.tools.allowedDomains,
+          playwrightEnabled: config.assistant.tools.browser?.playwrightEnabled ?? true,
+          lightpandaEnabled: config.assistant.tools.browser?.lightpandaEnabled ?? false,
+          playwrightBrowser: config.assistant.tools.browser?.playwrightBrowser ?? 'chromium',
+          playwrightCaps: config.assistant.tools.browser?.playwrightCaps ?? 'network,storage',
+        },
         cloud: redactCloudConfig(config.assistant.tools.cloud),
         agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
       },
@@ -4579,6 +4627,13 @@ function buildDashboardCallbacks(
   analytics: AnalyticsService,
   orchestrator: AssistantOrchestrator,
   jobTracker: AssistantJobTracker,
+  aiSecurity: AiSecurityService,
+  runAssistantSecurityScan: (input: {
+    profileId?: string;
+    targetIds?: string[];
+    source?: 'manual' | 'scheduled' | 'system';
+    requestedBy?: string;
+  }) => Promise<Awaited<ReturnType<AiSecurityService['scan']>>>,
   threatIntel: ThreatIntelService,
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
@@ -4921,6 +4976,7 @@ function buildDashboardCallbacks(
       const prevTelegram = configRef.current.channels.telegram;
       const prevSearch = configRef.current.assistant?.tools?.search;
       configRef.current = nextConfig;
+      syncAssistantSecurityMonitoringTask();
 
       // Hot-reload Telegram channel when config changes
       const nextTelegram = nextConfig.channels.telegram;
@@ -6270,6 +6326,7 @@ function buildDashboardCallbacks(
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
         includeAcknowledged,
         includeInactive,
       });
@@ -6291,7 +6348,7 @@ function buildDashboardCallbacks(
       }
 
       alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0 };
+      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
       const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
       for (const alert of alerts) {
         bySource[alert.source] += 1;
@@ -6307,6 +6364,7 @@ function buildDashboardCallbacks(
           networkBaseline,
           gatewayMonitor,
           windowsDefender,
+          assistantSecurity: aiSecurity,
         }),
         includeAcknowledged,
         includeInactive,
@@ -6330,6 +6388,7 @@ function buildDashboardCallbacks(
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
       });
       return {
         success: result.success,
@@ -6350,6 +6409,7 @@ function buildDashboardCallbacks(
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
       });
       return {
         success: result.success,
@@ -6371,6 +6431,7 @@ function buildDashboardCallbacks(
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
       });
       return {
         success: result.success,
@@ -6393,6 +6454,7 @@ function buildDashboardCallbacks(
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
         includeAcknowledged,
         includeInactive: false,
       });
@@ -6405,6 +6467,7 @@ function buildDashboardCallbacks(
           networkBaseline,
           gatewayMonitor,
           windowsDefender,
+          assistantSecurity: aiSecurity,
         }),
       });
     },
@@ -6422,6 +6485,7 @@ function buildDashboardCallbacks(
           networkBaseline,
           gatewayMonitor,
           windowsDefender,
+          assistantSecurity: aiSecurity,
         }),
       });
       return containmentService.getState({
@@ -6429,6 +6493,7 @@ function buildDashboardCallbacks(
         currentMode,
         alerts: base.alerts,
         posture,
+        assistantAutoContainment: configRef.current.assistant.security?.autoContainment,
       });
     },
 
@@ -6525,6 +6590,9 @@ function buildDashboardCallbacks(
       cleanups.push(unsubAudit);
 
       const onSecurityAlert = (event: import('./queue/event-bus.js').AgentEvent): void => {
+        if (!notificationDestinationEnabled(configRef.current.assistant.notifications, 'web')) {
+          return;
+        }
         listener({ type: 'security.alert', data: event.payload });
       };
       runtime.eventBus.subscribeByType('security:alert', onSecurityAlert);
@@ -7509,6 +7577,45 @@ function buildDashboardCallbacks(
                 rawSecurity.triageLlmProvider = trimmed;
               }
             }
+            const monitoringUpdates = securityUpdates.continuousMonitoring;
+            if (monitoringUpdates && typeof monitoringUpdates === 'object') {
+              rawSecurity.continuousMonitoring = (rawSecurity.continuousMonitoring as Record<string, unknown> | undefined) ?? {};
+              const rawMonitoring = rawSecurity.continuousMonitoring as Record<string, unknown>;
+              if (typeof monitoringUpdates.enabled === 'boolean') {
+                rawMonitoring.enabled = monitoringUpdates.enabled;
+              }
+              if (monitoringUpdates.profileId !== undefined) {
+                const trimmed = monitoringUpdates.profileId.trim();
+                if (trimmed) rawMonitoring.profileId = trimmed;
+                else delete rawMonitoring.profileId;
+              }
+              if (monitoringUpdates.cron !== undefined) {
+                const trimmed = monitoringUpdates.cron.trim();
+                if (trimmed) rawMonitoring.cron = trimmed;
+                else delete rawMonitoring.cron;
+              }
+            }
+            const autoContainmentUpdates = securityUpdates.autoContainment;
+            if (autoContainmentUpdates && typeof autoContainmentUpdates === 'object') {
+              rawSecurity.autoContainment = (rawSecurity.autoContainment as Record<string, unknown> | undefined) ?? {};
+              const rawAutoContainment = rawSecurity.autoContainment as Record<string, unknown>;
+              if (typeof autoContainmentUpdates.enabled === 'boolean') {
+                rawAutoContainment.enabled = autoContainmentUpdates.enabled;
+              }
+              if (autoContainmentUpdates.minSeverity !== undefined) {
+                const trimmed = autoContainmentUpdates.minSeverity.trim();
+                if (trimmed) rawAutoContainment.minSeverity = trimmed;
+                else delete rawAutoContainment.minSeverity;
+              }
+              if (typeof autoContainmentUpdates.minConfidence === 'number' && Number.isFinite(autoContainmentUpdates.minConfidence)) {
+                rawAutoContainment.minConfidence = autoContainmentUpdates.minConfidence;
+              }
+              if (Array.isArray(autoContainmentUpdates.categories)) {
+                rawAutoContainment.categories = autoContainmentUpdates.categories
+                  .map((category) => category?.trim())
+                  .filter((category): category is string => !!category);
+              }
+            }
           }
 
           const memoryUpdates = updates.assistant?.memory;
@@ -7903,6 +8010,16 @@ function buildDashboardCallbacks(
             if (sandboxUpdate.enforcementMode === 'strict' || sandboxUpdate.enforcementMode === 'permissive') {
               rawSandbox.enforcementMode = sandboxUpdate.enforcementMode;
             }
+            const degradedFallbackUpdate = sandboxUpdate.degradedFallback;
+            if (degradedFallbackUpdate && typeof degradedFallbackUpdate === 'object') {
+              rawSandbox.degradedFallback = (rawSandbox.degradedFallback as Record<string, unknown> | undefined) ?? {};
+              const rawDegradedFallback = rawSandbox.degradedFallback as Record<string, unknown>;
+              if (typeof degradedFallbackUpdate.allowNetworkTools === 'boolean') rawDegradedFallback.allowNetworkTools = degradedFallbackUpdate.allowNetworkTools;
+              if (typeof degradedFallbackUpdate.allowBrowserTools === 'boolean') rawDegradedFallback.allowBrowserTools = degradedFallbackUpdate.allowBrowserTools;
+              if (typeof degradedFallbackUpdate.allowMcpServers === 'boolean') rawDegradedFallback.allowMcpServers = degradedFallbackUpdate.allowMcpServers;
+              if (typeof degradedFallbackUpdate.allowPackageManagers === 'boolean') rawDegradedFallback.allowPackageManagers = degradedFallbackUpdate.allowPackageManagers;
+              if (typeof degradedFallbackUpdate.allowManualCodeTerminals === 'boolean') rawDegradedFallback.allowManualCodeTerminals = degradedFallbackUpdate.allowManualCodeTerminals;
+            }
           }
 
           // Agent policy updates (which policy areas the assistant can modify via chat)
@@ -7979,6 +8096,34 @@ function buildDashboardCallbacks(
     },
 
     onAnalyticsSummary: (windowMs) => analytics.summary(windowMs),
+
+    onAiSecuritySummary: () => aiSecurity.getSummary(),
+
+    onAiSecurityProfiles: () => aiSecurity.getProfiles(),
+
+    onAiSecurityTargets: () => aiSecurity.listTargets(),
+
+    onAiSecurityRuns: (limit) => aiSecurity.listRuns(limit ?? 20),
+
+    onAiSecurityScan: async (input) => runAssistantSecurityScan({
+      profileId: input?.profileId,
+      targetIds: input?.targetIds,
+      source: input?.source ?? 'manual',
+      requestedBy: 'web-security-page',
+    }),
+
+    onAiSecurityFindings: ({ limit, status }) => aiSecurity.listFindings(limit ?? 50, status),
+
+    onAiSecurityUpdateFindingStatus: ({ findingId, status }) => {
+      const result = aiSecurity.updateFindingStatus(findingId, status);
+      analytics.track({
+        type: result.success ? 'assistant_security_finding_status_updated' : 'assistant_security_finding_status_failed',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { findingId, status, success: result.success },
+      });
+      return result;
+    },
 
     onThreatIntelSummary: () => threatIntel.getSummary(),
 
@@ -8951,16 +9096,47 @@ async function main(): Promise<void> {
     sourceScanners: threatIntelSourceScanners,
   });
   // ─── OS-Level Process Sandbox ───────────────────────────────
+  const configuredSandbox = config.assistant.tools.sandbox;
+  const configuredWindowsHelper = configuredSandbox?.windowsHelper;
   const sandboxConfig: SandboxConfig = {
     ...DEFAULT_SANDBOX_CONFIG,
-    ...(config.assistant.tools.sandbox ?? {}),
+    ...(configuredSandbox ?? {}),
+    degradedFallback: resolveDegradedFallbackConfig(configuredSandbox ?? DEFAULT_SANDBOX_CONFIG),
     resourceLimits: {
       ...DEFAULT_SANDBOX_CONFIG.resourceLimits,
-      ...(config.assistant.tools.sandbox?.resourceLimits ?? {}),
+      ...(configuredSandbox?.resourceLimits ?? {}),
     },
+    windowsHelper: {
+      enabled: configuredWindowsHelper?.enabled ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.enabled ?? false,
+      command: configuredWindowsHelper?.command ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.command,
+      args: configuredWindowsHelper?.args ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.args,
+      timeoutMs: configuredWindowsHelper?.timeoutMs ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.timeoutMs,
+    },
+  };
+  const buildRuntimeSandboxConfig = (): SandboxConfig => {
+    const liveSandbox = configRef.current.assistant.tools.sandbox;
+    const liveWindowsHelper = liveSandbox?.windowsHelper;
+    return {
+      ...DEFAULT_SANDBOX_CONFIG,
+      ...(liveSandbox ?? {}),
+      degradedFallback: resolveDegradedFallbackConfig(liveSandbox ?? DEFAULT_SANDBOX_CONFIG),
+      resourceLimits: {
+        ...DEFAULT_SANDBOX_CONFIG.resourceLimits,
+        ...(liveSandbox?.resourceLimits ?? {}),
+      },
+      windowsHelper: {
+        enabled: liveWindowsHelper?.enabled ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.enabled ?? false,
+        command: liveWindowsHelper?.command ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.command,
+        args: liveWindowsHelper?.args ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.args,
+        timeoutMs: liveWindowsHelper?.timeoutMs ?? DEFAULT_SANDBOX_CONFIG.windowsHelper?.timeoutMs,
+      },
+    };
   };
   const sandboxCaps = await detectSandboxCapabilities(sandboxConfig);
   const sandboxHealth = await detectSandboxHealth(sandboxConfig, sandboxCaps);
+  const degradedFallbackAllowances = listEnabledDegradedFallbackAllowances(sandboxConfig);
+  const degradedFallbackActive = isDegradedSandboxFallbackActive(sandboxConfig, sandboxHealth);
+  const strictSandboxLockdown = isStrictSandboxLockdown(sandboxConfig, sandboxHealth);
   const sandboxUpgradeGuidance = [
     'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
     'Set assistant.tools.sandbox.enforcementMode: permissive only if you explicitly accept higher host risk.',
@@ -8976,16 +9152,7 @@ async function main(): Promise<void> {
       },
       'OS-level process sandbox active',
     );
-    if (sandboxHealth.enforcementMode !== 'strict') {
-      log.warn(
-        {
-          platform: sandboxHealth.platform,
-          availability: sandboxHealth.availability,
-          backend: sandboxHealth.backend,
-        },
-        `Permissive sandbox mode is explicitly enabled. ${sandboxUpgradeGuidance}`,
-      );
-    } else if (sandboxHealth.availability !== 'strong') {
+    if (strictSandboxLockdown) {
       log.warn(
         {
           platform: sandboxHealth.platform,
@@ -8994,6 +9161,26 @@ async function main(): Promise<void> {
         },
         `Strict sandbox mode is blocking risky subprocess-backed tools until a strong sandbox backend is available. ${sandboxUpgradeGuidance}`,
       );
+    } else if (sandboxHealth.enforcementMode !== 'strict') {
+      const baseMetadata = {
+        platform: sandboxHealth.platform,
+        availability: sandboxHealth.availability,
+        backend: sandboxHealth.backend,
+      };
+      if (degradedFallbackActive) {
+        const allowanceMessage = degradedFallbackAllowances.length > 0
+          ? `Explicit degraded-backend overrides are enabled for: ${degradedFallbackAllowances.join(', ')}.`
+          : 'Network/search tools, browser automation, third-party MCP servers, install-like package manager commands, and manual code terminals stay blocked until explicitly enabled.';
+        log.warn(
+          baseMetadata,
+          `Permissive sandbox mode is explicitly enabled on a degraded backend. ${allowanceMessage} ${sandboxUpgradeGuidance}`,
+        );
+      } else {
+        log.warn(
+          baseMetadata,
+          `Permissive sandbox mode is explicitly enabled. ${sandboxUpgradeGuidance}`,
+        );
+      }
     }
   } else {
     log.warn('OS-level process sandbox is disabled — child processes run unsandboxed');
@@ -9009,17 +9196,61 @@ async function main(): Promise<void> {
     ...configuredMCPServers.map((server) => ({ ...server })),
     ...managedMCPServers,
   ];
-  const mcpBlockedBySandbox = sandboxHealth.enforcementMode === 'strict' && sandboxHealth.availability !== 'strong';
+  const degradedFallback = resolveDegradedFallbackConfig(sandboxConfig);
+  const mcpBlockedBySandbox = strictSandboxLockdown || (degradedFallbackActive && !degradedFallback.allowMcpServers);
+  const recordMcpStartupAudit = (
+    type: 'action_allowed' | 'action_denied',
+    severity: 'info' | 'warn',
+    details: Record<string, unknown>,
+  ): void => {
+    runtime.auditLog.record({
+      type,
+      severity,
+      agentId: 'system',
+      controller: 'MCPStartupAdmission',
+      details,
+    });
+  };
   if (mcpConfig?.enabled && allMCPServers.length > 0) {
     if (mcpBlockedBySandbox) {
-      console.warn('  MCP servers blocked: strict sandbox mode requires strong sandbox availability');
+      const reason = strictSandboxLockdown
+        ? 'strict sandbox mode requires strong sandbox availability'
+        : 'degraded backend overrides leave third-party MCP servers disabled by default';
+      for (const server of allMCPServers) {
+        recordMcpStartupAudit('action_denied', 'warn', {
+          serverId: server.id,
+          serverName: server.name,
+          source: server.managedProviderId ? 'managed_provider' : 'third_party',
+          reason,
+        });
+      }
+      console.warn(`  MCP servers blocked: ${reason}`);
       log.warn(
-        { platform: sandboxHealth.platform, availability: sandboxHealth.availability },
-        'Strict sandbox mode is blocking MCP server startup',
+        { platform: sandboxHealth.platform, availability: sandboxHealth.availability, strictSandboxLockdown, degradedFallbackActive },
+        strictSandboxLockdown
+          ? 'Strict sandbox mode is blocking MCP server startup'
+          : 'Degraded backend safeguards are blocking third-party MCP server startup',
       );
     } else {
       mcpManager = new MCPClientManager(sandboxConfig);
       for (const server of allMCPServers) {
+        const serverSource = server.managedProviderId ? 'managed_provider' as const : 'third_party' as const;
+        const admission = assessMcpStartupAdmission({
+          source: serverSource,
+          startupApproved: server.startupApproved,
+          name: server.name,
+        });
+        if (!admission.allowed) {
+          recordMcpStartupAudit('action_denied', 'warn', {
+            serverId: server.id,
+            serverName: server.name,
+            source: serverSource,
+            reason: admission.reason,
+          });
+          log.warn({ serverId: server.id, serverName: server.name }, admission.reason ?? 'Blocked third-party MCP server startup');
+          continue;
+        }
+
         const serverConfig: MCPServerConfig = {
           id: server.id,
           name: server.name,
@@ -9029,11 +9260,24 @@ async function main(): Promise<void> {
           env: server.env,
           cwd: server.cwd,
           timeoutMs: server.timeoutMs,
+          startupApproved: server.startupApproved,
+          source: serverSource,
+          category: 'mcp',
+          networkAccess: server.networkAccess ?? false,
+          inheritEnv: server.inheritEnv ?? false,
+          allowedEnvKeys: server.allowedEnvKeys,
           trustLevel: server.trustLevel,
           maxCallsPerMinute: server.maxCallsPerMinute,
         };
         try {
           await mcpManager.addServer(serverConfig);
+          recordMcpStartupAudit('action_allowed', 'info', {
+            serverId: server.id,
+            serverName: server.name,
+            source: serverSource,
+            networkAccess: serverConfig.networkAccess,
+            startupApproved: serverConfig.startupApproved ?? false,
+          });
           const managedProvider = server.managedProviderId;
           if (managedProvider) {
             const exposeSkills = managedProvider === 'gws'
@@ -9069,14 +9313,16 @@ async function main(): Promise<void> {
   // Browser tools are MCP-based but should work out of the box without requiring
   // explicit mcp.enabled in config. Create mcpManager if it doesn't exist yet.
   const browserConfig = config.assistant?.tools?.browser;
-  if (browserConfig?.enabled !== false && !mcpBlockedBySandbox) {
+  const browserBlockedBySandbox = strictSandboxLockdown || (degradedFallbackActive && !degradedFallback.allowBrowserTools);
+  if (browserConfig?.enabled !== false && !browserBlockedBySandbox) {
     if (!mcpManager) {
       mcpManager = new MCPClientManager(sandboxConfig);
     }
     // Playwright MCP
     if (browserConfig?.playwrightEnabled !== false) {
       const playwrightArgs: string[] = [
-        '@playwright/mcp@latest',
+        '--no-install',
+        '@playwright/mcp',
         '--headless',
         '--browser', browserConfig?.playwrightBrowser ?? 'chromium',
         '--caps', browserConfig?.playwrightCaps ?? 'network,storage',
@@ -9090,6 +9336,10 @@ async function main(): Promise<void> {
           transport: 'stdio' as const,
           command: 'npx',
           args: playwrightArgs,
+          source: 'managed_browser',
+          category: 'browser',
+          networkAccess: true,
+          inheritEnv: false,
           timeoutMs: 60_000,
           maxCallsPerMinute: 60,
         });
@@ -9109,6 +9359,10 @@ async function main(): Promise<void> {
           transport: 'stdio' as const,
           command: browserConfig?.lightpandaBinaryPath ?? 'lightpanda',
           args: ['mcp'],
+          source: 'managed_browser',
+          category: 'browser',
+          networkAccess: true,
+          inheritEnv: false,
           timeoutMs: 30_000,
           maxCallsPerMinute: 120,
         });
@@ -9118,6 +9372,18 @@ async function main(): Promise<void> {
         log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Lightpanda MCP failed to start — lightweight browser reads unavailable');
       }
     }
+  } else if (browserConfig?.enabled !== false && browserBlockedBySandbox) {
+    log.warn(
+      {
+        platform: sandboxHealth.platform,
+        availability: sandboxHealth.availability,
+        strictSandboxLockdown,
+        degradedFallbackActive,
+      },
+      strictSandboxLockdown
+        ? 'Strict sandbox mode is blocking browser automation startup'
+        : 'Degraded backend safeguards are blocking browser automation until explicitly enabled',
+    );
   }
 
   // ─── Native Skills ───────────────────────────────────────────
@@ -9377,6 +9643,262 @@ async function main(): Promise<void> {
   const containmentService = new ContainmentService();
   const securityActivityLog = new SecurityActivityLogService();
   await securityActivityLog.load().catch(() => {});
+  const aiSecurity = new AiSecurityService({
+    enabled: true,
+    getRuntimeSnapshot: () => {
+      const liveSandbox = buildRuntimeSandboxConfig();
+      const degradedFallback = resolveDegradedFallbackConfig(liveSandbox);
+      const mcpStatusById = new Map((mcpManager?.getStatus() ?? []).map((status) => [status.id, status]));
+      const thirdPartyServers = (configRef.current.assistant.tools.mcp?.servers ?? []).map((server) => {
+        const status = mcpStatusById.get(server.id);
+        return {
+          id: server.id,
+          name: server.name,
+          command: server.command,
+          trustLevel: server.trustLevel,
+          startupApproved: server.startupApproved === true,
+          networkAccess: server.networkAccess === true,
+          inheritEnv: server.inheritEnv === true,
+          allowedEnvKeyCount: Array.isArray(server.allowedEnvKeys)
+            ? server.allowedEnvKeys.filter((value) => typeof value === 'string' && value.trim()).length
+            : 0,
+          envKeyCount: Object.keys(server.env ?? {}).length,
+          connected: status?.state === 'connected',
+        };
+      });
+      return {
+        sandbox: {
+          enabled: liveSandbox.enabled !== false,
+          availability: sandboxHealth.availability,
+          enforcementMode: liveSandbox.enforcementMode ?? sandboxHealth.enforcementMode ?? 'permissive',
+          backend: sandboxHealth.backend,
+          degradedFallbackActive: isDegradedSandboxFallbackActive(liveSandbox, sandboxHealth),
+          degradedFallback,
+        },
+        browser: {
+          enabled: configRef.current.assistant.tools.browser?.enabled ?? true,
+          allowedDomains: configRef.current.assistant.tools.browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains,
+          playwrightEnabled: configRef.current.assistant.tools.browser?.playwrightEnabled ?? true,
+          lightpandaEnabled: configRef.current.assistant.tools.browser?.lightpandaEnabled ?? false,
+        },
+        mcp: {
+          enabled: configRef.current.assistant.tools.mcp?.enabled ?? false,
+          configuredThirdPartyServerCount: thirdPartyServers.length,
+          connectedThirdPartyServerCount: thirdPartyServers.filter((server) => server.connected).length,
+          managedProviderIds: Object.entries(configRef.current.assistant.tools.mcp?.managedProviders ?? {})
+            .filter(([, value]) => value && typeof value === 'object' && (value as { enabled?: boolean }).enabled !== false)
+            .map(([id]) => id),
+          usesDynamicPlaywrightPackage: false,
+          thirdPartyServers,
+        },
+        agentPolicyUpdates: {
+          allowedPaths: configRef.current.assistant.tools.agentPolicyUpdates?.allowedPaths ?? false,
+          allowedCommands: configRef.current.assistant.tools.agentPolicyUpdates?.allowedCommands ?? false,
+          allowedDomains: configRef.current.assistant.tools.agentPolicyUpdates?.allowedDomains ?? false,
+          toolPolicies: configRef.current.assistant.tools.agentPolicyUpdates?.toolPolicies ?? false,
+        },
+      };
+    },
+    listCodeSessions: () => codeSessionStore
+      .listAllSessions()
+      .map((session) => createAiSecuritySessionSnapshot(sharedCodeWorkspaceTrustService?.maybeSchedule(session) ?? session)),
+  });
+  await aiSecurity.load().catch(() => {});
+  const getAssistantSecurityWorkspaceTargetIds = (profileId: string, selectedTargetIds?: string[]) => {
+    const profile = aiSecurity.getProfiles().find((entry) => entry.id === profileId);
+    if (!profile?.targetTypes.includes('workspace')) return [];
+
+    const explicitWorkspaceTargetIds = Array.isArray(selectedTargetIds)
+      ? selectedTargetIds.filter((value): value is string => typeof value === 'string' && value.startsWith('workspace:'))
+      : [];
+    if (explicitWorkspaceTargetIds.length > 0) {
+      return [...new Set(explicitWorkspaceTargetIds)];
+    }
+
+    return aiSecurity.listTargets()
+      .filter((target) => target.type === 'workspace')
+      .map((target) => target.id);
+  };
+  const updateAssistantSecurityCodeSessionChecks = (
+    result: Awaited<ReturnType<AiSecurityService['scan']>>,
+    profileId: string,
+    selectedTargetIds?: string[],
+  ) => {
+    const workspaceTargetIds = getAssistantSecurityWorkspaceTargetIds(profileId, selectedTargetIds);
+    if (workspaceTargetIds.length === 0) return;
+
+    const findingsByTarget = new Map<string, typeof result.findings>();
+    for (const finding of result.findings) {
+      if (finding.targetType !== 'workspace') continue;
+      const existing = findingsByTarget.get(finding.targetId) ?? [];
+      existing.push(finding);
+      findingsByTarget.set(finding.targetId, existing);
+    }
+
+    const severityRank = { critical: 4, high: 3, medium: 2, low: 1 } as const;
+    for (const targetId of workspaceTargetIds) {
+      const sessionId = targetId.slice('workspace:'.length);
+      if (!sessionId) continue;
+
+      const session = codeSessionStore.getSession(sessionId);
+      if (!session) continue;
+      const relatedSessions = codeSessionStore.listAllSessions()
+        .filter((candidate) => candidate.resolvedRoot === session.resolvedRoot);
+
+      const findings = findingsByTarget.get(targetId) ?? [];
+      const highest = findings.reduce<typeof result.findings[number] | null>((current, finding) => {
+        if (!current) return finding;
+        return severityRank[finding.severity] > severityRank[current.severity] ? finding : current;
+      }, null);
+      const status: 'pass' | 'warn' | 'fail' | 'not_run' = highest
+        ? (highest.severity === 'critical' || highest.severity === 'high' ? 'fail' : 'warn')
+        : 'pass';
+      const summary = highest
+        ? `${findings.length} finding${findings.length === 1 ? '' : 's'} (${highest.severity} highest): ${highest.title}`
+        : `No Assistant Security findings in the latest '${profileId}' scan.`;
+      for (const relatedSession of relatedSessions) {
+        const verification = [
+          ...relatedSession.workState.verification.filter((entry) => entry.id !== 'assistant-security'),
+          {
+            id: 'assistant-security',
+            kind: 'manual' as const,
+            status,
+            summary,
+            timestamp: result.run.completedAt,
+          },
+        ].sort((left, right) => right.timestamp - left.timestamp);
+
+        codeSessionStore.updateSession({
+          sessionId: relatedSession.id,
+          ownerUserId: relatedSession.ownerUserId,
+          workState: {
+            verification,
+          },
+        });
+      }
+    }
+  };
+  const runAssistantSecurityScan = async (input: {
+    profileId?: string;
+    targetIds?: string[];
+    source?: 'manual' | 'scheduled' | 'system';
+    requestedBy?: string;
+  }) => {
+    const profileId = input.profileId?.trim() || 'quick';
+    const targetIds = Array.isArray(input.targetIds)
+      ? input.targetIds.filter((value): value is string => !!value?.trim()).map((value) => value.trim())
+      : undefined;
+    const source = input.source ?? 'manual';
+
+    securityActivityLog.record({
+      agentId: 'assistant-security',
+      status: 'started',
+      severity: 'info',
+      title: 'Assistant security scan started',
+      summary: `Running '${profileId}' against ${targetIds?.length ? `${targetIds.length} selected target(s)` : 'default target set'}.`,
+      triggerEventType: 'assistant_security_scan_started',
+      details: {
+        profileId,
+        targetIds,
+        source,
+        requestedBy: input.requestedBy,
+      },
+    });
+
+    return jobTracker.run(
+      {
+        type: 'assistant_security.scan',
+        source,
+        detail: `Assistant security scan (${profileId})`,
+        metadata: {
+          profileId,
+          targetIds,
+          requestedBy: input.requestedBy,
+        },
+      },
+      async () => {
+        try {
+          const result = await aiSecurity.scan({
+            profileId,
+            targetIds,
+            source,
+          });
+          updateAssistantSecurityCodeSessionChecks(result, profileId, targetIds);
+
+          analytics.track({
+            type: result.success ? 'assistant_security_scan' : 'assistant_security_scan_failed',
+            channel: 'system',
+            canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+            metadata: {
+              profileId,
+              targetIds,
+              findingCount: result.findings.length,
+              highOrCriticalCount: result.promotedFindings.length,
+              success: result.success,
+              requestedBy: input.requestedBy,
+            },
+          });
+
+          securityActivityLog.record({
+            agentId: 'assistant-security',
+            status: result.success ? 'completed' : 'failed',
+            severity: result.promotedFindings.length > 0 ? 'warn' : 'info',
+            title: result.success ? 'Assistant security scan completed' : 'Assistant security scan failed',
+            summary: result.message,
+            triggerEventType: result.success ? 'assistant_security_scan_completed' : 'assistant_security_scan_failed',
+            details: {
+              profileId,
+              runId: result.run.id,
+              findingCount: result.findings.length,
+              highOrCriticalCount: result.promotedFindings.length,
+              requestedBy: input.requestedBy,
+            },
+          });
+
+          for (const finding of result.promotedFindings.slice(0, 10)) {
+            runtime.auditLog.record({
+              type: 'anomaly_detected',
+              severity: finding.severity === 'critical' ? 'critical' : 'warn',
+              agentId: 'assistant-security',
+              details: {
+                source: 'assistant_security_scan',
+                anomalyType: `assistant_security_${finding.category}`,
+                description: `${finding.title}: ${finding.summary}`,
+                evidence: {
+                  findingId: finding.id,
+                  targetId: finding.targetId,
+                  targetLabel: finding.targetLabel,
+                  severity: finding.severity,
+                  confidence: finding.confidence,
+                  profileId,
+                  runId: result.run.id,
+                },
+              },
+            });
+          }
+
+          return result;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          securityActivityLog.record({
+            agentId: 'assistant-security',
+            status: 'failed',
+            severity: 'warn',
+            title: 'Assistant security scan failed',
+            summary: message,
+            triggerEventType: 'assistant_security_scan_failed',
+            details: {
+              profileId,
+              targetIds,
+              source,
+              requestedBy: input.requestedBy,
+            },
+          });
+          throw err;
+        }
+      },
+    );
+  };
 
   let lastNetworkAlertEmitAt = 0;
   let lastWindowsDefenderAlertEmitAt = 0;
@@ -9389,11 +9911,13 @@ async function main(): Promise<void> {
     const configuredSecurity = configRef.current.assistant.security;
     const profile = configuredSecurity?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE;
     const currentMode = configuredSecurity?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE;
+    const assistantAutoContainment = configuredSecurity?.autoContainment;
     const alerts = collectUnifiedSecurityAlerts({
       hostMonitor,
       networkBaseline,
       gatewayMonitor,
       windowsDefender,
+      assistantSecurity: aiSecurity,
       includeAcknowledged: false,
       includeInactive: false,
     });
@@ -9406,9 +9930,10 @@ async function main(): Promise<void> {
         networkBaseline,
         gatewayMonitor,
         windowsDefender,
+        assistantSecurity: aiSecurity,
       }),
     });
-    return { profile, currentMode, alerts, posture };
+    return { profile, currentMode, alerts, posture, assistantAutoContainment };
   };
 
   const runNetworkAnalysis = (source: string): NetworkAnomalyReport => {
@@ -9773,6 +10298,7 @@ async function main(): Promise<void> {
     localAgentId: router.findAgentByRole('local')?.id,
     externalAgentId: router.findAgentByRole('external')?.id,
   });
+  let connectors: ConnectorPlaybookService;
 
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
@@ -9784,6 +10310,9 @@ async function main(): Promise<void> {
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
     agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
+    onApprovalDecided: async (approvalId, decision, result) => {
+      await connectors?.continueAfterApprovalDecision(approvalId, decision, result);
+    },
     onToolExecuted: (toolName, args, result, request) => {
       runtime.eventBus.emit({
         type: 'tool.executed',
@@ -9893,6 +10422,8 @@ async function main(): Promise<void> {
     sandboxConfig,
     sandboxHealth,
     threatIntel,
+    assistantSecurity: aiSecurity,
+    runAssistantSecurityScan,
     onCheckAction: ({ type, params, agentId, origin }) => {
       const capMap: Record<string, string[]> = {
         read_file: ['read_files'],
@@ -10067,7 +10598,12 @@ async function main(): Promise<void> {
     console.error(initialSearchReload.message);
   }
 
-  const connectors = new ConnectorPlaybookService({
+  const playbookRunStateStore = new JsonFileRunStateStore<PlaybookStepRunResult>({
+    persistPath: join(homedir(), '.guardianagent', 'playbook-run-state.json'),
+    maxEntries: 200,
+  });
+
+  connectors = new ConnectorPlaybookService({
     config: config.assistant.connectors,
     runTool: async (request) => toolExecutor.runTool(request),
     runInstruction: async (prompt, providerName, maxTokens) => {
@@ -10081,6 +10617,7 @@ async function main(): Promise<void> {
       );
       return response.content;
     },
+    runStateStore: playbookRunStateStore,
   });
 
   const getPlaybookOutputHandling = (playbookId: string) => (
@@ -10108,6 +10645,57 @@ async function main(): Promise<void> {
   if (scheduledTasks.list().length === 0) {
     scheduledTasks.autoInstallAllPresets();
   }
+
+  function getAssistantSecurityMonitoringConfig() {
+    const configured = configRef.current.assistant.security?.continuousMonitoring;
+    return {
+      enabled: configured?.enabled !== false,
+      profileId: configured?.profileId ?? DEFAULT_ASSISTANT_SECURITY_MONITORING_PROFILE,
+      cron: configured?.cron?.trim() || DEFAULT_ASSISTANT_SECURITY_MONITORING_CRON,
+    };
+  }
+
+  function findManagedAssistantSecurityTask() {
+    return scheduledTasks.list().find((task) => (
+      task.presetId === 'assistant-security-scan'
+      || (task.target === 'assistant_security_scan' && task.name === 'Assistant Security Scan')
+    )) ?? null;
+  }
+
+  syncAssistantSecurityMonitoringTask = (): void => {
+    const monitoring = getAssistantSecurityMonitoringConfig();
+    let task = findManagedAssistantSecurityTask();
+
+    if (!task && !monitoring.enabled) {
+      return;
+    }
+
+    if (!task) {
+      const installed = scheduledTasks.installPreset('assistant-security-scan');
+      if (!installed.success || !installed.task) {
+        log.warn({ result: installed.message }, 'Failed to install managed Assistant Security monitoring task');
+        return;
+      }
+      task = installed.task;
+    }
+
+    const update = scheduledTasks.update(task.id, {
+      name: 'Assistant Security Scan',
+      description: 'Managed continuous Assistant Security posture scan driven by Configuration > Security.',
+      args: {
+        profileId: monitoring.profileId,
+        source: 'scheduled',
+      },
+      cron: monitoring.cron,
+      enabled: monitoring.enabled,
+      emitEvent: 'assistant_security_scanned',
+    });
+    if (!update.success) {
+      log.warn({ taskId: task.id, result: update.message }, 'Failed to sync managed Assistant Security monitoring task');
+    }
+  };
+
+  syncAssistantSecurityMonitoringTask();
 
   // Auto-install all connector templates if no packs exist yet
   if (connectors.getState().packs.length === 0) {
@@ -10833,6 +11421,8 @@ async function main(): Promise<void> {
     analytics,
     orchestrator,
     jobTracker,
+    aiSecurity,
+    runAssistantSecurityScan,
     threatIntel,
     connectors,
     toolExecutor,
@@ -10868,6 +11458,64 @@ async function main(): Promise<void> {
     microsoftServiceRef,
     { current: toolExecutor },
   );
+
+  dashboardCallbacks.onCodeTerminalAccessCheck = () => {
+    const liveSandboxConfig = buildRuntimeSandboxConfig();
+    if (isStrictSandboxLockdown(liveSandboxConfig, sandboxHealth)) {
+      runtime.auditLog?.record?.({
+        type: 'action_denied',
+        severity: 'warn',
+        agentId: 'system',
+        controller: 'CodeTerminal',
+        details: {
+          reason: 'strict_sandbox_lockdown',
+          availability: sandboxHealth.availability,
+          backend: sandboxHealth.backend,
+        },
+      });
+      return {
+        allowed: false,
+        reason: 'Manual code terminals are blocked because strict sandbox mode requires a strong sandbox backend on this host.',
+      };
+    }
+    if (isDegradedSandboxFallbackActive(liveSandboxConfig, sandboxHealth) && !resolveDegradedFallbackConfig(liveSandboxConfig).allowManualCodeTerminals) {
+      runtime.auditLog?.record?.({
+        type: 'action_denied',
+        severity: 'warn',
+        agentId: 'system',
+        controller: 'CodeTerminal',
+        details: {
+          reason: 'degraded_backend_manual_terminals_disabled',
+          availability: sandboxHealth.availability,
+          backend: sandboxHealth.backend,
+        },
+      });
+      return {
+        allowed: false,
+        reason: 'Manual code terminals stay disabled by default on degraded sandbox backends. Enable them in Configuration > Security if you explicitly accept the host risk.',
+      };
+    }
+    return { allowed: true };
+  };
+  dashboardCallbacks.onCodeTerminalEvent = (event) => {
+    runtime.auditLog?.record?.({
+      type: 'action_allowed',
+      severity: 'info',
+      agentId: 'system',
+      controller: 'CodeTerminal',
+      details: {
+        action: event.action,
+        terminalId: event.terminalId,
+        shell: event.shell,
+        cwd: event.cwd,
+        codeSessionId: event.codeSessionId ?? null,
+        cols: event.cols,
+        rows: event.rows,
+        exitCode: event.exitCode,
+        signal: event.signal,
+      },
+    });
+  };
 
   const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
   if (basePlaybookUpsert) {

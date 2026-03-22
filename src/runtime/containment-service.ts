@@ -1,4 +1,5 @@
 import type { ToolCategory } from '../tools/types.js';
+import type { AssistantSecurityAutoContainmentConfig } from '../config/types.js';
 import type { UnifiedSecurityAlert } from './security-alerts.js';
 import type { DeploymentProfile, SecurityOperatingMode } from './security-controls.js';
 import type { SecurityPostureAssessment } from './security-posture.js';
@@ -12,6 +13,7 @@ export type ContainmentActionType =
   | 'restrict_outbound_mutation'
   | 'restrict_command_execution'
   | 'restrict_network_egress'
+  | 'restrict_mcp_tooling'
   | 'freeze_mutating_tools'
   | 'ir_assist_read_only';
 
@@ -37,6 +39,7 @@ export interface SecurityContainmentDecisionInput {
   currentMode: SecurityOperatingMode;
   posture: SecurityPostureAssessment;
   alerts: UnifiedSecurityAlert[];
+  assistantAutoContainment?: AssistantSecurityAutoContainmentConfig;
 }
 
 export interface SecurityContainmentActionInput extends SecurityContainmentDecisionInput {
@@ -123,9 +126,12 @@ export class ContainmentService {
 
   getState(input: SecurityContainmentDecisionInput): SecurityContainmentState {
     const activeAlerts = input.alerts.filter((alert) => alert.status === 'active');
-    const autoElevated = shouldAutoElevateGuarded(input.currentMode, input.posture, activeAlerts);
+    const assistantMatches = findAssistantAutoContainmentMatches(activeAlerts, input.assistantAutoContainment);
+    const autoElevated = shouldAutoElevateGuarded(input.currentMode, input.posture, activeAlerts)
+      || shouldAutoElevateFromAssistantFindings(input.currentMode, input.posture, assistantMatches);
     const effectiveMode = autoElevated ? 'guarded' : input.currentMode;
     const actions: ContainmentAction[] = [];
+    const matchedCategories = new Set(assistantMatches.map((match) => match.category));
 
     if (input.posture.shouldEscalate) {
       actions.push({
@@ -138,7 +144,9 @@ export class ContainmentService {
       actions.push({
         type: 'auto_escalated_guarded',
         title: 'Temporary guarded controls active',
-        reason: 'Multiple elevated alerts triggered a conservative temporary guarded posture while monitor mode is still configured.',
+        reason: assistantMatches.length > 0
+          ? 'High-confidence Assistant Security findings matched the configured containment thresholds, so Guardian temporarily elevated to guarded controls.'
+          : 'Multiple elevated alerts triggered a conservative temporary guarded posture while monitor mode is still configured.',
       });
     }
 
@@ -153,6 +161,20 @@ export class ContainmentService {
         title: 'Scheduled risky mutations paused',
         reason: 'Scheduled mutating browser, shell, and outbound actions are blocked in guarded mode.',
       });
+      if (matchedCategories.has('mcp')) {
+        actions.push({
+          type: 'restrict_mcp_tooling',
+          title: 'MCP tooling temporarily restricted',
+          reason: 'High-confidence Assistant Security MCP findings matched the configured containment thresholds, so MCP tool calls are temporarily blocked.',
+        });
+      }
+      if (matchedCategories.has('sandbox') || matchedCategories.has('trust_boundary')) {
+        actions.push({
+          type: 'restrict_command_execution',
+          title: 'Command execution temporarily restricted',
+          reason: 'High-confidence Assistant Security boundary findings matched the configured containment thresholds, so direct command execution is temporarily blocked.',
+        });
+      }
     }
 
     if (effectiveMode === 'lockdown') {
@@ -210,6 +232,11 @@ export class ContainmentService {
   shouldAllowAction(input: SecurityContainmentActionInput): SecurityContainmentActionDecision {
     const state = this.getState(input);
     const { action } = input;
+    const assistantMatches = findAssistantAutoContainmentMatches(
+      input.alerts.filter((alert) => alert.status === 'active'),
+      input.assistantAutoContainment,
+    );
+    const matchedCategories = new Set(assistantMatches.map((match) => match.category));
 
     if (isAlwaysAllowedSecurityControlTool(action.toolName)) {
       return { allowed: true, state };
@@ -232,6 +259,22 @@ export class ContainmentService {
     }
 
     if (state.effectiveMode === 'guarded') {
+      if (action.type === 'mcp_tool' && matchedCategories.has('mcp')) {
+        return {
+          allowed: false,
+          reason: `Blocked by containment: '${action.toolName}' is temporarily disabled because Assistant Security flagged MCP exposure that met the auto-containment threshold.`,
+          matchedAction: 'restrict_mcp_tooling',
+          state,
+        };
+      }
+      if (action.type === 'execute_command' && (matchedCategories.has('sandbox') || matchedCategories.has('trust_boundary'))) {
+        return {
+          allowed: false,
+          reason: `Blocked by containment: '${action.toolName}' is temporarily disabled because Assistant Security flagged a high-confidence sandbox or trust-boundary issue.`,
+          matchedAction: 'restrict_command_execution',
+          state,
+        };
+      }
       if (action.scheduled && isGuardedScheduledRisk(action)) {
         return {
           allowed: false,
@@ -303,6 +346,67 @@ function shouldAutoElevateGuarded(
   const highAlerts = activeAlerts.filter((alert) => alert.severity === 'high');
   const multiSource = new Set(activeAlerts.map((alert) => alert.source)).size >= 2;
   return highAlerts.length >= 2 || (highAlerts.length >= 1 && multiSource);
+}
+
+function shouldAutoElevateFromAssistantFindings(
+  currentMode: SecurityOperatingMode,
+  posture: SecurityPostureAssessment,
+  matches: AssistantAutoContainmentMatch[],
+): boolean {
+  if (currentMode !== 'monitor' || posture.recommendedMode === 'monitor' || matches.length === 0) return false;
+  if (matches.some((match) => match.severity === 'critical')) return true;
+  return matches.length >= 2;
+}
+
+interface AssistantAutoContainmentMatch {
+  alertId: string;
+  category: NonNullable<AssistantSecurityAutoContainmentConfig['categories']>[number];
+  severity: UnifiedSecurityAlert['severity'];
+  confidence: number;
+}
+
+function findAssistantAutoContainmentMatches(
+  activeAlerts: UnifiedSecurityAlert[],
+  config?: AssistantSecurityAutoContainmentConfig,
+): AssistantAutoContainmentMatch[] {
+  if (!config || config.enabled === false) return [];
+  const allowedCategories = new Set(config.categories ?? []);
+  return activeAlerts
+    .filter((alert) => alert.source === 'assistant')
+    .map((alert) => {
+      const evidence = (alert.evidence ?? {}) as Record<string, unknown>;
+      const category = typeof evidence.category === 'string'
+        ? evidence.category as AssistantAutoContainmentMatch['category']
+        : null;
+      const confidence = typeof evidence.confidence === 'number' ? evidence.confidence : Number.NaN;
+      return {
+        alertId: alert.id,
+        category,
+        severity: alert.severity,
+        confidence,
+      };
+    })
+    .filter((match): match is AssistantAutoContainmentMatch => {
+      if (!match.category || !allowedCategories.has(match.category)) return false;
+      if (!Number.isFinite(match.confidence) || match.confidence < config.minConfidence) return false;
+      return severityAtLeast(match.severity, config.minSeverity);
+    });
+}
+
+function severityAtLeast(
+  actual: UnifiedSecurityAlert['severity'],
+  minimum: NonNullable<AssistantSecurityAutoContainmentConfig['minSeverity']>,
+): boolean {
+  return severityRank(actual) >= severityRank(minimum);
+}
+
+function severityRank(severity: UnifiedSecurityAlert['severity']): number {
+  switch (severity) {
+    case 'critical': return 4;
+    case 'high': return 3;
+    case 'medium': return 2;
+    default: return 1;
+  }
 }
 
 function isGuardedScheduledRisk(action: SecurityContainmentActionInput['action']): boolean {

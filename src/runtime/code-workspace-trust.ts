@@ -125,7 +125,7 @@ const HIGH_RISK_EXEC_PATTERNS: Array<{ kind: CodeWorkspaceTrustFindingKind; summ
   {
     kind: 'inline_exec',
     summary: 'Inline interpreter execution pattern.',
-    regex: /\b(?:python|python3|node|ruby|perl)\b[^\n]{0,160}\s-[ce]\b/i,
+    regex: /\b(?:python|python3|ruby|perl)\b[^\n]{0,160}\s-[ce]\b/i,
   },
   {
     kind: 'encoded_exec',
@@ -149,6 +149,11 @@ const WARN_EXEC_PATTERNS: Array<{ kind: CodeWorkspaceTrustFindingKind; summary: 
     kind: 'inline_exec',
     summary: 'Dynamic evaluation pattern.',
     regex: /\b(?:eval|invoke-expression|iex)\b/i,
+  },
+  {
+    kind: 'inline_exec',
+    summary: 'Inline Node.js execution pattern.',
+    regex: /\bnode\b[^\n]{0,160}\s-[ce]\b/i,
   },
 ];
 
@@ -266,11 +271,35 @@ function toEvidence(match: RegExpMatchArray | null | undefined): string | undefi
 }
 
 function pushFinding(context: ScanContext, finding: CodeWorkspaceTrustFinding): void {
-  if (context.findings.length >= MAX_FINDINGS) return;
   const key = `${finding.severity}:${finding.kind}:${finding.path}:${finding.summary}`;
   if (context.findingKeys.has(key)) return;
+  if (context.findings.length < MAX_FINDINGS) {
+    context.findingKeys.add(key);
+    context.findings.push(finding);
+    return;
+  }
+
+  if (finding.severity !== 'high') return;
+  const replacementIndex = context.findings.findIndex((candidate) => candidate.severity !== 'high');
+  if (replacementIndex === -1) return;
+
+  const replaced = context.findings[replacementIndex];
+  const replacedKey = `${replaced.severity}:${replaced.kind}:${replaced.path}:${replaced.summary}`;
+  context.findingKeys.delete(replacedKey);
   context.findingKeys.add(key);
-  context.findings.push(finding);
+  context.findings.splice(replacementIndex, 1, finding);
+}
+
+function prioritizeAssessmentFindings(findings: CodeWorkspaceTrustFinding[]): CodeWorkspaceTrustFinding[] {
+  return [...findings].sort((left, right) => {
+    if (left.kind === 'native_av_detection' && right.kind !== 'native_av_detection') return -1;
+    if (right.kind === 'native_av_detection' && left.kind !== 'native_av_detection') return 1;
+    if (left.severity !== right.severity) return left.severity === 'high' ? -1 : 1;
+    const leftPath = String(left.path || '');
+    const rightPath = String(right.path || '');
+    if (leftPath !== rightPath) return leftPath.localeCompare(rightPath);
+    return String(left.kind || '').localeCompare(String(right.kind || ''));
+  });
 }
 
 function scanPromptInjection(relativePath: string, content: string, context: ScanContext): void {
@@ -496,10 +525,10 @@ export function applyCodeWorkspaceNativeProtection(
   nativeProtection: CodeWorkspaceNativeProtection | null | undefined,
 ): CodeWorkspaceTrustAssessment {
   const clonedNativeProtection = cloneCodeWorkspaceNativeProtection(nativeProtection);
-  const findings = [
+  const findings = prioritizeAssessmentFindings([
     ...stripNativeProtectionFindings(Array.isArray(assessment.findings) ? assessment.findings : []),
     ...buildNativeProtectionFindings(clonedNativeProtection),
-  ];
+  ]);
   const state = deriveAssessmentState(findings);
   return {
     ...assessment,
@@ -612,16 +641,17 @@ export function assessCodeWorkspaceTrustSync(workspaceRoot: string, now = Date.n
 
   visitDirectory(workspaceRoot, workspaceRoot, '', 0, context);
 
-  const state = deriveAssessmentState(context.findings);
+  const findings = prioritizeAssessmentFindings(context.findings);
+  const state = deriveAssessmentState(findings);
 
   return {
     workspaceRoot,
     state,
-    summary: summarizeAssessment(state, context.findings, context.filesScanned, context.truncated),
+    summary: summarizeAssessment(state, findings, context.filesScanned, context.truncated),
     assessedAt: now,
     scannedFiles: context.filesScanned,
     truncated: context.truncated,
-    findings: context.findings,
+    findings,
     nativeProtection: null,
   };
 }

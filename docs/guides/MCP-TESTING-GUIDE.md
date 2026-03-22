@@ -42,8 +42,11 @@ assistant:
           name: Filesystem Tools
           command: npx
           args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/mcp-test']
+          startupApproved: true       # required for third-party startup
+          networkAccess: false        # default-safe; opt in only if needed
+          inheritEnv: false           # default-safe; do not inherit full parent env
           timeoutMs: 15000
-          trustLevel: read_only        # optional override
+          trustLevel: mutating         # optional stricter floor; never lowers inferred risk
           maxCallsPerMinute: 30        # optional per-server limit
 ```
 
@@ -90,7 +93,7 @@ You should see MCP tools listed with the `mcp-filesystem-` prefix alongside buil
 - `mcp-filesystem-write_file`
 - `mcp-filesystem-list_directory`
 
-In the web dashboard, go to the Tools tab. Read-oriented tools should usually appear as `read_only`; mutating or outbound tools may infer `mutating` / `external_post`, unless you forced a `trustLevel` override.
+In the web dashboard, go to the Tools tab. Third-party MCP tools should usually appear conservatively as `mutating` or `external_post`, unless you raised the floor even further with `trustLevel`.
 
 ### 4.2 Tool Execution via Chat
 

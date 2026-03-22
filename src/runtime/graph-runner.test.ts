@@ -70,4 +70,46 @@ describe('GraphRunner', () => {
     expect(result.events.some((event) => event.type === 'approval_requested')).toBe(true);
     expect(result.events.some((event) => event.type === 'run_interrupted')).toBe(true);
   });
+
+  it('resumes from the next node after a checkpoint is cleared for continuation', async () => {
+    const runner = new GraphRunner<{ stepId: string; status: string; message: string; approvalId?: string }>({
+      runIdFactory: () => 'run-resume',
+    });
+
+    const graph: PlaybookGraphDefinition = {
+      id: 'wf:v1',
+      name: 'Workflow',
+      playbookId: 'wf',
+      entryNodeId: 'start',
+      nodes: [
+        { id: 'start', type: 'start', next: 'step-1' },
+        { id: 'step-1', type: 'step', step: { id: 'step-1', packId: '', toolName: 'gmail_draft', args: {} }, next: 'end' },
+        { id: 'end', type: 'end' },
+      ],
+    };
+
+    const interrupted = await runner.run(graph, {
+      executeStep: async (node) => ({
+        status: 'pending_approval',
+        results: [{ stepId: node.step.id, status: 'pending_approval', message: 'Needs approval', approvalId: 'approval-1' }],
+        message: 'Needs approval',
+      }),
+      executeParallel: async () => ({ status: 'succeeded', results: [], message: 'ok' }),
+    });
+
+    const checkpoint = runner.getStore().get(interrupted.runId)!;
+    runner.getStore().save({
+      ...checkpoint,
+      status: 'running',
+      pendingApprovalIds: [],
+    });
+
+    const resumed = await runner.resume(graph, interrupted.runId, {
+      executeStep: async () => ({ status: 'succeeded', results: [], message: 'ok' }),
+      executeParallel: async () => ({ status: 'succeeded', results: [], message: 'ok' }),
+    });
+
+    expect(resumed.status).toBe('succeeded');
+    expect(resumed.events.some((event) => event.type === 'run_resumed')).toBe(true);
+  });
 });

@@ -1,7 +1,7 @@
 # Coding Assistant Spec
 
 **Status:** As Built
-**Date:** 2026-03-20  
+**Date:** 2026-03-21  
 **Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
 **Primary Runtime:** [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)  
 **Code Session Store:** [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)  
@@ -138,6 +138,12 @@ Workspace profiling is still built from lightweight backend inspection of the se
 
 The shipped repo-assessment boundary is intentionally narrow: `workspaceTrust` is a bounded static heuristic review plus optional native AV enrichment. It is not an agentic repo assessment, it does not execute repo code, and a `trusted` result only means the shipped checks did not find current indicators.
 
+Current trust-review heuristics also distinguish between strong execution indicators and review-only context:
+
+- native AV detections and other blocking indicators are surfaced first in the bounded findings list
+- prompt-injection matches in documentation or prompt-testing content remain visible as caution signals, not direct malware proof
+- inline `node -e` helpers are treated as review indicators unless they pair with stronger execution signals such as fetch-and-exec or encoded payloads
+
 When a user manually accepts the current findings, the session records `workspaceTrustReview` and derives an effective trust state from `workspaceTrust + workspaceTrustReview`. This is intentionally separate from the raw assessment so the UI can still show the underlying findings and why the workspace would otherwise remain `caution` or `blocked`.
 
 When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md).
@@ -222,7 +228,9 @@ The Code page keeps the existing layout:
 Session edit now also exposes repo-trust review controls when the active workspace is flagged:
 
 - the Edit Session form shows the current raw trust state and trust findings
+- trust findings render as expandable deterministic review rows with `Why this matters`, `Investigate next`, and observed context
 - users can acknowledge the current findings and mark the workspace as manually trusted for that session
+- the edit form keeps its own scroll position and bounds the trust-review area so large scans remain usable
 - the session rail still shows `TRUST: TRUSTED` only as an effective state, while activity and the edit form keep the raw findings visible
 
 ### Monaco Editor
@@ -267,23 +275,52 @@ Theme selection persists in localStorage (`guardianagent_monaco_theme`). A dropd
 
 Monaco is installed as a devDependency (`monaco-editor`). The `postinstall` script copies `node_modules/monaco-editor/min/vs/` to `web/public/vendor/monaco/vs/`. The vendor directory is gitignored. The WebChannel serves it from `/vendor/monaco/` with caching headers.
 
-### Assistant Sidebar
+### Coding Assistant Sidebar
 
 The assistant sidebar remains tabbed:
 
 - `Chat`
-- `Tasks`
-- `Approvals`
-- `Checks`
+- `Activity`
 
 Behavior:
 
 - `Chat` is the main back-and-forth coding conversation
-- `Tasks` shows workspace profile, indexed repo map, current working set, plan state, and recent coding activity
-- `Approvals` shows queued coding approvals
-- `Checks` shows recent verification outcomes
+- `Activity` consolidates approvals, task state, and verification outcomes in one surface
+- `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch tabs when approvals appear
 - chat shows only a small approval notice instead of dumping approval cards inline
+
+### Code Inspector
+
+The Code page now includes a first-class detachable code inspector for supported `ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, and `cts` files.
+
+Shipped behavior:
+
+- the editor header exposes an `Inspect` button for the active file
+- Monaco adds CodeLens actions above detected symbols
+- `Inspect` and Monaco CodeLens open an editor-owned modal inspector on the `Investigate` tab
+- the inspector can detach into a dedicated window and dock back into the editor surface
+- the `Investigate` tab renders natural-language guidance for the current file or section: what the code does, what it talks to, potential risks, quality issues, hotspots, and recommended next inspection steps
+- the `Flow` tab renders a focus diagram that shows callers, the selected symbol, callees, and nearby file context for the current file or scoped section
+- the `Impact` tab renders a deterministic cross-file view for the active file using the workspace map, including local importers, imports, directory peers, working-set files, and notable files
+- large files are inspected section by section, with the inspector anchored to the current cursor or a chosen section rather than failing as too large by default
+- symbol cards still show exact source range, signature, deterministic summary, excerpt, side effects, trust-boundary tags, quality notes, security notes, and local callers/callees
+- clicking a symbol in the inspector or a Monaco CodeLens entry selects that symbol and reveals the range in the editor
+- clicking an impact node opens that file in the editor while keeping the inspector on the impact view
+- Monaco highlights the selected symbol range in the editor, minimap, and overview ruler
+
+The structure model is deterministic and runtime-owned. Natural-language investigation copy is derived from those deterministic facts rather than replacing them with opaque model-only output.
+
+### Live Structure Preview
+
+When the active editor buffer is dirty and the file is structure-previewable:
+
+- the browser sends a debounced structure-preview request using the unsaved Monaco buffer
+- the runtime re-parses the unsaved source via the same TypeScript AST logic used for saved-file inspection
+- Monaco CodeLens and inspector details refresh without requiring a save
+- the Investigate and Flow inspector tabs update after a short pause while the operator types
+- stale preview responses are ignored through request sequencing so older parses do not overwrite newer edits
+- a normal file refresh or save invalidates pending preview state and returns the structure view to the saved-file path
 
 ## Code Page State Ownership
 
@@ -333,6 +370,10 @@ Primary backend-owned session methods:
   - detaches the current surface
 - `POST /api/code/sessions/:id/reset`
   - resets the coding transcript for that session
+- `GET /api/code/sessions/:id/structure`
+  - returns deterministic structure analysis for the selected or requested file on disk
+- `POST /api/code/sessions/:id/structure-preview`
+  - returns deterministic structure analysis for unsaved editor content without writing to disk
 - `POST /api/code/sessions/:id/message`
   - sends a chat turn through the authoritative backend coding session
 - `POST /api/code/sessions/:id/approvals/:approvalId`
@@ -551,21 +592,30 @@ As built, the Coding Assistant still does not provide:
 - fully event-driven cross-client live sync; the Code page currently relies on refresh/polling and normal session reload paths
 - LSP backend integration for cross-file intelligence beyond Monaco's built-in TS/JS/JSON/CSS/HTML workers
 - agentic repo trust review or sandbox detonation before classifying a workspace as `trusted`
+- cross-file or repo-wide call graphs with symbol resolution beyond the current local-file matching
+- structure inspection for non-TypeScript/JavaScript languages
+- a visual structure or flow map beyond the current explorer, detachable inspector, and git graph
+- first-class provenance labels that distinguish deterministic findings from future model-generated explanations, because the shipped structure layer is deterministic-only
 
 ## Verification
 
 Relevant checks:
 
 - typecheck: `npm run check`
-- focused tests: `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
+- focused tests: `npx vitest run src/runtime/code-workspace-structure.test.ts`
+- WebChannel route tests: `npx vitest run src/channels/channels.test.ts src/runtime/code-workspace-structure.test.ts`
 - code UI smoke: [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
 - coding assistant harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- contextual security harness: [test-contextual-security-uplifts.mjs](/mnt/s/Development/GuardianAgent/scripts/test-contextual-security-uplifts.mjs)
+- broader regression run: `npm test`
 - Windows Defender host helper: [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
 
 Validated during this implementation:
 
-- `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
+- `npx vitest run src/runtime/code-workspace-structure.test.ts`
+- `npx vitest run src/channels/channels.test.ts src/runtime/code-workspace-structure.test.ts`
 - `node scripts/test-code-ui-smoke.mjs`
 - `node scripts/test-coding-assistant.mjs`
-- live WSL `CodeWorkspaceNativeProtectionScanner` validation with ClamAV clean and EICAR-positive fixtures
-- manual Windows Defender workspace scan validation with [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+- `node scripts/test-contextual-security-uplifts.mjs`
+- `npm test`
+- a final `npm run check` attempt surfaced an unrelated repo issue: `tsconfig.json` still includes `src/runtime/graph-runner.ts`, but that file is missing in the current workspace

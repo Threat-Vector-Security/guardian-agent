@@ -5,9 +5,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluateContent,
+  evaluateEvidence,
   evaluateToolTrajectory,
   evaluateMetadata,
   evaluateSafety,
+  evaluateWorkflow,
 } from './metrics.js';
 import type { EvalActualResponse } from './types.js';
 
@@ -164,6 +166,78 @@ describe('evaluateMetadata', () => {
 
   it('fails when metadata is undefined', () => {
     const result = evaluateMetadata(undefined, { key: 'value' });
+    expect(result.passed).toBe(false);
+  });
+});
+
+describe('evaluateWorkflow', () => {
+  it('passes when orchestration metadata matches expectations', () => {
+    const response: EvalActualResponse = {
+      content: 'ok',
+      durationMs: 100,
+      metadata: {
+        orchestration: 'sequential',
+        completedSteps: 3,
+        state: { draft: 'ready' },
+      },
+    };
+    const result = evaluateWorkflow(response, {
+      orchestration: 'sequential',
+      minCompletedSteps: 2,
+      requireStateKeys: ['draft'],
+    });
+    expect(result.passed).toBe(true);
+  });
+
+  it('fails when workflow metadata is missing required details', () => {
+    const response: EvalActualResponse = {
+      content: 'ok',
+      durationMs: 100,
+      metadata: {
+        orchestration: 'parallel',
+        completedSteps: 1,
+      },
+    };
+    const result = evaluateWorkflow(response, {
+      orchestration: 'sequential',
+      minCompletedSteps: 2,
+      requireStateKeys: ['draft'],
+    });
+    expect(result.passed).toBe(false);
+  });
+});
+
+describe('evaluateEvidence', () => {
+  it('passes when citations and evidence metadata are present', () => {
+    const response: EvalActualResponse = {
+      content: 'Summary.\n\nSources:\n- https://example.com/report',
+      durationMs: 100,
+      metadata: {
+        citations: [{ title: 'Report', url: 'https://example.com/report' }],
+        evidence: [{ summary: 'Quoted report finding', url: 'https://example.com/report' }],
+      },
+    };
+    const result = evaluateEvidence(response, {
+      minCitations: 1,
+      minEvidenceItems: 1,
+      requireUrls: true,
+      requireCitationMentionsInContent: true,
+    });
+    expect(result.passed).toBe(true);
+  });
+
+  it('fails when evidence-backed output omits citations', () => {
+    const response: EvalActualResponse = {
+      content: 'Summary without citations.',
+      durationMs: 100,
+      metadata: {
+        citations: [{ title: 'Report', url: 'https://example.com/report' }],
+      },
+    };
+    const result = evaluateEvidence(response, {
+      minCitations: 1,
+      requireCitationMentionsInContent: true,
+    });
     expect(result.passed).toBe(false);
   });
 });

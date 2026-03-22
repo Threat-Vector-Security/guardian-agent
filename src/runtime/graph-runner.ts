@@ -3,23 +3,24 @@ import { buildApprovalInterruptEvents } from './approval-interrupts.js';
 import { GraphCheckpointManager } from './graph-checkpoints.js';
 import type {
   GraphNodeExecutionResult,
+  GraphRunCheckpoint,
   GraphRunResult,
   PlaybookGraphDefinition,
   PlaybookGraphNode,
 } from './graph-types.js';
 import { createRunEvent } from './run-events.js';
-import { InMemoryRunStateStore } from './run-state-store.js';
+import { InMemoryRunStateStore, type RunStateStore } from './run-state-store.js';
 
 export interface GraphRunnerOptions<TStepResult> {
   now?: () => number;
   runIdFactory?: () => string;
-  store?: InMemoryRunStateStore<TStepResult>;
+  store?: RunStateStore<TStepResult>;
 }
 
 export class GraphRunner<TStepResult> {
   private readonly now: () => number;
   private readonly runIdFactory: () => string;
-  private readonly store: InMemoryRunStateStore<TStepResult>;
+  private readonly store: RunStateStore<TStepResult>;
   private readonly checkpoints: GraphCheckpointManager<TStepResult>;
 
   constructor(options: GraphRunnerOptions<TStepResult> = {}) {
@@ -29,7 +30,7 @@ export class GraphRunner<TStepResult> {
     this.checkpoints = new GraphCheckpointManager(this.store, this.now);
   }
 
-  getStore(): InMemoryRunStateStore<TStepResult> {
+  getStore(): RunStateStore<TStepResult> {
     return this.store;
   }
 
@@ -39,17 +40,64 @@ export class GraphRunner<TStepResult> {
       executeStep: (node: Extract<PlaybookGraphNode, { type: 'step' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
       executeParallel: (node: Extract<PlaybookGraphNode, { type: 'parallel' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
     },
+    options: {
+      resumeContext?: Record<string, unknown>;
+    } = {},
   ): Promise<GraphRunResult<TStepResult>> {
     const runId = this.runIdFactory();
-    let checkpoint = this.checkpoints.create(runId, graph.id, graph.name);
+    let checkpoint = this.checkpoints.create(runId, graph.id, graph.name, options.resumeContext);
     checkpoint.events = [
       createRunEvent(runId, 'run_created', this.now(), {
         message: `Run created for graph '${graph.name}'.`,
       }),
     ];
-    checkpoint = this.checkpoints.update(checkpoint, { events: checkpoint.events });
+    checkpoint = this.checkpoints.update(checkpoint, {
+      events: checkpoint.events,
+      nextNodeId: graph.entryNodeId,
+      pendingApprovalIds: [],
+    });
+    return this.executeFromCheckpoint(graph, checkpoint, handlers);
+  }
 
-    let nextNodeId: string | undefined = graph.entryNodeId;
+  async resume(
+    graph: PlaybookGraphDefinition,
+    runId: string,
+    handlers: {
+      executeStep: (node: Extract<PlaybookGraphNode, { type: 'step' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
+      executeParallel: (node: Extract<PlaybookGraphNode, { type: 'parallel' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
+    },
+  ): Promise<GraphRunResult<TStepResult>> {
+    const checkpoint = this.store.get(runId);
+    if (!checkpoint) {
+      throw new Error(`Run '${runId}' was not found.`);
+    }
+    const resumedEvents = checkpoint.events.map((event) => ({ ...event }));
+    resumedEvents.push(createRunEvent(runId, 'run_resumed', this.now(), {
+      nodeId: checkpoint.currentNodeId,
+      message: `Run '${runId}' resumed.`,
+      metadata: {
+        nextNodeId: checkpoint.nextNodeId,
+      },
+    }));
+    const nextCheckpoint = this.checkpoints.update(checkpoint, {
+      status: 'running',
+      events: resumedEvents,
+    });
+    return this.executeFromCheckpoint(graph, nextCheckpoint, handlers);
+  }
+
+  private async executeFromCheckpoint(
+    graph: PlaybookGraphDefinition,
+    initialCheckpoint: GraphRunCheckpoint<TStepResult>,
+    handlers: {
+      executeStep: (node: Extract<PlaybookGraphNode, { type: 'step' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
+      executeParallel: (node: Extract<PlaybookGraphNode, { type: 'parallel' }>, priorResults: TStepResult[]) => Promise<GraphNodeExecutionResult<TStepResult>>;
+    },
+  ): Promise<GraphRunResult<TStepResult>> {
+    const runId = initialCheckpoint.runId;
+    let checkpoint = initialCheckpoint;
+    let nextNodeId: string | undefined = checkpoint.nextNodeId ?? graph.entryNodeId;
+
     while (nextNodeId) {
       const node = graph.nodes.find((candidate) => candidate.id === nextNodeId);
       if (!node) {
@@ -60,6 +108,7 @@ export class GraphRunner<TStepResult> {
         checkpoint = this.checkpoints.update(checkpoint, {
           status: 'failed',
           events: checkpoint.events,
+          nextNodeId: undefined,
         });
         return this.finish(graph, checkpoint, `Graph node '${nextNodeId}' was not found.`);
       }
@@ -70,6 +119,7 @@ export class GraphRunner<TStepResult> {
       }));
       checkpoint = this.checkpoints.update(checkpoint, {
         currentNodeId: node.id,
+        nextNodeId: node.id,
         events: checkpoint.events,
       });
 
@@ -82,6 +132,8 @@ export class GraphRunner<TStepResult> {
         checkpoint = this.checkpoints.update(checkpoint, {
           completedNodeIds: checkpoint.completedNodeIds,
           events: checkpoint.events,
+          nextNodeId: node.next,
+          pendingApprovalIds: [],
         });
         nextNodeId = node.next;
         continue;
@@ -97,6 +149,8 @@ export class GraphRunner<TStepResult> {
           status: 'succeeded',
           completedNodeIds: checkpoint.completedNodeIds,
           events: checkpoint.events,
+          nextNodeId: undefined,
+          pendingApprovalIds: [],
         });
         return this.finish(graph, checkpoint, `Playbook '${graph.playbookId}' completed successfully.`);
       }
@@ -127,6 +181,8 @@ export class GraphRunner<TStepResult> {
           completedNodeIds: checkpoint.completedNodeIds,
           results: checkpoint.results,
           events: checkpoint.events,
+          nextNodeId: node.next,
+          pendingApprovalIds: approvalIds,
         });
         return this.finish(graph, checkpoint, execution.message);
       }
@@ -141,6 +197,8 @@ export class GraphRunner<TStepResult> {
           completedNodeIds: checkpoint.completedNodeIds,
           results: checkpoint.results,
           events: checkpoint.events,
+          nextNodeId: undefined,
+          pendingApprovalIds: [],
         });
         return this.finish(graph, checkpoint, execution.message);
       }
@@ -149,8 +207,10 @@ export class GraphRunner<TStepResult> {
         completedNodeIds: checkpoint.completedNodeIds,
         results: checkpoint.results,
         events: checkpoint.events,
+        nextNodeId: node.next,
+        pendingApprovalIds: [],
       });
-      nextNodeId = node.type === 'parallel' ? node.next : node.next;
+      nextNodeId = node.next;
     }
 
     checkpoint.events.push(createRunEvent(runId, 'run_completed', this.now(), {
@@ -159,6 +219,8 @@ export class GraphRunner<TStepResult> {
     checkpoint = this.checkpoints.update(checkpoint, {
       status: 'succeeded',
       events: checkpoint.events,
+      nextNodeId: undefined,
+      pendingApprovalIds: [],
     });
     return this.finish(graph, checkpoint, `Playbook '${graph.playbookId}' completed successfully.`);
   }
@@ -179,8 +241,10 @@ export class GraphRunner<TStepResult> {
       checkpoint: {
         ...checkpoint,
         completedNodeIds: [...checkpoint.completedNodeIds],
+        pendingApprovalIds: checkpoint.pendingApprovalIds ? [...checkpoint.pendingApprovalIds] : undefined,
         results: [...checkpoint.results],
         events: checkpoint.events.map((event) => ({ ...event })),
+        resumeContext: checkpoint.resumeContext ? { ...checkpoint.resumeContext } : undefined,
       },
     };
   }

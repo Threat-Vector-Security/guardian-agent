@@ -19,10 +19,12 @@ export type ToolCategory =
   | 'shell'
   | 'web'
   | 'browser'
+  | 'mcp'
   | 'automation'
   | 'contacts'
   | 'email'
   | 'workspace'
+  | 'security'
   | 'intel'
   | 'forum'
   | 'network'
@@ -38,10 +40,12 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   shell: { label: 'Shell', description: 'Execute allowlisted shell commands from the workspace root.' },
   web: { label: 'Web', description: 'Fetch web pages and search the internet via HTTP.' },
   browser: { label: 'Browser', description: 'Browser automation and page inspection via MCP-backed Playwright and Lightpanda tools.' },
+  mcp: { label: 'MCP', description: 'Third-party MCP tool servers exposed through the Guardian MCP client.' },
   automation: { label: 'Automation', description: 'Create, update, run, and schedule workflows and recurring tasks.' },
   contacts: { label: 'Contacts', description: 'Discover, import, list contacts and manage marketing campaigns.' },
   email: { label: 'Email', description: 'Draft and send emails via the configured Google Workspace integration and run email campaigns.' },
   workspace: { label: 'Google Workspace', description: 'Gmail, Calendar, Drive, Docs, and Sheets via Guardian Agent\'s native Google Workspace tools.' },
+  security: { label: 'Assistant Security', description: 'Assistant/runtime security scans, posture review, and finding inspection.' },
   intel: { label: 'Threat Intel', description: 'Threat intelligence monitoring, scanning, and response actions.' },
   forum: { label: 'Forum', description: 'Post responses to external forums (approval-gated).' },
   network: { label: 'Network', description: 'Local network diagnostics: ping, ARP, port check, DNS, traceroute.' },
@@ -74,10 +78,12 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   shell: ['shell_safe'],
   web: ['chrome_job', 'web_search', 'web_fetch'],
   browser: [],
+  mcp: [],
   automation: ['workflow_list', 'workflow_upsert', 'workflow_delete', 'workflow_run', 'task_list', 'task_create', 'task_update', 'task_delete'],
   contacts: ['contacts_discover_browser', 'contacts_import_csv', 'contacts_list', 'campaign_create', 'campaign_list', 'campaign_add_contacts', 'campaign_dry_run'],
   email: ['gmail_draft', 'gmail_send', 'campaign_run'],
   workspace: ['gws', 'gws_schema'],
+  security: ['assistant_security_summary', 'assistant_security_scan', 'assistant_security_findings'],
   intel: ['intel_summary', 'intel_watch_add', 'intel_watch_remove', 'intel_scan', 'intel_findings', 'intel_draft_action'],
   forum: ['forum_post'],
   network: [
@@ -177,7 +183,7 @@ export interface ToolDefinition {
   shortDescription?: string;
   risk: ToolRisk;
   parameters: Record<string, unknown>;
-  /** Tool category for enable/disable gating. Absent for MCP tools. */
+  /** Tool category for enable/disable gating. */
   category?: ToolCategory;
   /** When true, this tool is deferred and only loaded via tool_search. */
   deferLoading?: boolean;

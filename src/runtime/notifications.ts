@@ -78,7 +78,7 @@ export class NotificationService {
     if (!notification) return;
     if (!this.shouldEmit(config, notification)) return;
 
-    const destinations = resolveDestinations(config);
+    const destinations = resolveNotificationDestinations(config);
 
     await this.eventBus.emit({
       type: 'security:alert',
@@ -146,7 +146,7 @@ export class NotificationService {
   }
 
   private buildNotification(event: AuditEvent): SecurityNotification | null {
-    const description = extractDescription(event.details);
+    const description = extractNotificationDescription(event);
     const dedupeKey = [
       event.type,
       event.agentId,
@@ -185,7 +185,9 @@ export class NotificationService {
   }
 }
 
-function resolveDestinations(config: AssistantNotificationsConfig): AssistantNotificationsConfig['destinations'] {
+export function resolveNotificationDestinations(
+  config: AssistantNotificationsConfig,
+): AssistantNotificationsConfig['destinations'] {
   if (config.deliveryMode === 'all') {
     return {
       web: true,
@@ -196,8 +198,15 @@ function resolveDestinations(config: AssistantNotificationsConfig): AssistantNot
   return config.destinations;
 }
 
+export function notificationDestinationEnabled(
+  config: AssistantNotificationsConfig,
+  destination: keyof AssistantNotificationsConfig['destinations'],
+): boolean {
+  return resolveNotificationDestinations(config)[destination] === true;
+}
+
 function extractDetailType(details: Record<string, unknown>): string | null {
-  const keys = ['alertType', 'anomalyType', 'type'];
+  const keys = ['triggerDetailType', 'matchedAction', 'alertType', 'anomalyType', 'type', 'reason', 'actionType'];
   for (const key of keys) {
     const value = details[key];
     if (typeof value === 'string' && value.trim()) {
@@ -230,10 +239,17 @@ function summarizeTitle(event: AuditEvent): string {
     case 'auth_failure':
       return 'Authentication failure requires attention';
     case 'automation_finding':
-      return `Automation finding: ${extractAutomationName(event.details)}`;
+      return extractAutomationTitle(event.details) || `Automation finding: ${extractAutomationName(event.details)}`;
     default:
       return `Security event: ${event.type}`;
   }
+}
+
+function extractNotificationDescription(event: AuditEvent): string {
+  if (event.type === 'automation_finding' && isSecurityTriageFinding(event.details)) {
+    return summarizeSecurityTriageFinding(event.details);
+  }
+  return compactNotificationText(extractDescription(event.details));
 }
 
 function extractDescription(details: Record<string, unknown>): string {
@@ -256,6 +272,42 @@ function extractAutomationName(details: Record<string, unknown>): string {
   const automationId = details.automationId;
   if (typeof automationId === 'string' && automationId.trim()) return automationId.trim();
   return 'automation';
+}
+
+function extractAutomationTitle(details: Record<string, unknown>): string {
+  const title = details.title;
+  if (typeof title === 'string' && title.trim()) return title.trim();
+  return '';
+}
+
+function isSecurityTriageFinding(details: Record<string, unknown>): boolean {
+  return details.source === 'security_triage';
+}
+
+function summarizeSecurityTriageFinding(details: Record<string, unknown>): string {
+  const triggerDetailType = typeof details.triggerDetailType === 'string' && details.triggerDetailType.trim()
+    ? details.triggerDetailType.trim()
+    : 'security signal';
+  const triggerDescription = typeof details.triggerDescription === 'string' && details.triggerDescription.trim()
+    ? compactNotificationText(details.triggerDescription)
+    : '';
+  if (triggerDescription) {
+    return `Triage completed for ${triggerDetailType}: ${triggerDescription}`;
+  }
+  return `Triage completed for ${triggerDetailType}. Review Security Log for the full assessment.`;
+}
+
+function compactNotificationText(text: string): string {
+  const normalized = text
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/[`*_#>]/g, '')
+    .replace(/\|/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= 240) {
+    return normalized || 'No additional detail provided.';
+  }
+  return `${normalized.slice(0, 237).trimEnd()}...`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

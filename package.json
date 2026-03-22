@@ -64,7 +64,6 @@
     "@types/node": "^25.3.0",
     "monaco-editor": "^0.55.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
   "dependencies": {
@@ -88,7 +87,8 @@
     "js-yaml": "^4.1.1",
     "node-pty": "^1.1.0",
     "openai": "^6.24.0",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "typescript": "^5.9.3"
   },
   "optionalDependencies": {
     "@lightpanda/browser": "^0.2.5",

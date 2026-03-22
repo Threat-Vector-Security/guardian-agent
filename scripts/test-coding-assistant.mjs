@@ -761,22 +761,9 @@ guardian:
       channel: 'web',
       metadata: codeToolMetadata,
     });
-    assert.equal(codeShellPending.success, false);
-    assert.equal(codeShellPending.status, 'pending_approval');
-    assert.ok(codeShellPending.approvalId, `Expected approvalId from shell_safe git init: ${JSON.stringify(codeShellPending)}`);
-
-    const codeShellDecision = await requestJson(
-      baseUrl,
-      harnessToken,
-      'POST',
-      `${codeSessionPath}/approvals/${encodeURIComponent(codeShellPending.approvalId)}`,
-      {
-        decision: 'approved',
-        userId: 'web-code-harness',
-        channel: 'web',
-      },
-    );
-    assert.equal(codeShellDecision.success, true, `Expected approved shell_safe continuation to succeed: ${JSON.stringify(codeShellDecision)}`);
+    assert.equal(codeShellPending.success, true);
+    assert.equal(codeShellPending.status, 'succeeded');
+    assert.equal(Boolean(codeShellPending.approvalId), false, `Did not expect approval for trusted repo-scoped shell_safe: ${JSON.stringify(codeShellPending)}`);
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'nested-repo', '.git')), true);
 
     const blockedShellEscape = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {

@@ -52,7 +52,7 @@ The MCP (Model Context Protocol) client enables GuardianAgent to consume tools f
 
 ### Transport: stdio
 
-Communication with MCP servers uses stdin/stdout with Content-Length framing:
+Communication with MCP servers uses stdin/stdout. Guardian accepts either Content-Length framing or newline-delimited JSON from the server side, and writes newline-delimited JSON requests:
 
 ```
 Content-Length: 42\r\n
@@ -111,6 +111,14 @@ interface MCPServerConfig {
   env?: Record<string, string>;  // Environment variables
   cwd?: string;         // Working directory
   timeoutMs?: number;   // Request timeout (default: 30000)
+  startupApproved?: boolean;   // Required for third-party startup
+  source?: 'third_party' | 'managed_browser' | 'managed_provider';
+  category?: ToolCategory;     // browser vs mcp
+  networkAccess?: boolean;     // Default: false for third-party
+  inheritEnv?: boolean;        // Default: false for third-party
+  allowedEnvKeys?: string[];   // Extra inherited parent env keys
+  trustLevel?: ToolRisk;       // Risk floor only; never downgrades
+  maxCallsPerMinute?: number;
 }
 ```
 
@@ -124,6 +132,10 @@ const filesystemServer: MCPServerConfig = {
   transport: 'stdio',
   command: 'npx',
   args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+  source: 'third_party',
+  startupApproved: true,
+  networkAccess: false,
+  inheritEnv: false,
   timeoutMs: 10_000,
 };
 
@@ -156,11 +168,11 @@ See `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md`.
 MCP tool names are prefixed to prevent collisions when multiple servers are connected:
 
 ```
-Format: mcp:<serverId>:<originalToolName>
+Format: mcp-<serverId>-<originalToolName>
 
-Example: mcp:filesystem:read_file
-         mcp:sqlite:query
-         mcp:github:create_issue
+Example: mcp-filesystem-read_file
+         mcp-sqlite-query
+         mcp-github-create_issue
 ```
 
 The `MCPClientManager.parseToolName()` method extracts the server ID and original tool name for routing.
@@ -171,12 +183,12 @@ MCP tool schemas are converted to GuardianAgent's `ToolDefinition` format:
 
 | MCP Field | ToolDefinition Field | Notes |
 |-----------|---------------------|-------|
-| `name` | `name` | Prefixed with `mcp:<serverId>:` |
-| `description` | `description` | Fallback: "MCP tool from {serverName}" |
-| `inputSchema.properties` | `parameters` | Direct mapping |
-| (none) | `risk` | Always `'network'` (external process) |
+| `name` | `name` | Prefixed with `mcp-<serverId>-` |
+| `description` | `description` | Third-party metadata is sanitized and treated as untrusted |
+| `inputSchema.properties` | `parameters` | Sanitized subset; nested descriptions/examples are stripped |
+| `trustLevel` | `risk` | Applies only as a stricter floor |
 
-All MCP tools are classified as `network` risk because they communicate with an external process.
+Third-party MCP tools default conservatively to approval-gated behavior. Managed browser MCP uses curated risk inference so read-only browser operations remain low-friction.
 
 ---
 
@@ -216,7 +228,7 @@ await manager.addServer(sqliteConfig);
 manager.getAllToolDefinitions();  // Combined list from all servers
 manager.getStatus();             // Connection status for all servers
 
-const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.txt' });
+const result = await manager.callTool('mcp-filesystem-read_file', { path: '/a.txt' });
 
 manager.removeServer('filesystem');
 await manager.disconnectAll();
@@ -235,12 +247,13 @@ await manager.disconnectAll();
 - Sends data to external endpoints
 
 **Current mitigation:**
-- MCP servers are configured by the developer (not auto-discovered)
-- Environment variables can be explicitly scoped via `config.env`
+- Third-party MCP startup is blocked until `startupApproved: true` is set explicitly
+- Third-party MCP defaults to `networkAccess: false` and `inheritEnv: false`
 - Tool calls are validated by Guardian before reaching the MCP client
+- Tool metadata is sanitized before registration and third-party risk defaults conservatively
 - MCP tool results are returned through the OutputGuardian (secret scanning)
 
-**Residual risk:** The spawned process has the same OS-level permissions as the GuardianAgent process. It can access anything the Node.js process can access.
+**Residual risk:** The spawned process is still a local subprocess. Once operators explicitly trust and enable it, its real containment still depends on the active sandbox backend.
 
 **Recommendations:**
 1. Run MCP servers in containers or sandboxed environments for production
@@ -254,7 +267,7 @@ await manager.disconnectAll();
 **Risk:** An MCP server could register tools with names that shadow built-in GuardianAgent tools (e.g., `read_file`, `shell_command`).
 
 **Current mitigation:**
-- All MCP tool names are prefixed with `mcp:<serverId>:` — they cannot collide with built-in tools
+- All MCP tool names are prefixed with `mcp-<serverId>-` — they cannot collide with built-in tools
 - The server ID is set by the developer at configuration time
 
 **Residual risk:** None with current namespacing. If the prefix convention is bypassed, collisions could occur.

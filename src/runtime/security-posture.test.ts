@@ -52,6 +52,71 @@ describe('assessSecurityPosture', () => {
     expect(result.shouldEscalate).toBe(true);
   });
 
+  it('keeps assistant-only critical posture findings in guarded mode', () => {
+    const result = assessSecurityPosture({
+      profile: 'personal',
+      currentMode: 'monitor',
+      alerts: [{
+        id: 'assistant-1',
+        source: 'assistant',
+        type: 'assistant_security_sandbox',
+        severity: 'critical',
+        description: 'Sandbox isolation is disabled',
+      }],
+      availableSources: ['assistant'],
+    });
+
+    expect(result.recommendedMode).toBe('guarded');
+    expect(result.shouldEscalate).toBe(true);
+    expect(result.reasons.join(' ')).toContain('posture-oriented');
+  });
+
+  it('keeps a lone arp conflict in guarded mode until corroborated', () => {
+    const result = assessSecurityPosture({
+      profile: 'home',
+      currentMode: 'monitor',
+      alerts: [{
+        id: 'net-arp-1',
+        source: 'network',
+        type: 'arp_conflict',
+        severity: 'critical',
+        description: 'ARP conflict detected for 192.168.1.10',
+      }],
+      availableSources: ['network'],
+    });
+
+    expect(result.recommendedMode).toBe('guarded');
+    expect(result.shouldEscalate).toBe(true);
+    expect(result.reasons.join(' ')).toContain('requires corroboration');
+  });
+
+  it('recommends ir_assist when an arp conflict is corroborated by another elevated signal', () => {
+    const result = assessSecurityPosture({
+      profile: 'home',
+      currentMode: 'monitor',
+      alerts: [
+        {
+          id: 'net-arp-1',
+          source: 'network',
+          type: 'arp_conflict',
+          severity: 'critical',
+          description: 'ARP conflict detected for 192.168.1.10',
+        },
+        {
+          id: 'host-1',
+          source: 'host',
+          type: 'suspicious_process',
+          severity: 'high',
+          description: 'Suspicious process: wscript.exe',
+        },
+      ],
+      availableSources: ['network', 'host'],
+    });
+
+    expect(result.recommendedMode).toBe('ir_assist');
+    expect(result.shouldEscalate).toBe(true);
+  });
+
   it('recommends lockdown for critical protection-boundary failures', () => {
     const result = assessSecurityPosture({
       profile: 'personal',

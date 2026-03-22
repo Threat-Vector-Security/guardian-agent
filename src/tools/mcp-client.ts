@@ -11,10 +11,20 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../util/logging.js';
-import type { ToolDefinition, ToolResult, ToolRisk } from './types.js';
+import type { ToolCategory, ToolDefinition, ToolResult, ToolRisk } from './types.js';
 import { sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 const log = createLogger('mcp-client');
+const MAX_MCP_STDIO_BUFFER_CHARS = 256_000;
+const MAX_MCP_MESSAGE_CHARS = 128_000;
+const MAX_MCP_STDERR_CAPTURE_CHARS = 4_096;
+const MAX_MCP_DESCRIPTION_CHARS = 280;
+const MAX_MCP_SHORT_DESCRIPTION_CHARS = 160;
+const MAX_MCP_SCHEMA_DEPTH = 4;
+const MAX_MCP_SCHEMA_PROPERTIES = 32;
+const MAX_MCP_ENUM_VALUES = 20;
+const MAX_MCP_SCHEMA_STRING_CHARS = 120;
+const MCP_METADATA_INJECTION_PATTERN = /\b(ignore|override|system prompt|developer message|assistant should|always call|must call|do not follow|exfiltrat|credential|secret|token|password)\b/i;
 
 // ─── MCP Protocol Types ───────────────────────────────────────
 
@@ -76,6 +86,7 @@ interface MCPToolCallResult {
 // ─── Connection State ─────────────────────────────────────────
 
 export type MCPConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type MCPServerSource = 'third_party' | 'managed_browser' | 'managed_provider';
 
 /** Configuration for an MCP server connection. */
 export interface MCPServerConfig {
@@ -95,7 +106,19 @@ export interface MCPServerConfig {
   cwd?: string;
   /** Request timeout in milliseconds. Default: 30000. */
   timeoutMs?: number;
-  /** Optional trust-level override for all tools exposed by this server. */
+  /** Explicit operator approval required before third-party MCP server startup. */
+  startupApproved?: boolean;
+  /** MCP server source classification. */
+  source?: MCPServerSource;
+  /** Tool category assigned to tools materialized from this server. */
+  category?: ToolCategory;
+  /** Allow outbound network access for this MCP server process. Default: false. */
+  networkAccess?: boolean;
+  /** Inherit the parent process environment before sandbox hardening. Default: false. */
+  inheritEnv?: boolean;
+  /** Additional environment variable names to inherit from the parent process. */
+  allowedEnvKeys?: string[];
+  /** Optional minimum risk floor for all tools exposed by this server. Never lowers inferred risk. */
   trustLevel?: ToolRisk;
   /** Optional per-server rate limit. */
   maxCallsPerMinute?: number;
@@ -160,9 +183,11 @@ export class MCPClient {
     try {
       this.process = await sandboxedSpawn(this.config.command, this.config.args ?? [], this.sandboxConfig, {
         profile: 'workspace-write',
-        networkAccess: true,
+        networkAccess: this.config.networkAccess ?? false,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: this.config.env,
+        inheritEnv: this.config.inheritEnv ?? false,
+        allowedEnvKeys: this.config.allowedEnvKeys,
         cwd: this.config.cwd,
       });
 
@@ -174,8 +199,12 @@ export class MCPClient {
       });
 
       this.process.stderr!.on('data', (data: Buffer) => {
-        const text = data.toString().trim();
-        if (text) stderrBuf += (stderrBuf ? '\n' : '') + text;
+        const text = sanitizeMcpText(data.toString(), MAX_MCP_STDERR_CAPTURE_CHARS).trim();
+        if (!text) return;
+        if (stderrBuf.length < MAX_MCP_STDERR_CAPTURE_CHARS) {
+          const remaining = MAX_MCP_STDERR_CAPTURE_CHARS - stderrBuf.length;
+          stderrBuf += `${stderrBuf ? '\n' : ''}${text.slice(0, remaining)}`;
+        }
         log.warn({ server: this.config.id, stderr: text }, 'MCP server stderr');
       });
 
@@ -258,16 +287,23 @@ export class MCPClient {
    * when multiple MCP servers are connected.
    */
   getToolDefinitions(): ToolDefinition[] {
-    return this.getTools().map(tool => ({
-      name: `mcp-${this.config.id}-${tool.name}`,
-      description: tool.description ?? `MCP tool from ${this.config.name}`,
-      risk: inferMcpToolRisk(tool, this.config.trustLevel),
-      parameters: {
-        type: 'object' as const,
-        properties: tool.inputSchema?.properties ?? {},
-        ...(tool.inputSchema?.required?.length ? { required: tool.inputSchema.required } : {}),
-      },
-    }));
+    const definitions: ToolDefinition[] = [];
+    for (const tool of this.getTools()) {
+      if (!isSafeMcpToolName(tool.name)) {
+        log.warn({ server: this.config.id, toolName: sanitizeMcpText(tool.name, 80) }, 'Skipping MCP tool with unsafe name');
+        continue;
+      }
+      const description = buildSafeMcpDescription(tool, this.config);
+      definitions.push({
+        name: `mcp-${this.config.id}-${tool.name}`,
+        description: description.full,
+        shortDescription: description.short,
+        risk: inferMcpToolRisk(tool, this.config),
+        category: this.config.category ?? (this.config.source === 'managed_browser' ? 'browser' : 'mcp'),
+        parameters: sanitizeMcpInputSchema(tool.inputSchema),
+      });
+    }
+    return definitions;
   }
 
   /**
@@ -300,11 +336,7 @@ export class MCPClient {
         arguments: args,
       });
 
-      // Extract text content from result
-      const textContent = result.content
-        .filter(c => c.type === 'text' && c.text)
-        .map(c => c.text!)
-        .join('\n');
+      const textContent = formatMcpToolResultContent(result.content);
 
       if (result.isError) {
         return {
@@ -405,6 +437,10 @@ export class MCPClient {
 
   private handleStdout(data: string): void {
     this.buffer += data;
+    if (this.buffer.length > MAX_MCP_STDIO_BUFFER_CHARS) {
+      this.failTransport(`MCP server '${this.config.id}' exceeded stdout buffer limit (${MAX_MCP_STDIO_BUFFER_CHARS} chars).`);
+      return;
+    }
 
     // Try Content-Length framing first (LSP-style), fall back to newline-delimited JSON.
     // Most MCP servers use newline-delimited JSON, but some use Content-Length framing.
@@ -416,6 +452,10 @@ export class MCPClient {
         const match = header.match(/^Content-Length:\s*(\d+)/i);
         if (match) {
           const contentLength = parseInt(match[1], 10);
+          if (contentLength > MAX_MCP_MESSAGE_CHARS) {
+            this.failTransport(`MCP server '${this.config.id}' emitted oversized Content-Length frame (${contentLength} chars).`);
+            return;
+          }
           const bodyStart = headerEnd + 4;
           if (this.buffer.length < bodyStart + contentLength) {
             break; // Wait for more data
@@ -430,6 +470,10 @@ export class MCPClient {
       // Newline-delimited JSON: extract complete lines
       const newlineIdx = this.buffer.indexOf('\n');
       if (newlineIdx === -1) break; // Wait for complete line
+      if (newlineIdx > MAX_MCP_MESSAGE_CHARS) {
+        this.failTransport(`MCP server '${this.config.id}' emitted oversized newline-delimited frame.`);
+        return;
+      }
 
       const line = this.buffer.slice(0, newlineIdx).trim();
       this.buffer = this.buffer.slice(newlineIdx + 1);
@@ -444,7 +488,7 @@ export class MCPClient {
       const message = JSON.parse(body) as JsonRpcResponse;
       this.handleMessage(message);
     } catch {
-      log.warn({ server: this.config.id, body: body.slice(0, 200) }, 'Failed to parse MCP message');
+      log.warn({ server: this.config.id, size: body.length }, 'Failed to parse MCP message');
     }
   }
 
@@ -466,6 +510,18 @@ export class MCPClient {
       pending.reject(error);
     }
     this.pendingRequests.clear();
+  }
+
+  private failTransport(reason: string): void {
+    log.error({ server: this.config.id, reason }, 'MCP transport failure');
+    this.state = 'error';
+    this.rejectAllPending(new Error(reason));
+    this.tools.clear();
+    this.buffer = '';
+    if (this.process) {
+      this.process.kill('SIGTERM');
+      this.process = null;
+    }
   }
 }
 
@@ -589,29 +645,217 @@ export class MCPClientManager {
   }
 }
 
-function inferMcpToolRisk(tool: MCPToolSchema, override?: ToolRisk): ToolRisk {
-  if (override) {
-    return override;
+export function assessMcpStartupAdmission(
+  config: Pick<MCPServerConfig, 'source' | 'startupApproved' | 'name'>,
+): { allowed: boolean; reason: string | null } {
+  if ((config.source ?? 'third_party') !== 'third_party') {
+    return { allowed: true, reason: null };
   }
+  if (config.startupApproved === true) {
+    return { allowed: true, reason: null };
+  }
+  return {
+    allowed: false,
+    reason: `Third-party MCP server '${config.name}' is blocked until startupApproved: true is set explicitly.`,
+  };
+}
 
-  const fields = tool.inputSchema?.properties
-    ? Object.keys(tool.inputSchema.properties).join(' ')
-    : '';
-  const combined = `${tool.name} ${tool.description ?? ''} ${fields}`.toLowerCase();
+function inferMcpToolRisk(tool: MCPToolSchema, config: MCPServerConfig): ToolRisk {
+  const source = config.source ?? 'third_party';
+  const computed = source === 'managed_browser'
+    ? inferManagedBrowserToolRisk(tool)
+    : inferThirdPartyMcpRisk(tool);
+  return applyRiskFloor(computed, config.trustLevel);
+}
 
-  const isExternalPost = /\b(send|post|publish|notify|message|email|comment|reply|webhook|tweet|sms|invite)\b/.test(combined)
-    && /\b(create|write|update|post|publish|send|reply|comment|notify|share)\b/.test(combined);
-  if (isExternalPost) {
+function inferThirdPartyMcpRisk(tool: MCPToolSchema): ToolRisk {
+  const combined = `${tool.name} ${Object.keys(tool.inputSchema?.properties ?? {}).join(' ')}`
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+  if (/\b(send|post|publish|notify|message|email|comment|reply|webhook|tweet|sms|invite|submit)\b/.test(combined)) {
     return 'external_post';
   }
+  return 'mutating';
+}
 
-  if (/\b(create|write|update|delete|remove|insert|append|edit|modify|set|save|upload|rename|move|trash|archive)\b/.test(combined)) {
+function inferManagedBrowserToolRisk(tool: MCPToolSchema): ToolRisk {
+  const name = tool.name.toLowerCase().replace(/[_-]+/g, ' ');
+  if (/(click|type|press|drag|fill|upload|route|cookie_|localstorage_|sessionstorage_|select_option|handle_dialog|install|run_code|evaluate)/.test(name)) {
     return 'mutating';
   }
-
-  if (/\b(read|get|list|search|find|fetch|query|lookup|show|describe|preview|inspect|download)\b/.test(combined)) {
+  if (/(goto|navigate|network_requests|snapshot|markdown|links|structureddata|console_messages|wait_for|close|tabs|back|forward|reload|screenshot)/.test(name)) {
     return 'read_only';
   }
-
   return 'network';
+}
+
+function applyRiskFloor(inferred: ToolRisk, floor?: ToolRisk): ToolRisk {
+  if (!floor) return inferred;
+  const rank: Record<ToolRisk, number> = {
+    read_only: 0,
+    network: 1,
+    mutating: 2,
+    external_post: 3,
+  };
+  return rank[floor] > rank[inferred] ? floor : inferred;
+}
+
+function buildSafeMcpDescription(
+  tool: MCPToolSchema,
+  config: MCPServerConfig,
+): { full: string; short: string } {
+  const safeName = humanizeMcpToolName(tool.name);
+  const sanitizedSourceDescription = sanitizeMcpDescription(tool.description);
+  if ((config.source ?? 'third_party') === 'third_party') {
+    const full = sanitizedSourceDescription
+      ? `External MCP tool "${safeName}" from ${config.name}. Server metadata is treated as untrusted. Sanitized summary: ${sanitizedSourceDescription}`
+      : `External MCP tool "${safeName}" from ${config.name}. Server metadata is treated as untrusted.`;
+    return {
+      full,
+      short: truncateText(`External MCP tool "${safeName}" from ${config.name}. Review parameters and approval policy before use.`, MAX_MCP_SHORT_DESCRIPTION_CHARS),
+    };
+  }
+  const full = sanitizedSourceDescription || `Managed MCP tool "${safeName}".`;
+  return {
+    full,
+    short: truncateText(full, MAX_MCP_SHORT_DESCRIPTION_CHARS),
+  };
+}
+
+function sanitizeMcpDescription(description: string | undefined): string {
+  const cleaned = sanitizeMcpText(description ?? '', MAX_MCP_DESCRIPTION_CHARS);
+  if (!cleaned) return '';
+  if (MCP_METADATA_INJECTION_PATTERN.test(cleaned)) {
+    return '';
+  }
+  return cleaned;
+}
+
+function sanitizeMcpInputSchema(schema: MCPToolSchema['inputSchema'] | undefined): Record<string, unknown> {
+  if (!schema || schema.type !== 'object') {
+    return { type: 'object', properties: {} };
+  }
+  const properties = sanitizeSchemaProperties(schema.properties, 1);
+  const required = Array.isArray(schema.required)
+    ? schema.required
+      .filter((value): value is string => typeof value === 'string' && !!value.trim())
+      .slice(0, MAX_MCP_SCHEMA_PROPERTIES)
+    : undefined;
+  return {
+    type: 'object',
+    properties,
+    ...(required?.length ? { required } : {}),
+  };
+}
+
+function sanitizeSchemaProperties(
+  properties: Record<string, unknown> | undefined,
+  depth: number,
+): Record<string, unknown> {
+  if (!properties || depth > MAX_MCP_SCHEMA_DEPTH) {
+    return {};
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties).slice(0, MAX_MCP_SCHEMA_PROPERTIES)) {
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key)) continue;
+    const sanitizedValue = sanitizeSchemaNode(value, depth + 1);
+    if (sanitizedValue) {
+      sanitized[key] = sanitizedValue;
+    }
+  }
+  return sanitized;
+}
+
+function sanitizeSchemaNode(value: unknown, depth: number): Record<string, unknown> | null {
+  if (!isRecord(value) || depth > MAX_MCP_SCHEMA_DEPTH) {
+    return null;
+  }
+  const sanitized: Record<string, unknown> = {};
+  if (typeof value.type === 'string' && value.type.length <= 32) {
+    sanitized.type = value.type;
+  }
+  if (Array.isArray(value.enum)) {
+    const enumValues = value.enum
+      .filter((entry) => ['string', 'number', 'boolean'].includes(typeof entry))
+      .slice(0, MAX_MCP_ENUM_VALUES)
+      .map((entry) => typeof entry === 'string' ? truncateText(entry, MAX_MCP_SCHEMA_STRING_CHARS) : entry);
+    if (enumValues.length > 0) {
+      sanitized.enum = enumValues;
+    }
+  }
+  if (isRecord(value.items)) {
+    const items = sanitizeSchemaNode(value.items, depth + 1);
+    if (items) sanitized.items = items;
+  }
+  if (isRecord(value.properties)) {
+    sanitized.properties = sanitizeSchemaProperties(value.properties as Record<string, unknown>, depth + 1);
+  }
+  if (Array.isArray(value.required)) {
+    const required = value.required
+      .filter((entry): entry is string => typeof entry === 'string' && !!entry.trim())
+      .slice(0, MAX_MCP_SCHEMA_PROPERTIES);
+    if (required.length > 0) sanitized.required = required;
+  }
+  if (typeof value.additionalProperties === 'boolean') {
+    sanitized.additionalProperties = value.additionalProperties;
+  } else if (isRecord(value.additionalProperties)) {
+    const nested = sanitizeSchemaNode(value.additionalProperties, depth + 1);
+    if (nested) sanitized.additionalProperties = nested;
+  }
+  for (const numericKey of ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems'] as const) {
+    if (typeof value[numericKey] === 'number' && Number.isFinite(value[numericKey])) {
+      sanitized[numericKey] = value[numericKey];
+    }
+  }
+  if (typeof value.pattern === 'string' && value.pattern.length <= MAX_MCP_SCHEMA_STRING_CHARS) {
+    sanitized.pattern = value.pattern;
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+function formatMcpToolResultContent(content: MCPToolCallContent[]): string {
+  return content
+    .map((entry) => {
+      if (entry.type === 'text' && entry.text) {
+        return entry.text;
+      }
+      if (entry.type === 'image') {
+        return '[MCP image output omitted]';
+      }
+      if (entry.type === 'resource') {
+        return '[MCP resource output omitted]';
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function isSafeMcpToolName(name: string): boolean {
+  return /^[a-zA-Z0-9_.-]{1,80}$/.test(name);
+}
+
+function humanizeMcpToolName(name: string): string {
+  return truncateText(name.replace(/[_-]+/g, ' ').trim() || 'tool', MAX_MCP_SHORT_DESCRIPTION_CHARS);
+}
+
+function sanitizeMcpText(value: string, maxChars: number): string {
+  return truncateText(
+    value
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+      .replace(/[\u200b-\u200f\u2060\ufeff]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    maxChars,
+  );
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const suffix = '...';
+  return `${value.slice(0, Math.max(0, maxChars - suffix.length)).trimEnd()}${suffix}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

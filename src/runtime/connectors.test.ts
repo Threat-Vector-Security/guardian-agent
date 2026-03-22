@@ -528,6 +528,205 @@ describe('ConnectorPlaybookService', () => {
     expect(runInstruction).toHaveBeenCalledTimes(1);
   });
 
+  it('resumes awaiting-approval playbooks after an approval decision arrives', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'approval-resume',
+        name: 'Approval Resume',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          { id: 'draft', packId: '', toolName: 'gmail_draft', args: { to: 'me@example.com', subject: 'Status', body: 'draft' } },
+          { id: 'save', packId: '', toolName: 'memory_save', args: { key: 'draft-status', value: 'ready' } },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (request: ToolExecutionRequest): Promise<ToolRunResponse> => {
+      if (request.toolName === 'gmail_draft') {
+        return {
+          success: false,
+          status: 'pending_approval',
+          jobId: 'job-pending',
+          approvalId: 'approval-1',
+          message: 'Needs approval',
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-memory',
+        message: 'saved',
+      };
+    });
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool,
+    });
+
+    const pending = await service.runPlaybook({
+      playbookId: 'approval-resume',
+      origin: 'web',
+    });
+
+    expect(pending.status).toBe('awaiting_approval');
+    expect(pending.run.steps[0]?.status).toBe('pending_approval');
+
+    const resumed = await service.continueAfterApprovalDecision('approval-1', 'approved', {
+      success: true,
+      message: 'Approval granted.',
+      result: {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-draft',
+        message: 'draft created',
+        output: {
+          citations: [
+            { title: 'Draft evidence', url: 'https://example.com/draft' },
+          ],
+        },
+      },
+    });
+
+    expect(resumed).not.toBeNull();
+    expect(resumed?.status).toBe('succeeded');
+    expect(resumed?.run.steps).toHaveLength(2);
+    expect(resumed?.run.steps[0]?.status).toBe('succeeded');
+    expect(resumed?.run.steps[0]?.citations).toEqual([
+      {
+        title: 'Draft evidence',
+        url: 'https://example.com/draft',
+        snippet: undefined,
+        sourceStepId: 'draft',
+      },
+    ]);
+    expect(resumed?.run.steps[1]?.status).toBe('succeeded');
+    expect(runTool).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures evidence and citations for grounded instruction steps', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'grounded-report',
+        name: 'Grounded Report',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          { id: 'search', packId: '', toolName: 'web_search', args: { query: 'guardian sandbox posture' } },
+          {
+            id: 'report',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Write a short report from the captured evidence.',
+            evidenceMode: 'grounded',
+            citationStyle: 'sources_list',
+          },
+        ],
+      },
+    ];
+
+    const runInstruction = vi.fn(async (prompt: string) => {
+      expect(prompt).toContain('Structured evidence captured from prior steps');
+      expect(prompt).toContain('https://example.com/guardian');
+      return 'Guardian uses explicit sandbox controls.\n\nSources:\n- Guardian Overview (https://example.com/guardian)';
+    });
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async (): Promise<ToolRunResponse> => ({
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-search',
+        message: 'search complete',
+        output: {
+          results: [
+            {
+              title: 'Guardian Overview',
+              url: 'https://example.com/guardian',
+              snippet: 'Guardian uses explicit sandbox controls.',
+            },
+          ],
+        },
+      }),
+      runInstruction,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'grounded-report',
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.steps[1]?.status).toBe('succeeded');
+    expect(result.run.steps[1]?.citations).toHaveLength(1);
+    expect(result.run.steps[1]?.evidence).toHaveLength(1);
+    expect(runInstruction).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails strict grounded instruction steps when the response omits citations', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'strict-grounding',
+        name: 'Strict Grounding',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          { id: 'search', packId: '', toolName: 'web_search', args: { query: 'guardian sandbox posture' } },
+          {
+            id: 'report',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Write a short report from the captured evidence.',
+            evidenceMode: 'strict',
+            citationStyle: 'inline_markers',
+          },
+        ],
+      },
+    ];
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async (): Promise<ToolRunResponse> => ({
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-search',
+        message: 'search complete',
+        output: {
+          results: [
+            {
+              title: 'Guardian Overview',
+              url: 'https://example.com/guardian',
+              snippet: 'Guardian uses explicit sandbox controls.',
+            },
+          ],
+        },
+      }),
+      runInstruction: async () => 'Guardian uses explicit sandbox controls.',
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'strict-grounding',
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.run.steps[1]?.status).toBe('failed');
+    expect(result.run.steps[1]?.message).toContain('omitted required citations');
+  });
+
   it('resolves prior step placeholders inside later tool args', async () => {
     const config = makeConfig();
     config.playbooks.requireDryRunOnFirstExecution = false;

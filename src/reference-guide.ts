@@ -84,7 +84,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use CLI `/session list`, `/session use <sessionId>`, and `/session new` to revisit or branch prior work.',
                   'Assistant state in the dashboard shows queued and running sessions, wait times, execution times, and recent traces.',
-                  'Quick actions are available through the web quick-action bar, CLI `/quick <email|task|calendar> <details>`, and Telegram `/quick ...`.',
+                  'Quick actions are available through the web quick-action bar, CLI `/quick <action> <details>`, and Telegram `/quick ...`.',
+                  'Built-in quick actions cover email, task planning, calendar planning, and a security review that runs the Assistant Security scan flow.',
                 ],
                 note: 'Chat streaming uses SSE. Tool calls, token streaming, and completion events show up live in the web chat panel.',
               },
@@ -99,7 +100,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Web Control Surfaces',
                 items: [
                   'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
-                  'Configuration > Tools exposes tool enablement, routing, approvals, sandbox boundaries, and recent jobs. Configuration > Policy owns policy-as-code posture and enforcement mode.',
+                  'Configuration > Tools exposes tool enablement, routing, approvals, and recent jobs. Configuration > Security owns sandbox enforcement, allowlists, degraded-backend overrides, browser risk controls, and policy posture.',
                   'Security is the main operator surface for posture, unified alerts, agentic activity history, audit evidence, threat-intel workflows, and native Windows Defender state.',
                 ],
               },
@@ -123,7 +124,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Tool Governance',
                 items: [
                   'Configuration > Tools is the main operator surface for tool enablement, category routing, approvals, and recent jobs.',
-                  'Configuration > Policy is where you review or change policy-as-code enforcement posture.',
+                  'Configuration > Security is where you review or change sandbox enforcement, degraded-backend overrides, browser security posture, allowlists, and policy-engine posture.',
+                  'Configuration > Security now combines sandbox enforcement and assistant policy-widening gates in one control surface. `Strict` means fail closed when the strong sandbox is unavailable. `Permissive` means Guardian can keep running on a degraded backend, but the risky degraded-backend surfaces still stay off until you explicitly opt in.',
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Allowed paths, commands, and domains should be adjusted deliberately; treat them as policy boundaries, not convenience toggles.',
                 ],
@@ -143,6 +145,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Browser automation is provided through managed MCP servers: Playwright for full interaction and Lightpanda for fast read-only page analysis.',
                   'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
                   'Browser MCP startup does not require the general MCP toggle to be enabled; if browser tooling is on and the binaries are available, GuardianAgent registers the browser servers automatically.',
+                  'Third-party MCP servers are different from the managed browser path: they stay blocked until explicitly marked `startupApproved`, and they default to network-off, clean-environment startup unless you opt in.',
                   'Use Lightpanda first for page reading and structure extraction; use Playwright when you need clicks, typing, screenshots, uploads, or richer interaction.',
                 ],
               },
@@ -164,9 +167,15 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'IDE And Session Context',
                 items: [
-                  'The Code page combines a session rail, explorer, Monaco editor and diff view, manual terminal panes, and an assistant sidebar for chat, tasks, approvals, and checks.',
+                  'The Code page combines a session rail, explorer, Monaco editor and diff view, manual terminal panes, an assistant sidebar for chat and activity, and an editor-owned code inspector for guided investigation, local flow, and repo impact views.',
                   'The assistant sidebar uses backend session state rather than browser-only state, so workspace profile, indexed repo map, working set, pending approvals, recent jobs, and checks survive refreshes and cross-surface reuse.',
+                  'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
+                  'Use the `Inspect` button or Monaco CodeLens in supported TypeScript and JavaScript files to open the detachable code inspector. It starts on the `Investigate` tab and explains what the current code does, what it talks to, which deterministic risks or quality issues stand out, and where to inspect next.',
+                  'The inspector also includes `Flow` for symbol-level caller and callee explanations inside the active file or current large-file section, and `Impact` for cross-file imports, importers, nearby files, and working-set blast radius using the deterministic workspace map.',
+                  'Large files are inspected section by section instead of failing outright, so the inspector can anchor the analysis to the current cursor or a chosen section without parsing the whole file at once.',
+                  'Structure insights update live from the unsaved Monaco buffer after a short debounce, so the inspector can track edits before you save.',
                   'Terminal panes remain operator-controlled PTY sessions. Assistant-driven file edits, shell execution, tests, builds, and linting still go through the guarded tool path instead of taking over a PTY.',
+                  'Manual terminal sessions inherit a hardened environment and open/exit events land in audit history, but they are still operator terminals rather than a substitute for guarded tool execution.',
                 ],
               },
               {
@@ -175,6 +184,9 @@ export function getReferenceGuide(): ReferenceGuide {
                   'New code sessions no longer assume a cloned repo is automatically safe. Guardian first stores a bounded static repo review and then, when available, schedules a background native malware scan of the workspace root.',
                   'Windows code sessions consume Windows Defender custom-path scans. Unix-like hosts consume `clamscan` or `clamdscan` when installed.',
                   'The Code page exposes trust state directly through session badges, activity cards, and warning banners. Trust states are `trusted`, `caution`, and `blocked`, and native AV status is folded into the trust summary.',
+                  'Activity cards and Edit Session now render repo-trust findings as expandable deterministic reviews with `Why this matters`, `Investigate next`, and observed context instead of a flat findings dump.',
+                  'Guardian prioritizes native AV and blocking trust findings to the top of the bounded findings list, so a repo does not show `blocked` without also surfacing the blocking indicator.',
+                  'Documentation and prompt-testing content can still produce prompt-injection caution signals, but ordinary inline Node bootstrap helpers now stay in review-only territory unless they pair with stronger execution indicators.',
                   'Operators can manually trust the current findings from Edit Session. That override is session-scoped, keeps the raw findings visible, and clears automatically if the assessment changes.',
                   'When workspace trust is not cleared, README-derived summaries and raw working-set snippets are suppressed from the model prompt so repo content is treated as untrusted data rather than instructions.',
                   'A `trusted` result means the shipped static review and optional native AV scan did not find current indicators. It is not an agentic repo review or a proof that the repo is safe.',
@@ -351,6 +363,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Create the bot through `@BotFather` using `/newbot`, then copy the returned token.',
                   'Enable Telegram in Configuration > Integration System, then either paste the token once for secure local storage or leave the token field blank and provide an env-backed credential ref.',
+                  'Integration System stays limited to operator access, channels, and maintenance. AI provider, search, and cloud connection details live on their own owner tabs.',
                   'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
                   'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
                 ],
@@ -374,6 +387,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Built-in web search and fetch tools can run through the configured search provider path without leaving Guardian controls.',
                   'Use Configuration > Search Providers to set provider options and either paste premium search keys once or assign env-backed credential refs.',
+                  'Configuration > Search Providers only owns search and retrieval behavior. Ollama and other LLM provider profiles stay in Configuration > AI Providers.',
                   'Search config changes apply immediately and invalidate the web UI so the current state stays visible.',
                 ],
               },
@@ -383,6 +397,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Native hybrid search combines BM25 keyword matching and vector similarity across local directories, repositories, URLs, and files.',
                   'When you already know the exact local PDF path, use `fs_read` to extract the document text directly instead of indexing first.',
                   'Use Configuration > Search Providers to add, remove, enable, disable, or reindex document sources.',
+                  'The Search Providers overview now uses a compact runtime state summary instead of a vanity status-card strip, so the tab stays focused on source management.',
                   'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
                 ],
                 note: 'Treat web search and document search as complementary: web search is for external freshness, document search is for trusted local context.',
@@ -407,6 +422,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The Automations page is the unified home for playbooks and scheduled tasks.',
                   'Automations can run a single tool, multiple tools in sequential or parallel pipelines, or a scheduled assistant turn. The assistant turn option is inside the schedule section — check "Run as assistant turn" to create a full agent task with tools, memory, and skills.',
                   'Pipeline steps can be tool steps, LLM instruction steps (text synthesis from prior step outputs), or delay steps (pause the pipeline for a set duration). Delay steps are only meaningful in sequential mode.',
+                  'Instruction steps can also be evidence-grounded so reports and summaries carry forward citations or structured evidence captured by earlier search or retrieval steps.',
                   'The tool picker (Browse button) lets you search tools by name or description and shows integration requirements (e.g. Google Workspace connected, AWS profile configured).',
                   'An optional prompt on single-tool automations auto-converts the automation into a 2-step sequential pipeline (tool + LLM instruction).',
                   'The LLM Provider selector controls which model handles instruction steps and agent tasks. Auto uses smart routing; Local/External force a specific provider type.',
@@ -432,6 +448,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Inspect Results',
                 items: [
                   'Run history now keeps per-step output, not just status text.',
+                  'Approval-gated playbooks keep one stable run record and resume after the approval decision instead of starting over from scratch.',
                   'Scheduled tool runs, scheduled playbook runs, and scheduled assistant runs can be expanded in Automations to inspect captured output.',
                   'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
                   'Live UI invalidation updates the Automations page when runs finish, schedules change, or playbooks are edited.',
@@ -501,7 +518,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'CLI operators: `/intel [status]`, `/intel plan`, `/intel watch [list|add|remove] <target>`, `/intel scan [query] [--darkweb] [--sources=web,news,social,forum]`, `/intel findings [limit] [status]`, `/intel finding <id> status <new|triaged|actioned|dismissed>`, `/intel actions [limit]`, `/intel action draft <findingId> <report|request_takedown|draft_response|publish_response>`, and `/intel mode <manual|assisted|autonomous>`.',
                   'Built-in threat-intel tools exposed to the assistant and automations are `intel_summary`, `intel_watch_add`, `intel_watch_remove`, `intel_scan`, `intel_findings`, and `intel_draft_action`.',
-                  'The built-in scheduled example is `threat-intel-scan`, which runs `intel_scan` on a recurring schedule from Operations.',
+                  'Built-in scheduled examples include `threat-intel-scan` for recurring intel collection and `assistant-security-scan` for recurring Assistant Security posture reviews from Operations.',
+                  'Configuration > Security now owns the managed Assistant Security monitoring schedule, so recurring posture scans stay visible as product configuration rather than a hidden automation.',
                 ],
               },
               {
@@ -533,7 +551,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Quick Actions',
                 items: [
-                  'Quick actions are available in the web UI, CLI `/quick ...`, and Telegram `/quick ...` for common email, task, and calendar flows.',
+                  'Quick actions are available in the web UI, CLI `/quick ...`, and Telegram `/quick ...` for common email, task, calendar, and security-review flows.',
                   'Use quick actions when the job is structured but not worth building a full playbook.',
                   'Quick action runs still pass through normal approval, policy, and audit controls.',
                 ],
@@ -589,15 +607,16 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Analytics summary is available in the dashboard and with CLI `/analytics [minutes]`.',
                   'Assistant state exposes running jobs, failed jobs, queue pressure, traces, and policy decisions.',
-                  'Security monitoring now surfaces posture state, unified alerts, recent security-agent activity, audit volume, denied actions, host-monitor alerts, gateway-firewall alerts, native-provider alerts, and recent notifications.',
+                  'Security monitoring now surfaces posture state, unified alerts, Assistant Security findings and runs, audit volume, denied actions, host-monitor alerts, gateway-firewall alerts, native-provider alerts, and recent notifications.',
                 ],
               },
               {
                 title: 'Audit Workflow',
                 items: [
-                  'Use the Security page or CLI `/audit`, `/audit summary`, and `/security` to inspect recent events.',
+                  'Use Security > Security Log or CLI `/audit`, `/audit summary`, and `/security` to inspect recent events.',
                   'Audit entries are hash-chained; use the verification control when you need tamper-evidence confirmation.',
-                  'Audit details can be expanded in the web UI when you need the full raw event payload instead of the short preview.',
+                  'Security Log alerts and audit rows now expand into deterministic investigation guidance, normalized context, and raw event data so operators can work from structured evidence instead of freeform summaries alone.',
+                  'Audit details can be expanded in Security Log when you need the full raw event payload instead of the short preview.',
                   'Policy reloads, auth changes, and tool decisions are all reflected in audit visibility.',
                 ],
               },
@@ -611,9 +630,11 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Main Operator Surface',
                 items: [
-                  'The Security page is the main operator surface for the local defensive suite. It combines posture, unified alerts, activity history, audit review, threat intel, and native Windows Defender visibility in one place.',
+                  'The Security page is the main operator surface for the local defensive suite. It combines posture, Assistant Security, threat intel, the Security Log, and native Windows Defender visibility in one place.',
                   'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, and native Windows Defender alerts.',
                   'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',
+                  'Built-in Assistant Security tools exposed to the assistant and automations are `assistant_security_summary`, `assistant_security_scan`, and `assistant_security_findings`; recurring posture reviews can use the `assistant-security-scan` preset.',
+                  'Assistant Security continuous monitoring is scheduler-driven infrastructure work. It runs the built-in scan service directly and does not create a conversational assistant turn.',
                 ],
               },
               {
@@ -621,6 +642,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'The runtime stores deployment profiles (`personal`, `home`, `organization`) separately from operating modes (`monitor`, `guarded`, `lockdown`, `ir_assist`).',
                   'Monitor is the normal default. Posture can recommend escalation, and containment can temporarily auto-elevate to `guarded` when elevated alerts stack together.',
+                  'Configuration > Security also exposes conservative Assistant Security auto-containment thresholds. By default, only high-confidence sandbox, trust-boundary, and MCP findings can tighten controls automatically.',
                   'Containment remains bounded and policy-driven. The shipped system does not fully auto-remediate or silently take over the host.',
                 ],
               },
@@ -636,8 +658,17 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Agentic Triage',
                 items: [
                   'The defensive suite includes an LLM-backed `security-triage` agent plus an event dispatcher that investigates selected security events.',
-                  'The triage path is intentionally conservative: read-only evidence gathering first, repeated events deduped with a cooldown window, and completed investigations recorded in the security activity log.',
+                  'The triage path is intentionally conservative: read-only evidence gathering first, repeated events deduped with a cooldown window, expected guardrail denials skipped, and completed investigations recorded in the Assistant Security activity log.',
                   'The shipped triage loop does not automatically acknowledge, resolve, suppress, or launch mutating host actions purely because an alert fired.',
+                ],
+              },
+              {
+                title: 'MCP Security Uplifts',
+                items: [
+                  'Third-party MCP servers now require explicit startup approval before Guardian will launch them from config, which narrows config-tampering-to-code-execution risk at boot.',
+                  'Guardian now treats third-party MCP tool descriptions and schemas as untrusted metadata, uses safer default risk handling, and keeps trust-level overrides from broadly down-ranking server risk.',
+                  'MCP server runtime hardening now includes explicit network and environment controls, a pinned Playwright MCP path instead of `@latest`, transport/output caps, and dedicated MCP category gating in the executor.',
+                  'Assistant Security surfaces MCP exposure separately so operators can watch for connected third-party servers, network access, environment inheritance, and trust overrides over time.',
                 ],
               },
             ],
@@ -651,7 +682,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Policy Engine',
                 items: [
                   'Policy-as-code supports off, shadow, and enforce modes depending on how aggressively you want rules to apply.',
-                  'Configuration > Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
+                  'Configuration > Security and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
                   'Shadow mode is the safest way to compare rule output with current behavior before switching to enforce.',
                 ],
               },
@@ -675,7 +706,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'If the web dashboard rejects you, confirm the bearer token or session cookie state in Web Authentication settings.',
                   'If a model appears offline, verify connectivity in Configuration > AI Providers or with CLI `/providers`.',
-                  'If file or command execution is blocked, review Configuration > Tools, Configuration > Policy, and the relevant allowed path or command settings before retrying.',
+                  'If file or command execution is blocked, review Configuration > Tools, Configuration > Security, and the relevant allowed path or command settings before retrying.',
                   'If repo execution is blocked in the Code page, inspect the code session workspace trust badge, native AV summary, approvals tab, and recent jobs before assuming the coding tools are broken.',
                   'If network data looks stale, use the Network History tab and recent outputs to confirm whether the scan actually ran.',
                 ],
@@ -687,9 +718,11 @@ export function getReferenceGuide(): ReferenceGuide {
                   'New code sessions authorize the workspace path for repo-local access, but they do not treat the attached repo as automatically safe for execution.',
                   'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
                   'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
-                  'Security alerts default to CLI-only delivery; use Configuration > Integration System > Security Alerts to enable web or Telegram fanout.',
+                  'Security alerts default to CLI-only delivery for primary security events; triage and automation summaries stay in Security until you explicitly add `automation_finding` notification fanout.',
+                  'Default notification filters also mute low-confidence drift families and expected guardrail denials such as degraded-backend terminal blocks or containment-enforced action denials, so the stream stays focused on primary detections.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',
                   'Outbound HTTP tool calls are checked against SSRF protection rules that block private IPs, cloud metadata endpoints, and obfuscated addresses.',
+                  'Third-party MCP servers are now gated more tightly by default, but they still deserve the same scrutiny as shell, browser, and network tooling when you decide whether to enable them.',
                 ],
                 note: 'Configuration changes now propagate to the web UI live, so if something still looks wrong after a save, verify the underlying runtime state rather than assuming the browser is stale.',
               },

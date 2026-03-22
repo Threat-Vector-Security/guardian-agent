@@ -45,8 +45,9 @@ This is the graph-backed execution layer for deterministic workflows.
 - compiles playbooks into graph nodes
 - emits per-run `runId`
 - checkpoints node completion state
+- persists bounded resume context and pending approval ids
 - records orchestration events such as node start/completion and approval interrupts
-- provides the basis for future resume/replay-safe deterministic automations
+- resumes deterministic playbooks after approval decisions when the remaining scope is still valid
 
 This is where Guardian borrows most directly from graph-runtime systems without adopting an external framework wholesale.
 
@@ -101,6 +102,7 @@ This is structured multi-agent composition inside one invocation.
 - `ParallelAgent`
 - `LoopAgent`
 - `ConditionalAgent`
+- recipe helpers for `planner -> executor -> validator`, `researcher -> writer -> reviewer`, and `research -> draft -> verify`
 
 Every sub-agent call still goes through `ctx.dispatch()` and then `Runtime.dispatchMessage()`, so Guardian admission and output controls remain intact.
 When a step declares a handoff contract, runtime code validates it, applies context filtering (`full`, `summary_only`, `user_only`), preserves or strips taint deliberately, and blocks approval-gated or capability-invalid handoffs before the target agent runs.
@@ -127,7 +129,8 @@ For scheduled assistant automations, Guardian now follows the OpenClaw-style pat
 ## Guidance
 
 - Use **playbooks** when the steps should be explicit and repeatable (tool steps for actions, instruction steps for LLM synthesis, delay steps for pacing)
+- Use evidence-grounded instruction steps when a deterministic workflow should produce cited summaries or reports from prior tool outputs
 - Use **agent tasks** when the assistant should decide what to inspect at runtime and produce a report
 - Use the **automation authoring compiler** when the user is asking Guardian to create/update an automation object conversationally
 - Use **handoff contracts and orchestration events** when extending multi-agent delegation or resume/approval flows, rather than introducing new ad hoc session-side mechanisms
-- Use **orchestration agents** when developers need reusable multi-agent control flow inside one request
+- Use **orchestration agents and recipes** when developers need reusable multi-agent control flow inside one request

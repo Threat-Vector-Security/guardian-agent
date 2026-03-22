@@ -95,6 +95,17 @@ describe('validateConfig', () => {
     expect(DEFAULT_CONFIG.assistant.security?.deploymentProfile).toBe('personal');
     expect(DEFAULT_CONFIG.assistant.security?.operatingMode).toBe('monitor');
     expect(DEFAULT_CONFIG.assistant.security?.triageLlmProvider).toBe('auto');
+    expect(DEFAULT_CONFIG.assistant.security?.continuousMonitoring).toEqual({
+      enabled: true,
+      profileId: 'quick',
+      cron: '15 */12 * * *',
+    });
+    expect(DEFAULT_CONFIG.assistant.security?.autoContainment).toEqual({
+      enabled: true,
+      minSeverity: 'high',
+      minConfidence: 0.95,
+      categories: ['sandbox', 'trust_boundary', 'mcp'],
+    });
   });
 
   it('should pass with valid default config', () => {
@@ -122,6 +133,111 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toContain('assistant.security.deploymentProfile must be one of: personal, home, organization');
     expect(validateConfig(config)).toContain('assistant.security.operatingMode must be one of: monitor, guarded, lockdown, ir_assist');
     expect(validateConfig(config)).toContain('assistant.security.triageLlmProvider must be one of: auto, local, external');
+  });
+
+  it('should reject invalid Assistant Security monitoring and auto-containment settings', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        security: {
+          ...DEFAULT_CONFIG.assistant.security!,
+          continuousMonitoring: {
+            enabled: true,
+            profileId: 'deep-dive' as any,
+            cron: '',
+          },
+          autoContainment: {
+            enabled: true,
+            minSeverity: 'medium' as any,
+            minConfidence: 1.5,
+            categories: ['sandbox', 'unknown-category' as any],
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.security.continuousMonitoring.profileId must be one of: quick, runtime-hardening, workspace-boundaries');
+    expect(errors).toContain('assistant.security.continuousMonitoring.cron is required');
+    expect(errors).toContain('assistant.security.autoContainment.minSeverity must be one of: high, critical');
+    expect(errors).toContain('assistant.security.autoContainment.minConfidence must be between 0 and 1');
+    expect(errors).toContain("assistant.security.autoContainment.categories contains unknown category 'unknown-category'");
+  });
+
+  it('should reject invalid playbook evidence grounding settings', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          ...DEFAULT_CONFIG.assistant.connectors,
+          playbooks: {
+            ...DEFAULT_CONFIG.assistant.connectors.playbooks,
+            definitions: [
+              {
+                id: 'grounded-report',
+                name: 'Grounded Report',
+                enabled: true,
+                mode: 'sequential',
+                steps: [
+                  {
+                    id: 'report',
+                    type: 'instruction',
+                    packId: '',
+                    toolName: '',
+                    instruction: 'Summarize the evidence.',
+                    evidenceMode: 'unsupported' as any,
+                    citationStyle: 'footnotes' as any,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.connectors.playbook 'grounded-report' step 'report' evidenceMode must be none, grounded, or strict");
+    expect(errors).toContain("assistant.connectors.playbook 'grounded-report' step 'report' citationStyle must be sources_list or inline_markers");
+  });
+
+  it('should reject evidence grounding fields on non-instruction playbook steps', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          ...DEFAULT_CONFIG.assistant.connectors,
+          playbooks: {
+            ...DEFAULT_CONFIG.assistant.connectors.playbooks,
+            definitions: [
+              {
+                id: 'invalid-tool-step',
+                name: 'Invalid Tool Step',
+                enabled: true,
+                mode: 'sequential',
+                steps: [
+                  {
+                    id: 'search',
+                    type: 'tool',
+                    packId: '',
+                    toolName: 'web_search',
+                    args: { query: 'guardian' },
+                    evidenceMode: 'grounded',
+                    citationStyle: 'sources_list',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.connectors.playbook 'invalid-tool-step' step 'search' evidenceMode/citationStyle are only valid for instruction steps");
   });
 
   it('should fail when defaultProvider is missing', () => {
@@ -934,6 +1050,10 @@ describe('validateConfig — MCP', () => {
               name: 'Filesystem Tools',
               command: 'npx',
               args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+              startupApproved: true,
+              networkAccess: false,
+              inheritEnv: false,
+              allowedEnvKeys: ['PATH'],
               timeoutMs: 10000,
             }],
           },
@@ -942,6 +1062,35 @@ describe('validateConfig — MCP', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toEqual([]);
+  });
+
+  it('should fail when MCP hardening fields are invalid', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [{
+              id: 'filesystem',
+              name: 'Filesystem Tools',
+              command: 'npx',
+              startupApproved: 'yes' as unknown as boolean,
+              networkAccess: 'on' as unknown as boolean,
+              inheritEnv: 'maybe' as unknown as boolean,
+              allowedEnvKeys: ['PATH', ''],
+            }],
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.tools.mcp server 'filesystem' startupApproved must be a boolean");
+    expect(errors).toContain("assistant.tools.mcp server 'filesystem' networkAccess must be a boolean");
+    expect(errors).toContain("assistant.tools.mcp server 'filesystem' inheritEnv must be a boolean");
+    expect(errors).toContain("assistant.tools.mcp server 'filesystem' allowedEnvKeys must be an array of non-empty strings");
   });
 
   it('should skip validation when MCP is disabled', () => {

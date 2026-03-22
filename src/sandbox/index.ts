@@ -23,6 +23,35 @@ const execAsync = promisify(execCb);
 const execFileAsync = promisify(execFileCb);
 const log = createLogger('sandbox');
 const WINDOWS_APP_PACKAGE_SIDS = ['*S-1-15-2-1', '*S-1-15-2-2'] as const;
+const MINIMAL_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'SHELL',
+  'TERM',
+  'SystemRoot',
+  'ComSpec',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'PROGRAMDATA',
+  'ProgramFiles',
+  'ProgramFiles(x86)',
+  'ProgramW6432',
+  'USERPROFILE',
+  'PUBLIC',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+] as const;
 
 type WindowsAppContainerAccess = 'read' | 'write';
 
@@ -32,6 +61,34 @@ export interface WindowsAppContainerAccessPath {
 }
 
 const grantedWindowsAppContainerPaths = new Map<string, WindowsAppContainerAccess>();
+
+function resolveSandboxEnv(
+  options: { env?: Record<string, string>; inheritEnv?: boolean; allowedEnvKeys?: string[] },
+): Record<string, string> {
+  const allowedKeys = new Set<string>([
+    ...MINIMAL_ENV_ALLOWLIST,
+    ...(options.allowedEnvKeys ?? []),
+  ]);
+  const inheritedBase = options.inheritEnv === false
+    ? copyAllowedEnv(process.env, allowedKeys)
+    : process.env;
+  const merged = options.env ? { ...inheritedBase, ...options.env } : inheritedBase;
+  return buildHardenedEnv(merged as Record<string, string>);
+}
+
+function copyAllowedEnv(
+  source: NodeJS.ProcessEnv,
+  allowedKeys: ReadonlySet<string>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.length > 0) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
 
 // ─── Capability Detection ─────────────────────────────────────
 
@@ -195,13 +252,15 @@ export async function sandboxedExec(
   config: SandboxConfig = DEFAULT_SANDBOX_CONFIG,
   options: SandboxExecOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
+  const hardenedEnv = resolveSandboxEnv(options);
+
   // Bypass sandbox entirely if disabled
   if (!config.enabled) {
     return execAsync(command, {
       cwd: options.cwd,
       timeout: options.timeout,
       maxBuffer: options.maxBuffer,
-      env: options.env ? { ...process.env, ...options.env } : undefined,
+      env: hardenedEnv,
     });
   }
 
@@ -209,19 +268,15 @@ export async function sandboxedExec(
 
   // Full-access profile: only apply env hardening
   if (profile === 'full-access') {
-    const env = buildHardenedEnv(options.env ? { ...process.env, ...options.env } as Record<string, string> : undefined);
     return execAsync(command, {
       cwd: options.cwd,
       timeout: options.timeout,
       maxBuffer: options.maxBuffer,
-      env,
+      env: hardenedEnv,
     });
   }
 
   const caps = await detectCapabilities(config);
-  const hardenedEnv = buildHardenedEnv(
-    options.env ? { ...process.env, ...options.env } as Record<string, string> : undefined,
-  );
 
   if (process.platform === 'win32' && config.windowsHelper?.enabled && caps.windowsHelperAvailable) {
     const helperCommand = resolveWindowsHelperCommand(config);
@@ -285,20 +340,18 @@ export async function sandboxedSpawn(
   options: SandboxSpawnOptions = {},
 ): Promise<ChildProcess> {
   const useWindowsShell = process.platform === 'win32' && options.windowsShell !== false;
+  const hardenedEnv = resolveSandboxEnv(options);
   // Bypass sandbox entirely if disabled
   if (!config.enabled) {
     return spawn(command, args, {
       cwd: options.cwd,
       stdio: options.stdio,
-      env: options.env ? { ...process.env, ...options.env } : undefined,
+      env: hardenedEnv,
       ...(useWindowsShell ? { shell: true } : {}),
     });
   }
 
   const { profile, networkAccess } = resolveProfile(config, options);
-  const hardenedEnv = buildHardenedEnv(
-    options.env ? { ...process.env, ...options.env } as Record<string, string> : undefined,
-  );
 
   // Full-access profile: only apply env hardening
   if (profile === 'full-access') {

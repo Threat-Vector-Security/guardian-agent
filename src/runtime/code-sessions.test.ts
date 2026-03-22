@@ -405,4 +405,33 @@ describe('CodeSessionStore', () => {
     expect(updated?.workState.verification).toEqual([]);
     expect(updated?.workState.workspaceProfile?.repoName).toBe('second-state-app');
   });
+
+  it('lists all sessions across owners in activity order', () => {
+    const workspaceRoot = createWorkspace('all-sessions', {
+      'package.json': JSON.stringify({ name: 'all-sessions' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+      now: (() => {
+        let timestamp = 1_710_000_000_000;
+        return () => (timestamp += 1000);
+      })(),
+    });
+
+    const first = store.createSession({
+      ownerUserId: 'owner-a',
+      title: 'First Session',
+      workspaceRoot,
+    });
+    const second = store.createSession({
+      ownerUserId: 'owner-b',
+      title: 'Second Session',
+      workspaceRoot,
+    });
+
+    const sessions = store.listAllSessions();
+    expect(sessions.map((session) => session.id)).toEqual([second.id, first.id]);
+    expect(new Set(sessions.map((session) => session.ownerUserId))).toEqual(new Set(['owner-a', 'owner-b']));
+  });
 });

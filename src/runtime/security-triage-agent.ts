@@ -10,7 +10,7 @@ export const SECURITY_TRIAGE_DISPATCHER_AGENT_ID = 'security-triage-dispatcher';
 export const DEFAULT_SECURITY_TRIAGE_SYSTEM_PROMPT = [
   'You are the dedicated Security Triage Agent.',
   'Investigate security events using built-in defensive tools and security skills.',
-  'Prefer read-only evidence gathering first: security_alert_search, security_posture_status, security_containment_status, host_monitor_status, host_monitor_check, gateway_firewall_status, gateway_firewall_check, windows_defender_status, windows_defender_refresh, net_threat_summary, net_threat_check, and net_anomaly_check.',
+  'Prefer read-only evidence gathering first: security_alert_search, security_posture_status, security_containment_status, assistant_security_summary, assistant_security_findings, intel_summary, intel_findings, host_monitor_status, host_monitor_check, gateway_firewall_status, gateway_firewall_check, windows_defender_status, windows_defender_refresh, net_threat_summary, net_threat_check, and net_anomaly_check.',
   'Do not acknowledge, resolve, suppress, or mutate security state unless a human explicitly asks.',
   'Your job is to distinguish real incidents from benign noise, corroborate signals across sources, and recommend the right operating mode and next action.',
 ].join(' ');
@@ -23,9 +23,23 @@ const LOW_CONFIDENCE_DETAIL_TYPES = new Set([
   'defender_controlled_folder_access_disabled',
 ]);
 
+const EXPECTED_GUARDRAIL_DETAIL_TYPES = new Set([
+  'degraded_backend_manual_terminals_disabled',
+  'strict_sandbox_lockdown',
+  'restrict_browser_mutation',
+  'pause_scheduled_mutations',
+  'restrict_outbound_mutation',
+  'restrict_command_execution',
+  'restrict_network_egress',
+  'restrict_mcp_tooling',
+  'freeze_mutating_tools',
+  'ir_assist_read_only',
+]);
+
 const RELEVANT_SECURITY_ALERT_EVENT_TYPES = new Set([
   'action_denied',
   'secret_detected',
+  'anomaly_detected',
   'host_alert',
   'gateway_alert',
   'auth_failure',
@@ -404,7 +418,19 @@ function classifySecurityEvent(event: AgentEvent): SecurityEventTriageDecision |
     }
     const detailType = extractDetailType(payload) || sourceEventType;
     const severity = toAuditSeverity(payload.severity);
+    const details = asRecord(payload.details);
     if (severity === 'info') return null;
+    if (LOW_CONFIDENCE_DETAIL_TYPES.has(detailType) || isExpectedGuardrailDenial(sourceEventType, detailType, details)) {
+      return {
+        dedupeKey: buildDedupeKey(event.type, asString(payload.dedupeKey), `${sourceEventType}:${detailType}`),
+        detailType,
+        description: asString(payload.description) || `Security notification: ${detailType}`,
+        severity,
+        sourceLabel: 'notification',
+        disposition: 'skip',
+        skipReason: 'low_confidence',
+      };
+    }
     return {
       dedupeKey: buildDedupeKey(event.type, asString(payload.dedupeKey), `${sourceEventType}:${detailType}`),
       detailType,
@@ -503,10 +529,16 @@ function buildDedupeKey(eventType: string, explicitKey: string, fallbackDetail: 
 
 function buildSecurityTriagePrompt(event: AgentEvent, candidate: SecurityEventTriageCandidate): string {
   const payloadJson = safeJson(event.payload, MAX_EVENT_PAYLOAD_CHARS);
+  const recommendedEvidenceTools = candidate.detailType.startsWith('assistant_security_')
+    ? 'Start with assistant_security_summary and assistant_security_findings to confirm the latest scan posture and open findings.'
+    : candidate.detailType.startsWith('intel_')
+      ? 'Start with intel_summary and intel_findings to confirm the latest threat-intel posture and queue.'
+      : 'Start with the most relevant read-only security tools for this signal before widening the investigation.';
   return [
     'Investigate this security event as the dedicated Security Triage Agent.',
     'Relevant skills when useful: host-firewall-defense, native-av-management, security-mode-escalation, security-alert-hygiene, security-response-automation, browser-session-defense.',
     'Use read-only security tools first. Do not acknowledge, resolve, suppress, run scans, or perform other mutating actions unless a human explicitly asks.',
+    recommendedEvidenceTools,
     'Your goals are to decide whether this is likely benign noise, a real defensive issue, or an active incident; gather corroborating evidence; and recommend the right operating mode and next step.',
     '',
     `Trigger source: ${candidate.sourceLabel}`,
@@ -527,10 +559,32 @@ function buildSecurityTriagePrompt(event: AgentEvent, candidate: SecurityEventTr
 
 function extractDetailType(payload: Record<string, unknown>): string {
   const direct = asRecord(payload.details);
-  return asString(direct.alertType)
+  return asString(direct.triggerDetailType)
+    || asString(direct.alertType)
     || asString(direct.anomalyType)
     || asString(direct.type)
+    || asString(direct.matchedAction)
+    || normalizeDetailType(asString(direct.reason))
+    || asString(direct.actionType)
     || '';
+}
+
+function normalizeDetailType(value: string): string {
+  return /^[a-z0-9_:-]+$/i.test(value) ? value : '';
+}
+
+function isExpectedGuardrailDenial(
+  sourceEventType: string,
+  detailType: string,
+  details: Record<string, unknown>,
+): boolean {
+  if (sourceEventType !== 'action_denied') return false;
+  const source = asString(details.source);
+  const matchedAction = asString(details.matchedAction);
+  if (source === 'containment_service') {
+    return true;
+  }
+  return EXPECTED_GUARDRAIL_DETAIL_TYPES.has(detailType) || EXPECTED_GUARDRAIL_DETAIL_TYPES.has(matchedAction);
 }
 
 function toAuditSeverity(value: unknown): AuditSeverity {

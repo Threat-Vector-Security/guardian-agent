@@ -2,9 +2,14 @@ import type { NetworkAlert, NetworkBaselineService, NetworkAnomalySeverity } fro
 import type { HostMonitoringService, HostMonitorAlert } from './host-monitor.js';
 import type { GatewayFirewallMonitoringService, GatewayMonitorAlert } from './gateway-monitor.js';
 import type { WindowsDefenderProvider, WindowsDefenderAlert } from './windows-defender-provider.js';
-import type { SecurityAlertLifecycle, SecurityAlertStateResult } from './security-alert-lifecycle.js';
+import {
+  isSecurityAlertVisible,
+  type SecurityAlertLifecycle,
+  type SecurityAlertStateResult,
+} from './security-alert-lifecycle.js';
+import type { AiSecurityFinding, AiSecurityService } from './ai-security.js';
 
-export type SecurityAlertSource = 'host' | 'network' | 'gateway' | 'native';
+export type SecurityAlertSource = 'host' | 'network' | 'gateway' | 'native' | 'assistant';
 export type SecurityAlertSeverity = NetworkAnomalySeverity;
 
 export interface UnifiedSecurityAlert extends SecurityAlertLifecycle {
@@ -32,7 +37,7 @@ export interface UnifiedSecurityAlertStateResult extends SecurityAlertStateResul
   source?: SecurityAlertSource;
 }
 
-export const SECURITY_ALERT_SOURCES: readonly SecurityAlertSource[] = ['host', 'network', 'gateway', 'native'];
+export const SECURITY_ALERT_SOURCES: readonly SecurityAlertSource[] = ['host', 'network', 'gateway', 'native', 'assistant'];
 export const SECURITY_ALERT_SEVERITIES: readonly SecurityAlertSeverity[] = ['low', 'medium', 'high', 'critical'];
 
 export function isSecurityAlertSource(value: string): value is SecurityAlertSource {
@@ -63,6 +68,7 @@ export function collectUnifiedSecurityAlerts(input: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
   includeAcknowledged: boolean;
   includeInactive?: boolean;
 }): UnifiedSecurityAlert[] {
@@ -95,6 +101,16 @@ export function collectUnifiedSecurityAlerts(input: {
       limit: 500,
     }).map(toUnifiedNativeAlert));
   }
+  if (input.assistantSecurity) {
+    const now = Date.now();
+    alerts.push(...input.assistantSecurity
+      .listFindings(500)
+      .map(toUnifiedAssistantAlert)
+      .filter((alert) => isSecurityAlertVisible(alert, now, {
+        includeAcknowledged: input.includeAcknowledged,
+        includeInactive: input.includeInactive,
+      })));
+  }
   return alerts;
 }
 
@@ -103,12 +119,14 @@ export function availableSecurityAlertSources(options: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
 }): SecurityAlertSource[] {
   const sources: SecurityAlertSource[] = [];
   if (options.hostMonitor) sources.push('host');
   if (options.networkBaseline) sources.push('network');
   if (options.gatewayMonitor) sources.push('gateway');
   if (options.windowsDefender) sources.push('native');
+  if (options.assistantSecurity) sources.push('assistant');
   return sources;
 }
 
@@ -119,6 +137,7 @@ export function acknowledgeUnifiedSecurityAlert(input: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
 }): UnifiedSecurityAlertAcknowledgeResult {
   return updateUnifiedSecurityAlertState(input, 'acknowledge');
 }
@@ -131,6 +150,7 @@ export function resolveUnifiedSecurityAlert(input: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
 }): UnifiedSecurityAlertStateResult {
   return updateUnifiedSecurityAlertState(input, 'resolve');
 }
@@ -144,6 +164,7 @@ export function suppressUnifiedSecurityAlert(input: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
 }): UnifiedSecurityAlertStateResult {
   return updateUnifiedSecurityAlertState(input, 'suppress');
 }
@@ -157,6 +178,7 @@ function updateUnifiedSecurityAlertState(input: {
   networkBaseline?: NetworkBaselineService;
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
+  assistantSecurity?: AiSecurityService;
 }, action: 'acknowledge' | 'resolve' | 'suppress'): UnifiedSecurityAlertStateResult {
   const candidates: Array<{
     source: SecurityAlertSource;
@@ -174,13 +196,16 @@ function updateUnifiedSecurityAlertState(input: {
           ? input.networkBaseline
           : input.source === 'gateway'
             ? input.gatewayMonitor
-            : input.windowsDefender,
+            : input.source === 'native'
+              ? input.windowsDefender
+              : createAssistantSecurityAlertAdapter(input.assistantSecurity),
     }]
     : [
       { source: 'host', service: input.hostMonitor },
       { source: 'network', service: input.networkBaseline },
       { source: 'gateway', service: input.gatewayMonitor },
       { source: 'native', service: input.windowsDefender },
+      { source: 'assistant', service: createAssistantSecurityAlertAdapter(input.assistantSecurity) },
     ];
 
   let unavailableCount = 0;
@@ -338,6 +363,81 @@ function toUnifiedNativeAlert(alert: WindowsDefenderAlert): UnifiedSecurityAlert
     suppressionReason: alert.suppressionReason,
     resolvedAt: alert.resolvedAt,
     resolutionReason: alert.resolutionReason,
+  };
+}
+
+function toUnifiedAssistantAlert(finding: AiSecurityFinding): UnifiedSecurityAlert {
+  const lifecycle = mapAssistantFindingStatus(finding.status);
+  return {
+    id: finding.id,
+    source: 'assistant',
+    type: `assistant_security_${finding.category}`,
+    severity: finding.severity,
+    timestamp: finding.lastSeenAt,
+    firstSeenAt: finding.firstSeenAt,
+    lastSeenAt: finding.lastSeenAt,
+    occurrenceCount: finding.occurrenceCount,
+    description: `${finding.title}: ${finding.summary}`,
+    dedupeKey: finding.dedupeKey,
+    evidence: {
+      findingId: finding.id,
+      targetId: finding.targetId,
+      targetLabel: finding.targetLabel,
+      category: finding.category,
+      confidence: finding.confidence,
+      evidence: finding.evidence,
+    },
+    subject: finding.targetLabel,
+    acknowledged: lifecycle.acknowledged,
+    status: lifecycle.status,
+    lastStateChangedAt: finding.lastSeenAt,
+    suppressedUntil: lifecycle.suppressedUntil,
+    suppressionReason: lifecycle.suppressionReason,
+    resolvedAt: lifecycle.resolvedAt,
+    resolutionReason: lifecycle.resolutionReason,
+  };
+}
+
+function createAssistantSecurityAlertAdapter(service?: AiSecurityService): {
+  acknowledgeAlert?: (alertId: string) => SecurityAlertStateResult;
+  resolveAlert?: (alertId: string, reason?: string) => SecurityAlertStateResult;
+  suppressAlert?: (alertId: string, until: number, reason?: string) => SecurityAlertStateResult;
+} | undefined {
+  if (!service) return undefined;
+  return {
+    acknowledgeAlert: (alertId: string) => service.updateFindingStatus(alertId, 'triaged'),
+    resolveAlert: (alertId: string) => service.updateFindingStatus(alertId, 'resolved'),
+    suppressAlert: (alertId: string) => service.updateFindingStatus(alertId, 'suppressed'),
+  };
+}
+
+function mapAssistantFindingStatus(status: AiSecurityFinding['status']): SecurityAlertLifecycle {
+  if (status === 'triaged') {
+    return {
+      acknowledged: true,
+      status: 'acknowledged',
+      lastStateChangedAt: 0,
+    };
+  }
+  if (status === 'resolved') {
+    return {
+      acknowledged: false,
+      status: 'resolved',
+      lastStateChangedAt: 0,
+      resolvedAt: 0,
+    };
+  }
+  if (status === 'suppressed') {
+    return {
+      acknowledged: false,
+      status: 'suppressed',
+      lastStateChangedAt: 0,
+    };
+  }
+  return {
+    acknowledged: false,
+    status: 'active',
+    lastStateChangedAt: 0,
   };
 }
 

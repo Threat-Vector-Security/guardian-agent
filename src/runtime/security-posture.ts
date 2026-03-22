@@ -72,6 +72,8 @@ const IR_ASSIST_ALERT_TYPES = new Set<string>([
   'gateway_admin_change',
   'suspicious_process',
   'defender_threat_detected',
+  'data_exfiltration',
+  'lateral_movement',
 ]);
 
 const LOW_CONFIDENCE_MEDIUM_ALERT_TYPES = new Set<string>([
@@ -80,6 +82,10 @@ const LOW_CONFIDENCE_MEDIUM_ALERT_TYPES = new Set<string>([
   'sensitive_path_change',
   'firewall_change',
   'defender_controlled_folder_access_disabled',
+]);
+
+const CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES = new Set<string>([
+  'arp_conflict',
 ]);
 
 export { DEPLOYMENT_PROFILES, SECURITY_OPERATING_MODES, isDeploymentProfile, isSecurityOperatingMode };
@@ -98,37 +104,62 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
     high: activeAlerts.filter((alert) => alert.severity === 'high').length,
     critical: activeAlerts.filter((alert) => alert.severity === 'critical').length,
   };
-  const bySource: Record<SecurityPostureSource, number> = { host: 0, network: 0, gateway: 0, native: 0 };
+  const bySource: Record<SecurityPostureSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
   for (const alert of activeAlerts) {
     bySource[alert.source] += 1;
   }
 
   const availableSources = [...new Set((input.availableSources ?? activeAlerts.map((alert) => alert.source)).filter(Boolean))]
-    .filter((value): value is SecurityPostureSource => value === 'host' || value === 'network' || value === 'gateway' || value === 'native');
+    .filter((value): value is SecurityPostureSource => value === 'host' || value === 'network' || value === 'gateway' || value === 'native' || value === 'assistant');
 
   const criticalAlerts = activeAlerts.filter((alert) => alert.severity === 'critical');
   const highAlerts = activeAlerts.filter((alert) => alert.severity === 'high');
   const mediumAlerts = activeAlerts.filter((alert) => alert.severity === 'medium');
   const actionableMediumAlerts = mediumAlerts.filter((alert) => !LOW_CONFIDENCE_MEDIUM_ALERT_TYPES.has(alert.type));
+  const assistantCriticalAlerts = criticalAlerts.filter((alert) => isAssistantPostureAlert(alert));
+  const corroborationRequiredCriticalAlerts = criticalAlerts.filter((alert) => CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES.has(alert.type));
+  const incidentCriticalAlerts = criticalAlerts.filter((alert) => (
+    !LOCKDOWN_ALERT_TYPES.has(alert.type)
+    && !isAssistantPostureAlert(alert)
+    && !CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES.has(alert.type)
+  ));
+  const actionableHighAlerts = highAlerts.filter((alert) => !isAssistantPostureAlert(alert));
+  const assistantElevatedAlerts = activeAlerts.filter((alert) => alert.source === 'assistant' && severityRank(alert.severity) >= 3);
+  const incidentCriticalSources = new Set(incidentCriticalAlerts.map((alert) => alert.source));
+  const hasNonAssistantHighCorroboration = actionableHighAlerts.some((alert) => alert.source !== 'assistant');
   const reasons: string[] = [];
 
   let recommendedMode: SecurityOperatingMode = 'monitor';
   if (criticalAlerts.length > 0) {
     const lockdownCandidate = criticalAlerts.some((alert) => LOCKDOWN_ALERT_TYPES.has(alert.type))
-      || new Set(criticalAlerts.map((alert) => alert.source)).size >= 2;
+      || incidentCriticalSources.size >= 2;
     if (lockdownCandidate) {
       recommendedMode = 'lockdown';
       reasons.push('Critical alerts indicate a likely active incident or weakened protection boundary.');
-    } else {
+    } else if (incidentCriticalAlerts.length > 0) {
       recommendedMode = 'ir_assist';
       reasons.push('A critical alert is active and warrants operator-led investigation.');
+    } else if (corroborationRequiredCriticalAlerts.length > 0 && hasNonAssistantHighCorroboration) {
+      recommendedMode = 'ir_assist';
+      reasons.push('A critical network signal is corroborated by additional elevated alerts and now warrants investigation mode.');
+    } else {
+      recommendedMode = 'guarded';
+      if (assistantCriticalAlerts.length > 0) {
+        reasons.push('Critical Assistant Security findings indicate meaningful posture risk, but they are posture-oriented signals rather than direct incident evidence.');
+      }
+      if (corroborationRequiredCriticalAlerts.length > 0) {
+        reasons.push('A critical alert is active, but this signal class requires corroboration before incident-assist mode is warranted.');
+      }
     }
-  } else if (highAlerts.length >= 2 || (highAlerts.length >= 1 && new Set(activeAlerts.map((alert) => alert.source)).size >= 2)) {
+  } else if (actionableHighAlerts.length >= 2 || (actionableHighAlerts.length >= 1 && new Set(actionableHighAlerts.map((alert) => alert.source)).size >= 2)) {
     recommendedMode = 'guarded';
     reasons.push('Multiple elevated alerts suggest raising controls while preserving normal operation where possible.');
-  } else if (highAlerts.length === 1) {
+  } else if (actionableHighAlerts.length === 1) {
     recommendedMode = 'guarded';
     reasons.push('A high-severity alert is active and should tighten approvals and outbound actions.');
+  } else if (assistantElevatedAlerts.length > 0) {
+    recommendedMode = 'guarded';
+    reasons.push('Assistant Security has high-risk posture findings. Tighten controls, but avoid incident-response mode until stronger runtime evidence appears.');
   } else if (actionableMediumAlerts.length >= 2 && new Set(actionableMediumAlerts.map((alert) => alert.source)).size >= 2) {
     recommendedMode = 'guarded';
     reasons.push('Medium-severity alerts across multiple sources suggest a broader issue than a single noisy signal.');
@@ -136,6 +167,8 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
 
   if (recommendedMode === 'monitor' && activeAlerts.length === 0) {
     reasons.push('No active alerts currently justify tighter controls.');
+  } else if (recommendedMode === 'monitor' && activeAlerts.length > 0) {
+    reasons.push('Active alerts are currently low-confidence, low-severity, or posture-oriented enough to stay in monitor mode without incident escalation.');
   }
   if (recommendedMode === 'ir_assist' && criticalAlerts.some((alert) => IR_ASSIST_ALERT_TYPES.has(alert.type))) {
     reasons.push('The active signal pattern fits investigation-oriented response rather than immediate full lockdown.');
@@ -187,8 +220,15 @@ function buildSummary(input: {
   if (counts.total === 0) {
     return `Profile '${profile}' has no active alerts. Stay in '${currentMode}'.`;
   }
+  if (!shouldEscalate && recommendedMode === currentMode) {
+    return `Profile '${profile}' has ${counts.total} active alerts. '${currentMode}' remains appropriate for the current signal mix.`;
+  }
   if (!shouldEscalate) {
     return `Profile '${profile}' has ${counts.total} active alerts. Current mode '${currentMode}' is already at or above the recommended posture.`;
   }
   return `Profile '${profile}' has ${counts.total} active alerts. Escalate from '${currentMode}' to '${recommendedMode}'.`;
+}
+
+function isAssistantPostureAlert(alert: SecurityPostureAlert): boolean {
+  return alert.source === 'assistant' || alert.type.startsWith('assistant_security_');
 }

@@ -96,7 +96,8 @@ Notes:
 | cloud connections and cloud posture | `Cloud` | dashboard count only |
 | automations, schedules, run history | `Automations` | dashboard count only |
 | AI provider config and search config | `Configuration` | single dashboard summary card |
-| tools, approvals, policy, sandbox | `Configuration` | filtered links only |
+| tools, approvals, runtime routing | `Configuration > Tools` | filtered links only |
+| sandbox, allowlists, trust, browser risk controls, security-related configuration | `Configuration > Security` | filtered links only |
 | auth, integrations, system settings | `Configuration` | status only elsewhere |
 
 ## Cross-Page Rules
@@ -264,22 +265,22 @@ It must provide:
 
 ### Current content to relocate
 
-- `LLM Providers` table -> `Configuration > AI & Search`
+- `LLM Providers` table -> `Configuration > AI Providers`
 - `Scheduled Cron Jobs` -> `Automations`
-- `Recent Policy Decisions` -> `Security > Audit`
+- `Recent Policy Decisions` -> `Security > Security Log`
 - `Session Queue` and `Background Jobs` -> future runtime detail surface or collapsible advanced panel
 
 ## Security
 
 ### Purpose
 
-Central place for security investigation, alert triage, agentic-security workflow review, and audit history.
+Central place for security investigation, combined alert-and-audit review, Assistant Security scan/workflow review, and threat-intel work.
 
 ### Guidance standard
 
 Security must include:
 
-- a page-level intro explaining the difference between `Overview`, `Alerts`, `Agentic Security Log`, `Audit`, and `Threat Intel`
+- a page-level intro explaining the difference between `Overview`, `Security Log`, `Assistant Security`, and `Threat Intel`
 - a tab-level intro for each major tab
 - a tooltip or equivalent hover description on each tab button
 - section-level info affordances on major cards, tables, and queues
@@ -287,9 +288,8 @@ Security must include:
 ### Required tabs
 
 - `Overview`
-- `Alerts`
-- `Agentic Security Log`
-- `Audit`
+- `Security Log`
+- `Assistant Security`
 - `Threat Intel`
 
 ### `Overview`
@@ -310,9 +310,9 @@ Must not contain:
 - general-purpose runtime analytics that are not security-specific
 - duplicate agent status tables
 
-### `Alerts`
+### `Security Log`
 
-This is the canonical alert queue.
+This is the canonical combined action-and-evidence surface.
 
 Must support:
 
@@ -328,11 +328,16 @@ Must support:
 - acknowledgement
 - resolve and suppression actions for supported local alerts
 - deep links to originating objects
+- audit chain verification
+- searchable audit history
+- denial summaries or equivalent historical context
 
-### `Agentic Security Log`
+### `Assistant Security`
 
 Owns:
 
+- posture-driven Assistant Security scans across runtime and coding workspaces
+- the current Assistant Security findings queue and recent scan history
 - the persisted running log of security-agent workflow
 - live triage activity fed from `security.triage`
 - investigation start/skip/complete/failure history
@@ -343,16 +348,6 @@ Must not become:
 - a duplicate alert queue
 - a replacement for the audit ledger
 - a generic runtime metrics page
-
-### `Audit`
-
-Owns:
-
-- audit log
-- chain verification
-- policy decisions
-- denials
-- expanded event detail
 
 ### `Threat Intel`
 
@@ -579,52 +574,76 @@ Users should be able to tell immediately that this page is for product setup and
 
 ### Required tabs
 
-- `AI & Search`
-- `Tools & Policy`
-- `Integrations`
-- `System`
+- `AI Providers`
+- `Search Providers`
+- `Tools`
+- `Security`
+- `Integration System`
 - `Appearance`
 
-### `AI & Search`
+### `AI Providers`
 
 Owns:
 
 - AI providers
 - default provider
+- shared credential refs
+
+### `Search Providers`
+
+Owns:
+
 - web search and fallback
 - search sources
 
-### `Tools & Policy`
+Must not own:
+
+- Ollama or other LLM provider profile details
+- duplicate provider or cloud summary cards
+
+Search-source runtime state should be shown as one compact actionable summary, not a strip of vanity status cards.
+
+### `Tools`
 
 Owns:
 
 - tool runtime status
 - approvals
 - tool routing
-- sandbox status
+- recent tool jobs
+
+### `Security`
+
+Owns:
+
+- sandbox enforcement
+- degraded-backend override controls
+- browser automation security posture
 - allowlists
-- policy mode
-
-### `Integrations`
-
-Owns:
-
-- Telegram
-- browser automation settings
-- Google Workspace
-- future configuration-only integrations
-
-### `System`
-
-Owns:
-
-- authentication
+- agent policy access gates
 - Guardian agent
 - policy-as-code
 - Sentinel
 - notifications
 - trust preset
+
+### `Integration System`
+
+Owns:
+
+- Telegram
+- Google Workspace
+- authentication
 - danger zone
+- future configuration-only integrations that are not part of the security control plane
+
+Must not own:
+
+- AI provider inventory or Ollama details
+- search-provider status
+- cloud connection inventory
+
+Overview cards in this tab should stay limited to operator-access and channel state.
 
 ### `Appearance`
 
@@ -760,7 +779,7 @@ Promoted automation findings should flow through the same normalized alert path 
 
 - emit an audit event for the promoted finding
 - let the notification system consume that event
-- render it in `Security > Alerts`
+- render it in `Security > Security Log`
 
 This preserves one alert pipeline instead of creating a special-case UI-only path.
 
@@ -796,7 +815,7 @@ Example:
 
 ## Security UI requirements for automation findings
 
-The Security page must show automation-originated findings as a first-class source in `Alerts`.
+The Security page must show automation-originated findings as a first-class source in `Security Log`.
 
 Each row must include:
 
@@ -823,7 +842,7 @@ When a cloud automation is created:
 
 - it is owned by `Automations`
 - it may be launched from `Cloud > Automations`
-- any promoted findings appear in `Security > Alerts`
+- any promoted findings appear in `Security > Security Log`
 - raw run outputs remain in `Automations`
 
 ## Required Removals and Migrations
@@ -839,7 +858,7 @@ When a cloud automation is created:
 ### Replace with
 
 - left-nav `Cloud`
-- `Security > Alerts`
+- `Security > Security Log`
 - `Configuration` split into clear ownership tabs
 - `Network` focused on inventory and diagnostics
 

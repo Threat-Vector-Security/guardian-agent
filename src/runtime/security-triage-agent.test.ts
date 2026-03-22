@@ -185,4 +185,75 @@ describe('SecurityEventTriageAgent', () => {
     expect(activity.entries[0]?.details?.reason).toBe('informational');
     expect(activity.entries[0]?.summary).toContain('Observed host monitor check');
   });
+
+  it('dispatches triage for promoted anomaly notifications', async () => {
+    const auditLog = new AuditLog();
+    const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-anomaly-test-activity.json' });
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      activityLog,
+      now: () => 3_000,
+    });
+    const ctx = makeContext();
+
+    await agent.onEvent({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+      payload: {
+        severity: 'warn',
+        sourceEventType: 'anomaly_detected',
+        description: 'Assistant Security detected a connected third-party MCP server with network access.',
+        details: {
+          anomalyType: 'assistant_security_mcp',
+        },
+      },
+      timestamp: 2_999,
+    }, ctx);
+
+    expect(vi.mocked(ctx.dispatch)).toHaveBeenCalledTimes(1);
+    const [targetAgentId, message] = vi.mocked(ctx.dispatch).mock.calls[0]!;
+    expect(targetAgentId).toBe(SECURITY_TRIAGE_AGENT_ID);
+    expect(message.content).toContain('assistant_security_mcp');
+    expect(message.content).toContain('assistant_security_findings');
+  });
+
+  it('skips expected guardrail action-denied notifications', async () => {
+    const auditLog = new AuditLog();
+    const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-guardrail-test-activity.json' });
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      activityLog,
+      now: () => 4_000,
+    });
+    const ctx = makeContext();
+
+    await agent.onEvent({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+      payload: {
+        severity: 'warn',
+        sourceEventType: 'action_denied',
+        description: 'Manual code terminals stay disabled by default on degraded sandbox backends.',
+        details: {
+          reason: 'degraded_backend_manual_terminals_disabled',
+          source: 'code_terminal',
+        },
+      },
+      timestamp: 3_999,
+    }, ctx);
+
+    expect(vi.mocked(ctx.dispatch)).not.toHaveBeenCalled();
+    expect(auditLog.query({ type: 'automation_finding' })).toHaveLength(0);
+    const activity = activityLog.list();
+    expect(activity.totalMatches).toBe(1);
+    expect(activity.entries[0]?.status).toBe('skipped');
+    expect(activity.entries[0]?.triggerDetailType).toBe('degraded_backend_manual_terminals_disabled');
+    expect(activity.entries[0]?.details?.reason).toBe('low_confidence');
+  });
 });

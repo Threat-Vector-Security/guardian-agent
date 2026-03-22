@@ -44,7 +44,7 @@ Playwright is the default browser backend.
 Current startup shape:
 
 - command: `npx`
-- package: `@playwright/mcp@latest`
+- package: installed `@playwright/mcp` from the local dependency set (no `@latest` startup path)
 - default args:
   - `--headless`
   - `--browser <playwrightBrowser>`

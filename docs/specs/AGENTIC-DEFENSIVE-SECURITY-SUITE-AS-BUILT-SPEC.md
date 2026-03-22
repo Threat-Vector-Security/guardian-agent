@@ -242,6 +242,38 @@ Primary files:
 - `src/runtime/containment-service.ts`
 - `src/runtime/browser-session-broker.ts`
 
+## Default-safe degraded-backend posture
+
+The shipped runtime keeps compatibility with hosts that do not have a strong sandbox backend, but it no longer treats permissive mode as “open everything.”
+
+Current default behavior:
+
+- `assistant.tools.sandbox.enforcementMode` still defaults to `permissive`
+- on degraded or unavailable sandbox backends, risky fallback allowances are explicit operator opt-ins and default to off:
+  - `allowNetworkTools`
+  - `allowBrowserTools`
+  - `allowMcpServers`
+  - `allowPackageManagers`
+  - `allowManualCodeTerminals`
+- agent-driven policy widening through chat also defaults to off:
+  - `agentPolicyUpdates.allowedPaths`
+  - `agentPolicyUpdates.allowedCommands`
+  - `agentPolicyUpdates.allowedDomains`
+  - `agentPolicyUpdates.toolPolicies`
+
+Operator surface:
+
+- the web UI exposes these controls in `Configuration > Security`
+- degraded-backend warnings are presented inline with the relevant controls so operators explicitly choose when to widen host blast radius
+
+Primary files:
+
+- `src/sandbox/security-controls.ts`
+- `src/sandbox/types.ts`
+- `src/tools/executor.ts`
+- `src/channels/web.ts`
+- `web/public/js/pages/config.js`
+
 ## Agentic security triage
 
 The defensive stack now includes a dedicated LLM-backed security triage loop.
@@ -250,7 +282,7 @@ Current design:
 
 - a `security-triage` chat agent performs bounded investigation
 - a `security-triage-dispatcher` event agent listens for selected security events
-- the dispatcher ignores low-confidence noisy families
+- the dispatcher ignores low-confidence noisy families and expected guardrail denial events
 - repeated events are deduped with a cooldown window
 - the triage agent is instructed to use read-only evidence gathering first
 - the triage loop records an `automation_finding` audit event when it completes
@@ -369,22 +401,21 @@ The current Security page is the main operator surface for the local defensive s
 Current tabs:
 
 - `Overview`
-- `Alerts`
-- `Agentic Security Log`
-- `Audit`
+- `Assistant Security`
 - `Threat Intel`
+- `Security Log`
 
 Current Security page behavior:
 
 - page-level guidance panel describing the tab split
 - tab-level intro panels for each major tab
 - per-tab hover tooltips on the tab buttons
-- unified local alert queue
-- operating-mode posture and containment state
-- native Windows Defender status and actions
-- persisted live security-agent activity log
-- audit chain verification and historical audit review
-- threat-intel workspace for longer-running monitoring and action drafting
+- Overview optimized for fast posture readout with compact cards, a mode recommendation panel, and top active signals
+- Security Log centered on the unified queue, with historical audit review collapsed until needed
+- alert and audit rows expand into deterministic investigation guidance, normalized evidence/context, and raw JSON without requiring an AI triage pass
+- Assistant Security centered on posture, monitoring, and the live findings queue, with targets, runs, and activity moved into secondary expandable sections
+- threat-intel workspace focused on summary, watchlist, and findings, with drafted actions and operating plan kept as secondary expandable sections
+- unified alerts still include native-provider findings, but the Security page no longer duplicates a separate native-provider control panel here
 
 Primary files:
 

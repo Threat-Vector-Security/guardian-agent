@@ -56,9 +56,12 @@ export interface GraphRunCheckpoint<TStepResult> {
   createdAt: number;
   updatedAt: number;
   currentNodeId?: string;
+  nextNodeId?: string;
   completedNodeIds: string[];
+  pendingApprovalIds?: string[];
   results: TStepResult[];
   events: OrchestrationRunEvent[];
+  resumeContext?: Record<string, unknown>;
 }
 
 export interface GraphRunResult<TStepResult> {

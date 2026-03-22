@@ -397,6 +397,16 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     emitEvent: 'threat_intel_scanned',
   },
   {
+    id: 'assistant-security-scan',
+    name: 'Assistant Security Scan',
+    description: 'Run Assistant Security posture scan every 12 hours',
+    type: 'tool',
+    target: 'assistant_security_scan',
+    args: { profileId: 'quick', source: 'scheduled' },
+    cron: '15 */12 * * *',
+    emitEvent: 'assistant_security_scanned',
+  },
+  {
     id: 'host-security-baseline',
     name: 'Host Security Baseline',
     description: 'Run the built-in workstation security baseline playbook every 6 hours',

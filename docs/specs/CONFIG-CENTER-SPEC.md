@@ -96,7 +96,7 @@ REST endpoints for managing document search sources at runtime:
 - `PATCH /api/search/sources/:id` — Toggle source enabled/disabled (body: `{ enabled: boolean }`)
 - `POST /api/search/reindex` — Trigger reindex (body: `{ collection?: string }`)
 
-Web UI: Configuration > Search Sources tab provides full CRUD with status card, sources table, and add form.
+Web UI: Configuration > Search Providers tab provides full CRUD with a compact runtime summary, sources table, and add form.
 
 Config: `assistant.tools.search` — `enabled`, `sqlitePath`, `defaultMode`, `maxResults`, `sources[]`, `embedding`, `chunking`, `reranker`
 

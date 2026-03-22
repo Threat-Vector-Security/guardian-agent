@@ -122,6 +122,156 @@ describe('ToolExecutor', () => {
     expect(names).toContain('gmail_send');
   });
 
+  describe('assistant security tools', () => {
+    function createAssistantSecurityStub() {
+      const summary = {
+        enabled: true,
+        profileCount: 3,
+        targetCount: 2,
+        readyTargetCount: 2,
+        lastRunAt: 5_000,
+        findings: {
+          total: 1,
+          new: 1,
+          highOrCritical: 1,
+        },
+        posture: {
+          availability: 'strong',
+          enforcementMode: 'strict',
+          degradedFallbackActive: false,
+          confidence: 'bounded',
+        },
+      } as const;
+      const profiles = [{
+        id: 'quick',
+        label: 'Quick Scan',
+        description: 'Quick posture scan.',
+        targetTypes: ['runtime', 'workspace'],
+        focus: ['sandbox'],
+      }];
+      const targets = [{
+        id: 'runtime:guardian',
+        type: 'runtime',
+        label: 'Guardian runtime',
+        description: 'Runtime posture',
+        riskLevel: 'normal',
+        ready: true,
+      }];
+      const run = {
+        id: 'run-1',
+        source: 'manual',
+        profileId: 'quick',
+        profileLabel: 'Quick Scan',
+        startedAt: 4_000,
+        completedAt: 5_000,
+        success: true,
+        message: 'Scan completed.',
+        targetCount: 1,
+        findingCount: 1,
+        highOrCriticalCount: 1,
+      };
+      const finding = {
+        id: 'finding-1',
+        dedupeKey: 'runtime:guardian:degraded',
+        targetId: 'runtime:guardian',
+        targetType: 'runtime',
+        targetLabel: 'Guardian runtime',
+        category: 'sandbox',
+        severity: 'high',
+        confidence: 0.9,
+        status: 'new',
+        title: 'Degraded fallback is active',
+        summary: 'Sandbox fallback is active.',
+        firstSeenAt: 4_000,
+        lastSeenAt: 5_000,
+        occurrenceCount: 1,
+        evidence: [{ kind: 'sandbox', summary: 'fallback active' }],
+      };
+      return {
+        run,
+        finding,
+        service: {
+          getSummary: vi.fn().mockReturnValue(summary),
+          getProfiles: vi.fn().mockReturnValue(profiles),
+          listTargets: vi.fn().mockReturnValue(targets),
+          listRuns: vi.fn().mockReturnValue([run]),
+          listFindings: vi.fn().mockReturnValue([finding]),
+          scan: vi.fn().mockResolvedValue({
+            success: true,
+            message: 'Scan completed.',
+            run,
+            findings: [finding],
+            promotedFindings: [finding],
+          }),
+        },
+      };
+    }
+
+    it('returns Assistant Security summary data', async () => {
+      const root = createExecutorRoot();
+      const assistantSecurity = createAssistantSecurityStub();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        assistantSecurity: assistantSecurity.service as never,
+      });
+
+      const names = executor.listToolDefinitions().map((tool) => tool.name);
+      expect(names).toContain('assistant_security_summary');
+      expect(names).toContain('assistant_security_scan');
+      expect(names).toContain('assistant_security_findings');
+
+      const result = await executor.runTool({
+        toolName: 'assistant_security_summary',
+        args: {},
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect((result.output as { summary: { enabled: boolean } }).summary.enabled).toBe(true);
+      expect(assistantSecurity.service.getSummary).toHaveBeenCalled();
+      expect(assistantSecurity.service.getProfiles).toHaveBeenCalled();
+    });
+
+    it('routes Assistant Security scans through the shared scan hook', async () => {
+      const root = createExecutorRoot();
+      const assistantSecurity = createAssistantSecurityStub();
+      const runAssistantSecurityScan = vi.fn().mockResolvedValue({
+        success: true,
+        message: 'Scan completed.',
+        run: assistantSecurity.run,
+        findings: [assistantSecurity.finding],
+        promotedFindings: [assistantSecurity.finding],
+      });
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        assistantSecurity: assistantSecurity.service as never,
+        runAssistantSecurityScan,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'assistant_security_scan',
+        args: {
+          profileId: 'runtime-hardening',
+          targetIds: ['runtime:guardian'],
+        },
+        origin: 'cli',
+        agentId: 'agent-1',
+      });
+
+      expect(result.success).toBe(true);
+      expect(runAssistantSecurityScan).toHaveBeenCalledWith(expect.objectContaining({
+        profileId: 'runtime-hardening',
+        targetIds: ['runtime:guardian'],
+        source: 'manual',
+        requestedBy: 'tool:agent-1',
+      }));
+    });
+  });
+
   it('keeps update_tool_policy always loaded when policy updates are enabled', () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -5124,6 +5274,30 @@ describe('ToolExecutor', () => {
       expect(result.message).toContain('disabled category');
     });
 
+    it('disabled mcp category filters third-party MCP tools from list', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        disabledCategories: ['mcp'],
+        mcpManager: {
+          getAllToolDefinitions: () => ([
+            {
+              name: 'mcp-custom-read',
+              description: 'Read from a custom MCP server',
+              risk: 'mutating',
+              parameters: { type: 'object', properties: {} },
+            },
+          ]),
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('mcp-custom-read');
+    });
+
     it('all builtin tools have category field set', () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
@@ -5146,15 +5320,17 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(16);
+      expect(info.length).toBe(18);
       const names = info.map((c) => c.category);
       expect(names).toContain('coding');
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');
       expect(names).toContain('web');
       expect(names).toContain('browser');
+      expect(names).toContain('mcp');
       expect(names).toContain('contacts');
       expect(names).toContain('email');
+      expect(names).toContain('security');
       expect(names).toContain('intel');
       expect(names).toContain('forum');
       expect(names).toContain('network');
@@ -5255,8 +5431,132 @@ describe('ToolExecutor', () => {
       const notice = executor.getRuntimeNotices()[0];
       expect(notice?.level).toBe('warn');
       expect(notice?.message).toContain('Permissive sandbox mode is explicitly enabled');
+      expect(notice?.message).toContain('high-risk surfaces blocked by default');
       expect(notice?.message).toContain('bubblewrap');
       expect(notice?.message).toContain('guardian-sandbox-win.exe');
+    });
+
+    it('keeps degraded permissive backends locked down by default', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: ['echo', 'npm'],
+        allowedDomains: ['localhost'],
+        mcpManager: {
+          getAllToolDefinitions: () => ([
+            {
+              name: 'mcp-custom-read',
+              description: 'Read from a custom MCP server',
+              risk: 'read_only',
+              parameters: { type: 'object', properties: {} },
+            },
+          ]),
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+        sandboxConfig: {
+          ...DEFAULT_SANDBOX_CONFIG,
+          enforcementMode: 'permissive',
+        },
+        sandboxHealth: {
+          enabled: true,
+          platform: 'win32',
+          availability: 'unavailable',
+          backend: 'env',
+          enforcementMode: 'permissive',
+          reasons: ['No native Windows sandbox helper is available.'],
+        },
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('net_ping');
+      expect(names).not.toContain('web_search');
+      expect(names).not.toContain('chrome_job');
+      expect(names).not.toContain('mcp-custom-read');
+      expect(names).toContain('doc_search');
+    });
+
+    it('allows explicit degraded-backend overrides to re-enable selected tools', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: ['echo', 'npm'],
+        allowedDomains: ['localhost'],
+        mcpManager: {
+          getAllToolDefinitions: () => ([
+            {
+              name: 'mcp-custom-read',
+              description: 'Read from a custom MCP server',
+              risk: 'read_only',
+              parameters: { type: 'object', properties: {} },
+            },
+          ]),
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+        sandboxConfig: {
+          ...DEFAULT_SANDBOX_CONFIG,
+          enforcementMode: 'permissive',
+          degradedFallback: {
+            allowNetworkTools: true,
+            allowBrowserTools: true,
+            allowMcpServers: true,
+            allowPackageManagers: false,
+            allowManualCodeTerminals: false,
+          },
+        },
+        sandboxHealth: {
+          enabled: true,
+          platform: 'win32',
+          availability: 'unavailable',
+          backend: 'env',
+          enforcementMode: 'permissive',
+          reasons: ['No native Windows sandbox helper is available.'],
+        },
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('net_ping');
+      expect(names).toContain('web_search');
+      expect(names).toContain('chrome_job');
+      expect(names).toContain('mcp-custom-read');
+    });
+
+    it('blocks install-like package manager commands on degraded permissive backends by default', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: ['npm'],
+        allowedDomains: ['localhost'],
+        sandboxConfig: {
+          ...DEFAULT_SANDBOX_CONFIG,
+          enforcementMode: 'permissive',
+        },
+        sandboxHealth: {
+          enabled: true,
+          platform: 'win32',
+          availability: 'unavailable',
+          backend: 'env',
+          enforcementMode: 'permissive',
+          reasons: ['No native Windows sandbox helper is available.'],
+        },
+      });
+
+      const result = await executor.runTool({
+        toolName: 'shell_safe',
+        args: { command: 'npm install vitest' },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('allowPackageManagers');
     });
   });
 
@@ -5631,7 +5931,7 @@ describe('ToolExecutor', () => {
         totalMatches: 1,
         returned: 1,
         searchedSources: ['native'],
-        bySource: { host: 0, network: 0, gateway: 0, native: 1 },
+        bySource: { host: 0, network: 0, gateway: 0, native: 1, assistant: 0 },
       });
       expect((result.output as any).alerts[0]).toMatchObject({
         id: 'wd-1',

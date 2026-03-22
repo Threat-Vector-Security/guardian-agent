@@ -35,6 +35,12 @@ const BUILTIN_ACTIONS: QuickActionDefinition[] = [
     description: 'Create a calendar-ready meeting outline and agenda.',
     detailsHint: 'Objective, attendees, duration, preferred times',
   },
+  {
+    id: 'security',
+    label: 'Run Security Review',
+    description: 'Run Assistant Security posture review and summarize the highest-risk findings.',
+    detailsHint: 'Scope, workspace, profile preference, special concerns',
+  },
 ];
 
 export function getQuickActions(config: AssistantQuickActionsConfig): QuickActionDefinition[] {

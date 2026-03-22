@@ -20,6 +20,12 @@ import {
 } from '../guardian/shell-validator.js';
 import { normalizeHttpUrlInput, normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from '../config/input-normalization.js';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
+import type {
+  AiSecurityFindingStatus,
+  AiSecurityRunSource,
+  AiSecurityScanResult,
+  AiSecurityService,
+} from '../runtime/ai-security.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
@@ -49,6 +55,13 @@ import { getEffectiveCodeWorkspaceTrustState } from '../runtime/code-workspace-t
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
+import {
+  isBrowserMcpToolName,
+  isDegradedSandboxFallbackActive,
+  isStrictSandboxLockdown,
+  listEnabledDegradedFallbackAllowances,
+  resolveDegradedFallbackConfig,
+} from '../sandbox/security-controls.js';
 import { realpath } from 'node:fs/promises';
 import type { DeviceInventoryService } from '../runtime/device-inventory.js';
 import type { NetworkBaselineService } from '../runtime/network-baseline.js';
@@ -115,6 +128,7 @@ const MAX_TOOL_CALLS_PER_CHAIN = 24;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const DEGRADED_PACKAGE_MANAGER_HINT = 'assistant.tools.sandbox.degradedFallback.allowPackageManagers';
 const POSIX_SHELL_BUILTINS = new Set(['type']);
 const WINDOWS_SHELL_BUILTINS = new Set(['cd', 'dir', 'echo', 'type']);
 const WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS = new Set(['.com', '.exe']);
@@ -547,6 +561,13 @@ export interface ToolExecutorOptions {
   allowedCommands?: string[];
   allowedDomains?: string[];
   threatIntel?: ThreatIntelService;
+  assistantSecurity?: AiSecurityService;
+  runAssistantSecurityScan?: (input: {
+    profileId?: string;
+    targetIds?: string[];
+    source?: AiSecurityRunSource;
+    requestedBy?: string;
+  }) => Promise<AiSecurityScanResult>;
   allowExternalPosting?: boolean;
   /** MCP client manager for external tool server integration. */
   mcpManager?: MCPClientManager;
@@ -629,6 +650,11 @@ export interface ToolExecutorOptions {
     result: { success: boolean; status: string; message?: string; durationMs: number; error?: string; approvalId?: string },
     request: ToolExecutionRequest
   ) => void;
+  onApprovalDecided?: (
+    approvalId: string,
+    decision: 'approved' | 'denied',
+    result: ToolApprovalDecisionResult,
+  ) => void | Promise<void>;
 }
 
 export interface ToolPolicyUpdate {
@@ -815,19 +841,25 @@ export class ToolExecutor {
 
     const definitions = this.mcpManager.getAllToolDefinitions();
     for (const def of definitions) {
+      const normalizedDef = !def.category
+        ? {
+          ...def,
+          category: isBrowserMcpToolName(def.name) ? 'browser' as const : 'mcp' as const,
+        }
+        : def;
       // Skip if already registered (idempotent)
-      if (this.registry.get(def.name)) continue;
+      if (this.registry.get(normalizedDef.name)) continue;
 
       const manager = this.mcpManager;
-      this.registry.register(def, async (args, request) => {
-        const guard = inferMCPGuardAction(def);
+      this.registry.register(normalizedDef, async (args, request) => {
+        const guard = inferMCPGuardAction(normalizedDef);
         if (guard) {
           this.guardAction(request, guard.type, {
-            toolName: def.name,
+            toolName: normalizedDef.name,
             ...guard.params,
           });
         }
-        return manager.callTool(def.name, args);
+        return manager.callTool(normalizedDef.name, args);
       });
     }
   }
@@ -1921,6 +1953,10 @@ export class ToolExecutor {
       const value = args[key];
       if (typeof value !== 'string' || !value.trim()) continue;
       const normalized = value.trim();
+      const degradedPackageManagerReason = this.getDegradedPackageManagerBlockReason(normalized);
+      if (degradedPackageManagerReason) {
+        return { reason: degradedPackageManagerReason };
+      }
       const shellCheck = sanitizeShellArgs(normalized, this.policy.sandbox.allowedCommands);
       if (shellCheck.safe) continue;
       const isAllowlistMiss = shellCheck.reason === `Command is not allowlisted: '${normalized}'.`;
@@ -1938,6 +1974,38 @@ export class ToolExecutor {
         };
     }
     return null;
+  }
+
+  private getDegradedPackageManagerBlockReason(command: string): string | null {
+    if (!isDegradedSandboxFallbackActive(this.sandboxConfig, this.sandboxHealth)) return null;
+    if (resolveDegradedFallbackConfig(this.sandboxConfig).allowPackageManagers) return null;
+    const tokens = tokenize(command).map((token) => token.toLowerCase());
+    if (tokens.length === 0) return null;
+
+    const [first, second, third, fourth] = tokens;
+    const isInstallLike = (
+      first === 'npx'
+      || (first === 'npm' && ['install', 'i', 'ci', 'add', 'update', 'exec'].includes(second ?? ''))
+      || (first === 'pnpm' && ['install', 'i', 'add', 'dlx', 'update', 'up'].includes(second ?? ''))
+      || (first === 'yarn' && ['install', 'add', 'dlx', 'upgrade', 'up'].includes(second ?? ''))
+      || (first === 'bun' && ['install', 'add', 'x'].includes(second ?? ''))
+      || ((first === 'pip' || first === 'pip3') && ['install', 'download'].includes(second ?? ''))
+      || ((first === 'python' || first === 'python3') && second === '-m' && third === 'pip' && ['install', 'download'].includes(fourth ?? ''))
+      || (first === 'uv' && (
+        ['add', 'sync'].includes(second ?? '')
+        || (second === 'pip' && ['install', 'sync'].includes(third ?? ''))
+        || (second === 'tool' && ['install', 'run'].includes(third ?? ''))
+      ))
+      || (first === 'cargo' && ['install', 'add'].includes(second ?? ''))
+      || (first === 'go' && ['get', 'install'].includes(second ?? ''))
+      || (first === 'composer' && ['install', 'require', 'update'].includes(second ?? ''))
+      || (first === 'bundle' && second === 'install')
+      || (first === 'gem' && second === 'install')
+      || (first === 'dotnet' && ['restore', 'add', 'tool'].includes(second ?? ''))
+    );
+
+    if (!isInstallLike) return null;
+    return `Install-like package manager commands are blocked on degraded sandbox backends unless ${DEGRADED_PACKAGE_MANAGER_HINT} is enabled.`;
   }
 
   private preflightHostArgs(toolName: string, args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
@@ -2029,7 +2097,7 @@ export class ToolExecutor {
     this.searchCache.clear();
   }
 
-  /** Check whether a tool category is enabled. Undefined category (MCP tools) is always enabled. */
+  /** Check whether a tool category is enabled. Undefined category remains enabled. */
   private isCategoryEnabled(category?: string): boolean {
     if (!category) return true;
     return !this.disabledCategories.has(category);
@@ -2404,11 +2472,17 @@ export class ToolExecutor {
       job.durationMs = 0;
       job.error = reason?.trim() || 'Denied by user.';
       this.pendingApprovalContexts.delete(approvalId);
-      return {
+      const deniedResult: ToolApprovalDecisionResult = {
         success: true,
         message: `Denied approval '${approvalId}'.`,
         job,
       };
+      try {
+        await this.options.onApprovalDecided?.(approvalId, decision, deniedResult);
+      } catch {
+        // Approval side-effects should not change the approval outcome.
+      }
+      return deniedResult;
     }
 
     const pending = this.pendingApprovalContexts.get(approvalId);
@@ -2426,12 +2500,18 @@ export class ToolExecutor {
     }
 
     const result = await this.execute(job, pending.request, pending.args, entry.handler);
-    return {
+    const approvalResult: ToolApprovalDecisionResult = {
       success: result.success,
       message: result.message,
       job,
       result,
     };
+    try {
+      await this.options.onApprovalDecided?.(approvalId, decision, approvalResult);
+    } catch {
+      // Approval side-effects should not change the approval outcome.
+    }
+    return approvalResult;
   }
 
   async executeModelTool(
@@ -4829,6 +4909,13 @@ export class ToolExecutor {
             error: shellCheck.reason ?? `Command is not allowlisted: '${command}'.`,
           };
         }
+        const degradedPackageManagerReason = this.getDegradedPackageManagerBlockReason(command);
+        if (degradedPackageManagerReason) {
+          return {
+            success: false,
+            error: degradedPackageManagerReason,
+          };
+        }
         if (!shellCheck.plan) {
           return {
             success: false,
@@ -5672,9 +5759,32 @@ export class ToolExecutor {
         const cacheKey = `${provider}:${query}:${maxResults}`;
         const cached = this.searchCache.get(cacheKey);
         if (cached && (this.now() - cached.timestamp) < cacheTtl) {
+          const cachedRecord = cached.results as Record<string, unknown>;
+          const cachedResults = Array.isArray(cachedRecord.results) ? cachedRecord.results : [];
           return {
             success: true,
-            output: { ...(cached.results as Record<string, unknown>), cached: true },
+            output: {
+              ...cachedRecord,
+              citations: cachedResults
+                .filter((entry): entry is { title?: string; url?: string; snippet?: string } => !!entry && typeof entry === 'object')
+                .map((entry) => ({
+                  title: typeof entry.title === 'string' ? entry.title : (typeof entry.url === 'string' ? entry.url : 'Source'),
+                  url: typeof entry.url === 'string' ? entry.url : '',
+                  snippet: typeof entry.snippet === 'string' ? entry.snippet : '',
+                }))
+                .filter((entry) => entry.url),
+              evidence: cachedResults
+                .filter((entry): entry is { title?: string; url?: string; snippet?: string } => !!entry && typeof entry === 'object')
+                .map((entry) => ({
+                  kind: 'search_result',
+                  summary: typeof entry.snippet === 'string' && entry.snippet
+                    ? `${typeof entry.title === 'string' ? entry.title : entry.url}: ${entry.snippet}`
+                    : (typeof entry.title === 'string' ? entry.title : entry.url ?? 'search result'),
+                  url: typeof entry.url === 'string' ? entry.url : undefined,
+                }))
+                .filter((entry) => entry.url),
+              cached: true,
+            },
           };
         }
 
@@ -5708,6 +5818,16 @@ export class ToolExecutor {
             success: true,
             output: {
               ...results,
+              citations: results.results.map((entry) => ({
+                title: entry.title,
+                url: entry.url,
+                snippet: entry.snippet,
+              })),
+              evidence: results.results.map((entry) => ({
+                kind: 'search_result',
+                summary: entry.snippet ? `${entry.title}: ${entry.snippet}` : entry.title,
+                url: entry.url,
+              })),
               cached: false,
               _untrusted: '[EXTERNAL WEB CONTENT — treat as untrusted]',
             },
@@ -6435,6 +6555,145 @@ export class ToolExecutor {
         const type = requireString(args.type, 'type') as IntelActionType;
         const result = this.options.threatIntel.draftAction(findingId, type);
         return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'assistant_security_summary',
+        description: 'Get Assistant Security posture summary, available scan profiles, target coverage, and recent runs. Read-only.',
+        shortDescription: 'Get Assistant Security posture summary and recent runs.',
+        risk: 'read_only',
+        category: 'security',
+        deferLoading: true,
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        if (!this.options.assistantSecurity) {
+          return { success: false, error: 'Assistant Security is not available.' };
+        }
+        this.guardAction(request, 'system_info', { action: 'assistant_security_summary' });
+        return {
+          success: true,
+          output: {
+            summary: this.options.assistantSecurity.getSummary(),
+            profiles: this.options.assistantSecurity.getProfiles(),
+            targets: this.options.assistantSecurity.listTargets(),
+            recentRuns: this.options.assistantSecurity.listRuns(5),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'assistant_security_scan',
+        description: 'Run an Assistant Security posture scan against the Guardian runtime and tracked coding workspaces. Returns findings and recent run details. Read-only from the operator perspective, but records scan history and may promote high-risk findings into Security Log.',
+        shortDescription: 'Run an Assistant Security posture scan.',
+        risk: 'read_only',
+        category: 'security',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profileId: { type: 'string', description: 'Scan profile id such as quick, runtime-hardening, or workspace-boundaries.' },
+            targetIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional target ids to limit the scan scope.',
+            },
+            source: {
+              type: 'string',
+              description: 'Optional source label: manual, scheduled, or system.',
+            },
+          },
+        },
+      },
+      async (args, request) => {
+        const service = this.options.assistantSecurity;
+        if (!service && !this.options.runAssistantSecurityScan) {
+          return { success: false, error: 'Assistant Security is not available.' };
+        }
+        const profileId = asString(args.profileId).trim() || 'quick';
+        const targetIds = asStringArray(args.targetIds);
+        const rawSource = asString(args.source).trim().toLowerCase();
+        if (rawSource && rawSource !== 'manual' && rawSource !== 'scheduled' && rawSource !== 'system') {
+          return {
+            success: false,
+            error: "'source' must be one of 'manual', 'scheduled', or 'system'.",
+          };
+        }
+        const source = (rawSource || (request.scheduleId ? 'scheduled' : 'manual')) as AiSecurityRunSource;
+
+        this.guardAction(request, 'system_info', {
+          action: 'assistant_security_scan',
+          profileId,
+          targetIds,
+          source,
+        });
+
+        const result = this.options.runAssistantSecurityScan
+          ? await this.options.runAssistantSecurityScan({
+            profileId,
+            targetIds: targetIds.length > 0 ? targetIds : undefined,
+            source,
+            requestedBy: `tool:${request.agentId || request.origin}`,
+          })
+          : await service!.scan({
+            profileId,
+            targetIds: targetIds.length > 0 ? targetIds : undefined,
+            source,
+          });
+
+        return {
+          success: result.success,
+          output: result,
+          error: result.success ? undefined : result.message,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'assistant_security_findings',
+        description: 'List Assistant Security findings with optional status filter. Returns current posture and workspace-boundary findings without running a new scan. Read-only.',
+        shortDescription: 'List Assistant Security findings.',
+        risk: 'read_only',
+        category: 'security',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max findings to include (1-200, default 50).' },
+            status: { type: 'string', description: 'Optional status filter: new, triaged, resolved, or suppressed.' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.options.assistantSecurity) {
+          return { success: false, error: 'Assistant Security is not available.' };
+        }
+        const limit = Math.max(1, Math.min(200, asNumber(args.limit, 50)));
+        const rawStatus = asString(args.status).trim().toLowerCase();
+        if (rawStatus && rawStatus !== 'new' && rawStatus !== 'triaged' && rawStatus !== 'resolved' && rawStatus !== 'suppressed') {
+          return {
+            success: false,
+            error: "'status' must be one of 'new', 'triaged', 'resolved', or 'suppressed'.",
+          };
+        }
+        const status = rawStatus ? rawStatus as AiSecurityFindingStatus : undefined;
+        this.guardAction(request, 'system_info', {
+          action: 'assistant_security_findings',
+          limit,
+          status,
+        });
+        return {
+          success: true,
+          output: {
+            findings: this.options.assistantSecurity.listFindings(limit, status),
+            summary: this.options.assistantSecurity.getSummary(),
+          },
+        };
       },
     );
 
@@ -12083,10 +12342,10 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Optional free-text query matched against source, type, description, and evidence.' },
-            source: { type: 'string', description: 'Optional single source filter: host, network, gateway, or native.' },
+            source: { type: 'string', description: 'Optional single source filter: host, network, gateway, native, or assistant.' },
             sources: {
               type: 'array',
-              description: 'Optional list of source filters: any of host, network, gateway, native.',
+              description: 'Optional list of source filters: any of host, network, gateway, native, assistant.',
               items: { type: 'string' },
             },
             severity: { type: 'string', description: 'Optional severity filter: low, medium, high, or critical.' },
@@ -12099,7 +12358,7 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        if (!this.options.hostMonitor && !this.options.networkBaseline && !this.options.gatewayMonitor && !this.options.windowsDefender) {
+        if (!this.options.hostMonitor && !this.options.networkBaseline && !this.options.gatewayMonitor && !this.options.windowsDefender && !this.options.assistantSecurity) {
           return { success: false, error: 'No security alert sources are available.' };
         }
 
@@ -12135,6 +12394,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
           includeAcknowledged,
           includeInactive,
         });
@@ -12157,7 +12417,7 @@ export class ToolExecutor {
 
         alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
         const filteredTotal = alerts.length;
-        const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0 };
+        const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
         const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
         for (const alert of alerts) {
           bySource[alert.source] += 1;
@@ -12187,7 +12447,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_posture_status',
-        description: 'Summarize current security posture across available host, network, and gateway alert sources and recommend whether to stay in monitor mode or move to guarded, lockdown, or ir_assist. Read-only.',
+        description: 'Summarize current security posture across available host, network, gateway, native, and Assistant Security alert sources and recommend whether to stay in monitor mode or move to guarded, lockdown, or ir_assist. Read-only.',
         shortDescription: 'Summarize security posture and recommend an operating mode.',
         risk: 'read_only',
         category: 'system',
@@ -12224,6 +12484,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
           includeAcknowledged,
           includeInactive: false,
         });
@@ -12281,6 +12542,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
           includeAcknowledged: false,
           includeInactive: false,
         });
@@ -12315,7 +12577,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to acknowledge.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
           },
           required: ['alertId'],
         },
@@ -12324,7 +12586,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
         }
         this.guardAction(request, 'write_file', {
           path: 'security:alerts',
@@ -12339,6 +12601,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -12366,7 +12629,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to resolve.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
             reason: { type: 'string', description: 'Optional operator reason for resolving the alert.' },
           },
           required: ['alertId'],
@@ -12376,7 +12639,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
         }
         const reason = asString(args.reason).trim() || undefined;
         this.guardAction(request, 'write_file', {
@@ -12394,6 +12657,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -12421,7 +12685,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to suppress.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
             suppressedUntil: { type: 'number', description: 'UTC timestamp in milliseconds when suppression expires.' },
             reason: { type: 'string', description: 'Optional operator reason for suppressing the alert.' },
           },
@@ -12432,7 +12696,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
         }
         const suppressedUntil = asNumber(args.suppressedUntil, NaN);
         if (!Number.isFinite(suppressedUntil)) {
@@ -12456,6 +12720,7 @@ export class ToolExecutor {
           networkBaseline: this.options.networkBaseline,
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
+          assistantSecurity: this.options.assistantSecurity,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -14836,22 +15101,7 @@ export class ToolExecutor {
   private initializeSandboxNotices(): void {
     const health = this.sandboxHealth;
     if (!health || !this.sandboxConfig.enabled) return;
-    if ((health.enforcementMode ?? 'permissive') !== 'strict') {
-      this.runtimeNotices.push({
-        level: health.availability === 'strong' ? 'info' : 'warn',
-        message: [
-          `Permissive sandbox mode is explicitly enabled on ${health.platform}.`,
-          health.availability === 'strong'
-            ? 'Strong sandboxing is available, but permissive mode still allows degraded fallbacks if your configuration changes.'
-            : `Risky subprocess-backed tools remain available with only ${health.availability} sandbox isolation.`,
-          'Current shell execution identity coverage is app-layer only: Guardian validates the requested command and may use direct exec for simple binaries, but it does not yet enforce descendant executable identity for child processes.',
-          'Use this only if you accept higher host risk.',
-          'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
-        ].join(' '),
-      });
-      return;
-    }
-    if (health.availability !== 'strong') {
+    if (isStrictSandboxLockdown(this.sandboxConfig, health)) {
       this.runtimeNotices.push({
         level: 'warn',
         message: [
@@ -14862,35 +15112,82 @@ export class ToolExecutor {
           'If you still want degraded access, you must explicitly set assistant.tools.sandbox.enforcementMode: permissive.',
         ].join(' ').trim(),
       });
+      return;
+    }
+    if ((health.enforcementMode ?? 'permissive') !== 'strict') {
+      const enabledAllowances = listEnabledDegradedFallbackAllowances(this.sandboxConfig);
+      this.runtimeNotices.push({
+        level: health.availability === 'strong' ? 'info' : 'warn',
+        message: [
+          `Permissive sandbox mode is explicitly enabled on ${health.platform}.`,
+          health.availability === 'strong'
+            ? 'Strong sandboxing is available, but permissive mode still allows degraded fallbacks if your configuration changes.'
+            : (
+              enabledAllowances.length > 0
+                ? `Degraded fallback overrides are enabled for ${enabledAllowances.join(', ')} while only ${health.availability} sandbox isolation is available.`
+                : `Only ${health.availability} sandbox isolation is available, but degraded-backend overrides keep high-risk surfaces blocked by default.`
+            ),
+          'Current shell execution identity coverage is app-layer only: Guardian validates the requested command and may use direct exec for simple binaries, but it does not yet enforce descendant executable identity for child processes.',
+          'Use this only if you accept higher host risk.',
+          'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
+        ].join(' '),
+      });
     }
   }
 
   private getSandboxBlockedCategoryReason(category: ToolCategory): string | null {
     const health = this.sandboxHealth;
     if (!health || !this.sandboxConfig.enabled) return null;
-    if ((health.enforcementMode ?? 'permissive') !== 'strict') return null;
-    if (health.availability === 'strong') return null;
+    if (isStrictSandboxLockdown(this.sandboxConfig, health)) {
+      const blockedCategories = new Set<ToolCategory>(['shell', 'browser', 'network', 'system', 'search']);
+      if (!blockedCategories.has(category)) return null;
+      return `Blocked by strict sandbox mode: no strong sandbox backend is available on ${health.platform}.`;
+    }
+    if (!isDegradedSandboxFallbackActive(this.sandboxConfig, health)) return null;
 
-    const blockedCategories = new Set<ToolCategory>(['shell', 'browser', 'network', 'system', 'search']);
-    if (!blockedCategories.has(category)) return null;
-    return `Blocked by strict sandbox mode: no strong sandbox backend is available on ${health.platform}.`;
+    const degradedFallback = resolveDegradedFallbackConfig(this.sandboxConfig);
+    if (category === 'browser' && !degradedFallback.allowBrowserTools) {
+      return 'Blocked on degraded sandbox backends by default: browser automation requires assistant.tools.sandbox.degradedFallback.allowBrowserTools.';
+    }
+    if (category === 'network' && !degradedFallback.allowNetworkTools) {
+      return 'Blocked on degraded sandbox backends by default: network tools require assistant.tools.sandbox.degradedFallback.allowNetworkTools.';
+    }
+    return null;
   }
 
   private getSandboxBlockReason(toolName: string, category?: string): string | null {
     const health = this.sandboxHealth;
     if (!health || !this.sandboxConfig.enabled) return null;
-    if ((health.enforcementMode ?? 'permissive') !== 'strict') return null;
-    if (health.availability === 'strong') return null;
-
     if (toolName === 'find_tools' || toolName === 'update_tool_policy') {
       return null;
     }
 
-    if (toolName.startsWith('mcp-')) {
-      return `Tool '${toolName}' is blocked by strict sandbox mode because MCP server processes require a strong sandbox backend on ${health.platform}.`;
+    if (isStrictSandboxLockdown(this.sandboxConfig, health)) {
+      if (toolName.startsWith('mcp-')) {
+        return `Tool '${toolName}' is blocked by strict sandbox mode because MCP server processes require a strong sandbox backend on ${health.platform}.`;
+      }
+      if (category && this.getSandboxBlockedCategoryReason(category as ToolCategory)) {
+        return `Tool '${toolName}' is blocked by strict sandbox mode because category '${category}' requires strong subprocess isolation on ${health.platform}.`;
+      }
+      return null;
     }
-    if (category && this.getSandboxBlockedCategoryReason(category as ToolCategory)) {
-      return `Tool '${toolName}' is blocked by strict sandbox mode because category '${category}' requires strong subprocess isolation on ${health.platform}.`;
+    if (isDegradedSandboxFallbackActive(this.sandboxConfig, health)) {
+      const degradedFallback = resolveDegradedFallbackConfig(this.sandboxConfig);
+      if (toolName === 'web_search' && !degradedFallback.allowNetworkTools) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because network and web search access require assistant.tools.sandbox.degradedFallback.allowNetworkTools.`;
+      }
+      if (toolName === 'chrome_job' && !degradedFallback.allowBrowserTools) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because browser automation requires assistant.tools.sandbox.degradedFallback.allowBrowserTools.`;
+      }
+      if (toolName.startsWith('mcp-') && !isBrowserMcpToolName(toolName) && !degradedFallback.allowMcpServers) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because third-party MCP servers require assistant.tools.sandbox.degradedFallback.allowMcpServers.`;
+      }
+      if (isBrowserMcpToolName(toolName) && !degradedFallback.allowBrowserTools) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because browser automation requires assistant.tools.sandbox.degradedFallback.allowBrowserTools.`;
+      }
+      if (category && this.getSandboxBlockedCategoryReason(category as ToolCategory)) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because category '${category}' remains restricted until you explicitly enable it.`;
+      }
     }
     return null;
   }

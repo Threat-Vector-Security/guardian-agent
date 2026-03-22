@@ -16,6 +16,16 @@ import type { ConversationSessionInfo } from '../runtime/conversation.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type { AssistantConnectorPackConfig, AssistantConnectorPlaybookDefinition, ConnectorExecutionMode } from '../config/types.js';
 import type {
+  AiSecurityFinding,
+  AiSecurityFindingStatus,
+  AiSecurityProfile,
+  AiSecurityRun,
+  AiSecurityScanInput,
+  AiSecurityScanResult,
+  AiSecuritySummary,
+  AiSecurityTarget,
+} from '../runtime/ai-security.js';
+import type {
   ThreatIntelSummary,
   ThreatIntelPlan,
   ThreatIntelFinding,
@@ -42,7 +52,12 @@ import type {
   SecurityOperatingMode,
   SecurityPostureAssessment,
 } from '../runtime/security-posture.js';
-import type { SecurityTriageLlmProvider } from '../runtime/security-controls.js';
+import type {
+  AssistantSecurityAutoContainmentCategory,
+  AssistantSecurityAutoContainmentSeverity,
+  AssistantSecurityMonitoringProfile,
+  SecurityTriageLlmProvider,
+} from '../runtime/security-controls.js';
 import type { SecurityContainmentState } from '../runtime/containment-service.js';
 import type {
   SecurityActivityListResult,
@@ -293,6 +308,17 @@ export interface RedactedConfig {
       deploymentProfile: DeploymentProfile;
       operatingMode: SecurityOperatingMode;
       triageLlmProvider: SecurityTriageLlmProvider;
+      continuousMonitoring: {
+        enabled: boolean;
+        profileId: AssistantSecurityMonitoringProfile;
+        cron: string;
+      };
+      autoContainment: {
+        enabled: boolean;
+        minSeverity: AssistantSecurityAutoContainmentSeverity;
+        minConfidence: number;
+        categories: AssistantSecurityAutoContainmentCategory[];
+      };
     };
     credentials: {
       refs: Record<string, {
@@ -389,6 +415,7 @@ export interface RedactedConfig {
       allowedPathsCount: number;
       allowedCommandsCount: number;
       allowedDomainsCount: number;
+      allowedDomains: string[];
       preferredProviders?: {
         local?: string;
         external?: string;
@@ -406,6 +433,24 @@ export interface RedactedConfig {
         enabled: boolean;
         sourceCount: number;
         defaultMode: string;
+      };
+      sandbox?: {
+        enforcementMode: 'strict' | 'permissive';
+        degradedFallback: {
+          allowNetworkTools: boolean;
+          allowBrowserTools: boolean;
+          allowMcpServers: boolean;
+          allowPackageManagers: boolean;
+          allowManualCodeTerminals: boolean;
+        };
+      };
+      browser?: {
+        enabled: boolean;
+        allowedDomains: string[];
+        playwrightEnabled: boolean;
+        lightpandaEnabled: boolean;
+        playwrightBrowser: string;
+        playwrightCaps: string;
       };
       cloud?: RedactedCloudConfig;
       agentPolicyUpdates?: {
@@ -578,6 +623,18 @@ export interface UIInvalidationEvent {
   timestamp: number;
 }
 
+export interface DashboardCodeTerminalEvent {
+  action: 'opened' | 'exited';
+  terminalId: string;
+  shell: string;
+  cwd: string;
+  cols?: number;
+  rows?: number;
+  codeSessionId?: string | null;
+  exitCode?: number;
+  signal?: number;
+}
+
 export interface ScheduledTaskHistoryStep {
   toolName: string;
   status: ScheduledTaskStatus;
@@ -727,6 +784,11 @@ export interface DashboardCallbacks {
     surfaceId: string;
     historyLimit?: number;
   }) => DashboardCodeSessionSnapshot | null;
+  onCodeTerminalAccessCheck?: () => {
+    allowed: boolean;
+    reason?: string;
+  };
+  onCodeTerminalEvent?: (event: DashboardCodeTerminalEvent) => void;
   onCodeSessionCreate?: (args: {
     userId: string;
     principalId?: string;
@@ -834,6 +896,19 @@ export interface DashboardCallbacks {
   onSearchConfigUpdate?: (input: SearchConfigInput) => Promise<{ success: boolean; message: string }>;
   onAnalyticsTrack?: (event: AnalyticsEventInput) => void;
   onAnalyticsSummary?: (windowMs: number) => AnalyticsSummary;
+  onAiSecuritySummary?: () => AiSecuritySummary;
+  onAiSecurityProfiles?: () => AiSecurityProfile[];
+  onAiSecurityTargets?: () => AiSecurityTarget[];
+  onAiSecurityRuns?: (limit?: number) => AiSecurityRun[];
+  onAiSecurityScan?: (input: AiSecurityScanInput) => AiSecurityScanResult | Promise<AiSecurityScanResult>;
+  onAiSecurityFindings?: (args: {
+    limit?: number;
+    status?: AiSecurityFindingStatus;
+  }) => AiSecurityFinding[];
+  onAiSecurityUpdateFindingStatus?: (args: {
+    findingId: string;
+    status: AiSecurityFindingStatus;
+  }) => { success: boolean; message: string };
   onThreatIntelSummary?: () => ThreatIntelSummary;
   onThreatIntelPlan?: () => ThreatIntelPlan;
   onThreatIntelWatchlist?: () => string[];
@@ -1216,6 +1291,17 @@ export interface ConfigUpdate {
       deploymentProfile?: DeploymentProfile;
       operatingMode?: SecurityOperatingMode;
       triageLlmProvider?: SecurityTriageLlmProvider;
+      continuousMonitoring?: {
+        enabled?: boolean;
+        profileId?: AssistantSecurityMonitoringProfile;
+        cron?: string;
+      };
+      autoContainment?: {
+        enabled?: boolean;
+        minSeverity?: AssistantSecurityAutoContainmentSeverity;
+        minConfidence?: number;
+        categories?: AssistantSecurityAutoContainmentCategory[];
+      };
     };
     credentials?: {
       refs?: Record<string, {
@@ -1377,6 +1463,13 @@ export interface ConfigUpdate {
       };
       sandbox?: {
         enforcementMode?: 'strict' | 'permissive';
+        degradedFallback?: {
+          allowNetworkTools?: boolean;
+          allowBrowserTools?: boolean;
+          allowMcpServers?: boolean;
+          allowPackageManagers?: boolean;
+          allowManualCodeTerminals?: boolean;
+        };
       };
       agentPolicyUpdates?: {
         allowedPaths?: boolean;

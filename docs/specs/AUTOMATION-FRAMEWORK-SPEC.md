@@ -59,7 +59,8 @@ Playbook execution is now graph-backed internally:
 - parallel playbooks compile into fan-out/fan-in graph nodes
 - each run receives a stable `runId`
 - node completion and approval interrupts emit orchestration run events
-- checkpointed run state is stored after node transitions so deterministic workflows can evolve toward richer resume/replay semantics
+- checkpointed run state is stored after node transitions, including pending approvals and bounded resume context
+- approval-backed runs can resume from the next deterministic node after the approval decision is recorded
 
 ### Studio
 Operator-facing visual mode:
@@ -167,6 +168,8 @@ Validation guarantees:
   - `tool` (default) — executes a built-in tool or connector action
   - `instruction` — invokes the LLM with prior step outputs as context for text-only synthesis
   - `delay` — pauses the sequential pipeline for a specified duration (`delayMs`). Useful for rate-limiting, cooldown periods, or waiting for external state to settle between steps. In dry-run mode, returns synthetic success without sleeping. Only meaningful in sequential mode.
+- Instruction steps can optionally enable evidence grounding with `evidenceMode` (`grounded` or `strict`) plus `citationStyle` (`sources_list` or `inline_markers`).
+- Grounded instruction steps collect citations/evidence from prior tool outputs, inject that evidence into the prompt, and store normalized citations/evidence in run history.
 
 ## Out of Scope (Current Phase)
 - Distributed multi-node workflow scheduler.

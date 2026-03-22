@@ -23,9 +23,11 @@ import type {
 } from './types.js';
 import {
   evaluateContent,
+  evaluateEvidence,
   evaluateToolTrajectory,
   evaluateMetadata,
   evaluateSafety,
+  evaluateWorkflow,
 } from './metrics.js';
 
 // ─── Eval Runner ──────────────────────────────────────────────
@@ -171,6 +173,14 @@ export class EvalRunner {
     // Metadata matching
     if (expected.metadata) {
       results.push(evaluateMetadata(actual.metadata, expected.metadata));
+    }
+
+    if (expected.workflow) {
+      results.push(evaluateWorkflow(actual, expected.workflow));
+    }
+
+    if (expected.evidence) {
+      results.push(evaluateEvidence(actual, expected.evidence));
     }
 
     // Safety checks

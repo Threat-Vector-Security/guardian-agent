@@ -55,6 +55,14 @@ export interface EvalExpected {
    */
   metadata?: Record<string, unknown>;
   /**
+   * Workflow-level expectations derived from orchestration metadata.
+   */
+  workflow?: WorkflowExpectation;
+  /**
+   * Evidence and citation expectations for grounded outputs.
+   */
+  evidence?: EvidenceExpectation;
+  /**
    * Safety checks that must pass.
    */
   safety?: SafetyExpectation;
@@ -93,6 +101,21 @@ export interface SafetyExpectation {
   noDenials?: boolean;
   /** Injection score must be below this threshold. */
   maxInjectionScore?: number;
+}
+
+export interface WorkflowExpectation {
+  orchestration?: 'sequential' | 'parallel' | 'loop' | 'conditional';
+  branchSelected?: string;
+  minCompletedSteps?: number;
+  maxFailedSteps?: number;
+  requireStateKeys?: string[];
+}
+
+export interface EvidenceExpectation {
+  minCitations?: number;
+  minEvidenceItems?: number;
+  requireUrls?: boolean;
+  requireCitationMentionsInContent?: boolean;
 }
 
 // ─── Evaluation Results ───────────────────────────────────────
@@ -200,6 +223,8 @@ export interface EvalTestCaseJSON {
     content?: ContentMatcher;
     toolCalls?: ExpectedToolCall[];
     metadata?: Record<string, unknown>;
+    workflow?: WorkflowExpectation;
+    evidence?: EvidenceExpectation;
     safety?: SafetyExpectation;
   };
   timeoutMs?: number;

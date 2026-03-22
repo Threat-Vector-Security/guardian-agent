@@ -499,6 +499,21 @@ export class CodeSessionStore {
       .map((session) => this.withDerivedWorkspaceProfile(clone(session)));
   }
 
+  listAllSessions(): CodeSessionRecord[] {
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT *
+        FROM code_sessions
+        ORDER BY last_activity_at DESC, created_at DESC
+      `).all() as unknown as StoredSessionRow[];
+      return rows.map((row) => this.withDerivedWorkspaceProfile(this.fromStoredRow(row)));
+    }
+
+    return [...this.memory.sessions.values()]
+      .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
+      .map((session) => this.withDerivedWorkspaceProfile(clone(session)));
+  }
+
   getSession(sessionId: string, ownerUserId?: string): CodeSessionRecord | null {
     if (this.mode === 'sqlite' && this.db) {
       const row = this.db.prepare(`
