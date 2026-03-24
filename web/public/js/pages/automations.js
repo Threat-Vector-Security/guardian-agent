@@ -86,11 +86,10 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, automationCatalog, tasks, history, agentsState, assistantRuns] = await Promise.all([
+    const [connState, toolsState, automationCatalog, history, agentsState, assistantRuns] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
       api.automationsCatalog().catch(() => []),
-      api.scheduledTasks().catch(() => []),
       api.scheduledTaskHistory().catch(() => []),
       api.agents().catch(() => []),
       api.assistantRuns({ limit: 15 }).catch(() => ({ runs: [] })),
@@ -98,7 +97,6 @@ export async function renderAutomations(container) {
 
     const summary = connState.summary || {};
     const packs = connState.packs || [];
-    const playbooks = connState.playbooks || [];
     const runs = connState.runs || [];
     const workflowConfig = connState.playbooksConfig || {};
     const studio = connState.studio || {};
@@ -107,11 +105,11 @@ export async function renderAutomations(container) {
     const recentAssistantRuns = Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [];
 
     const automations = reorderAutomationsForUi(
-      buildAutomationList(Array.isArray(automationCatalog) ? automationCatalog : [], tools),
+      normalizeAutomationViews(Array.isArray(automationCatalog) ? automationCatalog : []),
     );
     const allCategories = [...new Set(automations.map((a) => a.category))].sort();
     const totalScheduled = automations.filter((a) => a.cron).length;
-    const totalRuns = runs.length + tasks.reduce((sum, t) => sum + (t.runCount || 0), 0);
+    const totalRuns = runs.length + automations.reduce((sum, automation) => sum + (automation.runCount || 0), 0);
 
     container.innerHTML = `
       <h2 class="page-title">Automations</h2>
@@ -224,7 +222,7 @@ export async function renderAutomations(container) {
       </div>
     `;
 
-    bindEvents(container, { automations, playbooks, tasks, tools, packs, workflowConfig, summary, studio, runs, history, agents });
+    bindEvents(container, { automations, tools, packs, workflowConfig, summary, studio, runs, history, agents });
     bindRunTimelineUpdates();
     focusRequestedRun(container);
     applyInputTooltips(container);
@@ -286,229 +284,39 @@ function createGenericHelpFactory(area) {
   return () => null;
 }
 
-// ─── Data Model — merge workflows + scheduled tasks ──────
+// ─── Data Model — backend-owned automation catalog view ──────
 
-function buildAutomationList(savedCatalog, tools) {
-  const automations = [];
-  for (const entry of (savedCatalog || [])) {
-    const pb = entry.workflow || entry._playbook || null;
-    const task = entry.task || entry._task || null;
-    const source = entry.source === 'builtin_template'
-      ? 'template'
-      : entry.source === 'builtin_preset'
-        ? 'preset'
-        : pb
-          ? 'playbook'
-          : 'task';
-    const category = entry.category || deriveCategory(pb?.steps || [], tools);
-    const enabled = entry.enabled !== false;
-    const isBuiltin = entry.builtin === true;
-    if (pb) {
-      automations.push({
-        id: pb.id,
-        name: pb.name,
-        description: pb.description || '',
-        category,
-        kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
-        mode: pb.mode || 'sequential',
-        steps: pb.steps || [],
-        packId: (pb.steps || [])[0]?.packId || null,
-        enabled,
-        cron: task?.cron || null,
-        runOnce: task?.runOnce === true,
-        emitEvent: task?.emitEvent || '',
-        outputHandling: normalizeOutputHandling(pb.outputHandling || task?.outputHandling),
-        scheduleEnabled: task?.enabled || false,
-        taskId: task?.id || null,
-        lastRunAt: task?.lastRunAt || null,
-        lastRunStatus: task?.lastRunStatus || null,
-        runCount: task?.runCount || 0,
-        _source: source,
-        _builtin: isBuiltin,
-        _playbook: pb,
-        _task: task || null,
-      });
-      continue;
-    }
-
-    if (!task) continue;
-    if (task.type === 'agent') {
-      automations.push({
-        id: task.id,
-        name: task.name || task.target,
-        description: describeAssistantAutomationTask(task),
-        category: 'assistant',
-        kind: 'assistant',
-        mode: 'assistant',
-        steps: [{
-          id: `${task.id}-step-1`,
-          name: task.target,
-          toolName: `agent:${task.target}`,
-          packId: null,
-          args: {
-            prompt: task.prompt || '',
-            channel: task.channel || 'scheduled',
-            deliver: task.deliver !== false,
-          },
-        }],
-        packId: null,
-        enabled: task.enabled,
-        cron: task.cron || null,
-        runOnce: task.runOnce === true,
-        emitEvent: task.emitEvent || '',
-        outputHandling: normalizeOutputHandling(task.outputHandling),
-        scheduleEnabled: task.enabled,
-        taskId: task.id,
-        lastRunAt: task.lastRunAt || null,
-        lastRunStatus: task.lastRunStatus || null,
-        runCount: task.runCount || 0,
-        agentPrompt: task.prompt || '',
-        agentChannel: task.channel || 'scheduled',
-        agentDeliver: task.deliver !== false,
-        _source: source,
-        _builtin: isBuiltin,
-        _playbook: null,
-        _task: task,
-      });
-      continue;
-    }
-
-    const tool = tools.find((t) => t.name === task.target);
-    automations.push({
-      id: task.id,
-      name: task.name || task.target,
-      description: describeStandaloneAutomationTask(task, tool),
-      category: entry.category || tool?.category || 'uncategorized',
-      kind: 'single',
-      mode: 'sequential',
-      steps: [{ id: 'step-1', name: task.target, toolName: task.target, packId: null, args: task.args || {} }],
-      packId: null,
-      enabled,
-      cron: task.cron || null,
-      runOnce: task.runOnce === true,
-      emitEvent: task.emitEvent || '',
-      outputHandling: normalizeOutputHandling(task.outputHandling),
-      scheduleEnabled: task.enabled,
-      taskId: task.id,
-      lastRunAt: task.lastRunAt || null,
-      lastRunStatus: task.lastRunStatus || null,
-      runCount: task.runCount || 0,
-      _source: source,
-      _builtin: isBuiltin,
-      _playbook: null,
-      _task: task,
-    });
-  }
-
-  return automations;
-}
-
-function deriveCategory(steps, tools) {
-  const cats = {};
-  for (const step of steps) {
-    const tool = tools.find((t) => t.name === step.toolName);
-    const cat = tool?.category;
-    if (cat) cats[cat] = (cats[cat] || 0) + 1;
-  }
-  const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1]);
-  return sorted.length > 0 ? sorted[0][0] : 'uncategorized';
-}
-
-function describeStandaloneAutomationTask(task, tool) {
-  if (task?.target === 'gws') {
-    const summary = summarizeGoogleWorkspaceTask(task.args || {});
-    if (summary) return summary;
-  }
-
-  if (task?.target === 'gmail_send' || task?.target === 'gmail_draft') {
-    const summary = summarizeDirectEmailTask(task.target, task.args || {});
-    if (summary) return summary;
-  }
-
-  return tool?.shortDescription || tool?.description || '';
-}
-
-function describeAssistantAutomationTask(task) {
-  const explicit = String(task?.description || '').trim();
-  if (explicit) return explicit;
-
-  const prompt = String(task?.prompt || '').trim();
-  if (!prompt) return 'Scheduled assistant task';
-
-  const operatorRequestMatch = prompt.match(/operator request:\s*([\s\S]+)$/i);
-  let summarySource = operatorRequestMatch?.[1] || prompt;
-  summarySource = summarySource.replace(/^\[Context:[^\]]+\]\s*/i, '').trim();
-  summarySource = summarySource.replace(/\s+/g, ' ').trim();
-  if (!summarySource) return 'Scheduled assistant task';
-  return summarySource;
-}
-
-function summarizeDirectEmailTask(toolName, args) {
-  const to = String(args?.to || '').trim();
-  const subject = String(args?.subject || '').trim();
-  if (!to && !subject) return '';
-  const action = toolName === 'gmail_draft' ? 'Draft Gmail' : 'Send Gmail';
-  return `${action}${to ? ` to ${to}` : ''}${subject ? ` with subject "${subject}"` : ''}`;
-}
-
-function summarizeGoogleWorkspaceTask(args) {
-  const service = String(args?.service || '').trim().toLowerCase();
-  const resource = String(args?.resource || '').trim().toLowerCase();
-  const method = String(args?.method || '').trim().toLowerCase();
-  if (!service || !method) return '';
-
-  if (service === 'gmail' && resource === 'users messages' && method === 'send') {
-    const summary = extractGoogleWorkspaceMessageSummary(args);
-    return summary
-      ? `Send Gmail to ${summary.to || '(unknown recipient)'}${summary.subject ? ` with subject "${summary.subject}"` : ''}`
-      : 'Send Gmail message';
-  }
-
-  if (service === 'gmail' && resource === 'users drafts' && method === 'create') {
-    const summary = extractGoogleWorkspaceMessageSummary(args);
-    return summary
-      ? `Draft Gmail to ${summary.to || '(unknown recipient)'}${summary.subject ? ` with subject "${summary.subject}"` : ''}`
-      : 'Create Gmail draft';
-  }
-
-  if (service === 'calendar' && resource === 'events' && method === 'list') return 'List calendar events';
-  if (service === 'calendar' && resource === 'events' && method === 'create') return 'Create calendar event';
-  if (service === 'drive' && resource === 'files' && method === 'list') return 'List Drive files';
-
-  return `${service} ${resource || 'request'} ${method}`.trim();
-}
-
-function extractGoogleWorkspaceMessageSummary(args) {
-  const json = isPlainObject(args?.json) ? args.json : {};
-  const message = isPlainObject(json.message) ? json.message : {};
-  const raw = String(json.raw || message.raw || '').trim();
-  if (!raw) return null;
-
-  try {
-    const decoded = decodeBase64Url(raw);
-    const lines = decoded.split(/\r?\n/);
-    const to = lines.find((line) => /^to:/i.test(line))?.replace(/^to:\s*/i, '').trim();
-    const subject = lines.find((line) => /^subject:/i.test(line))?.replace(/^subject:\s*/i, '').trim();
-    return { to: to || '', subject: subject || '' };
-  } catch {
-    return null;
-  }
-}
-
-function decodeBase64Url(value) {
-  const normalized = String(value).replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4 || 4)) % 4);
-  return atob(padded);
-}
-
-function isPlainObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value);
+function normalizeAutomationViews(entries) {
+  return (entries || []).map((entry) => ({
+    ...entry,
+    category: entry.category || 'uncategorized',
+    kind: entry.kind || 'single',
+    mode: entry.mode || 'sequential',
+    steps: Array.isArray(entry.steps) ? entry.steps : [],
+    enabled: entry.enabled !== false,
+    cron: entry.cron || null,
+    runOnce: entry.runOnce === true,
+    emitEvent: entry.emitEvent || '',
+    outputHandling: normalizeOutputHandling(entry.outputHandling),
+    scheduleEnabled: entry.scheduleEnabled === true,
+    taskId: entry.taskId || null,
+    lastRunAt: typeof entry.lastRunAt === 'number' ? entry.lastRunAt : null,
+    lastRunStatus: typeof entry.lastRunStatus === 'string' ? entry.lastRunStatus : null,
+    runCount: typeof entry.runCount === 'number' ? entry.runCount : 0,
+    sourceKind: entry.sourceKind || 'task',
+    builtin: entry.builtin === true,
+    workflow: entry.workflow || null,
+    task: entry.task || null,
+    agentPrompt: entry.agentPrompt || '',
+    agentChannel: entry.agentChannel || 'scheduled',
+    agentDeliver: entry.agentDeliver !== false,
+  }));
 }
 
 // ─── Rendering helpers ──────────────────────────────────
 
 function renderAutomationRow(auto, tools, packs) {
-  const isBuiltin = auto._builtin === true;
+  const isBuiltin = auto.builtin === true;
   const steps = auto.steps || [];
   const isAssistant = auto.kind === 'assistant';
   const kindLabel = isAssistant ? 'Assistant' : auto.kind === 'pipeline' ? 'Pipeline' : 'Single';
@@ -526,7 +334,7 @@ function renderAutomationRow(auto, tools, packs) {
   const toolsCell = isAssistant
     ? `
         <div class="wf-catalog-tools">
-          <span class="wf-tool-chip"><span class="wf-tool-chip-num">A</span>${esc(auto._task?.target || 'default')}</span>
+          <span class="wf-tool-chip"><span class="wf-tool-chip-num">A</span>${esc(auto.task?.target || 'default')}</span>
         </div>
         <div class="ops-task-sub">Channel: ${esc(auto.agentChannel || 'scheduled')} · Delivery: ${auto.agentDeliver ? 'on' : 'off'}</div>
       `
@@ -697,7 +505,7 @@ function renderPipelineView(auto, toolLookup, packs) {
     `;
   }).join('');
 
-  const playbookData = auto._playbook || { id: auto.id, name: auto.name, mode: auto.mode, steps, enabled: auto.enabled, description: auto.description };
+  const playbookData = auto.workflow || { id: auto.id, name: auto.name, mode: auto.mode, steps, enabled: auto.enabled, description: auto.description };
   const configPanel = `
     <details class="wf-config-details">
       <summary class="wf-config-summary">
@@ -1253,7 +1061,7 @@ function renderEngineSettings(summary, workflowConfig, studio, packs) {
 // ─── Event binding ──────────────────────────────────────
 
 function bindEvents(container, ctx) {
-  const { automations, playbooks, tasks, tools, packs, agents } = ctx;
+  const { automations, tools, packs, agents } = ctx;
 
   // Refresh
   container.querySelector('#auto-refresh')?.addEventListener('click', () => renderAutomations(container));
@@ -1406,7 +1214,7 @@ function bindEvents(container, ctx) {
           userId: 'web-user',
           requestedBy: 'web-user',
         });
-        if (auto._source === 'task' && !auto._playbook) {
+        if (auto.sourceKind === 'task' && !auto.workflow) {
           button.textContent = result.success ? 'Done' : 'Failed';
         } else {
           const resultsDiv = container.querySelector('#auto-run-results');
@@ -1452,26 +1260,26 @@ function bindEvents(container, ctx) {
         const newName = `${auto.name} (copy)`;
         automationUiState.clonePlacement = { anchorId: auto.id, cloneId: newId };
 
-        if (auto._playbook) {
-          const clonedPb = { ...auto._playbook, id: newId, name: newName, enabled: false };
+        if (auto.workflow) {
+          const clonedPb = { ...auto.workflow, id: newId, name: newName, enabled: false };
           requireAutomationMutationSuccess(
             await api.upsertPlaybook(clonedPb),
             `Could not clone '${auto.name}'.`,
           );
-        } else if (auto._task?.type === 'agent') {
+        } else if (auto.task?.type === 'agent') {
           requireAutomationMutationSuccess(await api.createScheduledTask({
             name: newName,
-            description: auto._task.description || auto.description,
+            description: auto.task.description || auto.description,
             type: 'agent',
-            target: auto._task.target,
-            prompt: auto._task.prompt,
-            channel: auto._task.channel || 'scheduled',
-            userId: auto._task.userId,
-            deliver: auto._task.deliver !== false,
+            target: auto.task.target,
+            prompt: auto.task.prompt,
+            channel: auto.task.channel || 'scheduled',
+            userId: auto.task.userId,
+            deliver: auto.task.deliver !== false,
             cron: auto.cron || '0 9 * * *',
             runOnce: auto.runOnce === true,
             enabled: false,
-            emitEvent: auto._task.emitEvent,
+            emitEvent: auto.task.emitEvent,
             outputHandling: auto.outputHandling,
           }), `Could not clone '${auto.name}'.`);
         } else {
@@ -1488,7 +1296,7 @@ function bindEvents(container, ctx) {
         }
 
         // Clone linked schedule if present
-        if (auto.cron && auto._task?.type !== 'agent' && (auto._task || auto._source === 'preset')) {
+        if (auto.cron && auto.task?.type !== 'agent' && (auto.task || auto.sourceKind === 'preset')) {
           requireAutomationMutationSuccess(await api.createScheduledTask({
             name: newName,
             type: 'playbook',
@@ -2420,8 +2228,8 @@ function bindCreateForm(container, { tools, packs, agents }) {
   });
 
   function editAutomation(auto) {
-    const isStandaloneTask = auto._source === 'task' && !auto._playbook && auto._task;
-    const isAgentTask = auto._task?.type === 'agent';
+    const isStandaloneTask = auto.sourceKind === 'task' && !auto.workflow && auto.task;
+    const isAgentTask = auto.task?.type === 'agent';
     const firstStep = auto.steps?.[0] || null;
 
     if (!attachFormInline(auto)) return;
@@ -2435,14 +2243,14 @@ function bindCreateForm(container, { tools, packs, agents }) {
     clearStatus();
 
     editIdInput.value = auto.id || '';
-    editSourceInput.value = isAgentTask ? 'agent_task' : (auto._source || '');
-    editTaskIdInput.value = auto._task?.id || '';
+    editSourceInput.value = isAgentTask ? 'agent_task' : (auto.sourceKind || '');
+    editTaskIdInput.value = auto.task?.id || '';
 
     nameInput.value = auto.name || '';
     idInput.value = auto.id || '';
     descriptionInput.value = auto.description || '';
     enabledSelect.value = String(auto.enabled !== false);
-    eventInput.value = auto._task?.emitEvent || '';
+    eventInput.value = auto.task?.emitEvent || '';
     outputNotifySelect.value = auto.outputHandling?.notify || 'off';
     outputSecuritySelect.value = auto.outputHandling?.sendToSecurity || 'off';
     outputArtifactsSelect.value = auto.outputHandling?.persistArtifacts || 'run_history_only';
@@ -2455,7 +2263,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
 
     // Detect LLM provider from instruction steps or agent task args
     const instrStep = (auto.steps || []).find((s) => s.type === 'instruction' && s.llmProvider);
-    const detectedLlmProv = instrStep?.llmProvider || auto._task?.args?.llmProvider || '';
+    const detectedLlmProv = instrStep?.llmProvider || auto.task?.args?.llmProvider || '';
     if (llmProviderSelect) llmProviderSelect.value = detectedLlmProv || 'auto';
 
     // Detect single-tool-with-prompt pattern: 2 steps where step 2 is instruction
@@ -2474,13 +2282,13 @@ function bindCreateForm(container, { tools, packs, agents }) {
       scheduleSection.style.display = '';
       if (agentModeCheck) agentModeCheck.checked = true;
       if (assistantFields) assistantFields.style.display = '';
-      if (agentSelect) agentSelect.value = auto._task.target || 'default';
-      if (agentChannelSelect) agentChannelSelect.value = auto._task.channel || 'scheduled';
-      if (agentPromptInput) agentPromptInput.value = auto._task.prompt || auto.agentPrompt || '';
-      if (agentDeliverCheck) agentDeliverCheck.checked = auto._task.deliver !== false;
-      descriptionInput.value = auto._task.description || auto.description || '';
+      if (agentSelect) agentSelect.value = auto.task.target || 'default';
+      if (agentChannelSelect) agentChannelSelect.value = auto.task.channel || 'scheduled';
+      if (agentPromptInput) agentPromptInput.value = auto.task.prompt || auto.agentPrompt || '';
+      if (agentDeliverCheck) agentDeliverCheck.checked = auto.task.deliver !== false;
+      descriptionInput.value = auto.task.description || auto.description || '';
       argsInput.value = '';
-      enabledSelect.value = String(auto._task.enabled !== false);
+      enabledSelect.value = String(auto.task.enabled !== false);
       idInput.value = auto.id || '';
       setIdReadOnly(true);
       if (singlePromptEl) singlePromptEl.value = '';
@@ -2488,15 +2296,15 @@ function bindCreateForm(container, { tools, packs, agents }) {
       ensureAssistantModeOption(false);
       modeSelect.value = 'single';
       modeSelect.disabled = true;
-      singleToolSelect.value = auto._task.target || '';
-      updateSingleToolDisplay(auto._task.target || '');
-      const editTool = tools.find((t) => t.name === auto._task.target);
-      renderToolParamFields(singleToolParamsPanel, editTool, auto._task.args || {});
-      argsInput.value = auto._task.args ? JSON.stringify(auto._task.args, null, 2) : '';
+      singleToolSelect.value = auto.task.target || '';
+      updateSingleToolDisplay(auto.task.target || '');
+      const editTool = tools.find((t) => t.name === auto.task.target);
+      renderToolParamFields(singleToolParamsPanel, editTool, auto.task.args || {});
+      argsInput.value = auto.task.args ? JSON.stringify(auto.task.args, null, 2) : '';
       scheduleCheck.checked = true;
       scheduleCheck.disabled = true;
       scheduleSection.style.display = '';
-      enabledSelect.value = String(auto._task.enabled !== false);
+      enabledSelect.value = String(auto.task.enabled !== false);
       setIdReadOnly(true);
       if (singlePromptEl) singlePromptEl.value = '';
     } else if (isSingleWithPrompt) {

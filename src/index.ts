@@ -11966,6 +11966,12 @@ async function main(): Promise<void> {
             })),
           })),
         },
+        toolMetadata: toolExecutor.listToolDefinitions().map((definition) => ({
+          name: definition.name,
+          category: definition.category,
+          description: definition.description,
+          shortDescription: definition.shortDescription,
+        })),
         onWorkflowSaved: (playbook) => {
           syncPlaybookScheduleToTasks(playbook);
           syncPlaybookOutputHandlingToSchedules(playbook.id);
@@ -12093,7 +12099,7 @@ async function main(): Promise<void> {
     dashboardCallbacks.onScheduledTaskPresets = () => automationRuntime.listTaskPresets();
     dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => automationRuntime.installTaskPreset(presetId);
     dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
-    dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalog();
+    dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalogView();
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
       automationRuntime.setSavedAutomationEnabled(automationId, enabled)
     );

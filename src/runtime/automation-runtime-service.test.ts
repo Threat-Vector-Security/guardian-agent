@@ -115,6 +115,14 @@ function makeService() {
     workflows: workflowControl,
     tasks: taskControl,
     templates: templateControl,
+    toolMetadata: [
+      {
+        name: 'browser_navigate',
+        category: 'browser',
+        description: 'Open a page.',
+        shortDescription: 'Open page',
+      },
+    ],
     onWorkflowSaved,
     onWorkflowRunResult,
   });
@@ -162,6 +170,11 @@ describe('automation-runtime-service', () => {
     expect(service.listAutomationCatalog()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'browser-read-smoke', source: 'saved_workflow' }),
       expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_template', builtin: true }),
+    ]));
+    expect(service.listAutomationCatalogView()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'browser-read-smoke', category: 'browser', sourceKind: 'playbook' }),
+      expect.objectContaining({ id: 'task-agent-1', kind: 'assistant', sourceKind: 'task' }),
+      expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'template' }),
     ]));
     expect(templateControl.list).toHaveBeenCalled();
 

@@ -5,6 +5,11 @@ import {
   buildSavedAutomationCatalogEntries,
   type SavedAutomationCatalogEntry,
 } from './automation-catalog.js';
+import {
+  buildAutomationCatalogViewEntries,
+  type AutomationCatalogToolMetadata,
+  type AutomationCatalogViewEntry,
+} from './automation-catalog-view.js';
 import type { BuiltinTemplate } from './builtin-packs.js';
 import type {
   ScheduledTaskCreateInput,
@@ -47,6 +52,7 @@ export interface AutomationRuntimeServiceOptions {
   workflows: AutomationWorkflowControl;
   tasks: AutomationTaskControl;
   templates?: AutomationTemplateControl;
+  toolMetadata?: AutomationCatalogToolMetadata[];
   onWorkflowSaved?: (playbook: AssistantConnectorPlaybookDefinition) => void;
   onWorkflowRunResult?: (
     result: ConnectorPlaybookRunResult,
@@ -56,6 +62,7 @@ export interface AutomationRuntimeServiceOptions {
 
 export interface AutomationRuntimeService {
   listAutomationCatalog(): SavedAutomationCatalogEntry[];
+  listAutomationCatalogView(): AutomationCatalogViewEntry[];
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
   upsertWorkflow(playbook: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   deleteWorkflow(playbookId: string): { success: boolean; message: string };
@@ -125,6 +132,7 @@ export interface AutomationRuntimeService {
 export function createAutomationRuntimeService(
   options: AutomationRuntimeServiceOptions,
 ): AutomationRuntimeService {
+  const toolMetadata = (options.toolMetadata ?? []).map((tool) => ({ ...tool }));
   const service: AutomationRuntimeService = {
     listAutomationCatalog: () => buildAutomationCatalogEntries(
       service.listWorkflows(),
@@ -132,6 +140,7 @@ export function createAutomationRuntimeService(
       options.templates?.list().map(cloneCatalogTemplate) ?? [],
       service.listTaskPresets(),
     ),
+    listAutomationCatalogView: () => buildAutomationCatalogViewEntries(service.listAutomationCatalog(), toolMetadata),
     listWorkflows: () => options.workflows.list().map(cloneWorkflow),
     upsertWorkflow: (playbook) => {
       const normalized = cloneWorkflow(playbook);
