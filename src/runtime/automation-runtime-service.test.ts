@@ -109,6 +109,7 @@ function makeService() {
         ],
       },
     ]),
+    install: vi.fn(() => ({ success: true, message: 'Installed template.' })),
   };
 
   const service = createAutomationRuntimeService({
@@ -177,6 +178,13 @@ describe('automation-runtime-service', () => {
       expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'template' }),
     ]));
     expect(templateControl.list).toHaveBeenCalled();
+
+    expect(service.materializeAutomation('builtin-browser-read')).toMatchObject({
+      success: true,
+      action: 'installed',
+      automationId: 'builtin-browser-read',
+    });
+    expect(templateControl.install).toHaveBeenCalledWith('builtin-browser');
 
     expect(service.setSavedAutomationEnabled('task-agent-1', false).success).toBe(true);
     expect(taskControl.update).toHaveBeenCalledWith('task-agent-1', { enabled: false });

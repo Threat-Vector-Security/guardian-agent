@@ -451,7 +451,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'An optional prompt on single-tool automations auto-converts the automation into a 2-step sequential pipeline (tool + LLM instruction).',
                   'The LLM Provider selector controls which model handles instruction steps and agent tasks. Auto uses smart routing; Local/External force a specific provider type.',
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
-                  'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
+                  'Use Install on built-in catalog examples to materialize starter automations such as Agent Host Guard and Firewall Sentry, and use Clone to fork an already-saved automation.',
                   'Built-in starter examples shown in the Automations catalog now come from the backend automation catalog directly instead of being reconstructed in the browser from separate template and preset lists.',
                   'Use Dry Run before live execution when you want a safe preview path.',
                   'Named automations can also be controlled from chat: Guardian can inspect, run, enable, disable, or delete saved workflows and task-only automations through the same backend control plane used by the UI.',

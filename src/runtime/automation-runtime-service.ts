@@ -1,6 +1,10 @@
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
 import type { ConnectorPlaybookRunInput, ConnectorPlaybookRunResult } from './connectors.js';
 import {
+  materializeAutomationCatalogEntry,
+  type AutomationCatalogMaterializationResult,
+} from './automation-catalog-actions.js';
+import {
   buildAutomationCatalogEntries,
   buildSavedAutomationCatalogEntries,
   type SavedAutomationCatalogEntry,
@@ -46,6 +50,7 @@ interface AutomationTaskControl {
 
 interface AutomationTemplateControl {
   list(): Array<Pick<BuiltinTemplate, 'id' | 'category' | 'playbooks'> & { installed: boolean }>;
+  install?(templateId: string): { success: boolean; message: string };
 }
 
 export interface AutomationRuntimeServiceOptions {
@@ -63,6 +68,7 @@ export interface AutomationRuntimeServiceOptions {
 export interface AutomationRuntimeService {
   listAutomationCatalog(): SavedAutomationCatalogEntry[];
   listAutomationCatalogView(): AutomationCatalogViewEntry[];
+  materializeAutomation(automationId: string): AutomationCatalogMaterializationResult;
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
   upsertWorkflow(playbook: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   deleteWorkflow(playbookId: string): { success: boolean; message: string };
@@ -134,13 +140,27 @@ export function createAutomationRuntimeService(
 ): AutomationRuntimeService {
   const toolMetadata = (options.toolMetadata ?? []).map((tool) => ({ ...tool }));
   const service: AutomationRuntimeService = {
-    listAutomationCatalog: () => buildAutomationCatalogEntries(
+  listAutomationCatalog: () => buildAutomationCatalogEntries(
       service.listWorkflows(),
       service.listTasks(),
       options.templates?.list().map(cloneCatalogTemplate) ?? [],
       service.listTaskPresets(),
     ),
     listAutomationCatalogView: () => buildAutomationCatalogViewEntries(service.listAutomationCatalog(), toolMetadata),
+    materializeAutomation: (automationId) => {
+      const installTemplate = options.templates?.install;
+      const controlPlane = {
+        listCatalog: () => service.listAutomationCatalog(),
+        upsertWorkflow: (workflow: AssistantConnectorPlaybookDefinition) => service.upsertWorkflow(workflow),
+        deleteWorkflow: (workflowId: string) => service.deleteWorkflow(workflowId),
+        createTask: (input: ScheduledTaskCreateInput) => service.createTask(input),
+        installPreset: (presetId: string) => service.installTaskPreset(presetId),
+        ...(installTemplate
+          ? { installTemplate: (templateId: string) => installTemplate(templateId) }
+          : {}),
+      };
+      return materializeAutomationCatalogEntry(controlPlane, automationId);
+    },
     listWorkflows: () => options.workflows.list().map(cloneWorkflow),
     upsertWorkflow: (playbook) => {
       const normalized = cloneWorkflow(playbook);

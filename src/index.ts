@@ -11965,6 +11965,7 @@ async function main(): Promise<void> {
               ...(playbook.outputHandling ? { outputHandling: { ...playbook.outputHandling } } : {}),
             })),
           })),
+          install: (templateId) => installTemplate(templateId, connectors),
         },
         toolMetadata: toolExecutor.listToolDefinitions().map((definition) => ({
           name: definition.name,
@@ -12100,6 +12101,7 @@ async function main(): Promise<void> {
     dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => automationRuntime.installTaskPreset(presetId);
     dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
     dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalogView();
+    dashboardCallbacks.onAutomationMaterialize = (automationId) => automationRuntime.materializeAutomation(automationId);
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
       automationRuntime.setSavedAutomationEnabled(automationId, enabled)
     );

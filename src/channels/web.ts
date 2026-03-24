@@ -3410,6 +3410,22 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/materialize$/)) {
+        if (!this.dashboard.onAutomationMaterialize) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const automationId = decodeURIComponent(url.pathname.split('/')[3] || '').trim();
+        if (!automationId) {
+          sendJSON(res, 400, { error: 'automationId is required' });
+          return;
+        }
+        const result = this.dashboard.onAutomationMaterialize(automationId);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.materialized', url.pathname);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/run$/)) {
         if (!this.dashboard.onAutomationRun) {
           sendJSON(res, 404, { error: 'Not available' });

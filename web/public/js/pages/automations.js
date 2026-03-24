@@ -14,7 +14,7 @@ let currentContainer = null;
 let runTimelineHandler = null;
 let runTimelineRefreshTimer = null;
 const automationUiState = {
-  clonePlacement: null,
+  placement: null,
 };
 
 const AUTOMATION_HELP = {
@@ -266,10 +266,11 @@ function focusRequestedRun(container) {
 }
 
 function reorderAutomationsForUi(automations) {
-  const placement = automationUiState.clonePlacement;
+  const placement = automationUiState.placement;
   if (!placement) return automations;
 
-  const cloneIndex = automations.findIndex((auto) => auto.id === placement.cloneId);
+  if (!placement.anchorId) return automations;
+  const cloneIndex = automations.findIndex((auto) => auto.id === placement.automationId);
   const anchorIndex = automations.findIndex((auto) => auto.id === placement.anchorId);
   if (cloneIndex === -1 || anchorIndex === -1) return automations;
 
@@ -326,11 +327,12 @@ function renderAutomationRow(auto, tools, packs) {
   const toggleDisabled = isBuiltin ? 'disabled' : '';
   const runDisabled = (!auto.enabled || isBuiltin) ? 'disabled' : '';
   const runTitle = isBuiltin
-    ? 'Clone or edit this catalog entry to create a runnable automation.'
+    ? 'Install this catalog entry first to create a runnable automation.'
     : (!auto.enabled ? 'Enable first' : '');
   const dryRunDisabled = isBuiltin || isAssistant ? 'disabled' : '';
-  const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Clone or edit this catalog entry first' : '');
+  const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Install this catalog entry first' : '');
   const deleteDisabled = isBuiltin ? 'disabled title="Built-in catalog item"' : '';
+  const secondaryActionLabel = isBuiltin ? 'Install' : 'Clone';
   const toolsCell = isAssistant
     ? `
         <div class="wf-catalog-tools">
@@ -394,7 +396,7 @@ function renderAutomationRow(auto, tools, packs) {
           <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${runDisabled} ${runTitle ? `title="${escAttr(runTitle)}"` : ''}>Run</button>
           <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${dryRunDisabled} ${dryRunTitle ? `title="${escAttr(dryRunTitle)}"` : ''}>Dry Run</button>
           <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}">Edit</button>
-          <button class="btn btn-secondary btn-sm auto-clone" data-auto-id="${escAttr(auto.id)}">Clone</button>
+          <button class="btn btn-secondary btn-sm auto-materialize" data-auto-id="${escAttr(auto.id)}">${esc(secondaryActionLabel)}</button>
           <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}" ${deleteDisabled}>Delete</button>
         </div>
       </td>
@@ -1246,84 +1248,43 @@ function bindEvents(container, ctx) {
     });
   });
 
-  // Clone
-  container.querySelectorAll('.auto-clone').forEach((button) => {
+  // Clone / install
+  container.querySelectorAll('.auto-materialize').forEach((button) => {
     button.addEventListener('click', async () => {
       const autoId = button.getAttribute('data-auto-id');
       const auto = automations.find((a) => a.id === autoId);
       if (!auto) return;
 
+      const actionLabel = auto.builtin ? 'Install' : 'Clone';
       button.disabled = true;
-      button.textContent = 'Cloning...';
+      button.textContent = `${actionLabel}...`;
       try {
-        const newId = generateCloneId(autoId, automations);
-        const newName = `${auto.name} (copy)`;
-        automationUiState.clonePlacement = { anchorId: auto.id, cloneId: newId };
-
-        if (auto.workflow) {
-          const clonedPb = { ...auto.workflow, id: newId, name: newName, enabled: false };
-          requireAutomationMutationSuccess(
-            await api.upsertPlaybook(clonedPb),
-            `Could not clone '${auto.name}'.`,
-          );
-        } else if (auto.task?.type === 'agent') {
-          requireAutomationMutationSuccess(await api.createScheduledTask({
-            name: newName,
-            description: auto.task.description || auto.description,
-            type: 'agent',
-            target: auto.task.target,
-            prompt: auto.task.prompt,
-            channel: auto.task.channel || 'scheduled',
-            userId: auto.task.userId,
-            deliver: auto.task.deliver !== false,
-            cron: auto.cron || '0 9 * * *',
-            runOnce: auto.runOnce === true,
-            enabled: false,
-            emitEvent: auto.task.emitEvent,
-            outputHandling: auto.outputHandling,
-          }), `Could not clone '${auto.name}'.`);
-        } else {
-          // Wrap orphaned task as playbook
-          requireAutomationMutationSuccess(await api.upsertPlaybook({
-            id: newId,
-            name: newName,
-            mode: 'sequential',
-            enabled: false,
-            description: auto.description,
-            outputHandling: auto.outputHandling,
-            steps: auto.steps.map((s, i) => ({ ...s, id: `${newId}-step-${i + 1}` })),
-          }), `Could not clone '${auto.name}'.`);
-        }
-
-        // Clone linked schedule if present
-        if (auto.cron && auto.task?.type !== 'agent' && (auto.task || auto.sourceKind === 'preset')) {
-          requireAutomationMutationSuccess(await api.createScheduledTask({
-            name: newName,
-            type: 'playbook',
-            target: newId,
-            cron: auto.cron,
-            runOnce: auto.runOnce === true,
-            enabled: false,
-            outputHandling: auto.outputHandling,
-          }), `Could not clone the linked schedule for '${auto.name}'.`);
-        }
+        const result = requireAutomationMutationSuccess(
+          await api.materializeAutomation(auto.id),
+          `Could not ${auto.builtin ? 'install' : 'clone'} '${auto.name}'.`,
+        );
+        automationUiState.placement = {
+          anchorId: auto.builtin ? null : auto.id,
+          automationId: result.automationId || auto.id,
+        };
 
         await renderAutomations(container);
-        setAutomationActionStatus(container, `Cloned '${auto.name}' as '${newName}'.`, 'success');
+        setAutomationActionStatus(container, result.message || `${actionLabel}ed '${auto.name}'.`, 'success');
 
-        // Highlight + scroll to cloned row
+        // Highlight + scroll to the affected row
         setTimeout(() => {
-          const newRow = container.querySelector(`tr[data-auto-id="${newId}"]`);
+          const targetId = automationUiState.placement?.automationId || auto.id;
+          const newRow = container.querySelector(`tr[data-auto-id="${targetId}"]`);
           if (newRow) {
             newRow.classList.add('auto-clone-highlight');
             newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
-          automationUiState.clonePlacement = null;
+          automationUiState.placement = null;
         }, 100);
       } catch (err) {
-        automationUiState.clonePlacement = null;
+        automationUiState.placement = null;
         button.disabled = false;
-        button.textContent = 'Clone';
+        button.textContent = actionLabel;
         setAutomationActionStatus(container, err instanceof Error ? err.message : String(err), 'error');
       }
     });
@@ -2631,19 +2592,6 @@ function clampInt(v, min, max) {
   const p = Number.parseInt(String(v), 10);
   if (!Number.isFinite(p)) return null;
   return Math.max(min, Math.min(max, p));
-}
-
-// ─── Clone helpers ──────────────────────────────────────
-
-function generateCloneId(originalId, automations) {
-  let candidate = `${originalId}-copy`;
-  let counter = 2;
-  const existingIds = new Set(automations.map((a) => a.id));
-  while (existingIds.has(candidate)) {
-    candidate = `${originalId}-copy-${counter}`;
-    counter++;
-  }
-  return candidate;
 }
 
 // ─── Utility ────────────────────────────────────────────
