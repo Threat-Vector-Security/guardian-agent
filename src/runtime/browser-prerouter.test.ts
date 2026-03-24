@@ -176,6 +176,109 @@ describe('tryBrowserPreRoute', () => {
     expect(result?.metadata?.pendingApprovals?.[0]?.id).toBe('approval-nested');
   });
 
+  it('renders link details from stringified browser_links output', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName !== 'browser_links') {
+        throw new Error(`Unexpected tool ${toolName}`);
+      }
+      expect(args).toEqual({ url: 'https://example.com' });
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Extracted 1 link from https://example.com.',
+        output: JSON.stringify({
+          url: 'https://example.com',
+          links: [
+            { text: 'Learn more', href: 'https://iana.org/domains/example' },
+          ],
+        }),
+      };
+    });
+
+    const result = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-links',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Show me the links on https://example.com',
+        timestamp: Date.now(),
+      },
+      executeTool,
+    });
+
+    expect(result).toEqual({
+      content: [
+        'Extracted 1 link from https://example.com.',
+        '- Learn more → https://iana.org/domains/example',
+      ].join('\n\n'),
+    });
+  });
+
+  it('renders read and extract details from nested browser output payloads', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'browser_read') {
+        expect(args).toEqual({ url: 'https://example.com' });
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'Read https://example.com via Playwright accessibility snapshot.',
+          output: {
+            result: JSON.stringify({
+              content: 'Example Domain\nThis domain is for use in illustrative examples in documents.',
+            }),
+          },
+        };
+      }
+      if (toolName === 'browser_extract') {
+        expect(args).toEqual({ url: 'https://example.com', type: 'structured' });
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'Extracted structured page data from https://example.com.',
+          output: {
+            data: {
+              structuredData: {
+                metadata: { title: 'Example Domain' },
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const readResult = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-read',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Read https://example.com',
+        timestamp: Date.now(),
+      },
+      executeTool,
+    });
+
+    expect(readResult?.content).toContain('Example Domain');
+    expect(readResult?.content).toContain('illustrative examples');
+
+    const extractResult = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-extract',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Extract structured metadata from https://example.com',
+        timestamp: Date.now(),
+      },
+      executeTool,
+    });
+
+    expect(extractResult?.content).toContain('Structured data:');
+    expect(extractResult?.content).toContain('"title": "Example Domain"');
+  });
+
   it('does not preroute Google Workspace browser URLs', async () => {
     const executeTool = vi.fn();
 

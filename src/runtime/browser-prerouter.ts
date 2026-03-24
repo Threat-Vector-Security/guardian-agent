@@ -482,7 +482,7 @@ function formatDirectBrowserToolResult(
 }
 
 function formatCapabilitiesContent(result: Record<string, unknown>): string | null {
-  const output = isRecord(result.output) ? result.output : null;
+  const output = coerceBrowserOutputRecord(result.output);
   if (!output) return toString(result.message) || null;
   const preferredRead = toString(output.preferredReadBackend) || 'none';
   const preferredInteraction = toString(output.preferredInteractionBackend) || 'none';
@@ -497,9 +497,7 @@ function formatCapabilitiesContent(result: Record<string, unknown>): string | nu
 }
 
 function formatReadContent(result: Record<string, unknown>): string | null {
-  const output = isRecord(result.output) ? result.output : null;
-  if (!output) return toString(result.message) || null;
-  const content = toString(output.content);
+  const content = extractBrowserReadContent(result.output);
   const excerpt = content
     ? clipText(content, 800)
     : '';
@@ -507,9 +505,7 @@ function formatReadContent(result: Record<string, unknown>): string | null {
 }
 
 function formatLinksContent(result: Record<string, unknown>): string | null {
-  const output = isRecord(result.output) ? result.output : null;
-  if (!output) return toString(result.message) || null;
-  const rawLinks = Array.isArray(output.links) ? output.links : [];
+  const rawLinks = extractBrowserLinks(result.output);
   const links = rawLinks
     .filter((entry): entry is Record<string, unknown> => isRecord(entry))
     .slice(0, 20)
@@ -526,7 +522,7 @@ function formatLinksContent(result: Record<string, unknown>): string | null {
 }
 
 function formatExtractContent(result: Record<string, unknown>): string | null {
-  const output = isRecord(result.output) ? result.output : null;
+  const output = coerceBrowserOutputRecord(result.output);
   if (!output) return toString(result.message) || null;
   const sections: string[] = [];
   if (output.structuredData !== undefined) {
@@ -539,7 +535,7 @@ function formatExtractContent(result: Record<string, unknown>): string | null {
 }
 
 function formatStateContent(result: Record<string, unknown>): string | null {
-  const output = isRecord(result.output) ? result.output : null;
+  const output = coerceBrowserStateRecord(result.output);
   if (!output) return toString(result.message) || null;
   const state = extractBrowserState(output);
   const lines = state.elements
@@ -587,4 +583,66 @@ function toString(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function extractBrowserReadContent(output: unknown): string {
+  const normalized = coerceBrowserOutput(output);
+  if (typeof normalized === 'string') return normalized;
+  if (isRecord(normalized)) return toString(normalized.content);
+  return '';
+}
+
+function extractBrowserLinks(output: unknown): unknown[] {
+  const normalized = coerceBrowserOutput(output);
+  if (Array.isArray(normalized)) return normalized;
+  if (isRecord(normalized) && Array.isArray(normalized.links)) return normalized.links;
+  return [];
+}
+
+function coerceBrowserOutputRecord(output: unknown): Record<string, unknown> | null {
+  const normalized = coerceBrowserOutput(output);
+  return isRecord(normalized) ? normalized : null;
+}
+
+function coerceBrowserOutput(output: unknown): unknown {
+  if (typeof output === 'string') {
+    try {
+      return coerceBrowserOutput(JSON.parse(output));
+    } catch {
+      return output;
+    }
+  }
+
+  if (Array.isArray(output)) {
+    return output.map((entry) => coerceBrowserOutput(entry));
+  }
+
+  if (!isRecord(output)) return output;
+  if (isStructuredBrowserOutput(output)) return output;
+
+  const nestedKeys = ['output', 'result', 'data', 'payload', 'state'];
+  for (const key of nestedKeys) {
+    const nested = coerceBrowserOutput(output[key]);
+    if (isStructuredBrowserOutput(nested)) {
+      return nested;
+    }
+  }
+
+  return output;
+}
+
+function isStructuredBrowserOutput(value: unknown): boolean {
+  if (Array.isArray(value)) return true;
+  if (!isRecord(value)) return false;
+  return [
+    'backends',
+    'content',
+    'elements',
+    'links',
+    'preferredInteractionBackend',
+    'preferredReadBackend',
+    'semanticTree',
+    'stateId',
+    'structuredData',
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
