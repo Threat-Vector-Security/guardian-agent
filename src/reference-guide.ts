@@ -437,13 +437,13 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'automations',
             title: 'Automations',
-            summary: 'Build deterministic workflows or scheduled assistant reports, then run them manually or on a cron schedule.',
+            summary: 'Build deterministic workflows, scheduled assistant reports, or manual on-demand assistant automations, then run them from Automations or on a cron schedule.',
             sections: [
               {
                 title: 'Create And Run',
                 items: [
                   'The Automations page is the unified home for playbooks and scheduled tasks.',
-                  'Automations can run a single tool, multiple tools in sequential or parallel pipelines, or a scheduled assistant turn. The assistant turn option is inside the schedule section — check "Run as assistant turn" to create a full agent task with tools, memory, and skills.',
+                  'Automations can run a single tool, multiple tools in sequential or parallel pipelines, a scheduled assistant turn, or a manual on-demand assistant automation. The assistant turn option is inside the schedule section — check "Run as assistant turn" to create a full agent task with tools, memory, and skills.',
                   'Pipeline steps can be tool steps, LLM instruction steps (text synthesis from prior step outputs), or delay steps (pause the pipeline for a set duration). Delay steps are only meaningful in sequential mode.',
                   'Instruction steps can also be evidence-grounded so reports and summaries carry forward citations or structured evidence captured by earlier search or retrieval steps.',
                   'The tool picker (Browse button) lets you search tools by name or description and shows integration requirements (e.g. Google Workspace connected, AWS profile configured).',
@@ -452,12 +452,13 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
                   'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
                   'Use Dry Run before live execution when you want a safe preview path.',
+                  'Named automations can also be controlled from chat: Guardian can inspect, run, enable, disable, or delete saved workflows and task-only automations through the same backend control plane used by the UI.',
                 ],
               },
               {
                 title: 'Scheduling And Limits',
                 items: [
-                  'Any automation can be given a cron schedule and turned into a recurring task.',
+                  'Any automation can be given a cron schedule and turned into a recurring task, or left manual-only so it runs only when an operator triggers it.',
                   'Use Single shot when you want the task to run once on the next matching schedule and then disable itself automatically.',
                   'Scheduled assistant tasks need a prompt plus a target agent. Enable "Run as assistant turn" inside the schedule section to create one. They are best for recurring briefs, watchlists, and open-ended checks that should decide what to inspect at runtime.',
                   'Pre-flight approval check: when scheduling an automation, the system checks whether any tools will require manual approval at runtime. If so, a validation panel shows the issues with one-click "Auto-approve" buttons that set per-tool auto policies. You can also skip the check and accept that each run may need manual approval.',

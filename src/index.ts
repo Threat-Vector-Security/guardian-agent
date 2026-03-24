@@ -150,7 +150,18 @@ import {
   isSkillInventoryQuery,
 } from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
+import { tryAutomationControlPreRoute } from './runtime/automation-control-prerouter.js';
 import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
+import {
+  resolveDirectIntentRoutingCandidates,
+} from './runtime/direct-intent-routing.js';
+import {
+  IntentGateway,
+  toIntentGatewayClientMetadata,
+  type IntentGatewayDecision,
+  type IntentGatewayRoute,
+  type IntentGatewayShadowRecord,
+} from './runtime/intent-gateway.js';
 import {
   isDirectBrowserAutomationIntent,
   parseDirectFileSearchIntent,
@@ -559,6 +570,16 @@ interface AutomationApprovalContinuation {
   expiresAt: number;
 }
 
+type DirectIntentShadowCandidate =
+  | 'filesystem'
+  | 'scheduled_email_automation'
+  | 'automation'
+  | 'automation_control'
+  | 'workspace_write'
+  | 'workspace_read'
+  | 'browser'
+  | 'web_search';
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private codeSessionSystemPrompt: string;
@@ -599,6 +620,8 @@ class ChatAgent extends BaseAgent {
   private analytics?: AnalyticsService;
   /** Resolve a routed LLM provider based on tools just executed. Returns undefined if no routing override. */
   private resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined;
+  /** Shadow-mode structured classifier for top-level request routing. */
+  private readonly intentGateway: IntentGateway;
 
   private executeToolsConflictAware(
     toolCalls: Array<{ id: string; name: string; arguments?: string }>,
@@ -708,6 +731,7 @@ class ChatAgent extends BaseAgent {
     this.qualityFallbackEnabled = qualityFallback ?? true;
     this.analytics = analytics;
     this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
+    this.intentGateway = new IntentGateway();
   }
 
   private tryDirectSkillInventoryResponse(content: string): string | null {
@@ -1143,26 +1167,6 @@ class ChatAgent extends BaseAgent {
     let responseSource: ResponseSourceMetadata | undefined;
     
     if (!skipDirectTools) {
-      const directSearch = await this.tryDirectFilesystemSearch(
-        contextAwareScopedMessage,
-        ctx,
-        effectiveCodeContext,
-      );
-      if (directSearch) {
-        finalContent = directSearch;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
-        };
-      }
-
       if (ambiguousEmailProviderClarification) {
         finalContent = ambiguousEmailProviderClarification;
         if (this.conversationService) {
@@ -1177,107 +1181,6 @@ class ChatAgent extends BaseAgent {
           metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
         };
       }
-
-      const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(contextAwareScopedMessage, ctx, userKey, stateAgentId);
-      if (directScheduledEmailAutomation) {
-        finalContent = directScheduledEmailAutomation;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
-        };
-      }
-
-      const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
-        contextAwareScopedMessage,
-        ctx,
-        userKey,
-        effectiveCodeContext,
-      );
-      if (directAutomationAuthoring) {
-        finalContent = directAutomationAuthoring.content;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: {
-            ...this.buildImmediateResponseMetadata(activeSkills, userKey),
-            ...directAutomationAuthoring.metadata,
-          },
-        };
-      }
-
-      const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(contextAwareScopedMessage, ctx, userKey);
-      if (directWorkspaceWrite) {
-        finalContent = directWorkspaceWrite;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
-        };
-      }
-
-      const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(contextAwareScopedMessage, ctx);
-      if (directWorkspaceRead) {
-        finalContent = directWorkspaceRead;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
-        };
-      }
-
-      const directBrowserAutomation = await this.tryDirectBrowserAutomation(
-        contextAwareScopedMessage,
-        ctx,
-        userKey,
-        effectiveCodeContext,
-      );
-      if (directBrowserAutomation) {
-        finalContent = directBrowserAutomation.content;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: {
-            ...this.buildImmediateResponseMetadata(activeSkills, userKey),
-            ...directBrowserAutomation.metadata,
-          },
-        };
-      }
-
-      // Direct web search: if the user clearly wants generic web results, call
-      // web_search directly so the tool executes even when the LLM doesn't invoke it.
-      // If a more specialized search skill is active, let the LLM read that skill
-      // first instead of forcing the generic shortcut.
       const directBrowserIntent = isDirectBrowserAutomationIntent(contextAwareScopedMessage.content);
       const skipDirectWebSearch = !!resolvedCodeSession
         || !!effectiveCodeContext
@@ -1287,52 +1190,217 @@ class ChatAgent extends BaseAgent {
           || skill.id === 'weather'
           || skill.id === 'blogwatcher'
         ));
-      if (!skipDirectWebSearch) {
-        let webSearchResult: string | null = null;
-        try {
-          webSearchResult = await this.tryDirectWebSearch(contextAwareScopedMessage, ctx);
-        } catch {
-          // Search failed — fall through to LLM with tool calling
-        }
-        if (webSearchResult) {
-          // Scan web search results through OutputGuardian before LLM reinjection
-          const sanitizedWebSearch = this.sanitizeToolResultForLlm(
-            'web_search',
-            webSearchResult,
-            defaultToolResultProviderKind,
-          );
-          const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
-            ? sanitizedWebSearch.sanitized
-            : String(sanitizedWebSearch.sanitized ?? '');
-          const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
-          const llmSearchPayload = warningPrefix
-            ? `${warningPrefix}\n${safeWebSearchResult}`
-            : safeWebSearchResult;
 
-          // Feed the sanitized search results through the LLM for a natural response
-          if (ctx.llm) {
+      const directIntentShadow = await this.classifyIntentGatewayShadow(contextAwareScopedMessage, ctx);
+      const directIntentRouting = resolveDirectIntentRoutingCandidates(
+        directIntentShadow?.decision ?? null,
+        [
+          'filesystem',
+          'scheduled_email_automation',
+          'automation',
+          'automation_control',
+          'workspace_write',
+          'workspace_read',
+          'browser',
+          'web_search',
+        ],
+        [
+          'filesystem',
+          'scheduled_email_automation',
+          'automation',
+          'automation_control',
+          'workspace_write',
+          'workspace_read',
+          'browser',
+          'web_search',
+        ],
+      );
+
+      for (const candidate of directIntentRouting.candidates) {
+        switch (candidate) {
+          case 'filesystem': {
+            const directSearch = await this.tryDirectFilesystemSearch(
+              contextAwareScopedMessage,
+              ctx,
+              effectiveCodeContext,
+            );
+            if (!directSearch) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directSearch,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'scheduled_email_automation': {
+            const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(
+              contextAwareScopedMessage,
+              ctx,
+              userKey,
+              stateAgentId,
+            );
+            if (!directScheduledEmailAutomation) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directScheduledEmailAutomation,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'automation': {
+            const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
+              contextAwareScopedMessage,
+              ctx,
+              userKey,
+              effectiveCodeContext,
+              {
+                assumeAuthoring: directIntentRouting.gatewayDirected,
+              },
+            );
+            if (!directAutomationAuthoring) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directAutomationAuthoring,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'automation_control': {
+            const directAutomationControl = await this.tryDirectAutomationControl(
+              contextAwareScopedMessage,
+              ctx,
+              userKey,
+              directIntentShadow?.decision,
+            );
+            if (!directAutomationControl) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directAutomationControl,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'workspace_write': {
+            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(contextAwareScopedMessage, ctx, userKey);
+            if (!directWorkspaceWrite) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directWorkspaceWrite,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'workspace_read': {
+            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(contextAwareScopedMessage, ctx);
+            if (!directWorkspaceRead) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directWorkspaceRead,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'browser': {
+            const directBrowserAutomation = await this.tryDirectBrowserAutomation(
+              contextAwareScopedMessage,
+              ctx,
+              userKey,
+              effectiveCodeContext,
+            );
+            if (!directBrowserAutomation) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directBrowserAutomation,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'web_search': {
+            if (skipDirectWebSearch) break;
+            let webSearchResult: string | null = null;
             try {
-              const llmFormat: ChatMessage[] = [
-                ...llmMessages,
-                { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
-              ];
-              const formatted = await this.chatWithFallback(ctx, llmFormat);
-              finalContent = formatted.content || llmSearchPayload;
+              webSearchResult = await this.tryDirectWebSearch(contextAwareScopedMessage, ctx);
             } catch {
-              // LLM formatting failed — return raw search results
+              webSearchResult = null;
+            }
+            if (!webSearchResult) break;
+
+            const sanitizedWebSearch = this.sanitizeToolResultForLlm(
+              'web_search',
+              webSearchResult,
+              defaultToolResultProviderKind,
+            );
+            const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
+              ? sanitizedWebSearch.sanitized
+              : String(sanitizedWebSearch.sanitized ?? '');
+            const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
+            const llmSearchPayload = warningPrefix
+              ? `${warningPrefix}\n${safeWebSearchResult}`
+              : safeWebSearchResult;
+
+            if (ctx.llm) {
+              try {
+                const llmFormat: ChatMessage[] = [
+                  ...llmMessages,
+                  { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
+                ];
+                const formatted = await this.chatWithFallback(ctx, llmFormat);
+                finalContent = formatted.content || llmSearchPayload;
+              } catch {
+                finalContent = llmSearchPayload;
+              }
+            } else {
               finalContent = llmSearchPayload;
             }
-          } else {
-            finalContent = llmSearchPayload;
-          }
-          if (this.conversationService) {
-            this.conversationService.recordTurn(
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: finalContent,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              shadow: directIntentShadow,
+              ctx,
+              userKey,
+              activeSkills,
               conversationKey,
-              message.content,
-              finalContent,
-            );
+            });
           }
-          return { content: finalContent };
+          default:
+            break;
         }
       }
     }
@@ -2349,6 +2417,42 @@ class ChatAgent extends BaseAgent {
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
+  private async buildDirectIntentResponse(input: {
+    candidate: DirectIntentShadowCandidate;
+    result: string | { content: string; metadata?: Record<string, unknown> };
+    message: UserMessage;
+    routingMessage?: UserMessage;
+    shadow?: IntentGatewayShadowRecord | null;
+    ctx: AgentContext;
+    userKey: string;
+    activeSkills: ResolvedSkill[];
+    conversationKey: ConversationKey;
+  }): Promise<AgentResponse> {
+    const normalized = typeof input.result === 'string'
+      ? { content: input.result }
+      : input.result;
+    if (this.conversationService) {
+      this.conversationService.recordTurn(
+        input.conversationKey,
+        input.message.content,
+        normalized.content,
+      );
+    }
+    const routingMessage = input.routingMessage ?? input.message;
+    const shadow = input.shadow ?? await this.classifyIntentGatewayShadow(routingMessage, input.ctx);
+    this.logIntentGatewayShadow(input.candidate, routingMessage, shadow, true);
+    const shadowMeta = toIntentGatewayClientMetadata(shadow);
+    const metadata = {
+      ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+      ...(normalized.metadata ?? {}),
+      ...(shadowMeta ? { intentGatewayShadow: shadowMeta } : {}),
+    };
+    return {
+      content: normalized.content,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    };
+  }
+
   private tryDirectRecentToolReport(message: UserMessage): string | null {
     if (!this.tools?.isEnabled()) return null;
     if (!_isToolReportQuery(message.content)) return null;
@@ -2943,7 +3047,7 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     codeContext?: { workspaceRoot?: string },
-    options?: { allowRemediation?: boolean },
+    options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const codeWorkspaceRoot = codeContext?.workspaceRoot?.trim();
@@ -2964,14 +3068,14 @@ class ChatAgent extends BaseAgent {
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
         this.setPendingApprovals(userKey, [...existingIds, approvalId]);
       },
-      onPendingApproval: ({ approvalId, toolName, automationName, verb }) => {
+      onPendingApproval: ({ approvalId, toolName, automationName, artifactLabel, verb }) => {
         this.setApprovalFollowUp(approvalId, {
           approved: toolName === 'workflow_upsert'
             ? `I ${verb} the workflow '${automationName}'.`
-            : `I ${verb} the scheduled assistant task '${automationName}'.`,
+            : `I ${verb} the ${artifactLabel} '${automationName}'.`,
           denied: toolName === 'workflow_upsert'
             ? `I did not ${verb === 'updated' ? 'update' : 'create'} the workflow '${automationName}'.`
-            : `I did not ${verb === 'updated' ? 'update' : 'create'} the scheduled assistant task '${automationName}'.`,
+            : `I did not ${verb === 'updated' ? 'update' : 'create'} the ${artifactLabel} '${automationName}'.`,
         });
       },
       formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
@@ -3001,6 +3105,44 @@ class ChatAgent extends BaseAgent {
     return result;
   }
 
+  private async tryDirectAutomationControl(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    intentDecision?: IntentGatewayDecision | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    return tryAutomationControlPreRoute({
+      agentId: this.id,
+      message,
+      checkAction: ctx.checkAction,
+      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
+      trackPendingApproval: (approvalId) => {
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+      },
+      onPendingApproval: ({ approvalId, approved, denied }) => {
+        this.setApprovalFollowUp(approvalId, { approved, denied });
+      },
+      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const summaries = this.tools?.getApprovalSummaries(ids);
+        if (!summaries) return fallback;
+        return ids.map((id) => {
+          const summary = summaries.get(id);
+          const fallbackItem = fallback.find((item) => item.id === id);
+          return {
+            id,
+            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
+            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+          };
+        });
+      },
+    }, {
+      intentDecision,
+    });
+  }
+
   private async tryDirectBrowserAutomation(
     message: UserMessage,
     ctx: AgentContext,
@@ -3012,7 +3154,7 @@ class ChatAgent extends BaseAgent {
       ? { workspaceRoot: codeContext.workspaceRoot, ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}) }
       : undefined;
 
-    return tryBrowserPreRoute({
+    const result = await tryBrowserPreRoute({
       agentId: this.id,
       message,
       checkAction: ctx.checkAction,
@@ -3042,6 +3184,71 @@ class ChatAgent extends BaseAgent {
         });
       },
     });
+    return result;
+  }
+
+  private async classifyIntentGatewayShadow(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<IntentGatewayShadowRecord | null> {
+    if (!ctx.llm) return null;
+    return this.intentGateway.classifyShadow(
+      {
+        content: message.content,
+        channel: message.channel,
+      },
+      (messages, options) => this.chatWithFallback(ctx, messages, options),
+    );
+  }
+
+  private logIntentGatewayShadow(
+    candidate: DirectIntentShadowCandidate,
+    message: UserMessage,
+    shadow: IntentGatewayShadowRecord | null,
+    handled: boolean,
+  ): void {
+    if (!shadow) return;
+    const expectedRoutes = this.expectedIntentGatewayRoutes(candidate);
+    const mismatch = handled && !expectedRoutes.has(shadow.decision.route);
+    log.info({
+      agentId: this.id,
+      messageId: message.id,
+      channel: message.channel,
+      candidate,
+      handled,
+      mismatch,
+      shadowRoute: shadow.decision.route,
+      shadowConfidence: shadow.decision.confidence,
+      shadowOperation: shadow.decision.operation,
+      shadowSummary: shadow.decision.summary,
+      shadowLatencyMs: shadow.latencyMs,
+      shadowModel: shadow.model,
+    }, 'Intent gateway shadow classification');
+  }
+
+  private expectedIntentGatewayRoutes(
+    candidate: DirectIntentShadowCandidate,
+  ): Set<IntentGatewayRoute> {
+    switch (candidate) {
+      case 'filesystem':
+        return new Set(['filesystem_task', 'search_task']);
+      case 'scheduled_email_automation':
+        return new Set(['automation_authoring']);
+      case 'automation':
+        return new Set(['automation_authoring', 'automation_control']);
+      case 'automation_control':
+        return new Set(['automation_control', 'ui_control']);
+      case 'workspace_write':
+        return new Set(['workspace_task', 'email_task']);
+      case 'workspace_read':
+        return new Set(['workspace_task']);
+      case 'browser':
+        return new Set(['browser_task']);
+      case 'web_search':
+        return new Set(['search_task']);
+      default:
+        return new Set(['unknown']);
+    }
   }
 
   private async tryDirectScheduledEmailAutomation(
@@ -11716,6 +11923,22 @@ async function main(): Promise<void> {
     };
   }
 
+  const basePlaybookDelete = dashboardCallbacks.onPlaybookDelete;
+  if (basePlaybookDelete) {
+    dashboardCallbacks.onPlaybookDelete = (playbookId) => {
+      const linkedTaskIds = scheduledTasks.list()
+        .filter((task) => task.type === 'playbook' && task.target === playbookId)
+        .map((task) => task.id);
+      const result = basePlaybookDelete(playbookId);
+      if (result.success) {
+        for (const taskId of linkedTaskIds) {
+          scheduledTasks.delete(taskId);
+        }
+      }
+      return result;
+    };
+  }
+
   const basePlaybookRun = dashboardCallbacks.onPlaybookRun;
   if (basePlaybookRun) {
     dashboardCallbacks.onPlaybookRun = async (input) => {
@@ -11890,6 +12113,12 @@ async function main(): Promise<void> {
         id,
         input as unknown as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskUpdate']>>[1],
       );
+    },
+    runTask: async (id) => {
+      if (!dashboardCallbacks.onScheduledTaskRunNow) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskRunNow(id);
     },
     deleteTask: (id) => {
       if (!dashboardCallbacks.onScheduledTaskDelete) {

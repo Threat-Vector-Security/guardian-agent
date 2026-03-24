@@ -28,6 +28,21 @@ describe('tryAutomationPreRoute', () => {
     expect(result).toBeNull();
   });
 
+  it('keeps forced authoring requests inside automation clarification instead of returning null', async () => {
+    const result = await tryAutomationPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Create it as an automation.',
+      },
+      executeTool: vi.fn(),
+    }, {
+      assumeAuthoring: true,
+    });
+
+    expect(result?.content).toContain('I recognized this as an automation authoring request');
+  });
+
   it('routes native scheduled automation requests to task_create before generic tools', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
       if (toolName === 'task_list') {
@@ -59,7 +74,7 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result?.content).toContain('native Guardian scheduled assistant task');
+    expect(result?.content).toContain("scheduled assistant task 'Weekday Lead Research'");
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
         id: 'approval-1',
@@ -83,6 +98,7 @@ describe('tryAutomationPreRoute', () => {
       approvalId: 'approval-1',
       toolName: 'task_create',
       automationName: 'Weekday Lead Research',
+      artifactLabel: 'native Guardian scheduled assistant task',
       verb: 'created',
     });
   });
@@ -125,7 +141,8 @@ describe('tryAutomationPreRoute', () => {
       executeTool,
     });
 
-    expect(result?.content).toBe("Updated scheduled assistant task 'Weekday Lead Research' on 0 9 * * 1-5.");
+    expect(result?.content).toContain("Updated scheduled assistant task 'Weekday Lead Research'");
+    expect(result?.content).toContain('Schedule: 0 9 * * 1-5');
     expect(executeTool).toHaveBeenNthCalledWith(
       2,
       'task_update',
@@ -181,6 +198,51 @@ describe('tryAutomationPreRoute', () => {
       }),
       expect.objectContaining({ channel: 'web', userId: 'owner' }),
     );
+  });
+
+  it('routes unscheduled open-ended requests to manual assistant automations instead of falling through', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'task_list') {
+        return {
+          success: true,
+          output: { tasks: [] },
+        };
+      }
+      if (toolName === 'task_create') {
+        expect(args).toMatchObject({
+          name: 'Company Homepage Collector',
+          type: 'agent',
+          target: 'default',
+          eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+        });
+        return {
+          success: true,
+          output: {
+            task: {
+              id: 'task-manual-1',
+              name: 'Company Homepage Collector',
+              type: 'agent',
+              target: 'default',
+              eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Build a workflow called Company Homepage Collector that reads ./companies.csv, opens each company homepage, extracts the page title and meta description, and writes ./tmp/company-homepages.json. Do not schedule it yet.',
+      },
+      executeTool,
+    });
+
+    expect(result?.content).toContain("Created manual assistant automation 'Company Homepage Collector'");
+    expect(result?.content).toContain('Runs on demand only');
+    expect(executeTool.mock.calls.some((call) => call[0] === 'task_create')).toBe(true);
   });
 
   it('blocks automation creation when required input files are missing', async () => {
@@ -351,7 +413,7 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(pathAllowed).toBe(true);
-    expect(result?.content).toContain('native Guardian scheduled assistant task');
+    expect(result?.content).toContain('scheduled assistant task');
     expect(executeTool.mock.calls.some((call) => call[0] === 'task_create')).toBe(true);
   });
 
@@ -412,7 +474,7 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(pathAllowed).toBe(true);
-    expect(result?.content).toContain('native Guardian scheduled assistant task');
+    expect(result?.content).toContain('scheduled assistant task');
     expect(result?.content).not.toContain('not execution-ready');
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
@@ -474,7 +536,7 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result?.content).toContain('native Guardian scheduled assistant task');
+    expect(result?.content).toContain('scheduled assistant task');
     expect(executeTool).toHaveBeenCalledWith(
       'task_create',
       expect.objectContaining({

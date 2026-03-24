@@ -19,7 +19,10 @@ export interface CompiledAutomationTaskCreate {
   channel: string;
   userId?: string;
   deliver: boolean;
-  cron: string;
+  cron?: string;
+  eventTrigger?: {
+    eventType: string;
+  };
   runOnce: boolean;
   enabled: true;
   maxRunsPerWindow: number;
@@ -39,7 +42,7 @@ export interface CompiledAutomationWorkflowUpsert extends AssistantConnectorPlay
 
 export interface AutomationAuthoringCompilation {
   intent: 'create';
-  shape: 'scheduled_agent' | 'workflow';
+  shape: AutomationAuthoringShape;
   name: string;
   id: string;
   description: string;
@@ -57,16 +60,30 @@ export interface ExistingAutomationTask {
   type: string;
   target: string;
   cron: string;
+  eventTrigger?: { eventType: string };
   prompt?: string;
   channel?: string;
   userId?: string;
   deliver?: boolean;
 }
 
+export type AutomationAuthoringShape = 'scheduled_agent' | 'manual_agent' | 'workflow';
+
+export interface AutomationAuthoringCompileOptions {
+  channel?: string;
+  userId?: string;
+  now?: Date;
+  assumeAuthoring?: boolean;
+}
+
 const AUTOMATION_INTENT_PATTERN = /\b(create|build|set up|setup|make|configure|schedule|automate|turn into|create this as)\b[\s\S]{0,120}\b(automation|workflow|playbook|pipeline|scheduled task|task)\b/i;
 const SCHEDULE_SIGNAL_PATTERN = /\b(daily|every day|weekday|weekdays|every weekday|weekly|every monday|every tuesday|every wednesday|every thursday|every friday|every saturday|every sunday|every \d+ minutes?|hourly|every hour|tomorrow)\b/i;
 const NATIVE_ONLY_PATTERN = /\b(guardian workflow|guardian scheduled task|workflow or scheduled task|scheduled task|built[- ]in (?:guardian )?tools only|native automation)\b/i;
 const FORBID_CODE_PATTERN = /\b(not a shell script|not .*code file|do not create .*script|do not create .*code file|no shell script|no python script|using built[- ]in (?:guardian )?tools only)\b/i;
+const MANUAL_ONLY_PATTERN = /\b(do not schedule(?: it| this)?(?: yet)?|don't schedule(?: it| this)?(?: yet)?|manual(?:ly)?(?: run)? only|run (?:it|this) manually|on demand only)\b/i;
+const EXPLICIT_ASSISTANT_TASK_PATTERN = /\b(scheduled assistant task|assistant task|assistant automation|agent task|assistant turn)\b/i;
+const EXPLICIT_WORKFLOW_PATTERN = /\b(workflow called|workflow named|workflow titled|playbook called|playbook named|playbook titled|create a sequential workflow|build a sequential workflow|create a parallel workflow|build a parallel workflow)\b/i;
+const NAMED_AUTOMATION_PATTERN = /\b(automation|workflow|playbook|scheduled assistant task|assistant automation|assistant task)\b[\s\S]{0,40}\b(called|named|titled)\b/i;
 const OPEN_ENDED_PATTERNS = [
   /\b(research|enrich|score|classify|triage|monitor|summari[sz]e|draft|compare|diff|analy[sz]e|prioriti[sz]e|review)\b/i,
   /\b(inbox|gmail|email|calendar|alerts?|tickets?|publication|newsletter|linkedin|competitor)\b/i,
@@ -127,14 +144,16 @@ const WEEKDAY_TO_CRON: Record<string, number> = {
 
 export function compileAutomationAuthoringRequest(
   content: string,
-  options?: { channel?: string; userId?: string; now?: Date },
+  options?: AutomationAuthoringCompileOptions,
 ): AutomationAuthoringCompilation | null {
   const ir = compileAutomationAuthoringIR(content, options);
   if (!ir) return null;
 
-  const shape = ir.primitive === 'workflow' ? 'workflow' : 'scheduled_agent';
+  const shape: AutomationAuthoringShape = ir.primitive === 'workflow'
+    ? 'workflow'
+    : (ir.schedule ? 'scheduled_agent' : 'manual_agent');
   if (shape === 'workflow' && !ir.workflow) return null;
-  if (shape === 'scheduled_agent' && !ir.agent) return null;
+  if ((shape === 'scheduled_agent' || shape === 'manual_agent') && !ir.agent) return null;
 
   if (shape === 'workflow') {
     const workflow = compileWorkflowFromIR(ir, ir.workflow!);
@@ -158,19 +177,30 @@ export function compileAutomationAuthoringRequest(
     description: ir.description,
     type: 'agent',
     target: ir.agent!.target,
-    prompt: buildScheduledAgentPrompt(ir.agent!.operatorRequest, {
-      nativeOnly: ir.constraints.nativeOnly,
-      forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
-    }),
+    prompt: buildAssistantAutomationPrompt(
+      ir.agent!.operatorRequest,
+      {
+        nativeOnly: ir.constraints.nativeOnly,
+        forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
+      },
+      ir.schedule ? 'scheduled' : 'manual',
+    ),
     channel: options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled',
     userId: options?.userId?.trim() || ir.metadata.userId?.trim() || undefined,
     deliver: (options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled') !== 'scheduled',
-    cron: ir.schedule!.cron,
-    runOnce: ir.schedule!.runOnce,
+    ...(ir.schedule
+      ? {
+          cron: ir.schedule.cron,
+          runOnce: ir.schedule.runOnce,
+        }
+      : {
+          eventTrigger: buildManualAutomationEventTrigger(ir.id),
+          runOnce: false,
+        }),
     enabled: true,
-    maxRunsPerWindow: deriveMaxRunsPerWindow(ir.schedule!),
-    dailySpendCap: deriveDailySpendCap(ir.schedule!),
-    providerSpendCap: deriveProviderSpendCap(ir.schedule!),
+    maxRunsPerWindow: ir.schedule ? deriveMaxRunsPerWindow(ir.schedule) : 5,
+    dailySpendCap: ir.schedule ? deriveDailySpendCap(ir.schedule) : 60_000,
+    providerSpendCap: ir.schedule ? deriveProviderSpendCap(ir.schedule) : 36_000,
   };
 
   return {
@@ -189,21 +219,17 @@ export function compileAutomationAuthoringRequest(
 
 export function compileAutomationAuthoringIR(
   content: string,
-  options?: { channel?: string; userId?: string; now?: Date },
+  options?: AutomationAuthoringCompileOptions,
 ): AutomationIR | null {
   const text = normalizeAutomationAuthoringText(content);
   if (!text) return null;
-  if (!isAutomationAuthoringIntent(text)) return null;
+  if (!options?.assumeAuthoring && !isAutomationAuthoringIntent(text)) return null;
 
   const schedule = parseAutomationSchedule(text, options?.now ?? new Date());
   const nativeOnly = NATIVE_ONLY_PATTERN.test(text);
   const forbidCodeArtifacts = FORBID_CODE_PATTERN.test(text);
   const builtInToolsOnly = /built[- ]in (?:guardian )?tools only/i.test(text);
   const shape = classifyAutomationShape(text, schedule);
-
-  if (shape === 'scheduled_agent' && !schedule) {
-    return null;
-  }
 
   const name = inferAutomationName(text, schedule);
   const id = slugify(name);
@@ -256,7 +282,7 @@ export function buildTaskUpdateForCompiledAutomation(
   compilation: AutomationAuthoringCompilation,
   options?: { channel?: string; userId?: string },
 ): CompiledAutomationTaskUpdate | null {
-  if (compilation.shape !== 'scheduled_agent' || !compilation.taskCreate) return null;
+  if ((compilation.shape !== 'scheduled_agent' && compilation.shape !== 'manual_agent') || !compilation.taskCreate) return null;
   return {
     taskId,
     ...compilation.taskCreate,
@@ -269,7 +295,7 @@ export function findMatchingScheduledAutomationTask(
   tasks: ExistingAutomationTask[],
   compilation: AutomationAuthoringCompilation,
 ): ExistingAutomationTask | null {
-  if (compilation.shape !== 'scheduled_agent' || !compilation.taskCreate) return null;
+  if ((compilation.shape !== 'scheduled_agent' && compilation.shape !== 'manual_agent') || !compilation.taskCreate) return null;
   const desired = compilation.taskCreate;
   const normalizedName = compilation.name.trim().toLowerCase();
   const candidates = tasks.filter((task) => (
@@ -279,7 +305,8 @@ export function findMatchingScheduledAutomationTask(
   ));
   if (candidates.length === 0) return null;
   const exact = candidates.find((task) => (
-    task.cron === desired.cron
+    (task.cron || '') === (desired.cron || '')
+    && (task.eventTrigger?.eventType || '') === (desired.eventTrigger?.eventType || '')
     && (task.channel ?? 'scheduled') === desired.channel
     && Boolean(task.deliver) === desired.deliver
   ));
@@ -288,20 +315,32 @@ export function findMatchingScheduledAutomationTask(
 
 function isAutomationAuthoringIntent(text: string): boolean {
   if (AUTOMATION_INTENT_PATTERN.test(text)) return true;
+  if (NAMED_AUTOMATION_PATTERN.test(text)) return true;
   return Boolean(SCHEDULE_SIGNAL_PATTERN.test(text) && /\b(automation|workflow|scheduled task|playbook|pipeline)\b/i.test(text));
+}
+
+export function isAutomationAuthoringRequest(content: string): boolean {
+  const normalized = normalizeAutomationAuthoringText(content);
+  if (!normalized) return false;
+  return isAutomationAuthoringIntent(normalized);
 }
 
 function classifyAutomationShape(
   text: string,
   schedule: AutomationScheduleSpec | null,
-): 'scheduled_agent' | 'workflow' {
+): AutomationAuthoringShape {
+  const explicitAssistantTask = EXPLICIT_ASSISTANT_TASK_PATTERN.test(text);
   const openEndedSignals = OPEN_ENDED_PATTERNS.filter((pattern) => pattern.test(text)).length;
+  const explicitWorkflow = EXPLICIT_WORKFLOW_PATTERN.test(text) && !explicitAssistantTask && openEndedSignals === 0;
   const explicitWorkflowSignals = EXPLICIT_WORKFLOW_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const deterministicInstructionWorkflow = looksLikeDeterministicInstructionWorkflow(text);
+  if (explicitAssistantTask) return schedule ? 'scheduled_agent' : 'manual_agent';
+  if (explicitWorkflow) return 'workflow';
   if (looksLikeBrowserWorkflow(text)) return 'workflow';
   if (deterministicInstructionWorkflow) return 'workflow';
   if (explicitWorkflowSignals >= 2) return 'workflow';
-  if (openEndedSignals > 0) return 'scheduled_agent';
+  if (openEndedSignals > 0) return schedule ? 'scheduled_agent' : 'manual_agent';
+  if (MANUAL_ONLY_PATTERN.test(text)) return 'manual_agent';
   if (schedule) return 'scheduled_agent';
   return 'workflow';
 }
@@ -412,9 +451,11 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
   if (!url) return null;
 
   const steps: AssistantConnectorPlaybookStepDefinition[] = [];
+  const outputPaths = extractWritePaths(text);
   const needsMutation = /\b(type|types|typed|typing|fill|fills|filled|filling|click|clicks|clicked|clicking|select|selects|selected|selecting)\b/i.test(text);
   const wantsRead = /\b(read|page title|page content|current page|summari[sz]e)\b/i.test(text);
-  const wantsLinks = /\b(list|show|extract|get)\b[\s\S]{0,48}\blinks?\b/i.test(text);
+  const wantsLinks = /\b(list|show|extract|get)(?:s|ed|ing)?\b[\s\S]{0,48}\blinks?\b/i.test(text);
+  const linkLimit = wantsLinks ? extractRequestedLinkLimit(text) : null;
   const wantsInteractiveList = /\b(list(?:s|ed|ing)?|show(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\b[\s\S]{0,48}\b(interactive elements?|inputs?|form fields?|controls?)\b/i.test(text)
     || /\blist the inputs\b/i.test(text);
   const extractType = inferBrowserExtractType(text);
@@ -449,7 +490,7 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       type: 'tool',
       packId: '',
       toolName: 'browser_links',
-      args: {},
+      args: linkLimit ? { maxItems: linkLimit } : {},
     });
   }
 
@@ -507,11 +548,62 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
     });
   }
 
+  if (outputPaths.length === 1) {
+    steps.push({
+      id: 'compose_output',
+      name: 'Compose requested artifact',
+      type: 'instruction',
+      packId: '',
+      toolName: '',
+      instruction: buildBrowserArtifactInstruction(text, outputPaths[0]),
+    });
+    steps.push({
+      id: 'write_output',
+      name: 'Write requested artifact',
+      type: 'tool',
+      packId: '',
+      toolName: 'fs_write',
+      args: {
+        path: outputPaths[0],
+        content: '${compose_output.output}',
+      },
+    });
+  }
+
   if (steps.length <= 1) return null;
   return {
     mode: 'sequential',
     steps,
   };
+}
+
+function extractRequestedLinkLimit(text: string): number | null {
+  const topMatch = text.match(/\b(?:top|first)\s+(\d+)\s+links?\b/i);
+  if (!topMatch) return null;
+  const parsed = Number.parseInt(topMatch[1], 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.min(parsed, 100);
+}
+
+function buildBrowserArtifactInstruction(text: string, outputPath: string): string {
+  const formatHint = inferOutputFormatForPath(outputPath);
+  return [
+    'You are composing the final saved artifact for a browser automation.',
+    'Use the prior browser step outputs as the source material.',
+    'Fulfill the operator request exactly, including any requested limits such as "top 20 links".',
+    `Return only the final ${formatHint} content to write to ${outputPath}.`,
+    'Do not include any preamble, markdown fences, or explanation unless the requested file format itself requires it.',
+    `Original operator request: ${text}`,
+  ].join(' ');
+}
+
+function inferOutputFormatForPath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.json')) return 'JSON';
+  if (lower.endsWith('.md')) return 'Markdown';
+  if (lower.endsWith('.csv')) return 'CSV';
+  if (lower.endsWith('.html')) return 'HTML';
+  return 'text';
 }
 
 function inferBrowserExtractType(text: string): 'structured' | 'semantic' | 'both' | null {
@@ -645,7 +737,7 @@ function parseAutomationSchedule(text: string, now: Date): AutomationScheduleSpe
 
   const time = extractTime(text) ?? { hour: 9, minute: 0 };
 
-  if (/\b(weekday|weekdays|every weekday)\b/i.test(text)) {
+  if (/\b(monday\s+to\s+friday|monday\s*-\s*friday|weekday|weekdays|every weekday)\b/i.test(text)) {
     return {
       cron: `${time.minute} ${time.hour} * * 1-5`,
       runOnce: false,
@@ -697,12 +789,15 @@ function parseAutomationSchedule(text: string, now: Date): AutomationScheduleSpe
   return null;
 }
 
-function buildScheduledAgentPrompt(
+function buildAssistantAutomationPrompt(
   request: string,
   options: { nativeOnly: boolean; forbidCodeArtifacts: boolean },
+  mode: 'scheduled' | 'manual',
 ): string {
   const lines = [
-    'You are executing a scheduled Guardian automation.',
+    mode === 'scheduled'
+      ? 'You are executing a scheduled Guardian automation.'
+      : 'You are executing a manual on-demand Guardian automation.',
     'Fulfill the operator request using Guardian built-in tools and managed providers.',
     'Prefer native tools over shell commands or generated scripts.',
   ];
@@ -831,7 +926,7 @@ function extractReadPath(text: string): string | null {
 
 function extractWritePaths(text: string): string[] {
   const matches = text.matchAll(
-    /\b(?:write|writes|save|saves|create|creates|output|outputs)\s+(?:a\s+summary\s+report\s+to\s+)?(`[^`]+`|"[^"]+"|'[^']+'|\.[/\\][^"',;\n\r]+|[A-Za-z]:\\[^"',;\n\r]+)/gi,
+    /\b(?:write|writes|save|saves|create|creates|output|outputs)\b(?:\s+[^"'`\n\r]{0,80}?\s+to)?\s+(`[^`]+`|"[^"]+"|'[^']+'|\.[/\\][^"',;\n\r]+|[A-Za-z]:\\[^"',;\n\r]+)/gi,
   );
   const paths: string[] = [];
   for (const match of matches) {
@@ -864,6 +959,7 @@ function normalizeExtractedPath(path: string | null): string | null {
     .replace(/\s+([\\/])/g, '$1')
     .replace(/([\\/])\s+/g, '$1')
     .replace(/([A-Za-z0-9._-])\s{2,}([A-Za-z0-9._-])/g, '$1$2')
+    .replace(/(\.[A-Za-z0-9]+)\.\s+\b(?:use|using|with|before|after|and|then|plus)\b[\s\S]*$/i, '$1')
     .replace(/\s+\b(?:and|then|using|with|before|after|plus)\b[\s\S]*$/i, '')
     .replace(/[.,;!?]+$/g, '');
   if (!normalized) return null;
@@ -933,8 +1029,30 @@ function inferOutputArtifactName(text: string): string | null {
 function normalizePathLikeSegments(text: string): string {
   return text.replace(
     /(?<![A-Za-z0-9])((?:\.{1,2}[\\/]|[A-Za-z]:[\\/])[^"',;\n\r]+)/g,
-    (match) => normalizeExtractedPath(match) ?? match,
+    (match) => {
+      const { candidate, suffix } = splitPathLikeMatch(match);
+      const normalized = normalizeExtractedPath(candidate);
+      return normalized ? `${normalized}${suffix}` : match;
+    },
   );
+}
+
+function splitPathLikeMatch(match: string): { candidate: string; suffix: string } {
+  const boundaries = [
+    /^(.*?\.[A-Za-z0-9]+)(\.\s+[A-Z][\s\S]*)$/,
+    /^(.*?\.[A-Za-z0-9]+)(,\s+\b(?:and|then|using|with|before|after|plus|use|do|don't)\b[\s\S]*)$/i,
+    /^(.*?\.[A-Za-z0-9]+)(\s+\b(?:and|then|using|with|before|after|plus)\b[\s\S]*)$/i,
+  ];
+  for (const pattern of boundaries) {
+    const found = match.match(pattern);
+    if (found) {
+      return {
+        candidate: found[1] ?? match,
+        suffix: found[2] ?? '',
+      };
+    }
+  }
+  return { candidate: match, suffix: '' };
 }
 
 function deriveMaxRunsPerWindow(schedule: AutomationScheduleSpec): number {
@@ -952,6 +1070,12 @@ function deriveDailySpendCap(schedule: AutomationScheduleSpec): number {
 
 function deriveProviderSpendCap(schedule: AutomationScheduleSpec): number {
   return Math.max(20_000, Math.floor(deriveDailySpendCap(schedule) * 0.6));
+}
+
+function buildManualAutomationEventTrigger(id: string): { eventType: string } {
+  return {
+    eventType: `automation:manual:${id}`,
+  };
 }
 
 function extractEveryMinutes(text: string): number | null {

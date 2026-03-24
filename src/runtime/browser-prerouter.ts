@@ -1,5 +1,6 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
+import { isAutomationAuthoringRequest } from './automation-authoring.js';
 
 export interface BrowserPendingApprovalMetadata {
   id: string;
@@ -62,6 +63,7 @@ type DirectBrowserTargetSelector =
 export async function tryBrowserPreRoute(
   params: BrowserPreRouteParams,
 ): Promise<BrowserPreRouteResult | null> {
+  if (isAutomationAuthoringRequest(params.message.content)) return null;
   const intent = parseDirectBrowserIntent(params.message.content);
   if (!intent) return null;
   if (isGoogleWorkspaceBrowserIntent(intent)) return null;
@@ -221,6 +223,9 @@ function parseDirectBrowserIntent(content: string): DirectBrowserIntent | null {
 
   const urls = extractBrowserUrls(normalized);
   const url = urls[0];
+  if (!url && isInternalDashboardPageReference(normalized)) {
+    return null;
+  }
   const hasPageContext = /\b(browser|page|current page|this page|website|web page|form)\b/i.test(normalized);
   const hasInteractiveContext = hasPageContext || /\b(link|links|button|input|field|interactive elements)\b/i.test(normalized);
 
@@ -276,6 +281,11 @@ function parseDirectBrowserIntent(content: string): DirectBrowserIntent | null {
   }
 
   return null;
+}
+
+function isInternalDashboardPageReference(text: string): boolean {
+  return /\b(?:automations?|automation catalog|workflow(?:s)?|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text)
+    || /\bin\s+the\s+(?:automations?|automation catalog|workflow(?:s)?|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text);
 }
 
 function isGoogleWorkspaceBrowserIntent(intent: DirectBrowserIntent): boolean {

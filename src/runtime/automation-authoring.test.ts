@@ -137,6 +137,24 @@ describe('compileAutomationAuthoringRequest', () => {
     ]);
   });
 
+  it('compiles unscheduled open-ended automation requests into manual assistant automations', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Build a workflow called Company Homepage Collector that reads ./companies.csv, opens each company homepage, extracts the page title and meta description, and writes ./tmp/company-homepages.json. Do not schedule it yet.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('manual_agent');
+    expect(compilation?.name).toBe('Company Homepage Collector');
+    expect(compilation?.taskCreate).toMatchObject({
+      type: 'agent',
+      target: 'default',
+      eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+    });
+    expect(compilation?.taskCreate?.cron).toBeUndefined();
+    expect(compilation?.taskCreate?.prompt).toContain('manual on-demand Guardian automation');
+  });
+
   it('compiles structured browser extraction workflows to browser_extract', () => {
     const compilation = compileAutomationAuthoringRequest(
       'Create an automation called Browser Extract Smoke. When I run it, it should open https://github.com, extract structured metadata and a semantic outline, and show me the result. Do not schedule it.',
@@ -156,6 +174,58 @@ describe('compileAutomationAuthoringRequest', () => {
         args: { type: 'both' },
       },
     ]);
+  });
+
+  it('adds a compose-and-write tail for browser workflows that save an artifact', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create a Monday to Friday 7:30 AM automation called News Digest Smoke that opens https://news.ycombinator.com, extracts the top 20 links, and writes a short summary to ./tmp/hn-digest.md. Use built-in Guardian tools only.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('workflow');
+    expect(compilation?.workflowUpsert?.schedule).toBe('30 7 * * 1-5');
+    expect(compilation?.workflowUpsert?.steps).toMatchObject([
+      {
+        toolName: 'browser_navigate',
+        args: { url: 'https://news.ycombinator.com', mode: 'read' },
+      },
+      {
+        toolName: 'browser_links',
+        args: { maxItems: 20 },
+      },
+      {
+        type: 'instruction',
+      },
+      {
+        toolName: 'fs_write',
+        args: { path: './tmp/hn-digest.md', content: '${compose_output.output}' },
+      },
+    ]);
+  });
+
+  it('recognizes named automation requests even if copied text loses the leading imperative verb', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Monday to Friday 7:30 AM automation called News Digest Smoke that opens https://news.ycombinator.com, extracts the top 20 links, and writes a short summary to ./tmp/hn-digest.md. Use built-in Guardian tools only.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('workflow');
+    expect(compilation?.name).toBe('News Digest Smoke');
+    expect(compilation?.workflowUpsert?.schedule).toBe('30 7 * * 1-5');
+  });
+
+  it('respects explicit scheduled assistant task wording even when browser verbs are present', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create a scheduled assistant task called Weekly Browser Report that runs every Monday at 8:00 AM, opens https://example.com, reads the page, lists the links, and writes ./tmp/weekly-browser-report.md.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('scheduled_agent');
+    expect(compilation?.taskCreate?.cron).toBe('0 8 * * 1');
+    expect(compilation?.workflowUpsert).toBeUndefined();
   });
 
   it('compiles simple browser form typing workflows with wrapper tools and deterministic target selection', () => {

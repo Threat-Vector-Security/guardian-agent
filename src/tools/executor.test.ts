@@ -3975,6 +3975,105 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('summarizes manual assistant automations as on-demand runs', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const task = {
+      id: 'task-manual-123',
+      name: 'Company Homepage Collector',
+      type: 'agent' as const,
+      target: 'default',
+      enabled: true,
+      eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+      prompt: 'Collect company homepages.',
+      channel: 'scheduled',
+      deliver: false,
+    };
+
+    executor.setAutomationControlPlane({
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [task],
+      createTask: () => ({ success: true, message: 'ok', task }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'task_create',
+      args: {
+        name: 'Company Homepage Collector',
+        type: 'agent',
+        target: 'default',
+        prompt: 'Collect company homepages.',
+        eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.message).toContain("Manual assistant automation 'Company Homepage Collector'");
+    expect(run.message).toContain('runs on demand');
+    expect(run.output).toMatchObject({
+      task: {
+        id: 'task-manual-123',
+        type: 'agent',
+        eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+      },
+    });
+  });
+
+  it('runs saved tasks immediately through task_run', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const runTask = vi.fn(async () => ({ success: true, message: 'Manual run triggered.' }));
+    executor.setAutomationControlPlane({
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [],
+      createTask: () => ({ success: true, message: 'ok' }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      runTask,
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'task_run',
+      args: {
+        taskId: 'task-manual-123',
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.message).toContain('Manual run triggered.');
+    expect(run.output).toMatchObject({
+      success: true,
+      message: 'Manual run triggered.',
+    });
+    expect(runTask).toHaveBeenCalledWith('task-manual-123');
+  });
+
   it('lists pending approval IDs scoped to user/channel with optional unscoped fallback', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

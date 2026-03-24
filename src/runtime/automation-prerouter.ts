@@ -3,6 +3,8 @@ import {
   buildTaskUpdateForCompiledAutomation,
   compileAutomationAuthoringRequest,
   findMatchingScheduledAutomationTask,
+  isAutomationAuthoringRequest,
+  type AutomationAuthoringCompilation,
   type ExistingAutomationTask,
 } from './automation-authoring.js';
 import {
@@ -49,6 +51,7 @@ interface AutomationPreRouteParams {
     approvalId: string;
     toolName: 'task_create' | 'task_update' | 'workflow_upsert';
     automationName: string;
+    artifactLabel: string;
     verb: 'created' | 'updated';
   }) => void;
   formatPendingApprovalPrompt?: (ids: string[]) => string;
@@ -57,13 +60,20 @@ interface AutomationPreRouteParams {
 
 export async function tryAutomationPreRoute(
   params: AutomationPreRouteParams,
-  options?: { allowRemediation?: boolean },
+  options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
 ): Promise<AutomationPreRouteResult | null> {
+  const authoringIntent = options?.assumeAuthoring || isAutomationAuthoringRequest(params.message.content);
   const compilation = compileAutomationAuthoringRequest(params.message.content, {
     channel: params.message.channel,
     userId: params.message.userId,
+    assumeAuthoring: options?.assumeAuthoring,
   });
-  if (!compilation) return null;
+  if (!compilation) {
+    if (!authoringIntent) return null;
+    return {
+      content: 'I recognized this as an automation authoring request, but I could not compile it into a Guardian workflow or assistant automation. Rephrase it as either a deterministic workflow or a manual/scheduled assistant automation.',
+    };
+  }
 
   if (params.preflightTools) {
     const validation = validateAutomationCompilation(
@@ -87,7 +97,7 @@ export async function tryAutomationPreRoute(
     ...toolRequestFor(params),
   };
 
-  if (compilation.shape === 'scheduled_agent' && compilation.taskCreate) {
+  if ((compilation.shape === 'scheduled_agent' || compilation.shape === 'manual_agent') && compilation.taskCreate) {
     const existingTasks = await listExistingAutomationTasks(params.executeTool, toolRequest);
     const matchedTask = findMatchingScheduledAutomationTask(existingTasks, compilation);
     const toolName = matchedTask ? 'task_update' : 'task_create';
@@ -102,8 +112,7 @@ export async function tryAutomationPreRoute(
     const toolResult = await params.executeTool(toolName, args as unknown as Record<string, unknown>, toolRequest);
     return formatAutomationPreRouteResult({
       toolName,
-      automationName: compilation.name,
-      cron: compilation.schedule?.cron,
+      compilation,
       toolResult,
       verb: matchedTask ? 'updated' : 'created',
       argsPreview: JSON.stringify(args).slice(0, 160),
@@ -122,8 +131,7 @@ export async function tryAutomationPreRoute(
     );
     return formatAutomationPreRouteResult({
       toolName: 'workflow_upsert',
-      automationName: compilation.name,
-      cron: compilation.schedule?.cron,
+      compilation,
       toolResult,
       verb: 'created',
       argsPreview: JSON.stringify(compilation.workflowUpsert).slice(0, 160),
@@ -168,12 +176,15 @@ async function listExistingAutomationTasks(
         type: toString(task.type),
         target: toString(task.target),
         cron: toString(task.cron),
+        eventTrigger: isRecord(task.eventTrigger)
+          ? { eventType: toString(task.eventTrigger.eventType) }
+          : undefined,
         prompt: toString(task.prompt) || undefined,
         channel: toString(task.channel) || undefined,
         userId: toString(task.userId) || undefined,
         deliver: typeof task.deliver === 'boolean' ? task.deliver : undefined,
       }))
-      .filter((task) => Boolean(task.id && task.name && task.type && task.target && task.cron));
+      .filter((task) => Boolean(task.id && task.name && task.type && task.target && (task.cron || task.eventTrigger?.eventType)));
     if (tasks.length > 0 || attempt === 2) {
       return tasks;
     }
@@ -184,8 +195,7 @@ async function listExistingAutomationTasks(
 
 function formatAutomationPreRouteResult(input: {
   toolName: 'task_create' | 'task_update' | 'workflow_upsert';
-  automationName: string;
-  cron: string | undefined;
+  compilation: AutomationAuthoringCompilation;
   toolResult: Record<string, unknown>;
   verb: 'created' | 'updated';
   argsPreview: string;
@@ -194,6 +204,7 @@ function formatAutomationPreRouteResult(input: {
   formatPendingApprovalPrompt?: AutomationPreRouteParams['formatPendingApprovalPrompt'];
   resolvePendingApprovalMetadata?: AutomationPreRouteParams['resolvePendingApprovalMetadata'];
 }): AutomationPreRouteResult {
+  const summary = describeAutomationCompilation(input.compilation);
   if (!toBoolean(input.toolResult.success)) {
     const status = toString(input.toolResult.status);
     if (status === 'pending_approval') {
@@ -203,13 +214,15 @@ function formatAutomationPreRouteResult(input: {
         input.onPendingApproval?.({
           approvalId,
           toolName: input.toolName,
-          automationName: input.automationName,
+          automationName: input.compilation.name,
+          artifactLabel: summary.kindLabel,
           verb: input.verb,
         });
       }
-      const summary = input.toolName === 'workflow_upsert'
-        ? `I prepared the native Guardian workflow '${input.automationName}'${input.cron ? ` on ${input.cron}` : ''}.`
-        : `I prepared the native Guardian scheduled assistant task '${input.automationName}'${input.cron ? ` on ${input.cron}` : ''}.`;
+      const pendingSummary = [
+        `I prepared the ${summary.kindLabel} '${input.compilation.name}'.`,
+        summary.detailLine,
+      ].filter(Boolean).join('\n');
       const fallback = approvalId
         ? [{
             id: approvalId,
@@ -224,29 +237,81 @@ function formatAutomationPreRouteResult(input: {
         ? input.formatPendingApprovalPrompt(approvalId ? [approvalId] : [])
         : 'This action needs approval before I can continue.';
       return {
-        content: [summary, prompt].filter(Boolean).join('\n\n'),
+        content: [pendingSummary, prompt].filter(Boolean).join('\n\n'),
         metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
       };
     }
     const msg = toString(input.toolResult.message) || 'Automation change failed.';
     return {
-      content: `I tried to ${input.verb === 'updated' ? 'update' : 'create'} '${input.automationName}', but it failed: ${msg}`,
+      content: `I tried to ${input.verb === 'updated' ? 'update' : 'create'} '${input.compilation.name}', but it failed: ${msg}`,
     };
   }
 
-  if (input.toolName === 'workflow_upsert') {
-    return {
-      content: toString(input.toolResult.message) || `Workflow '${input.automationName}' ${input.verb}.`,
-    };
-  }
-  if (input.toolName === 'task_update') {
-    return {
-      content: `Updated scheduled assistant task '${input.automationName}'${input.cron ? ` on ${input.cron}` : ''}.`,
-    };
-  }
   return {
-    content: `Created scheduled assistant task '${input.automationName}'${input.cron ? ` on ${input.cron}` : ''}.`,
+    content: [
+      renderAutomationSuccessHeadline(input.compilation, input.verb, input.toolResult),
+      summary.detailLine,
+    ].filter(Boolean).join('\n'),
   };
+}
+
+function describeAutomationCompilation(compilation: AutomationAuthoringCompilation): {
+  kindLabel: string;
+  detailLine: string;
+} {
+  if (compilation.shape === 'workflow' && compilation.workflowUpsert) {
+    const stepCount = compilation.workflowUpsert.steps.length;
+    const outputPaths = compilation.workflowUpsert.steps
+      .map((step) => {
+        const args = isRecord(step.args) ? step.args : null;
+        return step.toolName === 'fs_write' && args && typeof args.path === 'string'
+          ? args.path
+          : '';
+      })
+      .filter(Boolean);
+    return {
+      kindLabel: 'native Guardian workflow',
+      detailLine: [
+        `Mode: ${compilation.workflowUpsert.mode}`,
+        `Steps: ${stepCount}`,
+        compilation.workflowUpsert.schedule ? `Schedule: ${compilation.workflowUpsert.schedule}` : 'Manual run',
+        outputPaths.length > 0 ? `Outputs: ${outputPaths.join(', ')}` : '',
+      ].filter(Boolean).join(' · '),
+    };
+  }
+
+  if (compilation.shape === 'manual_agent') {
+    return {
+      kindLabel: 'native Guardian manual assistant automation',
+      detailLine: 'Runs on demand only · Target: default assistant',
+    };
+  }
+
+  return {
+    kindLabel: 'native Guardian scheduled assistant task',
+    detailLine: compilation.schedule?.cron
+      ? `Schedule: ${compilation.schedule.cron} · Target: default assistant`
+      : 'Target: default assistant',
+  };
+}
+
+function renderAutomationSuccessHeadline(
+  compilation: AutomationAuthoringCompilation,
+  verb: 'created' | 'updated',
+  toolResult: Record<string, unknown>,
+): string {
+  const output = isRecord(toolResult.output) ? toolResult.output : null;
+  if (compilation.shape === 'workflow') {
+    const workflow = output && isRecord(output.workflow) ? output.workflow : null;
+    const workflowId = workflow ? toString(workflow.id) : compilation.id;
+    return `${capitalize(verb)} workflow '${compilation.name}' (id: ${workflowId}).`;
+  }
+  const task = output && isRecord(output.task) ? output.task : null;
+  const taskId = task ? toString(task.id) : '';
+  if (compilation.shape === 'manual_agent') {
+    return `${capitalize(verb)} manual assistant automation '${compilation.name}'${taskId ? ` (id: ${taskId})` : ''}.`;
+  }
+  return `${capitalize(verb)} scheduled assistant task '${compilation.name}'${taskId ? ` (id: ${taskId})` : ''}.`;
 }
 
 async function tryAutomationRemediation(
@@ -352,6 +417,11 @@ function toBoolean(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function capitalize(value: string): string {
+  if (!value) return value;
+  return value[0].toUpperCase() + value.slice(1);
 }
 
 function sleep(ms: number): Promise<void> {

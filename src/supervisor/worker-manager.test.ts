@@ -236,7 +236,7 @@ describe('WorkerManager', () => {
     const sandbox = await import('../sandbox/index.js');
 
     let pathAllowed = false;
-    const externalPath = '/tmp/lead-summary.md';
+    const externalPath = 'D:\\Reports\\lead-summary.md';
     const executeModelTool = vi.fn(async (toolName: string, args?: Record<string, unknown>) => {
       if (toolName === 'update_tool_policy') {
         return {
@@ -382,7 +382,7 @@ describe('WorkerManager', () => {
     const sandbox = await import('../sandbox/index.js');
 
     let pathAllowed = false;
-    const externalPath = './lead-research-summary.md';
+    const externalPath = 'D:\\Reports\\lead-research-summary.md';
     const executeModelTool = vi.fn(async (toolName: string, args?: Record<string, unknown>) => {
       if (toolName === 'update_tool_policy') {
         return {

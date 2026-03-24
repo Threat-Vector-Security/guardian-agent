@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { tryBrowserPreRoute } from './browser-prerouter.js';
 
 describe('tryBrowserPreRoute', () => {
+  it('does not hijack automation authoring prompts that mention browser actions', async () => {
+    const result = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-auto',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Create a scheduled assistant task called Weekly Browser Report that runs every Monday at 8:00 AM, opens https://example.com, reads the page, lists the links, and writes ./tmp/weekly-browser-report.md.',
+        timestamp: Date.now(),
+      },
+      executeTool: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+  });
+
   it('routes explicit click prompts through browser_state and browser_act', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'browser_state') {

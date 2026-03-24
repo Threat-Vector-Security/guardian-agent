@@ -108,17 +108,10 @@ export function validateAutomationIR(ir: AutomationIR): AutomationIRValidationRe
   }
 
   if (ir.primitive === 'agent') {
-    if (!ir.schedule?.cron) {
-      issues.push({
-        path: '/schedule',
-        message: 'Scheduled assistant automations require a schedule.',
-        severity: 'error',
-      });
-    }
     if (!ir.agent?.operatorRequest?.trim()) {
       issues.push({
         path: '/agent/operatorRequest',
-        message: 'Scheduled assistant automations require an operator request.',
+        message: 'Assistant automations require an operator request.',
         severity: 'error',
       });
     }

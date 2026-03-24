@@ -61,6 +61,26 @@ async function renderAutomationsPreserveScroll(container) {
   requestAnimationFrame(() => { scrollParent.scrollTop = savedScroll; });
 }
 
+function setAutomationActionStatus(container, message, tone = 'info') {
+  const statusEl = container.querySelector('#auto-create-status');
+  if (!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.style.color = tone === 'error'
+    ? 'var(--error)'
+    : tone === 'success'
+      ? 'var(--success)'
+      : tone === 'warning'
+        ? 'var(--warning)'
+        : 'var(--text-muted)';
+}
+
+function requireAutomationMutationSuccess(result, fallbackMessage) {
+  if (result && typeof result.success === 'boolean' && result.success === false) {
+    throw new Error(result.message || fallbackMessage);
+  }
+  return result;
+}
+
 export async function renderAutomations(container) {
   currentContainer = container;
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
@@ -1458,14 +1478,22 @@ function bindEvents(container, ctx) {
       toggle.disabled = true;
       try {
         if (auto._source === 'playbook' && auto._playbook) {
-          await api.upsertPlaybook({ ...auto._playbook, enabled: toggle.checked });
+          requireAutomationMutationSuccess(
+            await api.upsertPlaybook({ ...auto._playbook, enabled: toggle.checked }),
+            `Could not ${toggle.checked ? 'enable' : 'disable'} '${auto.name}'.`,
+          );
         } else if (auto._task) {
-          await api.updateScheduledTask(auto._task.id, { enabled: toggle.checked });
+          requireAutomationMutationSuccess(
+            await api.updateScheduledTask(auto._task.id, { enabled: toggle.checked }),
+            `Could not ${toggle.checked ? 'enable' : 'disable'} '${auto.name}'.`,
+          );
         }
         await renderAutomationsPreserveScroll(container);
-      } catch {
+        setAutomationActionStatus(container, `${toggle.checked ? 'Enabled' : 'Disabled'} '${auto.name}'.`, 'success');
+      } catch (err) {
         toggle.checked = !toggle.checked;
         toggle.disabled = false;
+        setAutomationActionStatus(container, err instanceof Error ? err.message : String(err), 'error');
       }
     });
   });
@@ -1540,9 +1568,12 @@ function bindEvents(container, ctx) {
 
         if (auto._playbook) {
           const clonedPb = { ...auto._playbook, id: newId, name: newName, enabled: false };
-          await api.upsertPlaybook(clonedPb);
+          requireAutomationMutationSuccess(
+            await api.upsertPlaybook(clonedPb),
+            `Could not clone '${auto.name}'.`,
+          );
         } else if (auto._task?.type === 'agent') {
-          await api.createScheduledTask({
+          requireAutomationMutationSuccess(await api.createScheduledTask({
             name: newName,
             description: auto._task.description || auto.description,
             type: 'agent',
@@ -1556,10 +1587,10 @@ function bindEvents(container, ctx) {
             enabled: false,
             emitEvent: auto._task.emitEvent,
             outputHandling: auto.outputHandling,
-          });
+          }), `Could not clone '${auto.name}'.`);
         } else {
           // Wrap orphaned task as playbook
-          await api.upsertPlaybook({
+          requireAutomationMutationSuccess(await api.upsertPlaybook({
             id: newId,
             name: newName,
             mode: 'sequential',
@@ -1567,12 +1598,12 @@ function bindEvents(container, ctx) {
             description: auto.description,
             outputHandling: auto.outputHandling,
             steps: auto.steps.map((s, i) => ({ ...s, id: `${newId}-step-${i + 1}` })),
-          });
+          }), `Could not clone '${auto.name}'.`);
         }
 
         // Clone linked schedule if present
         if (auto.cron && auto._task?.type !== 'agent' && (auto._task || auto._source === 'preset')) {
-          await api.createScheduledTask({
+          requireAutomationMutationSuccess(await api.createScheduledTask({
             name: newName,
             type: 'playbook',
             target: newId,
@@ -1580,10 +1611,11 @@ function bindEvents(container, ctx) {
             runOnce: auto.runOnce === true,
             enabled: false,
             outputHandling: auto.outputHandling,
-          });
+          }), `Could not clone the linked schedule for '${auto.name}'.`);
         }
 
         await renderAutomations(container);
+        setAutomationActionStatus(container, `Cloned '${auto.name}' as '${newName}'.`, 'success');
 
         // Highlight + scroll to cloned row
         setTimeout(() => {
@@ -1594,10 +1626,11 @@ function bindEvents(container, ctx) {
           }
           automationUiState.clonePlacement = null;
         }, 100);
-      } catch {
+      } catch (err) {
         automationUiState.clonePlacement = null;
         button.disabled = false;
         button.textContent = 'Clone';
+        setAutomationActionStatus(container, err instanceof Error ? err.message : String(err), 'error');
       }
     });
   });
@@ -1611,10 +1644,46 @@ function bindEvents(container, ctx) {
       if (!auto || !confirm(`Delete automation '${label}'?`)) return;
 
       try {
-        if (auto._playbook) await api.deletePlaybook(auto.id);
-        if (auto._task) await api.deleteScheduledTask(auto._task.id);
+        const failures = [];
+        let deletedAny = false;
+
+        if (auto._task) {
+          try {
+            requireAutomationMutationSuccess(
+              await api.deleteScheduledTask(auto._task.id),
+              `Could not delete the linked task for '${label}'.`,
+            );
+            deletedAny = true;
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        if (auto._playbook) {
+          try {
+            requireAutomationMutationSuccess(
+              await api.deletePlaybook(auto.id),
+              `Could not delete workflow '${label}'.`,
+            );
+            deletedAny = true;
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        if (!deletedAny && failures.length > 0) {
+          throw new Error(failures[0]);
+        }
+
         await renderAutomationsPreserveScroll(container);
-      } catch { /* keep UI */ }
+        if (failures.length > 0) {
+          setAutomationActionStatus(container, `Deleted '${label}' with warnings: ${failures.join(' ')}`, 'warning');
+        } else {
+          setAutomationActionStatus(container, `Deleted '${label}'.`, 'success');
+        }
+      } catch (err) {
+        setAutomationActionStatus(container, err instanceof Error ? err.message : String(err), 'error');
+      }
     });
   });
 

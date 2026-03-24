@@ -276,6 +276,7 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'code_lint',
   'task_create',
   'task_update',
+  'task_run',
   'task_delete',
   'workflow_upsert',
   'workflow_run',
@@ -746,6 +747,7 @@ interface AutomationControlPlane {
   listTasks: () => AutomationTaskSummary[];
   createTask: (input: Record<string, unknown>) => { success: boolean; message: string; task?: AutomationTaskSummary };
   updateTask: (id: string, input: Record<string, unknown>) => { success: boolean; message: string };
+  runTask: (id: string) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
   deleteTask: (id: string) => { success: boolean; message: string };
 }
 
@@ -1324,7 +1326,7 @@ export class ToolExecutor {
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
-      'task_create', 'task_update', 'task_delete',
+      'task_create', 'task_update', 'task_run', 'task_delete',
       'workflow_upsert', 'workflow_run', 'workflow_delete',
       'workflow_list', 'task_list',
     ];
@@ -14505,8 +14507,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_create',
-        description: 'Schedule a task with bounded authority. Use type "tool" to run a single tool on cron, type "workflow" to run an automation playbook on cron, or type "agent" to trigger a scheduled assistant turn. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule. Scheduled tasks now carry approval expiry, scope hash, and runaway budgets; later cron runs are allowed only while that authority remains valid. Mutating - requires approval.',
-        shortDescription: 'Schedule a tool, workflow, or assistant turn on cron.',
+        description: 'Create a bounded automation task. Use type "tool" to run a single tool, type "workflow" to run an automation playbook, or type "agent" to trigger an assistant turn. Provide either cron for scheduled execution or eventTrigger for a non-cron/manual/event-driven task. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule. Scheduled tasks now carry approval expiry, scope hash, and runaway budgets; later runs are allowed only while that authority remains valid. Mutating - requires approval.',
+        shortDescription: 'Create a scheduled or manual tool, workflow, or assistant task.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
@@ -14566,7 +14568,15 @@ export class ToolExecutor {
             channel: { type: 'string', description: 'Optional for type="agent". Session and delivery channel: "scheduled", "cli", "telegram", or "web". Default: "scheduled".' },
             userId: { type: 'string', description: 'Optional for type="agent". Canonical user id for the assistant session. Defaults to the primary user.' },
             deliver: { type: 'boolean', description: 'Optional for type="agent". Deliver the assistant response back to the selected channel after the run.' },
-            cron: { type: 'string', description: 'Cron expression: "minute hour day month weekday" (e.g. "*/30 * * * *")' },
+            cron: { type: 'string', description: 'Cron expression: "minute hour day month weekday" (e.g. "*/30 * * * *"). Provide this for recurring schedules.' },
+            eventTrigger: {
+              type: 'object',
+              description: 'Optional event trigger for non-cron tasks. Use this when the task should be manual-only or event-driven instead of recurring on a schedule.',
+              properties: {
+                eventType: { type: 'string', description: 'Event name that fires this task.' },
+              },
+              required: ['eventType'],
+            },
             runOnce: { type: 'boolean', description: 'Optional. If true, run on the next matching cron time once, then disable the task automatically.' },
             enabled: { type: 'boolean', description: 'Start enabled (default: true)' },
             args: { type: 'object', description: 'Optional tool arguments as key-value pairs' },
@@ -14576,7 +14586,7 @@ export class ToolExecutor {
             providerSpendCap: { type: 'number', description: 'Optional per-provider daily token budget before auto-pause.' },
             emitEvent: { type: 'string', description: 'Optional event name to emit on completion' },
           },
-          required: ['name', 'type', 'target', 'cron'],
+          required: ['name', 'type', 'target'],
         },
       },
       async (args, request) => {
@@ -14591,13 +14601,8 @@ export class ToolExecutor {
         const linkedWorkflow = result.task?.type === 'playbook'
           ? this.automationControlPlane.listWorkflows().find((entry) => entry.id === result.task?.target)
           : undefined;
-        const typeLabel = result.task?.type === 'playbook'
-          ? 'scheduled workflow task'
-          : result.task?.type === 'agent'
-            ? 'scheduled assistant task'
-            : 'scheduled task';
         const summary = result.task
-          ? `${capitalizeFirst(typeLabel)} '${result.task.name}' (id: ${result.task.id}) targets '${result.task.target}' on ${result.task.cron}.`
+          ? formatScheduledTaskSummary(result.task)
           : result.message;
         return {
           success: true,
@@ -14653,6 +14658,32 @@ export class ToolExecutor {
         const next = { ...args };
         delete next.taskId;
         const result = this.automationControlPlane.updateTask(taskId, normalizeTaskInput(next, request));
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'task_run',
+        description: 'Run a scheduled or manual task immediately by id. Supports tool, workflow, and assistant tasks. Mutating - requires approval.',
+        shortDescription: 'Run a saved task immediately.',
+        risk: 'mutating',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string' },
+          },
+          required: ['taskId'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Task control plane is not available.' };
+        }
+        const taskId = requireString(args.taskId, 'taskId');
+        const result = await this.automationControlPlane.runTask(taskId);
         return { success: result.success, output: result, error: result.success ? undefined : result.message };
       },
     );
@@ -17334,13 +17365,21 @@ function summarizeScheduledTaskPreview(args: Record<string, unknown>): string | 
   const name = asString(args.name).trim() || 'scheduled task';
   const type = asString(args.type).trim();
   const cron = asString(args.cron).trim();
+  const eventTrigger = isRecord(args.eventTrigger) ? args.eventTrigger : null;
+  const eventType = eventTrigger ? asString(eventTrigger.eventType).trim() : '';
   const runOnce = args.runOnce === true;
   if (type === 'agent') {
     const target = asString(args.target).trim() || 'default';
+    if (eventType) {
+      return `manual assistant automation "${name}" for agent ${target} via ${eventType}`;
+    }
     return `${runOnce ? 'one-shot' : 'scheduled'} assistant task "${name}" for agent ${target} on ${cron || '(no cron)'}`;
   }
   if (type === 'workflow' || type === 'playbook') {
     const target = asString(args.target).trim();
+    if (eventType) {
+      return `manual workflow "${name}" targeting ${target || '(no target)'} via ${eventType}`;
+    }
     return `${runOnce ? 'one-shot' : 'scheduled'} workflow "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
   }
   if (type === 'tool') {
@@ -17354,6 +17393,28 @@ function summarizeScheduledTaskPreview(args: Record<string, unknown>): string | 
     return `${runOnce ? 'one-shot' : 'scheduled'} tool task "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
   }
   return null;
+}
+
+function formatScheduledTaskSummary(
+  task: Pick<AutomationTaskSummary, 'id' | 'name' | 'type' | 'target' | 'cron' | 'eventTrigger'>,
+): string {
+  const taskId = asString(task.id).trim();
+  const taskName = asString(task.name).trim();
+  const taskType = asString(task.type).trim();
+  const target = asString(task.target).trim();
+  const cron = asString(task.cron).trim();
+  const eventType = asString(task.eventTrigger && isRecord(task.eventTrigger) ? task.eventTrigger.eventType : undefined).trim();
+  const typeLabel = taskType === 'workflow' || taskType === 'playbook'
+    ? 'scheduled workflow task'
+    : taskType === 'agent'
+      ? (eventType ? 'manual assistant automation' : 'scheduled assistant task')
+      : 'scheduled task';
+
+  if (taskType === 'agent' && eventType) {
+    return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' and runs on demand.`;
+  }
+
+  return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' on ${cron || '(no cron)'}.`;
 }
 
 function summarizeGwsPreview(args: Record<string, unknown>): string | null {
@@ -17428,18 +17489,17 @@ function extractAutomationSuccessMessage(toolName: string, output: unknown): str
 
   if (toolName === 'task_create') {
     const task = isRecord(output.task) ? output.task : {};
-    const taskId = asString(task.id).trim();
-    const taskName = asString(task.name).trim();
-    const taskType = asString(task.type).trim();
-    const target = asString(task.target).trim();
-    const cron = asString(task.cron).trim();
-    if (taskId || taskName) {
-      const typeLabel = taskType === 'workflow' || taskType === 'playbook'
-        ? 'scheduled workflow task'
-        : taskType === 'agent'
-          ? 'scheduled assistant task'
-          : 'scheduled task';
-      return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' on ${cron || '(no cron)'}.`;
+    if (asString(task.id).trim() || asString(task.name).trim()) {
+      return formatScheduledTaskSummary({
+        id: asString(task.id).trim(),
+        name: asString(task.name).trim(),
+        type: (asString(task.type).trim() || 'tool') as AutomationTaskSummary['type'],
+        target: asString(task.target).trim(),
+        cron: asString(task.cron).trim() || undefined,
+        eventTrigger: isRecord(task.eventTrigger)
+          ? { eventType: asString(task.eventTrigger.eventType).trim() }
+          : undefined,
+      });
     }
   }
 

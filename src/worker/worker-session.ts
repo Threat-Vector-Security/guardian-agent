@@ -11,7 +11,17 @@ import {
   type ResponseSourceMetadata,
 } from '../runtime/model-routing-ux.js';
 import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
+import { tryAutomationControlPreRoute } from '../runtime/automation-control-prerouter.js';
 import { tryBrowserPreRoute } from '../runtime/browser-prerouter.js';
+import {
+  resolveDirectIntentRoutingCandidates,
+} from '../runtime/direct-intent-routing.js';
+import {
+  IntentGateway,
+  toIntentGatewayClientMetadata,
+  type IntentGatewayDecision,
+  type IntentGatewayShadowRecord,
+} from '../runtime/intent-gateway.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -141,6 +151,7 @@ class BrokeredToolExecutor {
 
 export class BrokeredWorkerSession {
   private readonly client: BrokerClient;
+  private readonly intentGateway = new IntentGateway();
   private pendingApprovals: PendingApprovalState | null = null;
   private suspendedSession: SuspendedSession | null = null;
   private automationContinuation: AutomationApprovalContinuation | null = null;
@@ -181,14 +192,38 @@ export class BrokeredWorkerSession {
       return approvalResponse;
     }
 
-    const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(params.message, toolExecutor);
-    if (directAutomationAuthoring) {
-      return directAutomationAuthoring;
-    }
-
-    const directBrowserAutomation = await this.tryDirectBrowserAutomation(params.message, toolExecutor);
-    if (directBrowserAutomation) {
-      return directBrowserAutomation;
+    const directIntentShadow = await this.classifyIntentGatewayShadow(params.message, chatFn);
+    const directRouting = resolveDirectIntentRoutingCandidates(
+      directIntentShadow?.decision ?? null,
+      ['automation', 'automation_control', 'browser'],
+      ['automation', 'automation_control', 'browser'],
+    );
+    for (const candidate of directRouting.candidates) {
+      switch (candidate) {
+        case 'automation': {
+          const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(params.message, toolExecutor, {
+            assumeAuthoring: directRouting.gatewayDirected,
+          });
+          if (!directAutomationAuthoring) break;
+          return this.attachIntentGatewayMetadata(directAutomationAuthoring, directIntentShadow);
+        }
+        case 'automation_control': {
+          const directAutomationControl = await this.tryDirectAutomationControl(
+            params.message,
+            toolExecutor,
+            directIntentShadow?.decision,
+          );
+          if (!directAutomationControl) break;
+          return this.attachIntentGatewayMetadata(directAutomationControl, directIntentShadow);
+        }
+        case 'browser': {
+          const directBrowserAutomation = await this.tryDirectBrowserAutomation(params.message, toolExecutor);
+          if (!directBrowserAutomation) break;
+          return this.attachIntentGatewayMetadata(directBrowserAutomation, directIntentShadow);
+        }
+        default:
+          break;
+      }
     }
 
     const enrichedSystemPrompt = buildWorkerSystemPrompt(params);
@@ -309,7 +344,7 @@ export class BrokeredWorkerSession {
   private async tryDirectAutomationAuthoring(
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
-    options?: { allowRemediation?: boolean },
+    options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const trackedPendingApprovalIds: string[] = [];
     const result = await tryAutomationPreRoute({
@@ -358,6 +393,44 @@ export class BrokeredWorkerSession {
     return result;
   }
 
+  private async tryDirectAutomationControl(
+    message: UserMessage,
+    toolExecutor: BrokeredToolExecutor,
+    intentDecision?: IntentGatewayDecision | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    return tryAutomationControlPreRoute({
+      agentId: 'brokered-worker',
+      message,
+      executeTool: (toolName, args, request) => {
+        const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+        return toolExecutor.executeModelTool(toolName, args, {
+          ...request,
+          ...(codeContext ? { codeContext } : {}),
+        });
+      },
+      trackPendingApproval: (approvalId) => {
+        const existingIds = this.getPendingApprovalIds();
+        this.pendingApprovals = {
+          ids: [...new Set([...existingIds, approvalId])],
+          expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        };
+        this.suspendedSession = null;
+      },
+      formatPendingApprovalPrompt: (ids) => {
+        const meta = toolExecutor.getApprovalMetadata(ids);
+        return meta.length > 0
+          ? formatPendingApprovalMessage(meta)
+          : 'This action needs approval before I can continue.';
+      },
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const resolved = toolExecutor.getApprovalMetadata(ids);
+        return resolved.length > 0 ? resolved : fallback;
+      },
+    }, {
+      intentDecision,
+    });
+  }
+
   private async tryDirectBrowserAutomation(
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
@@ -391,6 +464,34 @@ export class BrokeredWorkerSession {
         return resolved.length > 0 ? resolved : fallback;
       },
     });
+  }
+
+  private async classifyIntentGatewayShadow(
+    message: UserMessage,
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
+  ): Promise<IntentGatewayShadowRecord | null> {
+    return this.intentGateway.classifyShadow(
+      {
+        content: message.content,
+        channel: message.channel,
+      },
+      chatFn,
+    );
+  }
+
+  private attachIntentGatewayMetadata(
+    response: { content: string; metadata?: Record<string, unknown> },
+    shadow: IntentGatewayShadowRecord | null,
+  ): { content: string; metadata?: Record<string, unknown> } {
+    const shadowMeta = toIntentGatewayClientMetadata(shadow);
+    if (!shadowMeta) return response;
+    return {
+      content: response.content,
+      metadata: {
+        ...(response.metadata ?? {}),
+        intentGatewayShadow: shadowMeta,
+      },
+    };
   }
 
   private async executeLoop(

@@ -137,6 +137,12 @@ export function validateAutomationCompilation(
           message: `${result.name}: ${result.reason}. Scheduled assistant tasks must be execution-ready and cannot depend on future runtime approvals.`,
           fixes: result.fixes,
         });
+      } else if (compilation.shape === 'manual_agent') {
+        issues.push({
+          severity: 'warning',
+          message: `${result.name}: ${result.reason}. Manual assistant automations may still ask for approval when you run them.`,
+          fixes: result.fixes.filter((fix) => !(fix.type === 'tool_policy' && fix.value === result.name)),
+        });
       } else {
         issues.push({
           severity: 'warning',
@@ -179,6 +185,9 @@ export function formatAutomationValidationFailure(
   if (compilation.shape === 'scheduled_agent') {
     lines.push('');
     lines.push('If you want the save-time approval to authorize fixed tool steps, use a deterministic workflow instead of a scheduled assistant task.');
+  } else if (compilation.shape === 'manual_agent') {
+    lines.push('');
+    lines.push('You can also switch this to a scheduled assistant task later if you want it to run automatically.');
   }
 
   return lines.join('\n');
@@ -313,13 +322,44 @@ function extractExplicitPathMentions(text: string): Array<{ path: string; kind: 
     const normalizedPath = normalizeMentionedPath(path);
     if (!normalizedPath) continue;
     const matchIndex = match.index ?? 0;
-    const context = text.slice(Math.max(0, matchIndex - 48), matchIndex).toLowerCase();
-    const kind = /\b(write|writes|save|saves|create|creates|output|summary|report|results?)\b/.test(context)
-      ? 'output'
-      : 'input';
+    const kind = inferPathMentionKind(text, matchIndex);
     mentions.push({ path: normalizedPath, kind });
   }
   return dedupePathMentions(mentions);
+}
+
+function inferPathMentionKind(text: string, matchIndex: number): 'input' | 'output' {
+  const context = text.slice(Math.max(0, matchIndex - 96), matchIndex).toLowerCase();
+  return containsWrappedKeyword(context, [
+    'write',
+    'writes',
+    'save',
+    'saves',
+    'output',
+    'outputs',
+    'summary',
+    'report',
+    'result',
+    'results',
+    'export',
+    'exports',
+  ])
+    ? 'output'
+    : 'input';
+}
+
+function containsWrappedKeyword(text: string, keywords: string[]): boolean {
+  return keywords.some((keyword) => {
+    const pattern = keyword
+      .split('')
+      .map((char) => escapeRegexChar(char))
+      .join('\\s*');
+    return new RegExp(pattern, 'i').test(text);
+  });
+}
+
+function escapeRegexChar(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function extractExplicitUrls(text: string): string[] {
