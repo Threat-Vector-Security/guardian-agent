@@ -1,5 +1,5 @@
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
-import type { ConnectorPlaybookRunInput, ConnectorPlaybookRunResult } from './connectors.js';
+import type { ConnectorPlaybookRunInput, ConnectorPlaybookRunResult, PlaybookRunRecord } from './connectors.js';
 import {
   materializeAutomationCatalogEntry,
   type AutomationCatalogMaterializationResult,
@@ -9,6 +9,7 @@ import {
   type AutomationSaveInput,
   type AutomationSaveResult,
 } from './automation-save.js';
+import { buildAutomationRunHistoryEntries, type AutomationRunHistoryEntry } from './automation-run-history.js';
 import {
   buildAutomationCatalogEntries,
   buildSavedAutomationCatalogEntries,
@@ -36,6 +37,7 @@ import {
 
 interface AutomationWorkflowControl {
   list(): AssistantConnectorPlaybookDefinition[];
+  history(): PlaybookRunRecord[];
   upsert(playbook: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   delete(playbookId: string): { success: boolean; message: string };
   run(input: ConnectorPlaybookRunInput): Promise<ConnectorPlaybookRunResult> | ConnectorPlaybookRunResult;
@@ -73,6 +75,7 @@ export interface AutomationRuntimeServiceOptions {
 export interface AutomationRuntimeService {
   listAutomationCatalog(): SavedAutomationCatalogEntry[];
   listAutomationCatalogView(): AutomationCatalogViewEntry[];
+  listAutomationRunHistory(): AutomationRunHistoryEntry[];
   materializeAutomation(automationId: string): AutomationCatalogMaterializationResult;
   saveAutomation(input: AutomationSaveInput): AutomationSaveResult;
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
@@ -146,13 +149,17 @@ export function createAutomationRuntimeService(
 ): AutomationRuntimeService {
   const toolMetadata = (options.toolMetadata ?? []).map((tool) => ({ ...tool }));
   const service: AutomationRuntimeService = {
-  listAutomationCatalog: () => buildAutomationCatalogEntries(
+    listAutomationCatalog: () => buildAutomationCatalogEntries(
       service.listWorkflows(),
       service.listTasks(),
       options.templates?.list().map(cloneCatalogTemplate) ?? [],
       service.listTaskPresets(),
     ),
     listAutomationCatalogView: () => buildAutomationCatalogViewEntries(service.listAutomationCatalog(), toolMetadata),
+    listAutomationRunHistory: () => buildAutomationRunHistoryEntries(
+      options.workflows.history().map(cloneWorkflowRun),
+      service.listTaskHistory(),
+    ),
     materializeAutomation: (automationId) => {
       const installTemplate = options.templates?.install;
       const controlPlane = {
@@ -357,6 +364,21 @@ function cloneTaskHistoryEntry(entry: ScheduledTaskHistoryEntry): ScheduledTaskH
       ? { events: entry.events.map((event) => ({ ...event })) }
       : {}),
     ...(isRecord(entry.output) ? { output: { ...entry.output } } : {}),
+  };
+}
+
+function cloneWorkflowRun(run: PlaybookRunRecord): PlaybookRunRecord {
+  return {
+    ...run,
+    steps: run.steps.map((step) => ({
+      ...step,
+      ...(isRecord(step.output) ? { output: { ...step.output } } : {}),
+    })),
+    ...(run.outputHandling ? { outputHandling: { ...run.outputHandling } } : {}),
+    ...(Array.isArray(run.promotedFindings)
+      ? { promotedFindings: run.promotedFindings.map((finding) => ({ ...finding })) }
+      : {}),
+    ...(Array.isArray(run.events) ? { events: run.events.map((event) => ({ ...event })) } : { events: [] }),
   };
 }
 

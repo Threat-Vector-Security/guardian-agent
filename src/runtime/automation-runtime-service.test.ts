@@ -51,6 +51,25 @@ function makeService() {
 
   const workflowControl = {
     list: vi.fn(() => workflows),
+    history: vi.fn(() => [
+      {
+        id: 'run-1',
+        runId: 'run-1',
+        graphId: 'graph-1',
+        playbookId: 'browser-read-smoke',
+        playbookName: 'Browser Read Smoke',
+        createdAt: 1,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1,
+        dryRun: false,
+        status: 'succeeded' as const,
+        message: 'Ran workflow.',
+        steps: [],
+        origin: 'web' as const,
+        events: [],
+      },
+    ]),
     upsert: vi.fn(() => ({ success: true, message: 'Updated workflow.' })),
     delete: vi.fn(() => ({ success: true, message: 'Deleted workflow.' })),
     run: vi.fn(async () => ({
@@ -176,6 +195,9 @@ describe('automation-runtime-service', () => {
       expect.objectContaining({ id: 'browser-read-smoke', category: 'browser', sourceKind: 'playbook' }),
       expect.objectContaining({ id: 'task-agent-1', kind: 'assistant', sourceKind: 'task' }),
       expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'template' }),
+    ]));
+    expect(service.listAutomationRunHistory()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'run-1', source: 'workflow' }),
     ]));
     expect(templateControl.list).toHaveBeenCalled();
 

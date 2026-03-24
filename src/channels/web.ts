@@ -3410,6 +3410,15 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/automations/history') {
+        if (!this.dashboard.onAutomationRunHistory) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAutomationRunHistory());
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/automations/save') {
         if (!this.dashboard.onAutomationSave) {
           sendJSON(res, 404, { error: 'Not available' });

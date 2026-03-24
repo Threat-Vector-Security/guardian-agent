@@ -11941,6 +11941,11 @@ async function main(): Promise<void> {
             steps: workflow.steps.map((step) => ({ ...step })),
             ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
           })),
+          history: () => connectors.getState(60).runs.map((run) => ({
+            ...run,
+            steps: run.steps.map((step) => ({ ...step })),
+            ...(run.outputHandling ? { outputHandling: { ...run.outputHandling } } : {}),
+          })),
           upsert: (playbook) => basePlaybookUpsert(playbook),
           delete: (playbookId) => basePlaybookDelete(playbookId),
           run: async (input) => basePlaybookRun(input),
@@ -12101,6 +12106,7 @@ async function main(): Promise<void> {
     dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => automationRuntime.installTaskPreset(presetId);
     dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
     dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalogView();
+    dashboardCallbacks.onAutomationRunHistory = () => automationRuntime.listAutomationRunHistory();
     dashboardCallbacks.onAutomationMaterialize = (automationId) => automationRuntime.materializeAutomation(automationId);
     dashboardCallbacks.onAutomationSave = (input) => automationRuntime.saveAutomation(input);
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (

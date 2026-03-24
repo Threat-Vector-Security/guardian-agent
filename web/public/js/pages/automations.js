@@ -86,18 +86,17 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, automationCatalog, history, agentsState, assistantRuns] = await Promise.all([
+    const [connState, toolsState, automationCatalog, automationHistory, agentsState, assistantRuns] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
       api.automationsCatalog().catch(() => []),
-      api.scheduledTaskHistory().catch(() => []),
+      api.automationRunHistory().catch(() => []),
       api.agents().catch(() => []),
       api.assistantRuns({ limit: 15 }).catch(() => ({ runs: [] })),
     ]);
 
     const summary = connState.summary || {};
     const packs = connState.packs || [];
-    const runs = connState.runs || [];
     const workflowConfig = connState.playbooksConfig || {};
     const studio = connState.studio || {};
     const tools = Array.isArray(toolsState?.tools) ? toolsState.tools : [];
@@ -109,7 +108,7 @@ export async function renderAutomations(container) {
     );
     const allCategories = [...new Set(automations.map((a) => a.category))].sort();
     const totalScheduled = automations.filter((a) => a.cron).length;
-    const totalRuns = runs.length + automations.reduce((sum, automation) => sum + (automation.runCount || 0), 0);
+    const totalRuns = Number(summary.runCount || 0) + automations.reduce((sum, automation) => sum + (automation.runCount || 0), 0);
 
     container.innerHTML = `
       <h2 class="page-title">Automations</h2>
@@ -196,7 +195,7 @@ export async function renderAutomations(container) {
         <table>
           <thead><tr><th>Time</th><th>Automation</th><th>Source</th><th>Status</th><th>Duration</th><th>Details</th></tr></thead>
           <tbody>
-            ${renderRunHistory(runs, history)}
+            ${renderRunHistory(automationHistory)}
           </tbody>
         </table>
       </div>
@@ -222,7 +221,7 @@ export async function renderAutomations(container) {
       </div>
     `;
 
-    bindEvents(container, { automations, tools, packs, workflowConfig, summary, studio, runs, history, agents });
+    bindEvents(container, { automations, tools, packs, workflowConfig, summary, studio, agents });
     bindRunTimelineUpdates();
     focusRequestedRun(container);
     applyInputTooltips(container);
@@ -823,49 +822,13 @@ function renderCreateForm(tools, packs, agents) {
   `;
 }
 
-function renderRunHistory(playbookRuns, taskHistory) {
-  const merged = [];
-
-  for (const run of (playbookRuns || [])) {
-    merged.push({
-      time: run.startedAt || run.timestamp || 0,
-      name: run.playbookName || run.playbookId || '',
-      source: 'workflow',
-      status: run.status || '',
-      duration: run.durationMs || 0,
-      steps: run.steps || [],
-      id: run.id,
-      outputHandling: normalizeOutputHandling(run.outputHandling),
-      promotedFindings: run.promotedFindings || [],
-    });
-  }
-
-  for (const item of (taskHistory || [])) {
-    merged.push({
-      time: item.timestamp || 0,
-      name: item.taskName || '',
-      source: item.taskType === 'playbook'
-        ? 'scheduled workflow'
-        : item.taskType === 'agent'
-          ? 'scheduled assistant'
-          : 'scheduled',
-      status: item.status || '',
-      duration: item.durationMs || 0,
-      message: item.message || '',
-      steps: item.steps || [],
-      id: item.id || `${item.taskId || 'task'}-${item.timestamp || 0}`,
-      outputHandling: normalizeOutputHandling(item.outputHandling),
-      promotedFindings: item.promotedFindings || [],
-    });
-  }
-
-  merged.sort((a, b) => b.time - a.time);
-
-  if (merged.length === 0) {
+function renderRunHistory(entries) {
+  const history = Array.isArray(entries) ? entries : [];
+  if (history.length === 0) {
     return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No runs yet.</td></tr>';
   }
 
-  return merged.slice(0, 60).map((entry) => `
+  return history.slice(0, 60).map((entry) => `
     <tr>
       <td>${formatTime(entry.time)}</td>
       <td>${esc(entry.name)}</td>
