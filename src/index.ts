@@ -12102,6 +12102,7 @@ async function main(): Promise<void> {
     dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
     dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalogView();
     dashboardCallbacks.onAutomationMaterialize = (automationId) => automationRuntime.materializeAutomation(automationId);
+    dashboardCallbacks.onAutomationSave = (input) => automationRuntime.saveAutomation(input);
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
       automationRuntime.setSavedAutomationEnabled(automationId, enabled)
     );

@@ -5,6 +5,11 @@ import {
   type AutomationCatalogMaterializationResult,
 } from './automation-catalog-actions.js';
 import {
+  saveAutomationDefinition,
+  type AutomationSaveInput,
+  type AutomationSaveResult,
+} from './automation-save.js';
+import {
   buildAutomationCatalogEntries,
   buildSavedAutomationCatalogEntries,
   type SavedAutomationCatalogEntry,
@@ -69,6 +74,7 @@ export interface AutomationRuntimeService {
   listAutomationCatalog(): SavedAutomationCatalogEntry[];
   listAutomationCatalogView(): AutomationCatalogViewEntry[];
   materializeAutomation(automationId: string): AutomationCatalogMaterializationResult;
+  saveAutomation(input: AutomationSaveInput): AutomationSaveResult;
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
   upsertWorkflow(playbook: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   deleteWorkflow(playbookId: string): { success: boolean; message: string };
@@ -161,6 +167,12 @@ export function createAutomationRuntimeService(
       };
       return materializeAutomationCatalogEntry(controlPlane, automationId);
     },
+    saveAutomation: (input) => saveAutomationDefinition({
+      upsertWorkflow: (workflow: AssistantConnectorPlaybookDefinition) => service.upsertWorkflow(workflow),
+      createTask: (taskInput: ScheduledTaskCreateInput) => service.createTask(taskInput),
+      updateTask: (taskId: string, taskInput: ScheduledTaskUpdateInput) => service.updateTask(taskId, taskInput),
+      deleteTask: (taskId: string) => service.deleteTask(taskId),
+    }, input),
     listWorkflows: () => options.workflows.list().map(cloneWorkflow),
     upsertWorkflow: (playbook) => {
       const normalized = cloneWorkflow(playbook);

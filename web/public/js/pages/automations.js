@@ -331,6 +331,7 @@ function renderAutomationRow(auto, tools, packs) {
     : (!auto.enabled ? 'Enable first' : '');
   const dryRunDisabled = isBuiltin || isAssistant ? 'disabled' : '';
   const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Install this catalog entry first' : '');
+  const editDisabled = isBuiltin ? 'disabled title="Install this catalog item first"' : '';
   const deleteDisabled = isBuiltin ? 'disabled title="Built-in catalog item"' : '';
   const secondaryActionLabel = isBuiltin ? 'Install' : 'Clone';
   const toolsCell = isAssistant
@@ -395,7 +396,7 @@ function renderAutomationRow(auto, tools, packs) {
         <div class="ops-action-buttons">
           <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${runDisabled} ${runTitle ? `title="${escAttr(runTitle)}"` : ''}>Run</button>
           <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${dryRunDisabled} ${dryRunTitle ? `title="${escAttr(dryRunTitle)}"` : ''}>Dry Run</button>
-          <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}">Edit</button>
+          <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}" ${editDisabled}>Edit</button>
           <button class="btn btn-secondary btn-sm auto-materialize" data-auto-id="${escAttr(auto.id)}">${esc(secondaryActionLabel)}</button>
           <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}" ${deleteDisabled}>Delete</button>
         </div>
@@ -1966,7 +1967,6 @@ function bindCreateForm(container, { tools, packs, agents }) {
   // Save
   container.querySelector('#auto-create-save')?.addEventListener('click', async () => {
     const editId = editIdInput.value.trim();
-    const editSource = editSourceInput.value.trim();
     const editTaskId = editTaskIdInput.value.trim();
     const id = idInput.value.trim();
     const name = nameInput.value.trim();
@@ -2081,105 +2081,81 @@ function bindCreateForm(container, { tools, packs, agents }) {
         return;
       }
 
-      if (isAgentMode) {
-        // Save as agent scheduled task
-        const prompt = agentPromptInput?.value?.trim() || '';
-        if (!prompt) {
-          statusEl.textContent = 'Assistant prompt is required.';
-          statusEl.style.color = 'var(--error)';
-          return;
-        }
-        const llmProv = llmProviderSelect?.value;
-        const input = {
-          name,
-          description,
-          type: 'agent',
-          target: agentSelect?.value || 'default',
-          prompt,
-          channel: agentChannelSelect?.value || 'scheduled',
-          deliver: agentDeliverCheck?.checked !== false,
-          cron,
-          runOnce,
-          enabled,
-          emitEvent,
-          outputHandling,
-        };
-        if (llmProv && llmProv !== 'auto') input.args = { ...input.args, llmProvider: llmProv };
-        const result = editTaskId
-          ? await api.updateScheduledTask(editTaskId, input)
-          : await api.createScheduledTask(input);
-        if (!result.success) {
-          statusEl.textContent = result.message || 'Failed.';
-          statusEl.style.color = 'var(--error)';
-          return;
-        }
-      } else if (editSource === 'task' && editTaskId) {
-        const toolName = singleToolSelect.value;
-        const args = steps[0]?.args || {};
-        const result = await api.updateScheduledTask(editTaskId, {
-          name,
-          type: 'tool',
-          target: toolName,
-          args,
-          cron,
-          runOnce,
-          enabled,
-          emitEvent,
-          outputHandling,
-        });
-        if (!result.success) {
-          statusEl.textContent = result.message || 'Failed.';
-          statusEl.style.color = 'var(--error)';
-          return;
-        }
-      } else {
-        const playbookMode = mode === 'single' ? 'sequential' : mode;
-        const result = await api.upsertPlaybook({
-          id: editId || id,
-          name,
-          mode: playbookMode,
-          enabled,
-          description,
-          outputHandling,
-          steps,
-        });
-
-        if (!result.success) {
-          statusEl.textContent = result.message || 'Failed.';
-          statusEl.style.color = 'var(--error)';
-          return;
-        }
-
-        if (scheduleEnabled) {
-          if (editTaskId) {
-            await api.updateScheduledTask(editTaskId, {
-              name,
-              type: 'playbook',
-              target: editId || id,
+      const llmProv = llmProviderSelect?.value || 'auto';
+      const singleToolName = singleToolSelect.value;
+      const isExistingStandaloneTask = !!editTaskId && !isAgentMode && !editId;
+      const saveInput = isAgentMode
+        ? {
+            id: editId || id,
+            name,
+            description,
+            enabled,
+            kind: 'assistant_task',
+            sourceKind: editSourceInput.value.trim() || undefined,
+            existingTaskId: editTaskId || undefined,
+            task: {
+              target: agentSelect?.value || 'default',
+              prompt: agentPromptInput?.value?.trim() || '',
+              channel: agentChannelSelect?.value || 'scheduled',
+              deliver: agentDeliverCheck?.checked !== false,
+              ...(llmProv && llmProv !== 'auto' ? { llmProvider: llmProv } : {}),
+            },
+            schedule: {
+              enabled: scheduleEnabled,
               cron,
               runOnce,
-              enabled,
-              emitEvent,
-              outputHandling,
-            });
-          } else {
-            await api.createScheduledTask({
-              name,
-              type: 'playbook',
-              target: editId || id,
-              cron,
-              runOnce,
-              enabled,
-              emitEvent,
-              outputHandling,
-            });
+            },
+            emitEvent,
+            outputHandling,
           }
-        } else if (editTaskId) {
-          await api.deleteScheduledTask(editTaskId);
-        }
+        : isExistingStandaloneTask
+          ? {
+              id: editId || id,
+              name,
+              description,
+              enabled,
+              kind: 'standalone_task',
+              sourceKind: editSourceInput.value.trim() || undefined,
+              existingTaskId: editTaskId || undefined,
+              task: {
+                target: singleToolName,
+                args: steps[0]?.args || {},
+              },
+              schedule: {
+                enabled: scheduleEnabled,
+                cron,
+                runOnce,
+              },
+              emitEvent,
+              outputHandling,
+            }
+          : {
+              id: editId || id,
+              name,
+              description,
+              enabled,
+              kind: 'workflow',
+              sourceKind: editSourceInput.value.trim() || undefined,
+              existingTaskId: editTaskId || undefined,
+              mode: mode === 'single' ? 'sequential' : mode,
+              steps,
+              schedule: {
+                enabled: scheduleEnabled,
+                cron,
+                runOnce,
+              },
+              emitEvent,
+              outputHandling,
+            };
+
+      const result = await api.saveAutomation(saveInput);
+      if (!result.success) {
+        statusEl.textContent = result.message || 'Failed.';
+        statusEl.style.color = 'var(--error)';
+        return;
       }
 
-      statusEl.textContent = editId || editTaskId ? 'Saved.' : 'Created.';
+      statusEl.textContent = editId || editTaskId ? (result.message || 'Saved.') : 'Created.';
       statusEl.style.color = 'var(--success)';
       setTimeout(() => renderAutomationsPreserveScroll(container), 350);
     } catch (err) {

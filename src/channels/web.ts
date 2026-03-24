@@ -3410,6 +3410,32 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/automations/save') {
+        if (!this.dashboard.onAutomationSave) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '{}';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = body ? JSON.parse(body) as Record<string, unknown> : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const result = this.dashboard.onAutomationSave(parsed as never);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.saved', url.pathname);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/materialize$/)) {
         if (!this.dashboard.onAutomationMaterialize) {
           sendJSON(res, 404, { error: 'Not available' });

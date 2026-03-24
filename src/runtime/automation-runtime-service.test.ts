@@ -186,6 +186,29 @@ describe('automation-runtime-service', () => {
     });
     expect(templateControl.install).toHaveBeenCalledWith('builtin-browser');
 
+    expect(service.saveAutomation({
+      id: 'browser-read-smoke',
+      name: 'Browser Read Smoke',
+      enabled: true,
+      kind: 'workflow',
+      mode: 'sequential',
+      steps: [
+        { id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+      ],
+      existingTaskId: 'task-linked-1',
+      schedule: { enabled: true, cron: '0 8 * * 1' },
+    })).toMatchObject({
+      success: true,
+      automationId: 'browser-read-smoke',
+      taskId: 'task-linked-1',
+    });
+    expect(taskControl.update).toHaveBeenCalledWith('task-linked-1', expect.objectContaining({
+      name: 'Browser Read Smoke',
+      type: 'playbook',
+      target: 'browser-read-smoke',
+      cron: '0 8 * * 1',
+    }));
+
     expect(service.setSavedAutomationEnabled('task-agent-1', false).success).toBe(true);
     expect(taskControl.update).toHaveBeenCalledWith('task-agent-1', { enabled: false });
 

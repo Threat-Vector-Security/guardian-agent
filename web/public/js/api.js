@@ -440,6 +440,10 @@ export const api = {
   }),
   factoryReset: (scope) => requestPrivileged('/api/factory-reset', 'factory-reset', { scope }),
   automationsCatalog: () => request('/api/automations/catalog'),
+  saveAutomation: (payload) => request('/api/automations/save', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
   materializeAutomation: (id) => request(`/api/automations/${encodeURIComponent(id)}/materialize`, {
     method: 'POST',
     body: JSON.stringify({}),

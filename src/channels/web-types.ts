@@ -40,6 +40,7 @@ import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, 
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
 import type { AutomationCatalogMaterializationResult } from '../runtime/automation-catalog-actions.js';
 import type { AutomationCatalogViewEntry } from '../runtime/automation-catalog-view.js';
+import type { AutomationSaveInput, AutomationSaveResult } from '../runtime/automation-save.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
@@ -1164,6 +1165,7 @@ export interface DashboardCallbacks {
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
   onAutomationCatalog?: () => AutomationCatalogViewEntry[];
   onAutomationMaterialize?: (automationId: string) => AutomationCatalogMaterializationResult;
+  onAutomationSave?: (input: AutomationSaveInput) => AutomationSaveResult;
   onAutomationSetEnabled?: (automationId: string, enabled: boolean) => { success: boolean; message: string };
   onAutomationDelete?: (automationId: string) => { success: boolean; message: string };
   onAutomationRun?: (input: {
