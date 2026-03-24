@@ -150,6 +150,71 @@ describe('HostMonitoringService', () => {
     ]));
   });
 
+  it('downgrades installed Windows autoruns under Program Files to medium severity', async () => {
+    const dir = await makeTempDir();
+    const persistPath = join(dir, 'host-monitor.json');
+    const baselineRunner = makeRunner({
+      'tasklist /FO CSV /NH': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
+      'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
+    });
+    const driftRunner = makeRunner({
+      'tasklist /FO CSV /NH': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    GoogleDriveFS    REG_SZ    "C:\\Program Files\\Google\\Drive File Stream\\123.0.1.0\\GoogleDriveFS.exe" --startupmode\n',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
+      'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
+    });
+
+    const baselineService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: baselineRunner,
+    });
+    await baselineService.runCheck();
+    await baselineService.persist();
+
+    const service = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: driftRunner,
+    });
+    await service.load();
+    const report = await service.runCheck();
+
+    expect(report.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'persistence_change', severity: 'medium' }),
+    ]));
+  });
+
   it('ignores built-in Windows Defender scheduled tasks when persistence drifts', async () => {
     const dir = await makeTempDir();
     const persistPath = join(dir, 'host-monitor.json');

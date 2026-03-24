@@ -7,7 +7,7 @@
 
 import { exec as execCb, execFile as execFileCb, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import { createLogger } from '../util/logging.js';
 import type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities, SandboxHealth } from './types.js';
@@ -339,7 +339,7 @@ export async function sandboxedSpawn(
   config: SandboxConfig = DEFAULT_SANDBOX_CONFIG,
   options: SandboxSpawnOptions = {},
 ): Promise<ChildProcess> {
-  const useWindowsShell = process.platform === 'win32' && options.windowsShell !== false;
+  const useWindowsShell = shouldUseWindowsShell(command, options.windowsShell);
   const hardenedEnv = resolveSandboxEnv(options);
   // Bypass sandbox entirely if disabled
   if (!config.enabled) {
@@ -425,6 +425,45 @@ function shellEscape(s: string): string {
   if (s === '') return "''";
   if (/^[a-zA-Z0-9_\-/.=:@]+$/.test(s)) return s;
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+const WINDOWS_SHELL_SHIMS = new Set([
+  'npm',
+  'npx',
+  'pnpm',
+  'pnpx',
+  'yarn',
+  'yarnpkg',
+  'bun',
+  'bunx',
+]);
+
+export function shouldUseWindowsShell(command: string, override?: boolean): boolean {
+  if (process.platform !== 'win32') {
+    return false;
+  }
+  if (override === false) {
+    return false;
+  }
+  if (override === true) {
+    return true;
+  }
+
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const extension = extname(trimmed).toLowerCase();
+  if (extension === '.cmd' || extension === '.bat') {
+    return true;
+  }
+  if (extension === '.exe' || extension === '.com' || extension === '.ps1') {
+    return false;
+  }
+
+  const name = basename(trimmed).toLowerCase();
+  return WINDOWS_SHELL_SHIMS.has(name);
 }
 
 export function buildWindowsHelperExecArgs(

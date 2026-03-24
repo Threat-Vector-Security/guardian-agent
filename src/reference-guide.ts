@@ -657,6 +657,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'The Security page is the main operator surface for the local defensive suite. It combines posture, Assistant Security, threat intel, the Security Log, and native Windows Defender visibility in one place.',
                   'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, and native Windows Defender alerts.',
+                  'Windows host-monitor persistence alerts now use heuristics rather than treating every new autorun as equally severe. Script-host, network-path, and user-writable autoruns stay high risk, while conventional installed-app autoruns under `Program Files` are downgraded to reduce noise.',
                   'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',
                   'Built-in Assistant Security tools exposed to the assistant and automations are `assistant_security_summary`, `assistant_security_scan`, and `assistant_security_findings`; recurring posture reviews can use the `assistant-security-scan` preset.',
                   'Assistant Security continuous monitoring is scheduler-driven infrastructure work. It runs the built-in scan service directly and does not create a conversational assistant turn.',

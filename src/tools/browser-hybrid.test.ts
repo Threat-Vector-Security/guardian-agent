@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HybridBrowserService } from './browser-hybrid.js';
+import type { PlaywrightDirectBackendLike } from './browser-playwright-direct.js';
 import type { MCPClientManager } from './mcp-client.js';
 import type { ToolDefinition, ToolResult } from './types.js';
 
@@ -21,6 +22,37 @@ function makeManager(
     getAllToolDefinitions: () => definitions,
     callTool: vi.fn(callTool),
   } as unknown as MCPClientManager;
+}
+
+function makeDirectBackend(overrides: Partial<PlaywrightDirectBackendLike> = {}): PlaywrightDirectBackendLike {
+  return {
+    getCapabilities: () => ({
+      available: true,
+      navigate: true,
+      snapshot: true,
+      interact: true,
+      evaluate: true,
+    }),
+    setBrowserConfig: vi.fn(),
+    navigate: vi.fn(async (_scopeKey: string, url: string) => ({
+      success: true,
+      output: { url, title: 'Direct Example' },
+    })),
+    snapshot: vi.fn(async () => ({
+      success: true,
+      output: { snapshot: 'link ref=e6 Learn more' },
+    })),
+    evaluate: vi.fn(async () => ({
+      success: true,
+      output: [{ text: 'Learn more', href: 'https://example.com' }],
+    })),
+    act: vi.fn(async (_scopeKey: string, input) => ({
+      success: true,
+      output: { action: input.action, ref: input.ref, url: 'https://example.com' },
+    })),
+    closeAll: vi.fn(async () => {}),
+    ...overrides,
+  };
 }
 
 const PLAYWRIGHT_DEFINITIONS = [
@@ -54,6 +86,28 @@ describe('HybridBrowserService', () => {
     expect(capabilities.wrappers.browserExtract).toBe(true);
     expect(capabilities.wrappers.browserState).toBe(true);
     expect(capabilities.wrappers.browserAct).toBe(true);
+  });
+
+  it('falls back to the direct Playwright backend when no MCP tools are connected', async () => {
+    const directBackend = makeDirectBackend();
+    const manager = makeManager([], async () => ({ success: false, error: 'unexpected MCP call' }));
+    const service = new HybridBrowserService(manager, {
+      directPlaywright: directBackend,
+    });
+
+    const capabilities = service.getCapabilities();
+    expect(capabilities.available).toBe(true);
+    expect(capabilities.preferredReadBackend).toBe('playwright');
+    expect(capabilities.preferredInteractionBackend).toBe('playwright');
+
+    const state = await service.state('scope-direct', { url: 'https://example.com' });
+    expect(state.success).toBe(true);
+    expect(state.output).toMatchObject({
+      backend: 'playwright',
+      elements: [{ ref: 'e6', type: 'link', text: 'Learn more' }],
+    });
+    expect(directBackend.navigate).toHaveBeenCalledWith('scope-direct', 'https://example.com');
+    expect(directBackend.snapshot).toHaveBeenCalledWith('scope-direct');
   });
 
   it('reads page content from the Playwright snapshot lane', async () => {

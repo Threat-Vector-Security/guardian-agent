@@ -122,9 +122,30 @@ const HIGH_RISK_WINDOWS_PROCESSES = new Set([
   'certutil.exe',
   'psexec.exe',
 ]);
+const HIGH_RISK_WINDOWS_PERSISTENCE_LAUNCHERS = new Set([
+  ...HIGH_RISK_WINDOWS_PROCESSES,
+  'powershell.exe',
+  'pwsh.exe',
+  'cmd.exe',
+]);
 const HIGH_RISK_PORTS = new Set([22, 23, 445, 1433, 3306, 3389, 5432, 5900, 6379]);
 const KNOWN_WINDOWS_PERSISTENCE_PREFIXES = [
   'schtasks:\\microsoft\\windows\\windows defender\\',
+];
+const TRUSTED_WINDOWS_AUTORUN_PATH_PREFIXES = [
+  'c:\\program files\\',
+  'c:\\program files (x86)\\',
+  '%programfiles%\\',
+  '%programfiles(x86)%\\',
+  '%programw6432%\\',
+];
+const HIGH_RISK_WINDOWS_AUTORUN_PATH_MARKERS = [
+  '\\appdata\\',
+  '\\temp\\',
+  '\\tmp\\',
+  '\\downloads\\',
+  '\\desktop\\',
+  '\\users\\public\\',
 ];
 
 export interface HostMonitoringServiceOptions {
@@ -986,7 +1007,10 @@ function parsePfState(infoOut: string, rulesOut: string): HostFirewallState {
 }
 
 function persistenceSeverity(entry: string, platform: NodeJS.Platform): HostMonitorSeverity {
-  if (platform === 'win32' && (entry.startsWith('schtasks:') || entry.includes('\\Run'))) return 'critical';
+  if (platform === 'win32') {
+    if (entry.startsWith('schtasks:')) return 'critical';
+    if (entry.includes('\\Run')) return windowsAutorunSeverity(entry);
+  }
   if (entry.includes('LaunchDaemon') || entry.includes('systemd-system')) return 'high';
   return 'high';
 }
@@ -995,6 +1019,29 @@ function isIgnoredPersistenceEntry(entry: string, platform: NodeJS.Platform): bo
   if (platform !== 'win32') return false;
   const normalized = entry.trim().toLowerCase();
   return KNOWN_WINDOWS_PERSISTENCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function windowsAutorunSeverity(entry: string): HostMonitorSeverity {
+  const parsed = parseWindowsRunEntry(entry);
+  const normalizedCommand = parsed?.command.toLowerCase().replaceAll('/', '\\') ?? entry.toLowerCase();
+  const normalizedExecutable = extractWindowsCommandExecutable(parsed?.command ?? '').toLowerCase().replaceAll('/', '\\');
+
+  if (normalizedCommand.startsWith('\\\\') || normalizedExecutable.startsWith('\\\\')) {
+    return 'critical';
+  }
+  if (HIGH_RISK_WINDOWS_AUTORUN_PATH_MARKERS.some((marker) => normalizedExecutable.includes(marker))) {
+    return 'critical';
+  }
+  if (HIGH_RISK_WINDOWS_PERSISTENCE_LAUNCHERS.has(basename(normalizedExecutable))) {
+    return 'critical';
+  }
+  if (/\.(?:bat|cmd|hta|js|jse|ps1|vbe|vbs|wsf|wsh)(?:\s|$)/i.test(normalizedCommand)) {
+    return 'critical';
+  }
+  if (TRUSTED_WINDOWS_AUTORUN_PATH_PREFIXES.some((prefix) => normalizedExecutable.startsWith(prefix))) {
+    return 'medium';
+  }
+  return 'high';
 }
 
 function firewallDisabledSeverity(platform: NodeJS.Platform, state: HostFirewallState): HostMonitorSeverity {
@@ -1024,4 +1071,31 @@ function sensitivePathSeverity(pathKey: string): HostMonitorSeverity {
     return 'high';
   }
   return 'medium';
+}
+
+function parseWindowsRunEntry(entry: string): { key: string; valueName: string; command: string } | null {
+  const separatorIdx = entry.indexOf(':');
+  const equalsIdx = entry.indexOf('=');
+  if (separatorIdx <= 0 || equalsIdx <= separatorIdx) return null;
+  return {
+    key: entry.slice(0, separatorIdx).trim(),
+    valueName: entry.slice(separatorIdx + 1, equalsIdx).trim(),
+    command: entry.slice(equalsIdx + 1).trim(),
+  };
+}
+
+function extractWindowsCommandExecutable(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('"')) {
+    const closingQuoteIdx = trimmed.indexOf('"', 1);
+    if (closingQuoteIdx > 1) {
+      return trimmed.slice(1, closingQuoteIdx).trim();
+    }
+  }
+  const extensionMatch = trimmed.match(/^[^\s]+\.(?:bat|cmd|com|exe|hta|js|jse|ps1|vbe|vbs|wsf|wsh)/i);
+  if (extensionMatch) {
+    return extensionMatch[0];
+  }
+  return trimmed.split(/\s+/, 1)[0] ?? '';
 }

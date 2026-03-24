@@ -9,6 +9,7 @@ import {
   buildHardenedEnv,
   PROTECTED_PATHS,
 } from './profiles.js';
+import { shouldUseWindowsShell } from './index.js';
 import type { SandboxConfig, SandboxResourceLimits } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG, DEFAULT_RESOURCE_LIMITS } from './types.js';
 
@@ -226,6 +227,30 @@ describe('DEFAULT_SANDBOX_CONFIG', () => {
     expect(limits.maxCpuSeconds).toBe(60);
     expect(limits.maxFileSizeKb).toBe(10_240);
     expect(limits.maxProcesses).toBe(0);
+  });
+});
+
+describe('shouldUseWindowsShell', () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
+
+  it('returns false on non-Windows platforms', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    expect(shouldUseWindowsShell('npx')).toBe(false);
+    expect(shouldUseWindowsShell('C:\\Program Files\\nodejs\\node.exe')).toBe(false);
+  });
+
+  it('uses shell for Windows shim commands but not direct executables', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    expect(shouldUseWindowsShell('npx')).toBe(true);
+    expect(shouldUseWindowsShell('npm')).toBe(true);
+    expect(shouldUseWindowsShell('C:\\Program Files\\nodejs\\node.exe')).toBe(false);
+    expect(shouldUseWindowsShell('C:\\repo\\node_modules\\.bin\\playwright-mcp.cmd')).toBe(true);
   });
 });
 

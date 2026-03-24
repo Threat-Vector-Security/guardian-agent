@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import type { BrowserConfig } from '../config/types.js';
 import type { MCPClientManager } from './mcp-client.js';
+import { DirectPlaywrightBrowserBackend, type PlaywrightDirectBackendLike } from './browser-playwright-direct.js';
 import type { ToolDefinition, ToolResult } from './types.js';
 
 const PLAYWRIGHT_NAVIGATE_TOOL = 'mcp-playwright-browser_navigate';
@@ -118,6 +120,10 @@ export interface HybridBrowserCapabilities {
       snapshot: boolean;
       interact: boolean;
       evaluate: boolean;
+      moduleName?: string;
+      moduleSource?: string;
+      moduleEntryPath?: string;
+      unavailableReason?: string;
     };
   };
   wrappers: {
@@ -142,14 +148,38 @@ export interface HybridBrowserSessionSnapshot {
   updatedAt: number;
 }
 
+export interface HybridBrowserServiceOptions {
+  now?: () => number;
+  browserConfig?: BrowserConfig;
+  enableDirectPlaywright?: boolean;
+  directPlaywright?: PlaywrightDirectBackendLike;
+}
+
 export class HybridBrowserService {
   private readonly sessions = new Map<string, HybridBrowserSessionState>();
   private readonly actionStates = new Map<string, HybridBrowserActionState>();
+  private readonly now: () => number;
+  private readonly directPlaywright?: PlaywrightDirectBackendLike;
 
   constructor(
     private readonly manager: MCPClientManager,
-    private readonly now: () => number = Date.now,
-  ) {}
+    nowOrOptions: (() => number) | HybridBrowserServiceOptions = Date.now,
+  ) {
+    if (typeof nowOrOptions === 'function') {
+      this.now = nowOrOptions;
+      return;
+    }
+
+    this.now = nowOrOptions.now ?? Date.now;
+    this.directPlaywright = nowOrOptions.directPlaywright
+      ?? (nowOrOptions.enableDirectPlaywright
+        ? new DirectPlaywrightBrowserBackend(nowOrOptions.browserConfig)
+        : undefined);
+  }
+
+  setBrowserConfig(browserConfig: BrowserConfig | undefined): void {
+    this.directPlaywright?.setBrowserConfig(browserConfig);
+  }
 
   hasAnyBackend(): boolean {
     const capabilities = this.getCapabilities();
@@ -158,12 +188,18 @@ export class HybridBrowserService {
 
   getCapabilities(): HybridBrowserCapabilities {
     const toolNames = this.getToolNames();
-    const playwrightNavigate = toolNames.has(PLAYWRIGHT_NAVIGATE_TOOL);
-    const playwrightSnapshot = toolNames.has(PLAYWRIGHT_SNAPSHOT_TOOL);
-    const playwrightInteract = toolNames.has(PLAYWRIGHT_CLICK_TOOL)
+    const managedPlaywrightNavigate = toolNames.has(PLAYWRIGHT_NAVIGATE_TOOL);
+    const managedPlaywrightSnapshot = toolNames.has(PLAYWRIGHT_SNAPSHOT_TOOL);
+    const managedPlaywrightInteract = toolNames.has(PLAYWRIGHT_CLICK_TOOL)
       || toolNames.has(PLAYWRIGHT_TYPE_TOOL)
       || toolNames.has(PLAYWRIGHT_SELECT_TOOL);
-    const playwrightEvaluate = toolNames.has(PLAYWRIGHT_EVALUATE_TOOL);
+    const managedPlaywrightEvaluate = toolNames.has(PLAYWRIGHT_EVALUATE_TOOL);
+    const directPlaywright = this.directPlaywright?.getCapabilities();
+
+    const playwrightNavigate = managedPlaywrightNavigate || directPlaywright?.navigate === true;
+    const playwrightSnapshot = managedPlaywrightSnapshot || directPlaywright?.snapshot === true;
+    const playwrightInteract = managedPlaywrightInteract || directPlaywright?.interact === true;
+    const playwrightEvaluate = managedPlaywrightEvaluate || directPlaywright?.evaluate === true;
 
     const preferredReadBackend = playwrightNavigate && playwrightSnapshot
       ? 'playwright'
@@ -183,6 +219,10 @@ export class HybridBrowserService {
           snapshot: playwrightSnapshot,
           interact: playwrightInteract,
           evaluate: playwrightEvaluate,
+          moduleName: typeof directPlaywright?.moduleName === 'string' ? directPlaywright.moduleName : undefined,
+          moduleSource: typeof directPlaywright?.moduleSource === 'string' ? directPlaywright.moduleSource : undefined,
+          moduleEntryPath: typeof directPlaywright?.moduleEntryPath === 'string' ? directPlaywright.moduleEntryPath : undefined,
+          unavailableReason: typeof directPlaywright?.unavailableReason === 'string' ? directPlaywright.unavailableReason : undefined,
         },
       },
       wrappers: {
@@ -237,7 +277,7 @@ export class HybridBrowserService {
     if (!sync.success) {
       return sync.result;
     }
-    const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+    const snapshotResult = await this.capturePlaywrightSnapshot(scopeKey);
     if (!snapshotResult.success) {
       return snapshotResult;
     }
@@ -319,14 +359,13 @@ export class HybridBrowserService {
       return sync.result;
     }
 
-    const toolName = action === 'click'
-      ? PLAYWRIGHT_CLICK_TOOL
-      : action === 'select'
-        ? PLAYWRIGHT_SELECT_TOOL
-        : PLAYWRIGHT_TYPE_TOOL;
-    const definition = this.getToolDefinition(toolName);
-    const payload = buildPlaywrightMutationPayload(definition, action as 'click' | 'type' | 'fill' | 'select', ref, asString(input.value, ''));
-    const result = await this.callTool(toolName, payload);
+    const result = await this.mutatePlaywright(
+      scopeKey,
+      action as 'click' | 'type' | 'fill' | 'select',
+      ref,
+      asString(input.value, ''),
+      target.text,
+    );
     if (!result.success) {
       return result;
     }
@@ -374,7 +413,7 @@ export class HybridBrowserService {
       return { success: false, error: 'url is required' };
     }
 
-    const playwrightResult = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url: normalizedUrl });
+    const playwrightResult = await this.navigatePlaywright(scopeKey, normalizedUrl);
     if (!playwrightResult.success) {
       return playwrightResult;
     }
@@ -432,7 +471,7 @@ export class HybridBrowserService {
     if (!sync.success) {
       return sync.result;
     }
-    const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+    const snapshotResult = await this.capturePlaywrightSnapshot(scopeKey);
     if (!snapshotResult.success) {
       return snapshotResult;
     }
@@ -484,10 +523,7 @@ export class HybridBrowserService {
       return sync.result;
     }
 
-    const evaluateResult = await this.callTool(
-      PLAYWRIGHT_EVALUATE_TOOL,
-      buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), PLAYWRIGHT_LINKS_EVALUATION),
-    );
+    const evaluateResult = await this.evaluatePlaywright(scopeKey, PLAYWRIGHT_LINKS_EVALUATION);
     if (!evaluateResult.success) {
       return evaluateResult;
     }
@@ -548,7 +584,7 @@ export class HybridBrowserService {
 
     let snapshotText = '';
     if (type === 'semantic' || type === 'both') {
-      const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+      const snapshotResult = await this.capturePlaywrightSnapshot(scopeKey);
       if (!snapshotResult.success) {
         return snapshotResult;
       }
@@ -560,10 +596,7 @@ export class HybridBrowserService {
       if (!capabilities.backends.playwright.evaluate) {
         return { success: false, error: 'Structured metadata extraction requires the Playwright browser_evaluate capability.' };
       }
-      const evaluateResult = await this.callTool(
-        PLAYWRIGHT_EVALUATE_TOOL,
-        buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), PLAYWRIGHT_STRUCTURED_EVALUATION),
-      );
+      const evaluateResult = await this.evaluatePlaywright(scopeKey, PLAYWRIGHT_STRUCTURED_EVALUATION);
       if (!evaluateResult.success) {
         return evaluateResult;
       }
@@ -683,6 +716,79 @@ export class HybridBrowserService {
     return this.manager.getAllToolDefinitions().find((definition) => definition.name === toolName);
   }
 
+  private managedPlaywrightCapabilities(): {
+    navigate: boolean;
+    snapshot: boolean;
+    interact: boolean;
+    evaluate: boolean;
+  } {
+    const toolNames = this.getToolNames();
+    return {
+      navigate: toolNames.has(PLAYWRIGHT_NAVIGATE_TOOL),
+      snapshot: toolNames.has(PLAYWRIGHT_SNAPSHOT_TOOL),
+      interact: toolNames.has(PLAYWRIGHT_CLICK_TOOL)
+        || toolNames.has(PLAYWRIGHT_TYPE_TOOL)
+        || toolNames.has(PLAYWRIGHT_SELECT_TOOL),
+      evaluate: toolNames.has(PLAYWRIGHT_EVALUATE_TOOL),
+    };
+  }
+
+  private async navigatePlaywright(scopeKey: string, url: string): Promise<ToolResult> {
+    if (this.managedPlaywrightCapabilities().navigate) {
+      return this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url });
+    }
+    if (this.directPlaywright?.getCapabilities().navigate) {
+      return this.directPlaywright.navigate(scopeKey, url);
+    }
+    return { success: false, error: 'No navigation-capable browser backend is available.' };
+  }
+
+  private async capturePlaywrightSnapshot(scopeKey: string): Promise<ToolResult> {
+    if (this.managedPlaywrightCapabilities().snapshot) {
+      return this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+    }
+    if (this.directPlaywright?.getCapabilities().snapshot) {
+      return this.directPlaywright.snapshot(scopeKey);
+    }
+    return { success: false, error: 'No snapshot-capable browser backend is available.' };
+  }
+
+  private async evaluatePlaywright(scopeKey: string, fnSource: string): Promise<ToolResult> {
+    if (this.managedPlaywrightCapabilities().evaluate) {
+      return this.callTool(
+        PLAYWRIGHT_EVALUATE_TOOL,
+        buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), fnSource),
+      );
+    }
+    if (this.directPlaywright?.getCapabilities().evaluate) {
+      return this.directPlaywright.evaluate(scopeKey, fnSource);
+    }
+    return { success: false, error: 'Structured browser evaluation requires the Playwright backend.' };
+  }
+
+  private async mutatePlaywright(
+    scopeKey: string,
+    action: 'click' | 'type' | 'fill' | 'select',
+    ref: string,
+    value: string,
+    label?: string,
+  ): Promise<ToolResult> {
+    if (this.managedPlaywrightCapabilities().interact) {
+      const toolName = action === 'click'
+        ? PLAYWRIGHT_CLICK_TOOL
+        : action === 'select'
+          ? PLAYWRIGHT_SELECT_TOOL
+          : PLAYWRIGHT_TYPE_TOOL;
+      const definition = this.getToolDefinition(toolName);
+      const payload = buildPlaywrightMutationPayload(definition, action, ref, value);
+      return this.callTool(toolName, payload);
+    }
+    if (this.directPlaywright?.getCapabilities().interact) {
+      return this.directPlaywright.act(scopeKey, { action, ref, value, label });
+    }
+    return { success: false, error: 'Interactive browser actions require the Playwright backend.' };
+  }
+
   private async ensurePlaywrightAtUrl(
     scopeKey: string,
     url: string,
@@ -692,7 +798,7 @@ export class HybridBrowserService {
     if (currentUrl === url) {
       return { success: true, navigated: false };
     }
-    const result = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url });
+    const result = await this.navigatePlaywright(scopeKey, url);
     if (!result.success) {
       return { success: false, result };
     }

@@ -486,7 +486,14 @@ function formatCapabilitiesContent(result: Record<string, unknown>): string | nu
   if (!output) return toString(result.message) || null;
   const preferredRead = toString(output.preferredReadBackend) || 'none';
   const preferredInteraction = toString(output.preferredInteractionBackend) || 'none';
-  return `Browser capabilities: read=${preferredRead}, interact=${preferredInteraction}.`;
+  const backendInfo = isRecord(output.backends) && isRecord(output.backends.playwright)
+    ? output.backends.playwright
+    : null;
+  const unavailableReason = backendInfo ? toString(backendInfo.unavailableReason) : '';
+  const details = unavailableReason && preferredRead === 'none' && preferredInteraction === 'none'
+    ? ` Reason: ${unavailableReason}`
+    : '';
+  return `Browser capabilities: read=${preferredRead}, interact=${preferredInteraction}.${details}`;
 }
 
 function formatReadContent(result: Record<string, unknown>): string | null {

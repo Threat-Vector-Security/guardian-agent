@@ -576,6 +576,8 @@ export interface ToolExecutorOptions {
   webSearch?: WebSearchConfig;
   /** Browser automation configuration (Playwright MCP wrappers). */
   browserConfig?: BrowserConfig;
+  /** Allow wrapper tools to fall back to direct Playwright when managed MCP is unavailable. */
+  enableDirectPlaywrightFallback?: boolean;
   /** Cloud and hosting provider integrations. */
   cloudConfig?: AssistantCloudConfig;
   /** Tool categories to disable at startup. */
@@ -776,7 +778,11 @@ export class ToolExecutor {
     this.now = options.now ?? Date.now;
     this.disabledCategories = new Set(options.disabledCategories ?? []);
     this.mcpManager = options.mcpManager;
-    this.hybridBrowser = this.mcpManager ? new HybridBrowserService(this.mcpManager, this.now) : undefined;
+    this.hybridBrowser = this.mcpManager ? new HybridBrowserService(this.mcpManager, {
+      now: this.now,
+      browserConfig: options.browserConfig,
+      enableDirectPlaywright: options.enableDirectPlaywrightFallback === true,
+    }) : undefined;
     this.webSearchConfig = options.webSearch ?? {};
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
     this.sandboxHealth = options.sandboxHealth;
@@ -882,6 +888,7 @@ export class ToolExecutor {
 
   setBrowserConfig(browserConfig: BrowserConfig | undefined): void {
     this.options.browserConfig = browserConfig;
+    this.hybridBrowser?.setBrowserConfig(browserConfig);
   }
 
   private syncHybridBrowserTools(): void {
@@ -1257,6 +1264,17 @@ export class ToolExecutor {
 
   isEnabled(): boolean {
     return this.options.enabled;
+  }
+
+  getBrowserCapabilities(): { available: boolean; read: string; interact: string; directBackend: boolean; mcpTools: number } {
+    const capabilities = this.hybridBrowser?.getCapabilities();
+    return {
+      available: capabilities?.available ?? false,
+      read: capabilities?.preferredReadBackend ?? 'none',
+      interact: capabilities?.preferredInteractionBackend ?? 'none',
+      directBackend: !!capabilities?.backends.playwright.moduleName || !!capabilities?.backends.playwright.unavailableReason,
+      mcpTools: this.mcpManager?.getAllToolDefinitions().filter(d => d.name.startsWith('mcp-playwright-')).length ?? 0,
+    };
   }
 
   setAutomationControlPlane(controlPlane: AutomationControlPlane | undefined): void {

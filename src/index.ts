@@ -59,6 +59,7 @@ import {
   formatCodeWorkspaceWorkingSetForPrompt,
   shouldRefreshCodeWorkspaceMap,
 } from './runtime/code-workspace-map.js';
+import { resolveManagedPlaywrightLaunch } from './runtime/playwright-launch.js';
 import {
   assessCodeWorkspaceTrustSync,
   getEffectiveCodeWorkspaceTrustState,
@@ -9411,22 +9412,14 @@ async function main(): Promise<void> {
     }
     // Playwright MCP
     if (browserConfig?.playwrightEnabled !== false) {
-      const playwrightArgs: string[] = [
-        '--no-install',
-        '@playwright/mcp',
-        '--headless',
-        '--browser', browserConfig?.playwrightBrowser ?? 'chromium',
-        '--caps', browserConfig?.playwrightCaps ?? 'network,storage',
-        '--snapshot-mode', 'incremental',
-        ...(browserConfig?.playwrightArgs ?? []),
-      ];
+      const playwrightLaunch = resolveManagedPlaywrightLaunch(browserConfig);
       try {
         await mcpManager.addServer({
           id: 'playwright',
           name: 'Playwright Browser',
           transport: 'stdio' as const,
-          command: 'npx',
-          args: playwrightArgs,
+          command: playwrightLaunch.command,
+          args: playwrightLaunch.args,
           source: 'managed_browser',
           category: 'browser',
           networkAccess: true,
@@ -9435,9 +9428,17 @@ async function main(): Promise<void> {
           maxCallsPerMinute: 60,
         });
         const pwTools = mcpManager.getClient('playwright')?.getTools().length ?? 0;
-        log.info({ tools: pwTools }, 'Playwright MCP browser connected');
+        log.info({
+          tools: pwTools,
+          launchSource: playwrightLaunch.source,
+          launchDetail: playwrightLaunch.detail,
+        }, 'Playwright MCP browser connected');
+        console.log(`  Playwright MCP: connected (${pwTools} tools via ${playwrightLaunch.source})`);
       } catch (err) {
-        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Playwright MCP failed to start — browser automation unavailable');
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.warn({ err: errMsg }, 'Playwright MCP failed to start — direct Playwright fallback will be used');
+        console.log(`  Playwright MCP: failed to start — ${errMsg}`);
+        console.log('  Direct Playwright fallback is enabled and will handle browser actions.');
       }
     }
 
@@ -10475,6 +10476,7 @@ async function main(): Promise<void> {
     webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
     cloudConfig: resolvedRuntimeCredentials.resolvedCloud,
     browserConfig: config.assistant.tools.browser,
+    enableDirectPlaywrightFallback: true,
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
@@ -10658,6 +10660,20 @@ async function main(): Promise<void> {
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
 
+  // Log browser backend status at startup
+  {
+    const browserCaps = toolExecutor.getBrowserCapabilities();
+    const status = browserCaps.available
+      ? `read=${browserCaps.read}, interact=${browserCaps.interact}`
+      : 'unavailable';
+    const details = [
+      `directBackend=${browserCaps.directBackend}`,
+      `mcpTools=${browserCaps.mcpTools}`,
+    ].join(', ');
+    console.log(`  Browser backends: ${status} (${details})`);
+    log.info({ browserCaps }, 'Browser backend capabilities at startup');
+  }
+
   const applyBrowserRuntimeConfig = async (
     nextBrowserConfig: BrowserConfig | undefined,
   ): Promise<{ success: boolean; message: string }> => {
@@ -10691,22 +10707,14 @@ async function main(): Promise<void> {
 
     const issues: string[] = [];
     if (normalized.playwrightEnabled !== false) {
-      const playwrightArgs: string[] = [
-        '--no-install',
-        '@playwright/mcp',
-        '--headless',
-        '--browser', normalized.playwrightBrowser ?? 'chromium',
-        '--caps', normalized.playwrightCaps ?? 'network,storage',
-        '--snapshot-mode', 'incremental',
-        ...(normalized.playwrightArgs ?? []),
-      ];
+      const playwrightLaunch = resolveManagedPlaywrightLaunch(normalized);
       try {
         await mcpManager.addServer({
           id: 'playwright',
           name: 'Playwright Browser',
           transport: 'stdio',
-          command: 'npx',
-          args: playwrightArgs,
+          command: playwrightLaunch.command,
+          args: playwrightLaunch.args,
           source: 'managed_browser',
           category: 'browser',
           networkAccess: true,
