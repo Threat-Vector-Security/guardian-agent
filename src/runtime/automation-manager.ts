@@ -2,6 +2,19 @@ import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
 import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
 import { buildSavedAutomationCatalogEntries, type SavedAutomationCatalogEntry } from './automation-catalog.js';
 
+export type SavedAutomationMutationToolName =
+  | 'workflow_upsert'
+  | 'workflow_delete'
+  | 'workflow_run'
+  | 'task_update'
+  | 'task_run'
+  | 'task_delete';
+
+export interface SavedAutomationMutationOperation {
+  toolName: SavedAutomationMutationToolName;
+  args: Record<string, unknown>;
+}
+
 export interface AutomationManagerControlPlane {
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
   listTasks(): ScheduledTaskDefinition[];
@@ -47,18 +60,12 @@ export function setSavedAutomationEnabled(
     return { success: false, message: `Automation '${automationId}' not found.` };
   }
 
-  if (selected.workflow) {
-    return controlPlane.upsertWorkflow({
-      ...cloneWorkflow(selected.workflow),
-      enabled,
-    });
+  const planned = planSavedAutomationToggle(selected, enabled);
+  const [operation] = planned.operations;
+  if (!operation) {
+    return { success: false, message: `Automation '${automationId}' cannot be toggled.` };
   }
-
-  if (!selected.task) {
-    return { success: false, message: `Automation '${automationId}' is missing its task definition.` };
-  }
-
-  return controlPlane.updateTask(selected.task.id, { enabled });
+  return executeMutationOperation(controlPlane, operation);
 }
 
 export function deleteSavedAutomation(
@@ -70,14 +77,16 @@ export function deleteSavedAutomation(
     return { success: false, message: `Automation '${automationId}' not found.` };
   }
 
+  const planned = planSavedAutomationDelete(selected);
   const failures: string[] = [];
-  if (selected.task) {
-    const taskResult = controlPlane.deleteTask(selected.task.id);
-    if (!taskResult.success) failures.push(taskResult.message || `Could not delete task '${selected.task.id}'.`);
-  }
-  if (selected.workflow) {
-    const workflowResult = controlPlane.deleteWorkflow(selected.workflow.id);
-    if (!workflowResult.success) failures.push(workflowResult.message || `Could not delete workflow '${selected.workflow.id}'.`);
+  for (const operation of planned.operations) {
+    const taskResult = executeMutationOperation(controlPlane, operation);
+    if (!taskResult.success) {
+      const targetId = toNonEmptyString(operation.args.taskId)
+        || toNonEmptyString(operation.args.workflowId)
+        || selected.id;
+      failures.push(taskResult.message || `Could not delete '${targetId}'.`);
+    }
   }
 
   if (failures.length > 0) {
@@ -104,24 +113,95 @@ export async function runSavedAutomation(
     return { success: false, message: `Automation '${automationId}' not found.` };
   }
 
-  if (selected.workflow) {
-    const result = await controlPlane.runWorkflow({
-      workflowId: selected.workflow.id,
-      ...options,
-    });
-    return isRecord(result)
-      ? result
-      : { success: false, message: 'Workflow run returned an invalid result.' };
+  const planned = planSavedAutomationRun(selected);
+  const [operation] = planned.operations;
+  if (!operation) {
+    return { success: false, message: `Automation '${automationId}' cannot be run.` };
   }
 
-  if (!selected.task) {
-    return { success: false, message: `Automation '${automationId}' is missing its task definition.` };
-  }
-
-  const result = await controlPlane.runTask(selected.task.id);
+  const result = await executeAsyncMutationOperation(controlPlane, operation, options);
   return isRecord(result)
     ? result
-    : { success: false, message: 'Task run returned an invalid result.' };
+    : { success: false, message: 'Automation run returned an invalid result.' };
+}
+
+export function planSavedAutomationRun(
+  entry: SavedAutomationCatalogEntry,
+): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationMutationOperation[] } {
+  if (entry.workflow) {
+    return {
+      entry,
+      operations: [{
+        toolName: 'workflow_run',
+        args: {
+          workflowId: entry.workflow.id,
+        },
+      }],
+    };
+  }
+
+  const taskId = toNonEmptyString(entry.task?.id);
+  return {
+    entry,
+    operations: taskId
+      ? [{ toolName: 'task_run', args: { taskId } }]
+      : [],
+  };
+}
+
+export function planSavedAutomationToggle(
+  entry: SavedAutomationCatalogEntry,
+  desiredEnabled?: boolean,
+): {
+  entry: SavedAutomationCatalogEntry;
+  enabled: boolean;
+  operations: SavedAutomationMutationOperation[];
+} {
+  const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
+  if (entry.workflow) {
+    return {
+      entry,
+      enabled,
+      operations: [{
+        toolName: 'workflow_upsert',
+        args: buildWorkflowToggleArgs(entry.workflow, enabled),
+      }],
+    };
+  }
+
+  const taskId = toNonEmptyString(entry.task?.id);
+  return {
+    entry,
+    enabled,
+    operations: taskId
+      ? [{ toolName: 'task_update', args: { taskId, enabled } }]
+      : [],
+  };
+}
+
+export function planSavedAutomationDelete(
+  entry: SavedAutomationCatalogEntry,
+): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationMutationOperation[] } {
+  const operations: SavedAutomationMutationOperation[] = [];
+  const taskId = toNonEmptyString(entry.task?.id);
+  const workflowId = toNonEmptyString(entry.workflow?.id);
+  if (taskId) {
+    operations.push({ toolName: 'task_delete', args: { taskId } });
+  }
+  if (workflowId) {
+    operations.push({ toolName: 'workflow_delete', args: { workflowId } });
+  }
+  return { entry, operations };
+}
+
+export function buildWorkflowToggleArgs(
+  workflow: AssistantConnectorPlaybookDefinition,
+  enabled: boolean,
+): Record<string, unknown> {
+  return {
+    ...cloneWorkflow(workflow),
+    enabled,
+  };
 }
 
 function cloneWorkflow(workflow: AssistantConnectorPlaybookDefinition): AssistantConnectorPlaybookDefinition {
@@ -141,6 +221,61 @@ function cloneTask(task: ScheduledTaskDefinition): ScheduledTaskDefinition {
   };
 }
 
+function executeMutationOperation(
+  controlPlane: AutomationManagerControlPlane,
+  operation: SavedAutomationMutationOperation,
+): { success: boolean; message: string } {
+  switch (operation.toolName) {
+    case 'workflow_upsert':
+      return controlPlane.upsertWorkflow(operation.args as unknown as AssistantConnectorPlaybookDefinition);
+    case 'task_update': {
+      const taskId = toNonEmptyString(operation.args.taskId) || '';
+      const { taskId: _taskId, ...input } = operation.args;
+      return controlPlane.updateTask(taskId, input);
+    }
+    case 'workflow_delete':
+      return controlPlane.deleteWorkflow(toNonEmptyString(operation.args.workflowId) || '');
+    case 'task_delete':
+      return controlPlane.deleteTask(toNonEmptyString(operation.args.taskId) || '');
+    default:
+      return { success: false, message: `Mutation '${operation.toolName}' is not supported in direct control.` };
+  }
+}
+
+async function executeAsyncMutationOperation(
+  controlPlane: AutomationManagerControlPlane,
+  operation: SavedAutomationMutationOperation,
+  options?: {
+    dryRun?: boolean;
+    origin?: 'assistant' | 'cli' | 'web';
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+    requestedBy?: string;
+  },
+): Promise<unknown> {
+  switch (operation.toolName) {
+    case 'workflow_run':
+      return controlPlane.runWorkflow({
+        workflowId: toNonEmptyString(operation.args.workflowId) || '',
+        dryRun: options?.dryRun === true,
+        origin: options?.origin,
+        agentId: options?.agentId,
+        userId: options?.userId,
+        channel: options?.channel,
+        requestedBy: options?.requestedBy,
+      });
+    case 'task_run':
+      return controlPlane.runTask(toNonEmptyString(operation.args.taskId) || '');
+    default:
+      return { success: false, message: `Run '${operation.toolName}' is not supported in direct control.` };
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

@@ -12,6 +12,13 @@ import {
   selectSavedAutomationCatalogEntry,
   type SavedAutomationCatalogEntry,
 } from './automation-catalog.js';
+import {
+  planSavedAutomationDelete,
+  planSavedAutomationRun,
+  planSavedAutomationToggle,
+  type SavedAutomationMutationToolName,
+  type SavedAutomationMutationOperation,
+} from './automation-manager.js';
 
 export interface AutomationControlPendingApprovalMetadata {
   id: string;
@@ -273,15 +280,18 @@ async function runAutomationEntry(
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
   entry: SavedAutomationCatalogEntry,
 ): Promise<AutomationControlPreRouteResult> {
-  const toolName = entry.workflow ? 'workflow_run' : 'task_run';
-  const args = entry.workflow
-    ? { workflowId: toString(entry.workflow.id) }
-    : { taskId: toString(entry.task?.id) };
+  const [operation] = planSavedAutomationRun(entry).operations;
+  if (!operation) {
+    return {
+      content: `I could not run '${entry.name}'.`,
+    };
+  }
+  const { toolName, args } = operation;
   const result = await params.executeTool(toolName, args, toolRequest);
   return formatSingleAutomationMutationResult(
     params,
     result,
-    toolName,
+    toolName as Extract<SavedAutomationMutationToolName, 'workflow_run' | 'task_run'>,
     args,
     entry.name,
     `I ran '${entry.name}'.`,
@@ -296,51 +306,24 @@ async function toggleAutomationEntry(
   entry: SavedAutomationCatalogEntry,
   desiredEnabled?: boolean,
 ): Promise<AutomationControlPreRouteResult> {
-  const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
-  if (entry.workflow) {
-    const workflowArgs = buildWorkflowToggleArgs(entry.workflow, enabled);
-    const result = await params.executeTool('workflow_upsert', workflowArgs, toolRequest);
-    return formatSingleAutomationMutationResult(
-      params,
-      result,
-      'workflow_upsert',
-      workflowArgs,
-      entry.name,
-      enabled ? `I enabled '${entry.name}'.` : `I disabled '${entry.name}'.`,
-      enabled ? `I did not enable '${entry.name}'.` : `I did not disable '${entry.name}'.`,
-      enabled ? `Enabled '${entry.name}'.` : `Disabled '${entry.name}'.`,
-    );
+  const plan = planSavedAutomationToggle(entry, desiredEnabled);
+  const [operation] = plan.operations;
+  if (!operation) {
+    return {
+      content: `I could not update '${entry.name}'.`,
+    };
   }
-
-  const taskId = toString(entry.task?.id);
-  const args = { taskId, enabled };
-  const result = await params.executeTool('task_update', args, toolRequest);
+  const result = await params.executeTool(operation.toolName, operation.args, toolRequest);
   return formatSingleAutomationMutationResult(
     params,
     result,
-    'task_update',
-    args,
+    operation.toolName as Extract<SavedAutomationMutationToolName, 'workflow_upsert' | 'task_update'>,
+    operation.args,
     entry.name,
-    enabled ? `I enabled '${entry.name}'.` : `I disabled '${entry.name}'.`,
-    enabled ? `I did not enable '${entry.name}'.` : `I did not disable '${entry.name}'.`,
-    enabled ? `Enabled '${entry.name}'.` : `Disabled '${entry.name}'.`,
+    plan.enabled ? `I enabled '${entry.name}'.` : `I disabled '${entry.name}'.`,
+    plan.enabled ? `I did not enable '${entry.name}'.` : `I did not disable '${entry.name}'.`,
+    plan.enabled ? `Enabled '${entry.name}'.` : `Disabled '${entry.name}'.`,
   );
-}
-
-function buildWorkflowToggleArgs(
-  workflow: AssistantConnectorPlaybookDefinition,
-  enabled: boolean,
-): Record<string, unknown> {
-  return {
-    id: workflow.id,
-    name: workflow.name,
-    mode: workflow.mode || 'sequential',
-    description: workflow.description,
-    enabled,
-    ...(workflow.schedule ? { schedule: workflow.schedule } : {}),
-    ...(workflow.outputHandling ? { outputHandling: workflow.outputHandling } : {}),
-    steps: Array.isArray(workflow.steps) ? workflow.steps.map((step) => ({ ...step })) : [],
-  };
 }
 
 async function deleteAutomationEntry(
@@ -352,36 +335,19 @@ async function deleteAutomationEntry(
   const pendingIds: string[] = [];
   const pendingFallback: AutomationControlPendingApprovalMetadata[] = [];
 
-  if (entry.task) {
-    const taskId = toString(entry.task.id);
-    const taskResult = await params.executeTool('task_delete', { taskId }, toolRequest);
+  for (const operation of planSavedAutomationDelete(entry).operations) {
+    const taskResult = await params.executeTool(operation.toolName, operation.args, toolRequest);
     const taskPending = collectPendingMutation(
       params,
       taskResult,
-      'task_delete',
-      { taskId },
+      operation.toolName,
+      operation.args,
       `I deleted '${entry.name}'.`,
       `I did not delete '${entry.name}'.`,
       pendingFallback,
     );
     pendingIds.push(...taskPending.pendingIds);
     if (taskPending.message) messages.push(taskPending.message);
-  }
-
-  if (entry.workflow) {
-    const workflowId = toString(entry.workflow.id);
-    const workflowResult = await params.executeTool('workflow_delete', { workflowId }, toolRequest);
-    const workflowPending = collectPendingMutation(
-      params,
-      workflowResult,
-      'workflow_delete',
-      { workflowId },
-      `I deleted '${entry.name}'.`,
-      `I did not delete '${entry.name}'.`,
-      pendingFallback,
-    );
-    pendingIds.push(...workflowPending.pendingIds);
-    if (workflowPending.message) messages.push(workflowPending.message);
   }
 
   if (pendingIds.length > 0) {
@@ -416,7 +382,7 @@ async function deleteAutomationEntry(
 function formatSingleAutomationMutationResult(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: 'workflow_upsert' | 'workflow_run' | 'task_update' | 'task_run',
+  toolName: Extract<SavedAutomationMutationOperation['toolName'], 'workflow_upsert' | 'workflow_run' | 'task_update' | 'task_run'>,
   args: Record<string, unknown>,
   automationName: string,
   approvedCopy: string,
@@ -463,7 +429,7 @@ function formatSingleAutomationMutationResult(
 function collectPendingMutation(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: 'workflow_upsert' | 'workflow_delete' | 'workflow_run' | 'task_update' | 'task_run' | 'task_delete',
+  toolName: SavedAutomationMutationOperation['toolName'],
   args: Record<string, unknown>,
   approvedCopy: string,
   deniedCopy: string,

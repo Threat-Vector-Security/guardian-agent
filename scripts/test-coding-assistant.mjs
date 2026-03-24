@@ -660,6 +660,7 @@ guardian:
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        HOME: tmpDir,
         PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       },
     });
