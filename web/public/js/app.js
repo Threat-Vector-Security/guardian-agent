@@ -374,12 +374,6 @@ async function navigate() {
   const raw = nextHash.slice(1) || '/';
   const [path, query] = raw.split('?');
 
-  // Redirect old pages to unified Automations
-  if (path === '/workflows' || path === '/operations') {
-    window.location.hash = '#/automations';
-    return;
-  }
-
   const params = new URLSearchParams(query || '');
   const route = routes[path] || routes['/'];
   const previousPage = currentPage;
