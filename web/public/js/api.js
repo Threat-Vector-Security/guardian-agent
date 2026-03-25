@@ -313,11 +313,6 @@ export const api = {
   updateConnectorsSettings: (payload) => requestPrivileged('/api/connectors/settings', 'connectors.config', payload || {}),
   upsertConnectorPack: (pack) => requestPrivileged('/api/connectors/packs/upsert', 'connectors.pack', pack || {}),
   deleteConnectorPack: (packId) => requestPrivileged('/api/connectors/packs/delete', 'connectors.pack', { packId }),
-  connectorsTemplates: () => request('/api/connectors/templates'),
-  installTemplate: (templateId) => request('/api/connectors/templates/install', {
-    method: 'POST',
-    body: JSON.stringify({ templateId }),
-  }),
   networkDevices: () => request('/api/network/devices'),
   networkBaseline: () => request('/api/network/baseline'),
   networkThreats: (params = {}) => {

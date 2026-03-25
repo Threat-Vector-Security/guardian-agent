@@ -1050,8 +1050,6 @@ export interface DashboardCallbacks {
     displayMessage?: string;
   };
   onConnectorsState?: (args?: { limitRuns?: number }) => ConnectorFrameworkState;
-  onConnectorsTemplates?: () => Array<{ id: string; name: string; description: string; category: string; installed: boolean; playbookCount: number }>;
-  onConnectorsTemplateInstall?: (templateId: string) => { success: boolean; message: string };
   onNetworkDevices?: () => {
     devices: Array<{
       ip: string;

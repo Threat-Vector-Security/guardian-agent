@@ -1515,47 +1515,6 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // GET /api/connectors/templates — list built-in templates
-      if (req.method === 'GET' && url.pathname === '/api/connectors/templates') {
-        if (!this.dashboard.onConnectorsTemplates) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        sendJSON(res, 200, this.dashboard.onConnectorsTemplates());
-        return;
-      }
-
-      // POST /api/connectors/templates/install — install a built-in template
-      if (req.method === 'POST' && url.pathname === '/api/connectors/templates/install') {
-        if (!this.dashboard.onConnectorsTemplateInstall) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        let body = '';
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: { templateId?: string };
-        try {
-          parsed = JSON.parse(body) as { templateId?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.templateId?.trim()) {
-          sendJSON(res, 400, { error: 'templateId is required' });
-          return;
-        }
-        const result = this.dashboard.onConnectorsTemplateInstall(parsed.templateId.trim());
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'connectors.template.installed', url.pathname);
-        return;
-      }
-
       // GET /api/network/devices — device inventory
       if (req.method === 'GET' && url.pathname === '/api/network/devices') {
         if (!this.dashboard.onNetworkDevices) {

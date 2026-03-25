@@ -6553,22 +6553,6 @@ function buildDashboardCallbacks(
 
     connectorWorkflowOps,
 
-    onConnectorsTemplates: () => listTemplates(connectors),
-
-    onConnectorsTemplateInstall: (templateId) => {
-      const result = installTemplate(templateId, connectors);
-      if (result.success) {
-        persistConnectorsState();
-        analytics.track({
-          type: 'template_installed',
-          channel: 'system',
-          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-          metadata: { templateId },
-        });
-      }
-      return result;
-    },
-
     onNetworkDevices: () => ({
       devices: deviceInventory.listDevices(),
     }),
