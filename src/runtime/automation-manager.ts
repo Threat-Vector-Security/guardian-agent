@@ -121,7 +121,7 @@ export async function runSavedAutomation(
 
   const result = await executeAsyncMutationOperation(controlPlane, operation, options);
   return isRecord(result)
-    ? result
+    ? normalizeAutomationRunResult(selected, result)
     : { success: false, message: 'Automation run returned an invalid result.' };
 }
 
@@ -274,6 +274,29 @@ async function executeAsyncMutationOperation(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeAutomationRunResult(
+  entry: SavedAutomationCatalogEntry,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...result };
+  if (!entry.workflow) {
+    return normalized;
+  }
+
+  const run = isRecord(result.run) ? result.run : null;
+  if (!run) {
+    return normalized;
+  }
+
+  normalized.run = {
+    ...run,
+    automationId: toNonEmptyString(run.automationId) || toNonEmptyString(run.playbookId) || entry.id,
+    automationName: toNonEmptyString(run.automationName) || toNonEmptyString(run.playbookName) || entry.name,
+    source: 'automation',
+  };
+  return normalized;
 }
 
 function toNonEmptyString(value: unknown): string | undefined {

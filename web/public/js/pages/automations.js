@@ -1195,7 +1195,7 @@ function bindEvents(container, ctx) {
             resultsDiv.innerHTML = `
               <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-secondary);border-radius:8px">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-                  <strong>${esc(result.run.playbookName || autoId)}</strong>
+                  <strong>${esc(result.run.automationName || result.run.playbookName || autoId)}</strong>
                   <span style="color:${result.success ? 'var(--success)' : 'var(--error)'}">${esc(result.status)} (${result.run.durationMs}ms)</span>
                 </div>
                 <div style="margin-bottom:0.5rem">${renderOutputHandlingBadges(runOutputHandling, result.run.promotedFindings || [])}</div>

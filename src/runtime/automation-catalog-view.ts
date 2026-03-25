@@ -46,7 +46,7 @@ export interface AutomationCatalogViewEntry {
   lastRunStatus: string | null;
   runCount: number;
   source: AutomationCatalogSource | null;
-  sourceKind: 'playbook' | 'task' | 'example';
+  sourceKind: 'workflow' | 'task' | 'example';
   builtin: boolean;
   workflow: AssistantConnectorPlaybookDefinition | null;
   task: ScheduledTaskDefinition | null;
@@ -81,7 +81,7 @@ function toAutomationCatalogViewEntry(
   const sourceKind = source === 'builtin_example'
     ? 'example'
     : workflow
-      ? 'playbook'
+      ? 'workflow'
       : 'task';
 
   if (workflow) {

@@ -66,7 +66,7 @@ function makeControlPlane(): AutomationManagerControlPlane {
     updateTask: vi.fn(() => ({ success: true, message: 'Updated task.' })),
     deleteWorkflow: vi.fn(() => ({ success: true, message: 'Deleted workflow.' })),
     deleteTask: vi.fn(() => ({ success: true, message: 'Deleted task.' })),
-    runWorkflow: vi.fn(async () => ({ success: true, status: 'succeeded', run: { playbookId: 'browser-read-smoke' } })),
+    runWorkflow: vi.fn(async () => ({ success: true, status: 'succeeded', run: { playbookId: 'browser-read-smoke', playbookName: 'Browser Read Smoke' } })),
     runTask: vi.fn(async () => ({ success: true, message: 'Task run started.' })),
   };
 }
@@ -99,6 +99,11 @@ describe('automation-manager', () => {
 
     const workflowRun = await runSavedAutomation(controlPlane, 'browser-read-smoke', { origin: 'web', channel: 'web', userId: 'web-user' });
     expect(workflowRun.success).toBe(true);
+    expect(workflowRun.run).toMatchObject({
+      automationId: 'browser-read-smoke',
+      automationName: 'Browser Read Smoke',
+      source: 'automation',
+    });
     expect(controlPlane.runWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       workflowId: 'browser-read-smoke',
       origin: 'web',

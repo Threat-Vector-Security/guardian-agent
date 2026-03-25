@@ -102,7 +102,7 @@ describe('automation-catalog-view', () => {
         id: 'browser-read-smoke',
         category: 'browser',
         kind: 'single',
-        sourceKind: 'playbook',
+        sourceKind: 'workflow',
         cron: '0 8 * * 1',
         scheduleEnabled: true,
         taskId: 'task-linked-1',

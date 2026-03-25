@@ -379,7 +379,7 @@ describe('tryAutomationControlPreRoute', () => {
       },
     });
 
-    expect(result?.content).toContain('built-in starter entry');
+    expect(result?.content).toContain('built-in starter example');
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 });

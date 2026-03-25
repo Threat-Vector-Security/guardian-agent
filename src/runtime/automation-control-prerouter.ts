@@ -190,7 +190,7 @@ function renderAutomationInspectCopy(
       `Enabled: ${selected.enabled ? 'yes' : 'no'}`,
     ];
     if (selected.builtin) {
-      lines.push('Catalog: built-in starter entry');
+      lines.push('Catalog: built-in starter example');
     }
     const cron = toString(selected.task?.cron);
     const eventType = readEventType(selected.task);
@@ -289,7 +289,7 @@ async function runAutomationEntry(
 ): Promise<AutomationControlPreRouteResult> {
   if (entry.builtin) {
     return {
-      content: `'${entry.name}' is a built-in starter entry. Clone or install it first, then run the saved automation.`,
+      content: `'${entry.name}' is a built-in starter example. Create a copy first, then run the saved automation.`,
     };
   }
   const result = await params.executeTool('automation_run', { automationId: entry.id }, toolRequest);
@@ -313,7 +313,7 @@ async function toggleAutomationEntry(
 ): Promise<AutomationControlPreRouteResult> {
   if (entry.builtin) {
     return {
-      content: `'${entry.name}' is a built-in starter entry. Clone or install it first, then enable or disable the saved automation.`,
+      content: `'${entry.name}' is a built-in starter example. Create a copy first, then enable or disable the saved automation.`,
     };
   }
   const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
@@ -341,7 +341,7 @@ async function deleteAutomationEntry(
 ): Promise<AutomationControlPreRouteResult> {
   if (entry.builtin) {
     return {
-      content: `'${entry.name}' is a built-in starter entry and cannot be deleted from the catalog.`,
+      content: `'${entry.name}' is a built-in starter example and cannot be deleted from the catalog.`,
     };
   }
   const result = await params.executeTool('automation_delete', { automationId: entry.id }, toolRequest);
