@@ -128,7 +128,7 @@ describe('tryAutomationControlPreRoute', () => {
     );
   });
 
-  it('fills missing automation names from the user prompt when the gateway omits them', async () => {
+  it('falls back to heuristic name recovery only when no gateway decision is available', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
         return {
@@ -164,20 +164,12 @@ describe('tryAutomationControlPreRoute', () => {
       agentId: 'default',
       message: {
         ...baseMessage,
-        content: 'Run Browser Read Smoke now.',
+        content: 'Show me the automation Browser Read Smoke.',
       },
       executeTool,
-    }, {
-      intentDecision: {
-        route: 'automation_control',
-        confidence: 'high',
-        operation: 'run',
-        summary: 'Run an existing automation.',
-        entities: {},
-      },
     });
 
-    expect(result?.content).toContain("Ran 'Browser Read Smoke'.");
+    expect(result?.content).toContain('Browser Read Smoke (workflow)');
   });
 
   it('toggles workflows from automations-page intents via automation_set_enabled', async () => {

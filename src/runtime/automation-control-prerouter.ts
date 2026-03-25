@@ -130,13 +130,7 @@ function resolveAutomationControlIntent(
 ): AutomationControlIntent | null {
   if (decision) {
     const routed = resolveDecisionBackedIntent(decision);
-    if (routed) {
-      const inferredName = routed.automationName ?? extractAutomationReference(content);
-      return {
-        ...routed,
-        ...(inferredName ? { automationName: inferredName } : {}),
-      };
-    }
+    if (routed) return routed;
   }
   return resolveHeuristicAutomationControlIntent(content);
 }
