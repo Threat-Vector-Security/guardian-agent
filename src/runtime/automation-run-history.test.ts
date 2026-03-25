@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildAutomationRunHistoryEntries } from './automation-run-history.js';
 
 describe('automation-run-history', () => {
-  it('merges workflow runs and scheduled task history into one operator-facing ledger', () => {
+  it('merges automation runs and scheduled task history into one operator-facing ledger', () => {
     const entries = buildAutomationRunHistoryEntries(
       [
         {
@@ -56,7 +56,7 @@ describe('automation-run-history', () => {
       }),
       expect.objectContaining({
         id: 'run-1',
-        source: 'workflow',
+        source: 'automation',
         name: 'Browser Read Smoke',
         status: 'succeeded',
         duration: 40,

@@ -198,7 +198,7 @@ describe('automation-runtime-service', () => {
       expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'template' }),
     ]));
     expect(service.listAutomationRunHistory()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'run-1', source: 'workflow' }),
+      expect.objectContaining({ id: 'run-1', source: 'automation' }),
     ]));
     expect(templateControl.list).toHaveBeenCalled();
 

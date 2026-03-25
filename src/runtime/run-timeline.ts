@@ -21,7 +21,7 @@ export type DashboardRunStatus =
 
 export type DashboardRunKind =
   | 'assistant_dispatch'
-  | 'workflow_run'
+  | 'automation_run'
   | 'code_session'
   | 'scheduled_task';
 
@@ -289,15 +289,15 @@ export class RunTimelineStore {
         baseStatus: mapPlaybookStatus(run.status),
         summary: {
           groupId: run.playbookId,
-          kind: 'workflow_run',
-          title: `Playbook: ${run.playbookName}`,
+          kind: 'automation_run',
+          title: `Automation: ${run.playbookName}`,
           subtitle: nonEmptyText(run.message),
           agentId: run.requestedBy ?? undefined,
           channel: run.origin,
           startedAt: run.startedAt,
           completedAt: run.completedAt,
           durationMs: run.durationMs,
-          tags: ['playbook', run.origin, run.playbookId],
+          tags: ['automation', run.origin, run.playbookId],
         },
         items: buildWorkflowEventItems(run.runId, run.events, 'workflow'),
       });

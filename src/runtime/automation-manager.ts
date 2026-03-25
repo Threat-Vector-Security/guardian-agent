@@ -2,16 +2,16 @@ import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
 import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
 import { buildSavedAutomationCatalogEntries, type SavedAutomationCatalogEntry } from './automation-catalog.js';
 
-export type SavedAutomationMutationToolName =
-  | 'workflow_upsert'
-  | 'workflow_delete'
-  | 'workflow_run'
-  | 'task_update'
-  | 'task_run'
-  | 'task_delete';
+export type SavedAutomationOperationKind =
+  | 'set_workflow_enabled'
+  | 'set_task_enabled'
+  | 'delete_workflow'
+  | 'delete_task'
+  | 'run_workflow'
+  | 'run_task';
 
-export interface SavedAutomationMutationOperation {
-  toolName: SavedAutomationMutationToolName;
+export interface SavedAutomationOperation {
+  kind: SavedAutomationOperationKind;
   args: Record<string, unknown>;
 }
 
@@ -127,12 +127,12 @@ export async function runSavedAutomation(
 
 export function planSavedAutomationRun(
   entry: SavedAutomationCatalogEntry,
-): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationMutationOperation[] } {
+): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationOperation[] } {
   if (entry.workflow) {
     return {
       entry,
       operations: [{
-        toolName: 'workflow_run',
+        kind: 'run_workflow',
         args: {
           workflowId: entry.workflow.id,
         },
@@ -144,7 +144,7 @@ export function planSavedAutomationRun(
   return {
     entry,
     operations: taskId
-      ? [{ toolName: 'task_run', args: { taskId } }]
+      ? [{ kind: 'run_task', args: { taskId } }]
       : [],
   };
 }
@@ -155,7 +155,7 @@ export function planSavedAutomationToggle(
 ): {
   entry: SavedAutomationCatalogEntry;
   enabled: boolean;
-  operations: SavedAutomationMutationOperation[];
+  operations: SavedAutomationOperation[];
 } {
   const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
   if (entry.workflow) {
@@ -163,7 +163,7 @@ export function planSavedAutomationToggle(
       entry,
       enabled,
       operations: [{
-        toolName: 'workflow_upsert',
+        kind: 'set_workflow_enabled',
         args: buildWorkflowToggleArgs(entry.workflow, enabled),
       }],
     };
@@ -174,22 +174,22 @@ export function planSavedAutomationToggle(
     entry,
     enabled,
     operations: taskId
-      ? [{ toolName: 'task_update', args: { taskId, enabled } }]
+      ? [{ kind: 'set_task_enabled', args: { taskId, enabled } }]
       : [],
   };
 }
 
 export function planSavedAutomationDelete(
   entry: SavedAutomationCatalogEntry,
-): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationMutationOperation[] } {
-  const operations: SavedAutomationMutationOperation[] = [];
+): { entry: SavedAutomationCatalogEntry; operations: SavedAutomationOperation[] } {
+  const operations: SavedAutomationOperation[] = [];
   const taskId = toNonEmptyString(entry.task?.id);
   const workflowId = toNonEmptyString(entry.workflow?.id);
   if (taskId) {
-    operations.push({ toolName: 'task_delete', args: { taskId } });
+    operations.push({ kind: 'delete_task', args: { taskId } });
   }
   if (workflowId) {
-    operations.push({ toolName: 'workflow_delete', args: { workflowId } });
+    operations.push({ kind: 'delete_workflow', args: { workflowId } });
   }
   return { entry, operations };
 }
@@ -223,28 +223,28 @@ function cloneTask(task: ScheduledTaskDefinition): ScheduledTaskDefinition {
 
 function executeMutationOperation(
   controlPlane: AutomationManagerControlPlane,
-  operation: SavedAutomationMutationOperation,
+  operation: SavedAutomationOperation,
 ): { success: boolean; message: string } {
-  switch (operation.toolName) {
-    case 'workflow_upsert':
+  switch (operation.kind) {
+    case 'set_workflow_enabled':
       return controlPlane.upsertWorkflow(operation.args as unknown as AssistantConnectorPlaybookDefinition);
-    case 'task_update': {
+    case 'set_task_enabled': {
       const taskId = toNonEmptyString(operation.args.taskId) || '';
       const { taskId: _taskId, ...input } = operation.args;
       return controlPlane.updateTask(taskId, input);
     }
-    case 'workflow_delete':
+    case 'delete_workflow':
       return controlPlane.deleteWorkflow(toNonEmptyString(operation.args.workflowId) || '');
-    case 'task_delete':
+    case 'delete_task':
       return controlPlane.deleteTask(toNonEmptyString(operation.args.taskId) || '');
     default:
-      return { success: false, message: `Mutation '${operation.toolName}' is not supported in direct control.` };
+      return { success: false, message: `Mutation '${operation.kind}' is not supported in direct control.` };
   }
 }
 
 async function executeAsyncMutationOperation(
   controlPlane: AutomationManagerControlPlane,
-  operation: SavedAutomationMutationOperation,
+  operation: SavedAutomationOperation,
   options?: {
     dryRun?: boolean;
     origin?: 'assistant' | 'cli' | 'web';
@@ -254,8 +254,8 @@ async function executeAsyncMutationOperation(
     requestedBy?: string;
   },
 ): Promise<unknown> {
-  switch (operation.toolName) {
-    case 'workflow_run':
+  switch (operation.kind) {
+    case 'run_workflow':
       return controlPlane.runWorkflow({
         workflowId: toNonEmptyString(operation.args.workflowId) || '',
         dryRun: options?.dryRun === true,
@@ -265,10 +265,10 @@ async function executeAsyncMutationOperation(
         channel: options?.channel,
         requestedBy: options?.requestedBy,
       });
-    case 'task_run':
+    case 'run_task':
       return controlPlane.runTask(toNonEmptyString(operation.args.taskId) || '');
     default:
-      return { success: false, message: `Run '${operation.toolName}' is not supported in direct control.` };
+      return { success: false, message: `Run '${operation.kind}' is not supported in direct control.` };
   }
 }
 

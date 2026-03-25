@@ -838,7 +838,7 @@ function renderRunHistory(entries) {
     <tr>
       <td>${formatTime(entry.time)}</td>
       <td>${esc(entry.name)}</td>
-      <td><span class="badge ${entry.source === 'workflow' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
+      <td><span class="badge ${entry.source === 'automation' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
       <td>
         <span style="color:${statusColor(entry.status)}">${esc(entry.status)}</span>
         <div class="ops-task-sub" style="margin-top:0.25rem">${renderOutputHandlingBadges(entry.outputHandling, entry.promotedFindings)}</div>
@@ -2587,8 +2587,8 @@ function formatRunKind(kind) {
   switch (kind) {
     case 'assistant_dispatch':
       return 'assistant';
-    case 'workflow_run':
-      return 'workflow';
+    case 'automation_run':
+      return 'automation';
     case 'scheduled_task':
       return 'scheduled';
     case 'code_session':

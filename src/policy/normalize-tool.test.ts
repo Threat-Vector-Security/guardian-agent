@@ -138,13 +138,14 @@ describe('normalizeToolRequest', () => {
     expect(input.resource.attrs?.method).toBe('send');
   });
 
-  it('extracts workflow IDs', () => {
+  it('extracts automation IDs and kinds', () => {
     const input = normalizeToolRequest(
-      makeRequest({ toolName: 'workflow_delete', args: { workflowId: 'wf-123' } }),
-      makeDefinition({ name: 'workflow_delete', risk: 'mutating', category: 'automation' }),
+      makeRequest({ toolName: 'automation_save', args: { id: 'browser-read-smoke', kind: 'workflow' } }),
+      makeDefinition({ name: 'automation_save', risk: 'mutating', category: 'automation' }),
       'approve_by_policy',
     );
-    expect(input.resource.attrs?.workflowId).toBe('wf-123');
+    expect(input.resource.attrs?.automationId).toBe('browser-read-smoke');
+    expect(input.resource.attrs?.automationKind).toBe('workflow');
   });
 
   it('extracts intel target', () => {

@@ -114,7 +114,7 @@ describe('automation-manager', () => {
     expect(controlPlane.deleteWorkflow).toHaveBeenCalledWith('browser-read-smoke');
   });
 
-  it('builds shared mutation plans for workflow-linked and task-only automations', () => {
+  it('builds shared control plans for workflow-linked and task-only automations', () => {
     const controlPlane = makeControlPlane();
     const workflowEntry = getSavedAutomationById(controlPlane, 'browser-read-smoke');
     const taskEntry = getSavedAutomationById(controlPlane, 'task-agent-1');
@@ -124,23 +124,23 @@ describe('automation-manager', () => {
 
     expect(planSavedAutomationToggle(workflowEntry!, false)).toMatchObject({
       enabled: false,
-      operations: [{ toolName: 'workflow_upsert' }],
+      operations: [{ kind: 'set_workflow_enabled' }],
     });
     expect(planSavedAutomationRun(workflowEntry!).operations).toEqual([
-      { toolName: 'workflow_run', args: { workflowId: 'browser-read-smoke' } },
+      { kind: 'run_workflow', args: { workflowId: 'browser-read-smoke' } },
     ]);
     expect(planSavedAutomationDelete(workflowEntry!).operations).toEqual([
-      { toolName: 'task_delete', args: { taskId: 'task-linked-1' } },
-      { toolName: 'workflow_delete', args: { workflowId: 'browser-read-smoke' } },
+      { kind: 'delete_task', args: { taskId: 'task-linked-1' } },
+      { kind: 'delete_workflow', args: { workflowId: 'browser-read-smoke' } },
     ]);
 
     expect(planSavedAutomationToggle(taskEntry!, false)).toEqual({
       entry: taskEntry,
       enabled: false,
-      operations: [{ toolName: 'task_update', args: { taskId: 'task-agent-1', enabled: false } }],
+      operations: [{ kind: 'set_task_enabled', args: { taskId: 'task-agent-1', enabled: false } }],
     });
     expect(planSavedAutomationRun(taskEntry!).operations).toEqual([
-      { toolName: 'task_run', args: { taskId: 'task-agent-1' } },
+      { kind: 'run_task', args: { taskId: 'task-agent-1' } },
     ]);
   });
 });

@@ -26,7 +26,7 @@ export function buildAutomationRunHistoryEntries(
       id: run.id,
       time: run.startedAt || run.createdAt || 0,
       name: run.playbookName || run.playbookId || '',
-      source: 'workflow',
+      source: 'automation',
       status: run.status || '',
       duration: run.durationMs || 0,
       steps: run.steps.map((step) => ({ ...step })),
@@ -41,7 +41,7 @@ export function buildAutomationRunHistoryEntries(
       time: item.timestamp || 0,
       name: item.taskName || '',
       source: item.taskType === 'playbook'
-        ? 'scheduled workflow'
+        ? 'scheduled automation'
         : item.taskType === 'agent'
           ? 'scheduled assistant'
           : 'scheduled',

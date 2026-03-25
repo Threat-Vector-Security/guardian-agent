@@ -134,17 +134,16 @@ function extractResourceAttrs(
       if (typeof args.method === 'string') attrs.method = args.method;
       break;
 
-    // Automation: extract workflow/task IDs
-    case 'workflow_upsert':
-    case 'workflow_delete':
-    case 'workflow_run':
-      if (typeof args.workflowId === 'string') attrs.workflowId = args.workflowId;
-      if (typeof args.id === 'string') attrs.workflowId = args.id;
+    // Automation: extract canonical automation identifiers
+    case 'automation_save':
+      if (typeof args.automationId === 'string') attrs.automationId = args.automationId;
+      if (typeof args.id === 'string') attrs.automationId = args.id;
+      if (typeof args.kind === 'string') attrs.automationKind = args.kind;
       break;
-    case 'task_create':
-    case 'task_update':
-    case 'task_delete':
-      if (typeof args.taskId === 'string') attrs.taskId = args.taskId;
+    case 'automation_set_enabled':
+    case 'automation_run':
+    case 'automation_delete':
+      if (typeof args.automationId === 'string') attrs.automationId = args.automationId;
       break;
 
     // Intel: extract target/finding
