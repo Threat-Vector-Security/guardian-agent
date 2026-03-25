@@ -465,7 +465,7 @@ assistant:
     policyMode: approve_by_policy
     toolPolicies:
       fs_write: auto
-      workflow_run: auto
+      automation_run: auto
     allowedPaths:
       - ${JSON.stringify(harnessHome)}
     allowedDomains:

@@ -3361,20 +3361,30 @@ class ChatAgent extends BaseAgent {
     };
 
     const toolResult = await this.tools!.executeModelTool(
-      'task_create',
+      'automation_save',
       {
+        id: taskName
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'scheduled-email-automation',
         name: taskName,
-        type: 'tool',
-        target: 'gws',
-        cron: input.schedule.cron,
-        runOnce: input.schedule.runOnce,
         enabled: true,
-        args: {
-          service: 'gmail',
-          resource: 'users messages',
-          method: 'send',
-          params: { userId: 'me' },
-          json: { raw },
+        kind: 'standalone_task',
+        task: {
+          target: 'gws',
+          args: {
+            service: 'gmail',
+            resource: 'users messages',
+            method: 'send',
+            params: { userId: 'me' },
+            json: { raw },
+          },
+        },
+        schedule: {
+          enabled: true,
+          cron: input.schedule.cron,
+          runOnce: input.schedule.runOnce,
         },
       },
       toolRequest,
@@ -3389,24 +3399,24 @@ class ChatAgent extends BaseAgent {
           this.setPendingApprovals(input.userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: input.schedule.runOnce
-              ? `I created the one-shot email task to ${to}.`
-              : `I created the recurring email task to ${to}.`,
-            denied: 'I did not create the scheduled email task.',
+              ? `I created the one-shot email automation to ${to}.`
+              : `I created the recurring email automation to ${to}.`,
+            denied: 'I did not create the scheduled email automation.',
           });
         }
         const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
         return [
-          `I prepared a ${input.schedule.runOnce ? 'one-shot' : 'recurring'} email task to ${to}.`,
+          `I prepared a ${input.schedule.runOnce ? 'one-shot' : 'recurring'} email automation to ${to}.`,
           prompt,
         ].filter(Boolean).join('\n\n');
       }
-      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Scheduled email task creation failed.';
-      return `I tried to create the scheduled email task, but it failed: ${msg}`;
+      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Scheduled email automation creation failed.';
+      return `I tried to create the scheduled email automation, but it failed: ${msg}`;
     }
 
     return input.schedule.runOnce
-      ? `I created a one-shot email task to ${to}. It will run on the next scheduled time.`
-      : `I created a recurring email task to ${to}.`;
+      ? `I created a one-shot email automation to ${to}. It will run on the next scheduled time.`
+      : `I created a recurring email automation to ${to}.`;
   }
 
   private async tryDirectGoogleWorkspaceRead(

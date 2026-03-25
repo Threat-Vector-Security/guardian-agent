@@ -289,13 +289,6 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'automation_set_enabled',
   'automation_run',
   'automation_delete',
-  'task_create',
-  'task_update',
-  'task_run',
-  'task_delete',
-  'workflow_upsert',
-  'workflow_run',
-  'workflow_delete',
 ]);
 const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
   'shell_safe',
@@ -1355,9 +1348,6 @@ export class ToolExecutor {
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
       'automation_list', 'automation_save', 'automation_set_enabled', 'automation_run', 'automation_delete',
-      'task_create', 'task_update', 'task_run', 'task_delete',
-      'workflow_upsert', 'workflow_run', 'workflow_delete',
-      'workflow_list', 'task_list',
     ];
     const defs: ToolDefinition[] = [];
     for (const name of codingToolNames) {

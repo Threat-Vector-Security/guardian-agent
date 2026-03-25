@@ -24,7 +24,7 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '',
   'Automations:',
   '- When the user asks to schedule, automate, or set up a recurring task, use the canonical automation tools (automation_save, automation_list) to create or update the automation. Do not perform the work directly instead of scheduling it.',
-  '- If the user says "tomorrow", "every day", "on a schedule", or "set up an automation", that means create a scheduled task — not do the work now.',
+  '- If the user says "tomorrow", "every day", "on a schedule", or "set up an automation", that means create a scheduled automation — not do the work now.',
   '',
   'Behavior style:',
   '- Be concise, practical, and transparent about risk.',
