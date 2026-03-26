@@ -60,6 +60,7 @@ For the shipped local defensive overlay on top of the runtime security model, se
 | Overlapping scheduled side effects | per-task active-run locks, approval expiry, principal binding, scope hash drift checks | Enabled by default | different schedules can still target overlapping real-world systems if operators configure them that way |
 | Script drift during automation creation | native automation compiler, intercepted automation-intent path, script/code-file authoring bans for native Guardian automations | Enabled by default | generic chat outside automation-authoring intent still requires normal tool governance |
 | Suspicious repo/workspace content in coding sessions | bounded repo trust review, native AV enrichment, approval gating for execution/persistence, trust invalidation on drift | Enabled by default | a `trusted` result is not a proof the repo is safe |
+| Malicious or hijacked public package installs | managed `package_install` staging path, bounded archive review, native AV enrichment, caution acceptance, unified install alerts | Available through the dedicated tool path | coverage is currently limited to Guardian-managed installs and v1 stages the requested top-level artifacts rather than the full resolved dependency closure |
 | Host drift or suspicious local activity | host monitor, unified alerts, containment recommendations, risk-action blocking under critical or stacked alerts | Available but operator-configurable | this is practical host monitoring, not full EDR-grade telemetry |
 | Gateway firewall drift | gateway monitor, unified alerts, containment recommendations, risky-network-action blocking | Available but operator-configurable | relies on operator-supplied collectors and normalized gateway state |
 | Browser-to-localhost attacks against the web UI | bearer auth, HttpOnly `SameSite=Strict` cookies, CORS validation, privileged tickets, auth-failure rate limiting, SSE auth | Enabled by default | a valid bearer token still grants web access within the authorization model |
@@ -86,6 +87,42 @@ The shipped security posture is intentionally restrictive on the paths that wide
 | `assistant.tools.mcp.servers[].startupApproved` | `false` unless the operator explicitly sets it | third-party MCP commands do not auto-launch from config until they are explicitly trusted |
 | `assistant.tools.mcp.servers[].networkAccess` | `false` unless the operator explicitly sets it | third-party MCP subprocesses do not get broad outbound egress by default |
 | `assistant.tools.mcp.servers[].inheritEnv` | `false` unless the operator explicitly sets it | third-party MCP subprocesses start from a minimal inherited environment instead of the full parent env |
+
+## Managed Package Install Trust
+
+GuardianAgent includes a host-level package supply-chain control for public package repositories. This capability is separate from coding-workspace repo trust. It reduces the risk of installing hijacked or malicious packages by forcing supported install commands through a managed pre-install review path.
+
+### Scope
+
+- The primary surface is the `package_install` tool
+- The feature is target-agnostic rather than workspace-scoped: it can install into the working directory, an explicit directory such as `--prefix` or `--target`, user-level locations, or global targets when the command is otherwise allowed
+- The current v1 path supports explicit public-registry installs for `npm`, `pnpm`, `yarn`, `bun`, and `pip install`
+- Current coverage applies to Guardian-managed installs only; unmanaged terminal installs are not yet intercepted by the same trust path
+
+### Execution Model
+
+1. Guardian parses the package-manager command and rejects unsupported or ambiguous forms such as command chaining, redirects, direct URLs, VCS specs, local paths, requirements files, and editable installs.
+2. Guardian stages the requested top-level package artifacts into a quarantine directory before the real install step runs.
+3. The staged archives go through bounded static inspection for install-time lifecycle scripts, Python build hooks, fetch-and-exec patterns, encoded execution chains, native binaries, and transitive-dependency indicators.
+4. When native malware scanning is available, Guardian enriches the staged review with Windows Defender or ClamAV results.
+5. `blocked` findings stop the install before the package manager executes against the requested target.
+6. `caution` findings pause the install and require an explicit operator re-run with `allowCaution`.
+7. If the review is `trusted`, or the operator explicitly accepts a `caution` result, Guardian installs from the staged artifacts rather than re-resolving the original package spec directly.
+
+### Current Boundary
+
+- The review is intentionally bounded rather than a full package sandbox
+- v1 stages and inspects the requested top-level artifacts, not the complete resolved dependency closure
+- A `trusted` result means the current bounded checks did not find deterministic indicators; it is not a proof the package is safe
+- `blocked` results are not overridable through `allowCaution`
+- On degraded sandbox backends, install-like package-manager commands remain disabled unless the operator explicitly enables degraded package-manager fallback
+
+### Operator Surfaces
+
+- The web, CLI, and Telegram assistant flows can invoke `package_install` instead of sending install-like commands to `shell_safe`
+- Package-install findings are normalized into the unified local security alert model as source `install`
+- The Security page can show package-install caution and blocked alerts alongside host, network, gateway, native, and Assistant Security findings
+- Package-install findings also contribute to posture-oriented risk summaries, but they are treated as posture evidence rather than direct incident proof on their own
 
 ---
 

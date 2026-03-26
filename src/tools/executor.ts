@@ -26,6 +26,11 @@ import type {
   AiSecurityScanResult,
   AiSecurityService,
 } from '../runtime/ai-security.js';
+import type { PackageInstallTrustService } from '../runtime/package-install-trust-service.js';
+import {
+  isInstallLikePackageManagerCommand,
+  parseManagedPackageInstallCommand,
+} from '../runtime/package-install-trust.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
@@ -573,6 +578,7 @@ export interface ToolExecutorOptions {
   allowedDomains?: string[];
   threatIntel?: ThreatIntelService;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
   runAssistantSecurityScan?: (input: {
     profileId?: string;
     targetIds?: string[];
@@ -2387,6 +2393,20 @@ export class ToolExecutor {
   }
 
   private preflightSandbox(toolName: string, args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    if (toolName === 'package_install') {
+      const command = asString(args.command).trim();
+      if (!command) return null;
+      const degradedPackageManagerReason = this.getDegradedPackageManagerBlockReason(command);
+      if (degradedPackageManagerReason) {
+        return { reason: degradedPackageManagerReason };
+      }
+      const planned = parseManagedPackageInstallCommand(command);
+      if (!planned.success) {
+        return { reason: planned.error ?? 'Managed package install planning failed.' };
+      }
+      return null;
+    }
+
     const pathCheck = this.preflightPathArgs(args);
     if (pathCheck) return pathCheck;
 
@@ -3597,11 +3617,26 @@ export class ToolExecutor {
       if (!command) {
         return null;
       }
+      if (isInstallLikePackageManagerCommand(command)) {
+        const plannedInstall = parseManagedPackageInstallCommand(command);
+        return plannedInstall.success
+          ? 'Install-like package manager commands must use package_install so Guardian can stage and review the package artifacts first.'
+          : `Install-like package manager commands must use package_install. ${plannedInstall.error ?? 'This install form is not supported by managed package installs in v1.'}`;
+      }
       const cwd = typeof args.cwd === 'string' && args.cwd.trim()
         ? await this.resolveAllowedPath(args.cwd.trim(), request)
         : this.getEffectiveWorkspaceRoot(request);
       const shellCheck = this.validateShellCommandForRequest(command, request, cwd);
       return shellCheck.safe ? null : shellCheck.reason ?? 'Command failed shell safety validation.';
+    }
+
+    if (toolName === 'package_install') {
+      const command = typeof args.command === 'string' ? args.command.trim() : '';
+      if (!command) {
+        return 'command is required';
+      }
+      const plannedInstall = parseManagedPackageInstallCommand(command);
+      return plannedInstall.success ? null : (plannedInstall.error ?? 'Managed package install planning failed.');
     }
 
     if (toolName === 'fs_read' || toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete' || toolName === 'doc_create') {
@@ -5399,6 +5434,65 @@ export class ToolExecutor {
             path: safePath,
             template,
             bytes: Buffer.byteLength(finalBody, 'utf-8'),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'package_install',
+        description: 'Run a managed package install through Guardian\'s staged trust path. Supported in v1 for explicit public-registry npm/pnpm/yarn/bun add-style commands and pip install commands. Guardian stages the requested top-level artifacts, runs bounded static checks plus native AV when available, and only then proceeds with the install. Mutating — requires approval. Requires execute_commands capability.',
+        shortDescription: 'Stage, review, and then run a managed package install.',
+        risk: 'mutating',
+        category: 'shell',
+        examples: [
+          { input: { command: 'npm install lodash' }, description: 'Stage and install a Node package through the managed trust path' },
+          { input: { command: 'pip install requests', allowCaution: true }, description: 'Proceed with a managed pip install after accepting caution-level findings' },
+        ],
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Package-manager command to run through the managed install path.' },
+            cwd: { type: 'string', description: 'Optional working directory for the install command. Unlike shell_safe, this is not limited to allowedPaths.' },
+            allowCaution: { type: 'boolean', description: 'Proceed when the staged review result is caution. Blocked findings still stop the install.' },
+          },
+          required: ['command'],
+        },
+      },
+      async (args, request) => {
+        if (!this.options.packageInstallTrust) {
+          return { success: false, error: 'Managed package install trust is not available in this Guardian runtime.' };
+        }
+        const command = requireString(args.command, 'command').trim();
+        const cwd = asString(args.cwd).trim() || undefined;
+        const allowCaution = !!args.allowCaution;
+        this.guardAction(request, 'execute_command', {
+          command,
+          cwd,
+          managed: true,
+          tool: 'package_install',
+          allowCaution,
+        });
+        const result = await this.options.packageInstallTrust.runManagedInstall({
+          command,
+          cwd,
+          allowCaution,
+        });
+        if (!result.success) {
+          return {
+            success: false,
+            error: result.message,
+          };
+        }
+        return {
+          success: true,
+          message: result.message,
+          output: {
+            status: result.status,
+            alertId: result.alertId,
+            event: result.event,
+            message: result.message,
           },
         };
       },
@@ -12861,8 +12955,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_alert_search',
-        description: 'Search and filter unified security alerts across workstation host monitoring, network anomaly alerts, gateway firewall monitoring, and native security-provider alerts such as Windows Defender. Read-only.',
-        shortDescription: 'Search unified security alerts across host, network, gateway, and native sources.',
+        description: 'Search and filter unified security alerts across workstation host monitoring, network anomaly alerts, gateway firewall monitoring, native security-provider alerts such as Windows Defender, Assistant Security findings, and managed package-install trust alerts. Read-only.',
+        shortDescription: 'Search unified security alerts across host, network, gateway, native, assistant, and install sources.',
         risk: 'read_only',
         category: 'system',
         deferLoading: true,
@@ -12870,10 +12964,10 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Optional free-text query matched against source, type, description, and evidence.' },
-            source: { type: 'string', description: 'Optional single source filter: host, network, gateway, native, or assistant.' },
+            source: { type: 'string', description: 'Optional single source filter: host, network, gateway, native, assistant, or install.' },
             sources: {
               type: 'array',
-              description: 'Optional list of source filters: any of host, network, gateway, native, assistant.',
+              description: 'Optional list of source filters: any of host, network, gateway, native, assistant, or install.',
               items: { type: 'string' },
             },
             severity: { type: 'string', description: 'Optional severity filter: low, medium, high, or critical.' },
@@ -12886,7 +12980,7 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        if (!this.options.hostMonitor && !this.options.networkBaseline && !this.options.gatewayMonitor && !this.options.windowsDefender && !this.options.assistantSecurity) {
+        if (!this.options.hostMonitor && !this.options.networkBaseline && !this.options.gatewayMonitor && !this.options.windowsDefender && !this.options.assistantSecurity && !this.options.packageInstallTrust) {
           return { success: false, error: 'No security alert sources are available.' };
         }
 
@@ -12923,6 +13017,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
           includeAcknowledged,
           includeInactive,
         });
@@ -12945,7 +13040,7 @@ export class ToolExecutor {
 
         alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
         const filteredTotal = alerts.length;
-        const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
+        const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0, install: 0 };
         const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
         for (const alert of alerts) {
           bySource[alert.source] += 1;
@@ -12975,7 +13070,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_posture_status',
-        description: 'Summarize current security posture across available host, network, gateway, native, and Assistant Security alert sources and recommend whether to stay in monitor mode or move to guarded, lockdown, or ir_assist. Read-only.',
+        description: 'Summarize current security posture across available host, network, gateway, native, Assistant Security, and managed package-install trust alert sources and recommend whether to stay in monitor mode or move to guarded, lockdown, or ir_assist. Read-only.',
         shortDescription: 'Summarize security posture and recommend an operating mode.',
         risk: 'read_only',
         category: 'system',
@@ -13013,6 +13108,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
           includeAcknowledged,
           includeInactive: false,
         });
@@ -13071,6 +13167,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
           includeAcknowledged: false,
           includeInactive: false,
         });
@@ -13096,7 +13193,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_alert_ack',
-        description: 'Acknowledge a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts. Mutating and approval-gated.',
+        description: 'Acknowledge a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, native security-provider alerts, Assistant Security findings, or package-install trust alerts. Mutating and approval-gated.',
         shortDescription: 'Acknowledge a security alert by id.',
         risk: 'mutating',
         category: 'system',
@@ -13105,7 +13202,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to acknowledge.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, assistant, or install.' },
           },
           required: ['alertId'],
         },
@@ -13114,7 +13211,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'." };
         }
         this.guardAction(request, 'write_file', {
           path: 'security:alerts',
@@ -13130,6 +13227,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -13148,7 +13246,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_alert_resolve',
-        description: 'Resolve a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts. Mutating and approval-gated.',
+        description: 'Resolve a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, native security-provider alerts, Assistant Security findings, or package-install trust alerts. Mutating and approval-gated.',
         shortDescription: 'Resolve a security alert by id.',
         risk: 'mutating',
         category: 'system',
@@ -13157,7 +13255,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to resolve.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, assistant, or install.' },
             reason: { type: 'string', description: 'Optional operator reason for resolving the alert.' },
           },
           required: ['alertId'],
@@ -13167,7 +13265,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'." };
         }
         const reason = asString(args.reason).trim() || undefined;
         this.guardAction(request, 'write_file', {
@@ -13186,6 +13284,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -13204,7 +13303,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'security_alert_suppress',
-        description: 'Suppress a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts until a future timestamp. Mutating and approval-gated.',
+        description: 'Suppress a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, native security-provider alerts, Assistant Security findings, or package-install trust alerts until a future timestamp. Mutating and approval-gated.',
         shortDescription: 'Suppress a security alert until a future timestamp.',
         risk: 'mutating',
         category: 'system',
@@ -13213,7 +13312,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             alertId: { type: 'string', description: 'Security alert id to suppress.' },
-            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, or assistant.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, native, assistant, or install.' },
             suppressedUntil: { type: 'number', description: 'UTC timestamp in milliseconds when suppression expires.' },
             reason: { type: 'string', description: 'Optional operator reason for suppressing the alert.' },
           },
@@ -13224,7 +13323,7 @@ export class ToolExecutor {
         const alertId = requireString(args.alertId, 'alertId').trim();
         const source = normalizeSecurityAlertSources(args.source, undefined)[0];
         if (asString(args.source).trim() && !source) {
-          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'." };
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'." };
         }
         const suppressedUntil = asNumber(args.suppressedUntil, NaN);
         if (!Number.isFinite(suppressedUntil)) {
@@ -13249,6 +13348,7 @@ export class ToolExecutor {
           gatewayMonitor: this.options.gatewayMonitor,
           windowsDefender: this.options.windowsDefender,
           assistantSecurity: this.options.assistantSecurity,
+          packageInstallTrust: this.options.packageInstallTrust,
         });
         if (!result.success) {
           return { success: false, error: result.message };
@@ -15620,6 +15720,9 @@ export class ToolExecutor {
     }
     if (isDegradedSandboxFallbackActive(this.sandboxConfig, health)) {
       const degradedFallback = resolveDegradedFallbackConfig(this.sandboxConfig);
+      if (toolName === 'package_install' && !degradedFallback.allowPackageManagers) {
+        return `Tool '${toolName}' is blocked on degraded sandbox backends by default because managed package installs require ${DEGRADED_PACKAGE_MANAGER_HINT}.`;
+      }
       if (toolName === 'web_search' && !degradedFallback.allowNetworkTools) {
         return `Tool '${toolName}' is blocked on degraded sandbox backends by default because network and web search access require assistant.tools.sandbox.degradedFallback.allowNetworkTools.`;
       }

@@ -82,6 +82,8 @@ import {
   type CodeSessionFileReferenceInput,
 } from './runtime/code-session-file-references.js';
 import { CodeWorkspaceTrustService } from './runtime/code-workspace-trust-service.js';
+import { PackageInstallNativeProtectionScanner } from './runtime/package-install-native-protection.js';
+import { PackageInstallTrustService } from './runtime/package-install-trust-service.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
 import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
@@ -256,6 +258,7 @@ import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToo
 
 const log = createLogger('main');
 let sharedCodeWorkspaceTrustService: CodeWorkspaceTrustService | undefined;
+let sharedPackageInstallTrustService: PackageInstallTrustService | undefined;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -5312,6 +5315,16 @@ function buildDashboardCallbacks(
     };
   };
 
+  const reconcileConfiguredAllowedPaths = (): void => {
+    const configuredAllowedPaths = [...configRef.current.assistant.tools.allowedPaths];
+    const currentAllowedPaths = toolExecutor.getPolicy().sandbox.allowedPaths;
+    if (configuredAllowedPaths.length === currentAllowedPaths.length
+      && configuredAllowedPaths.every((value, index) => value === currentAllowedPaths[index])) {
+      return;
+    }
+    toolExecutor.updatePolicy({ sandbox: { allowedPaths: configuredAllowedPaths } });
+  };
+
   const persistAndApplyConfig = (
     rawConfig: Record<string, unknown>,
     meta?: { changedBy?: string; reason?: string },
@@ -6726,6 +6739,7 @@ function buildDashboardCallbacks(
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
         includeAcknowledged,
         includeInactive,
       });
@@ -6747,7 +6761,7 @@ function buildDashboardCallbacks(
       }
 
       alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
+      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0, install: 0 };
       const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
       for (const alert of alerts) {
         bySource[alert.source] += 1;
@@ -6764,6 +6778,7 @@ function buildDashboardCallbacks(
           gatewayMonitor,
           windowsDefender,
           assistantSecurity: aiSecurity,
+          packageInstallTrust: sharedPackageInstallTrustService,
         }),
         includeAcknowledged,
         includeInactive,
@@ -6788,6 +6803,7 @@ function buildDashboardCallbacks(
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
       });
       return {
         success: result.success,
@@ -6809,6 +6825,7 @@ function buildDashboardCallbacks(
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
       });
       return {
         success: result.success,
@@ -6831,6 +6848,7 @@ function buildDashboardCallbacks(
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
       });
       return {
         success: result.success,
@@ -6854,6 +6872,7 @@ function buildDashboardCallbacks(
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
         includeAcknowledged,
         includeInactive: false,
       });
@@ -6867,6 +6886,7 @@ function buildDashboardCallbacks(
           gatewayMonitor,
           windowsDefender,
           assistantSecurity: aiSecurity,
+          packageInstallTrust: sharedPackageInstallTrustService,
         }),
       });
     },
@@ -6885,6 +6905,7 @@ function buildDashboardCallbacks(
           gatewayMonitor,
           windowsDefender,
           assistantSecurity: aiSecurity,
+          packageInstallTrust: sharedPackageInstallTrustService,
         }),
       });
       return containmentService.getState({
@@ -7109,15 +7130,9 @@ function buildDashboardCallbacks(
         agentId: agentId?.trim() || null,
       });
       const session = sharedCodeWorkspaceTrustService?.maybeSchedule(created) ?? created;
-      // Auto-add workspace root to allowed paths on create so the LLM sees it
-      // in <tool-context> and never calls update_tool_policy for the workspace.
-      if (session.resolvedRoot && toolExecutor) {
-        const currentAllowed = toolExecutor.getPolicy().sandbox.allowedPaths;
-        if (!currentAllowed.some((p: string) => session.resolvedRoot.startsWith(p) || p.startsWith(session.resolvedRoot))) {
-          toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...currentAllowed, session.resolvedRoot] } });
-          log.info({ sessionId: session.id, path: session.resolvedRoot }, 'Auto-added code session workspace root to allowed paths');
-        }
-      }
+      // Code-session workspace access is scoped via codeContext, not by mutating
+      // the global live allowlist visible to non-Code surfaces.
+      toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
       if (attach !== false) {
         codeSessionStore.attachSession({
           sessionId: session.id,
@@ -7165,6 +7180,7 @@ function buildDashboardCallbacks(
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
       const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
       const deleted = codeSessionStore.deleteSession(sessionId, canonicalUserId);
+      toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
       const current = codeSessionStore.resolveForRequest({
         userId: canonicalUserId,
         principalId,
@@ -7191,14 +7207,7 @@ function buildDashboardCallbacks(
         mode,
       });
       const session = codeSessionStore.getSession(sessionId, canonicalUserId);
-      // Auto-add workspace root to allowed paths on attach (covers resumed sessions).
-      if (session?.resolvedRoot && toolExecutor) {
-        const currentAllowed = toolExecutor.getPolicy().sandbox.allowedPaths;
-        if (!currentAllowed.some((p: string) => session.resolvedRoot.startsWith(p) || p.startsWith(session.resolvedRoot))) {
-          toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...currentAllowed, session.resolvedRoot] } });
-          log.info({ sessionId: session.id, path: session.resolvedRoot }, 'Auto-added code session workspace root to allowed paths on attach');
-        }
-      }
+      reconcileConfiguredAllowedPaths();
       return {
         success: !!attachment && !!session,
         ...(session ? {
@@ -7216,12 +7225,14 @@ function buildDashboardCallbacks(
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
       const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const success = codeSessionStore.detachSession({
+        userId: canonicalUserId,
+        channel: resolvedChannel,
+        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+      });
+      reconcileConfiguredAllowedPaths();
       return {
-        success: codeSessionStore.detachSession({
-          userId: canonicalUserId,
-          channel: resolvedChannel,
-          surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        }),
+        success,
       };
     },
 
@@ -10052,6 +10063,12 @@ async function main(): Promise<void> {
   await gatewayMonitor.load().catch(() => {});
   const windowsDefender = new WindowsDefenderProvider();
   await windowsDefender.load().catch(() => {});
+  sharedPackageInstallTrustService = new PackageInstallTrustService({
+    nativeProtectionScanner: new PackageInstallNativeProtectionScanner({
+      windowsDefender,
+    }),
+  });
+  await sharedPackageInstallTrustService.load().catch(() => {});
   sharedCodeWorkspaceTrustService = new CodeWorkspaceTrustService({
     codeSessionStore,
     scanner: new CodeWorkspaceNativeProtectionScanner({
@@ -10335,6 +10352,7 @@ async function main(): Promise<void> {
       gatewayMonitor,
       windowsDefender,
       assistantSecurity: aiSecurity,
+      packageInstallTrust: sharedPackageInstallTrustService,
       includeAcknowledged: false,
       includeInactive: false,
     });
@@ -10348,6 +10366,7 @@ async function main(): Promise<void> {
         gatewayMonitor,
         windowsDefender,
         assistantSecurity: aiSecurity,
+        packageInstallTrust: sharedPackageInstallTrustService,
       }),
     });
     return { profile, currentMode, alerts, posture, assistantAutoContainment };
@@ -10752,7 +10771,7 @@ async function main(): Promise<void> {
       }
 
       const hostRelevant = new Set([
-        'shell_safe', 'net_connections', 'sys_processes',
+        'shell_safe', 'package_install', 'net_connections', 'sys_processes',
         'browser_navigate', 'browser_read', 'browser_links', 'browser_extract', 'browser_state', 'browser_act', 'browser_interact',
         'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
         'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
@@ -10846,6 +10865,7 @@ async function main(): Promise<void> {
     sandboxHealth,
     threatIntel,
     assistantSecurity: aiSecurity,
+    packageInstallTrust: sharedPackageInstallTrustService,
     runAssistantSecurityScan,
     onCheckAction: ({ type, params, agentId, origin }) => {
       const capMap: Record<string, string[]> = {
@@ -12185,6 +12205,7 @@ async function main(): Promise<void> {
       try { conversations.close(); } catch { /* already closed */ }
       try { codeSessionStore.close(); } catch { /* already closed */ }
       try { analytics.close(); } catch { /* already closed */ }
+      toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
 
       tryDelete('assistant-memory.sqlite', resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite'));
       tryDelete('assistant-code-sessions.sqlite', resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite'));

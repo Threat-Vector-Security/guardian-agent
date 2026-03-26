@@ -3556,7 +3556,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
             </div>
             ${activeSession ? `
               <div data-code-assistant-tabs-host>${renderAssistantTabs(activeSession)}</div>
-              <div data-code-assistant-panel-host>${renderAssistantPanel(activeSession)}</div>
+              <div class="code-assistant-panel" data-code-assistant-panel-host>${renderAssistantPanel(activeSession)}</div>
             ` : '<div class="empty-state">Create a session to start chatting.</div>'}
           </aside>
         </section>
@@ -5040,41 +5040,43 @@ function renderAssistantPanel(session) {
         : '';
       const hasVisibleMessages = committedMessages.length > 0 || !!pendingUserMessage;
       return `
-        <div class="code-chat__meta">
-          <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
-        </div>
-        ${renderWorkspaceTrustNotice(session)}
-        ${renderChatNotice(session)}
-        <div class="code-chat__history">
-          ${!hasVisibleMessages
-            ? `<div class="code-chat__onboarding">
-                <div class="code-chat__onboarding-title">Getting Started</div>
-                <ul class="code-chat__onboarding-list">
-                  <li>Describe a bug, feature, or refactor in plain language</li>
-                  <li>The agent reads files, edits code, and runs commands</li>
-                  <li>Mutating actions go through Guardian approval automatically</li>
-                  <li>Coding tools are built in &mdash; just describe what you need</li>
-                </ul>
-              </div>`
-            : `${committedMessages.map((message, idx) => {
-                const isLastAgent = message.role === 'agent' && !committedMessages.slice(idx + 1).some((m) => m.role === 'agent');
-                const inlineApprovals = isLastAgent && !pendingUserMessage && Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0
-                  ? session.pendingApprovals
-                  : null;
-                return renderCodeMessage(message.role, message.content, '', inlineApprovals, message.responseSource);
-              }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
-        </div>
-        <form class="code-chat__form" data-code-chat-form>
-          <div class="code-chat__refs" data-code-chat-ref-list${Array.isArray(session.draftFileReferences) && session.draftFileReferences.length > 0 ? '' : ' hidden'}>
-            ${renderCodeChatDraftReferencesMarkup(session.draftFileReferences)}
+        <div class="code-assistant-panel__body">
+          <div class="code-chat__meta">
+            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
           </div>
-          <div class="code-chat__composer">
-            <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want. Type @ to tag files or docs." title="Type @ to tag workspace files or docs and inject that context into this turn.">${esc(session.chatDraft || '')}</textarea>
-            <div class="code-chat__mention-menu" data-code-chat-mention-menu hidden></div>
+          ${renderWorkspaceTrustNotice(session)}
+          ${renderChatNotice(session)}
+          <div class="code-chat__history">
+            ${!hasVisibleMessages
+              ? `<div class="code-chat__onboarding">
+                  <div class="code-chat__onboarding-title">Getting Started</div>
+                  <ul class="code-chat__onboarding-list">
+                    <li>Describe a bug, feature, or refactor in plain language</li>
+                    <li>The agent reads files, edits code, and runs commands</li>
+                    <li>Mutating actions go through Guardian approval automatically</li>
+                    <li>Coding tools are built in &mdash; just describe what you need</li>
+                  </ul>
+                </div>`
+              : `${committedMessages.map((message, idx) => {
+                  const isLastAgent = message.role === 'agent' && !committedMessages.slice(idx + 1).some((m) => m.role === 'agent');
+                  const inlineApprovals = isLastAgent && !pendingUserMessage && Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0
+                    ? session.pendingApprovals
+                    : null;
+                  return renderCodeMessage(message.role, message.content, '', inlineApprovals, message.responseSource);
+                }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
           </div>
-          <div class="code-chat__hint">Type <code>@</code> to tag files or docs into this turn's model context.</div>
-          <button class="btn btn-primary" type="submit">Send</button>
-        </form>
+          <form class="code-chat__form" data-code-chat-form>
+            <div class="code-chat__refs" data-code-chat-ref-list${Array.isArray(session.draftFileReferences) && session.draftFileReferences.length > 0 ? '' : ' hidden'}>
+              ${renderCodeChatDraftReferencesMarkup(session.draftFileReferences)}
+            </div>
+            <div class="code-chat__composer">
+              <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want. Type @ to tag files or docs." title="Type @ to tag workspace files or docs and inject that context into this turn.">${esc(session.chatDraft || '')}</textarea>
+              <div class="code-chat__mention-menu" data-code-chat-mention-menu hidden></div>
+            </div>
+            <div class="code-chat__hint">Type <code>@</code> to tag files or docs into this turn's model context.</div>
+            <button class="btn btn-primary" type="submit">Send</button>
+          </form>
+        </div>
       `;
   }
 }

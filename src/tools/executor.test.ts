@@ -110,6 +110,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('fs_write');
     expect(names).toContain('fs_mkdir');
     expect(names).toContain('shell_safe');
+    expect(names).toContain('package_install');
     expect(names).toContain('code_edit');
     expect(names).toContain('code_patch');
     expect(names).toContain('code_create');
@@ -2359,6 +2360,27 @@ describe('ToolExecutor', () => {
     expect(result.message).toContain('shell control operators');
   });
 
+  it('rejects install-like shell_safe commands and directs callers to package_install', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: [],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'shell_safe',
+      args: { command: 'npm install lodash' },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('package_install');
+  });
+
   it('runs shell_safe inside an allowed cwd override', async () => {
     const root = createWorkspaceExecutorRoot();
     const nested = join(root, 'packages', 'app');
@@ -2396,6 +2418,46 @@ describe('ToolExecutor', () => {
       expect(typeof result.output?.resolvedExecutable).toBe('string');
       expect(String(result.output?.resolvedExecutable || '')).not.toHaveLength(0);
     }
+  });
+
+  it('delegates package_install through the managed trust service', async () => {
+    const root = createExecutorRoot();
+    const packageInstallTrust = {
+      runManagedInstall: vi.fn().mockResolvedValue({
+        success: true,
+        status: 'installed',
+        message: 'Managed install completed.',
+        event: {
+          id: 'pkg-1',
+          state: 'trusted',
+          installed: true,
+        },
+      }),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: [],
+      packageInstallTrust: packageInstallTrust as any,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'package_install',
+      args: { command: 'npm install lodash', cwd: root },
+      origin: 'cli',
+      bypassApprovals: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(packageInstallTrust.runManagedInstall).toHaveBeenCalledWith({
+      command: 'npm install lodash',
+      cwd: root,
+      allowCaution: false,
+    });
+    expect((result.output as any).status).toBe('installed');
   });
 
   it('uses codeContext workspace roots instead of the global allowedPaths list', async () => {
@@ -6250,7 +6312,7 @@ describe('ToolExecutor', () => {
       });
 
       const result = await executor.runTool({
-        toolName: 'shell_safe',
+        toolName: 'package_install',
         args: { command: 'npm install vitest' },
         origin: 'cli',
       });
@@ -6631,7 +6693,7 @@ describe('ToolExecutor', () => {
         totalMatches: 1,
         returned: 1,
         searchedSources: ['native'],
-        bySource: { host: 0, network: 0, gateway: 0, native: 1, assistant: 0 },
+        bySource: { host: 0, network: 0, gateway: 0, native: 1, assistant: 0, install: 0 },
       });
       expect((result.output as any).alerts[0]).toMatchObject({
         id: 'wd-1',

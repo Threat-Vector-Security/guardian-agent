@@ -5849,6 +5849,14 @@ tr:hover td {
   overflow: hidden;
 }
 
+.code-assistant-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .code-assistant-panel__scroll {
   flex: 1;
   min-height: 0;
@@ -6946,6 +6954,7 @@ tr:hover td {
 .code-chat__form {
   padding: 1rem;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .code-chat__composer {

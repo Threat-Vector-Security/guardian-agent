@@ -66,6 +66,27 @@ describe('Telegram approval flow', () => {
     };
   }
 
+  function createFakeCallbackCtx(data = 'approve:approval-1', text = '⚠️ fs_write — {"path":"S:\\\\Development\\\\test.txt"}') {
+    const edits: string[] = [];
+    return {
+      edits,
+      ctx: {
+        chat: { id: 1001 },
+        from: { id: 2002 },
+        callbackQuery: {
+          data,
+          message: { text },
+        },
+        answerCallbackQuery: vi.fn(async () => ({} as unknown)),
+        editMessageText: vi.fn(async (nextText: string) => {
+          edits.push(nextText);
+          return {} as unknown;
+        }),
+        reply: vi.fn(async () => ({} as unknown)),
+      },
+    };
+  }
+
   it('auto-continues plain-text approvals through add-path then write-file without generic completion chatter', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
     const dispatches: Array<{ agentId: string; content: string; userId?: string; channel?: string }> = [];
@@ -171,6 +192,50 @@ describe('Telegram approval flow', () => {
 
     expect(replies[0]?.text).toBe('Waiting for approval to add S:\\Development to allowed paths.');
     expect(replies.map((reply) => reply.text).join('\n')).not.toContain('Please approve this action.');
+  });
+
+  it('acknowledges inline approval buttons immediately before slow continuation finishes', async () => {
+    let resolveApproval!: (value: { success: boolean; message: string }) => void;
+    const approvalGate = new Promise<{ success: boolean; message: string }>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async () => approvalGate,
+      onDispatch: async () => ({
+        content: 'Done — wrote the requested file.',
+      }),
+    });
+    const { ctx, edits } = createFakeCallbackCtx('approve:approval-write-1');
+    (
+      channel as unknown as {
+        pendingApprovalsByChat: Map<string, { approvals: Array<{ id: string; toolName: string; argsPreview: string }>; agentId: string }>;
+      }
+    ).pendingApprovalsByChat.set('1001:2002', {
+      approvals: [
+        {
+          id: 'approval-write-1',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"S:\\\\Development\\\\test.txt","content":"ok"}',
+        },
+      ],
+      agentId: 'default',
+    });
+
+    const pending = (channel as unknown as {
+      handleInlineApprovalCallback: (ctx: unknown) => Promise<void>;
+    }).handleInlineApprovalCallback(ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: '⏳ Approval received. Continuing...' });
+    expect(edits[0]).toContain('⏳ Approval received. Continuing...');
+
+    resolveApproval({ success: true, message: "Tool 'fs_write' completed." });
+    await pending;
+
+    expect(edits.at(-1)).toContain('✅ fs_write: Approved and executed');
+    expect(ctx.reply).toHaveBeenCalledWith('Done — wrote the requested file.');
   });
 
   it('prefixes source labels on normal Telegram replies', async () => {

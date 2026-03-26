@@ -524,6 +524,7 @@ async function runHarness() {
   const baseUrl = `http://127.0.0.1:${harnessPort}`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-coding-harness-'));
   const workspaceRoot = path.join(tmpDir, 'workspace');
+  const scopedWorkspaceRoot = path.join(tmpDir, 'scoped-workspace');
   const suspiciousWorkspaceRoot = path.join(tmpDir, 'suspicious-workspace');
   const fakeBinDir = path.join(tmpDir, 'fake-bin');
   const configPath = path.join(tmpDir, 'config.yaml');
@@ -585,6 +586,26 @@ async function runHarness() {
     '',
   ].join('\n'));
   setupGitWorkspace(workspaceRoot);
+
+  fs.mkdirSync(path.join(scopedWorkspaceRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(scopedWorkspaceRoot, 'README.md'), [
+    '# Scoped Workspace',
+    '',
+    'Scoped Workspace is only meant to be reachable through a backend code session.',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(scopedWorkspaceRoot, 'package.json'), JSON.stringify({
+    name: 'scoped-workspace',
+    version: '1.0.0',
+    scripts: {
+      test: 'vitest',
+    },
+  }, null, 2));
+  fs.writeFileSync(path.join(scopedWorkspaceRoot, 'src', 'scoped.ts'), [
+    'export const scopedMessage = "session-only";',
+    '',
+  ].join('\n'));
+  setupGitWorkspace(scopedWorkspaceRoot);
 
   fs.mkdirSync(path.join(suspiciousWorkspaceRoot, 'src'), { recursive: true });
   fs.writeFileSync(path.join(suspiciousWorkspaceRoot, 'README.md'), [
@@ -693,6 +714,46 @@ guardian:
     assert.equal(codeSessionCreate?.session?.workState?.workspaceTrust?.state, 'trusted');
     assert.deepEqual(codeSessionCreate?.session?.workState?.workspaceTrust?.findings ?? [], []);
     const codeSessionId = codeSessionCreate.session.id;
+    const scopedCodeSessionCreate = await requestJson(baseUrl, harnessToken, 'POST', '/api/code/sessions', {
+      userId: 'web-code-harness',
+      channel: 'web',
+      title: 'Scoped Session',
+      workspaceRoot: scopedWorkspaceRoot,
+      attach: false,
+    });
+    assert.ok(scopedCodeSessionCreate?.session?.id, `Expected scoped code session creation to return a session id: ${JSON.stringify(scopedCodeSessionCreate)}`);
+    const scopedCodeSessionId = scopedCodeSessionCreate.session.id;
+    const policyAfterScopedSession = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=20');
+    const liveAllowedPaths = policyAfterScopedSession?.policy?.sandbox?.allowedPaths ?? [];
+    assert.equal(
+      Array.isArray(liveAllowedPaths) && liveAllowedPaths.includes(scopedWorkspaceRoot),
+      false,
+      `Did not expect non-Code tool policy to inherit the scoped code-session workspace: ${JSON.stringify(policyAfterScopedSession?.policy)}`,
+    );
+    const scopedFilePath = path.join(scopedWorkspaceRoot, 'src', 'scoped.ts');
+    const deniedScopedRead = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'fs_read',
+      args: { path: scopedFilePath },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+    });
+    assert.equal(deniedScopedRead.success, false, `Expected generic fs_read outside the configured allowlist to fail: ${JSON.stringify(deniedScopedRead)}`);
+    assert.match(String(deniedScopedRead.message ?? ''), /allowed paths/i);
+    const scopedSessionRead = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'fs_read',
+      args: { path: scopedFilePath },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: {
+        codeContext: {
+          sessionId: scopedCodeSessionId,
+        },
+      },
+    });
+    assert.equal(scopedSessionRead.success, true, `Expected code-session-scoped fs_read to succeed: ${JSON.stringify(scopedSessionRead)}`);
+    assert.equal(scopedSessionRead.output?.content, 'export const scopedMessage = "session-only";\n');
     const codeSessionPath = `/api/code/sessions/${encodeURIComponent(codeSessionId)}`;
     const getCodeSessionSnapshot = async (historyLimit = 20) => requestJson(
       baseUrl,

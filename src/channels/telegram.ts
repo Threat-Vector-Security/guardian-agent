@@ -20,6 +20,8 @@ const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go 
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
+const APPROVAL_IN_PROGRESS_LINE = '⏳ Approval received. Continuing...';
+const DENIAL_IN_PROGRESS_LINE = '⏳ Denial received. Processing...';
 
 interface PendingTelegramApproval {
   id: string;
@@ -51,6 +53,18 @@ function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 
   }
 
   return normalized;
+}
+
+function appendApprovalStatusLine(messageText: string, statusLine: string): string {
+  const normalized = messageText.trim();
+  if (!normalized) return statusLine;
+  const lines = normalized.split('\n');
+  const lastLine = lines[lines.length - 1] ?? '';
+  if (lines.length > 1 && /^[⏳✅❌⚠️]\s/.test(lastLine)) {
+    lines[lines.length - 1] = statusLine;
+    return lines.join('\n');
+  }
+  return `${normalized}\n${statusLine}`;
 }
 
 export interface TelegramChannelOptions {
@@ -258,46 +272,7 @@ export class TelegramChannel implements ChannelAdapter {
 
     // Handle inline keyboard callback queries for tool approvals
     this.bot.on('callback_query:data', async (ctx) => {
-      const data = ctx.callbackQuery.data;
-      if (!data.startsWith('approve:') && !data.startsWith('deny:')) {
-        await ctx.answerCallbackQuery();
-        return;
-      }
-
-      const [action, ...idParts] = data.split(':');
-      const approvalId = idParts.join(':');
-      const decision = action === 'approve' ? 'approved' as const : 'denied' as const;
-      const approvalKey = this.buildApprovalKey(ctx);
-
-      if (!this.onToolsApprovalDecision) {
-        await ctx.answerCallbackQuery({ text: 'Approval handler not available.' });
-        return;
-      }
-
-      try {
-        const result = await this.handleApprovalDecisions(ctx, {
-          approvalKey,
-          actor: `telegram:${ctx.from.id}`,
-          decision,
-          approvalIds: [approvalId],
-          userId: String(ctx.from.id),
-        });
-        const callbackText = result.callbackText ?? (result.statusLines[0] ?? (decision === 'approved' ? 'Approved.' : 'Denied.'));
-        await ctx.answerCallbackQuery({ text: callbackText.slice(0, 200) });
-
-        try {
-          const originalText = (ctx.callbackQuery.message && 'text' in ctx.callbackQuery.message)
-            ? ctx.callbackQuery.message.text ?? ''
-            : '';
-          const suffix = result.statusLines[0] ?? (decision === 'approved' ? '✅ Approved and executed' : '❌ Denied');
-          await ctx.editMessageText(`${originalText}\n${suffix}`);
-        } catch {
-          // Message may have been deleted or keyboard already removed
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await ctx.answerCallbackQuery({ text: `Error: ${msg}` });
-      }
+      await this.handleInlineApprovalCallback(ctx);
     });
 
     // Validate token before starting polling
@@ -730,6 +705,64 @@ export class TelegramChannel implements ChannelAdapter {
   private async replyInChunks(ctx: Context, text: string): Promise<void> {
     for (const chunk of splitTelegramMessage(text, TELEGRAM_MAX_MESSAGE_CHARS)) {
       await ctx.reply(chunk);
+    }
+  }
+
+  private getCallbackMessageText(ctx: Context): string {
+    return (ctx.callbackQuery?.message && 'text' in ctx.callbackQuery.message)
+      ? (ctx.callbackQuery.message.text ?? '')
+      : '';
+  }
+
+  private async tryEditApprovalMessage(ctx: Context, messageText: string): Promise<void> {
+    if (!messageText.trim()) return;
+    try {
+      await ctx.editMessageText(messageText);
+    } catch {
+      // Message may have been deleted, already updated, or be otherwise unavailable.
+    }
+  }
+
+  private async handleInlineApprovalCallback(ctx: Context): Promise<void> {
+    const data = ctx.callbackQuery?.data ?? '';
+    if (!data.startsWith('approve:') && !data.startsWith('deny:')) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    const [action, ...idParts] = data.split(':');
+    const approvalId = idParts.join(':');
+    const decision = action === 'approve' ? 'approved' as const : 'denied' as const;
+    const approvalKey = this.buildApprovalKey(ctx);
+
+    if (!this.onToolsApprovalDecision) {
+      await ctx.answerCallbackQuery({ text: 'Approval handler not available.' });
+      return;
+    }
+
+    const inProgressLine = decision === 'approved' ? APPROVAL_IN_PROGRESS_LINE : DENIAL_IN_PROGRESS_LINE;
+    let messageText = this.getCallbackMessageText(ctx);
+
+    try {
+      await ctx.answerCallbackQuery({ text: inProgressLine.slice(0, 200) });
+      messageText = appendApprovalStatusLine(messageText, inProgressLine);
+      await this.tryEditApprovalMessage(ctx, messageText);
+
+      const result = await this.handleApprovalDecisions(ctx, {
+        approvalKey,
+        actor: `telegram:${ctx.from?.id ?? 'unknown-user'}`,
+        decision,
+        approvalIds: [approvalId],
+        userId: String(ctx.from?.id ?? ctx.chat?.id ?? ''),
+      });
+
+      const finalLine = result.statusLines[0] ?? (decision === 'approved' ? '✅ Approved and executed' : '❌ Denied');
+      messageText = appendApprovalStatusLine(messageText, finalLine);
+      await this.tryEditApprovalMessage(ctx, messageText);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      messageText = appendApprovalStatusLine(messageText, `⚠️ Approval handling failed: ${msg}`);
+      await this.tryEditApprovalMessage(ctx, messageText);
     }
   }
 }

@@ -75,7 +75,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'code_build',
     'code_lint',
   ],
-  shell: ['shell_safe'],
+  shell: ['shell_safe', 'package_install'],
   web: ['chrome_job', 'web_search', 'web_fetch'],
   browser: [
     'browser_capabilities',

@@ -12,7 +12,7 @@ function createPosture(recommendedMode: SecurityPostureAssessment['recommendedMo
     summary: 'test',
     reasons: [],
     counts: { total: 0, low: 0, medium: 0, high: 0, critical: 0 },
-    bySource: { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 },
+    bySource: { host: 0, network: 0, gateway: 0, native: 0, assistant: 0, install: 0 },
     availableSources: ['assistant'],
     topAlerts: [],
   };

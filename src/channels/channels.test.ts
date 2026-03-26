@@ -2651,7 +2651,7 @@ describe('WebChannel', () => {
         returned: 1,
         searchedSources: ['network'],
         includeAcknowledged: false,
-        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0 },
+        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0, install: 0 },
         bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
       }),
       onSecurityAlertAcknowledge: ({ alertId, source }) => ({ success: true, message: `security-acked:${source || 'auto'}:${alertId}`, source: source || 'network' }),
@@ -2663,7 +2663,7 @@ describe('WebChannel', () => {
         summary: "Profile 'personal' has 1 active alerts. Escalate from 'monitor' to 'guarded'.",
         reasons: ['A high-severity alert is active and should tighten approvals and outbound actions.'],
         counts: { total: 1, low: 0, medium: 1, high: 0, critical: 0 },
-        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0 },
+        bySource: { host: 0, network: 1, gateway: 0, native: 0, assistant: 0, install: 0 },
         availableSources: ['network'],
         topAlerts: [{
           id: 'net-alert-1',

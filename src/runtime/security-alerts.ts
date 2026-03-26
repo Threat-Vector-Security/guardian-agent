@@ -8,8 +8,9 @@ import {
   type SecurityAlertStateResult,
 } from './security-alert-lifecycle.js';
 import type { AiSecurityFinding, AiSecurityService } from './ai-security.js';
+import type { PackageInstallTrustAlert, PackageInstallTrustService } from './package-install-trust-service.js';
 
-export type SecurityAlertSource = 'host' | 'network' | 'gateway' | 'native' | 'assistant';
+export type SecurityAlertSource = 'host' | 'network' | 'gateway' | 'native' | 'assistant' | 'install';
 export type SecurityAlertSeverity = NetworkAnomalySeverity;
 
 export interface UnifiedSecurityAlert extends SecurityAlertLifecycle {
@@ -37,7 +38,7 @@ export interface UnifiedSecurityAlertStateResult extends SecurityAlertStateResul
   source?: SecurityAlertSource;
 }
 
-export const SECURITY_ALERT_SOURCES: readonly SecurityAlertSource[] = ['host', 'network', 'gateway', 'native', 'assistant'];
+export const SECURITY_ALERT_SOURCES: readonly SecurityAlertSource[] = ['host', 'network', 'gateway', 'native', 'assistant', 'install'];
 export const SECURITY_ALERT_SEVERITIES: readonly SecurityAlertSeverity[] = ['low', 'medium', 'high', 'critical'];
 
 export function isSecurityAlertSource(value: string): value is SecurityAlertSource {
@@ -69,6 +70,7 @@ export function collectUnifiedSecurityAlerts(input: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
   includeAcknowledged: boolean;
   includeInactive?: boolean;
 }): UnifiedSecurityAlert[] {
@@ -111,6 +113,13 @@ export function collectUnifiedSecurityAlerts(input: {
         includeInactive: input.includeInactive,
       })));
   }
+  if (input.packageInstallTrust) {
+    alerts.push(...input.packageInstallTrust.listAlerts({
+      includeAcknowledged: input.includeAcknowledged,
+      includeInactive: input.includeInactive,
+      limit: 500,
+    }).map(toUnifiedInstallAlert));
+  }
   return alerts;
 }
 
@@ -120,6 +129,7 @@ export function availableSecurityAlertSources(options: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
 }): SecurityAlertSource[] {
   const sources: SecurityAlertSource[] = [];
   if (options.hostMonitor) sources.push('host');
@@ -127,6 +137,7 @@ export function availableSecurityAlertSources(options: {
   if (options.gatewayMonitor) sources.push('gateway');
   if (options.windowsDefender) sources.push('native');
   if (options.assistantSecurity) sources.push('assistant');
+  if (options.packageInstallTrust) sources.push('install');
   return sources;
 }
 
@@ -138,6 +149,7 @@ export function acknowledgeUnifiedSecurityAlert(input: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
 }): UnifiedSecurityAlertAcknowledgeResult {
   return updateUnifiedSecurityAlertState(input, 'acknowledge');
 }
@@ -151,6 +163,7 @@ export function resolveUnifiedSecurityAlert(input: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
 }): UnifiedSecurityAlertStateResult {
   return updateUnifiedSecurityAlertState(input, 'resolve');
 }
@@ -165,6 +178,7 @@ export function suppressUnifiedSecurityAlert(input: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
 }): UnifiedSecurityAlertStateResult {
   return updateUnifiedSecurityAlertState(input, 'suppress');
 }
@@ -179,6 +193,7 @@ function updateUnifiedSecurityAlertState(input: {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   windowsDefender?: WindowsDefenderProvider;
   assistantSecurity?: AiSecurityService;
+  packageInstallTrust?: PackageInstallTrustService;
 }, action: 'acknowledge' | 'resolve' | 'suppress'): UnifiedSecurityAlertStateResult {
   const candidates: Array<{
     source: SecurityAlertSource;
@@ -198,7 +213,9 @@ function updateUnifiedSecurityAlertState(input: {
             ? input.gatewayMonitor
             : input.source === 'native'
               ? input.windowsDefender
-              : createAssistantSecurityAlertAdapter(input.assistantSecurity),
+              : input.source === 'assistant'
+                ? createAssistantSecurityAlertAdapter(input.assistantSecurity)
+                : input.packageInstallTrust,
     }]
     : [
       { source: 'host', service: input.hostMonitor },
@@ -206,6 +223,7 @@ function updateUnifiedSecurityAlertState(input: {
       { source: 'gateway', service: input.gatewayMonitor },
       { source: 'native', service: input.windowsDefender },
       { source: 'assistant', service: createAssistantSecurityAlertAdapter(input.assistantSecurity) },
+      { source: 'install', service: input.packageInstallTrust },
     ];
 
   let unavailableCount = 0;
@@ -395,6 +413,30 @@ function toUnifiedAssistantAlert(finding: AiSecurityFinding): UnifiedSecurityAle
     suppressionReason: lifecycle.suppressionReason,
     resolvedAt: lifecycle.resolvedAt,
     resolutionReason: lifecycle.resolutionReason,
+  };
+}
+
+function toUnifiedInstallAlert(alert: PackageInstallTrustAlert): UnifiedSecurityAlert {
+  return {
+    id: alert.id,
+    source: 'install',
+    type: alert.type,
+    severity: alert.severity,
+    timestamp: alert.timestamp,
+    firstSeenAt: alert.firstSeenAt,
+    lastSeenAt: alert.lastSeenAt,
+    occurrenceCount: alert.occurrenceCount,
+    description: alert.description,
+    dedupeKey: alert.dedupeKey,
+    evidence: alert.evidence,
+    subject: alert.subject,
+    acknowledged: alert.acknowledged,
+    status: alert.status,
+    lastStateChangedAt: alert.lastStateChangedAt,
+    suppressedUntil: alert.suppressedUntil,
+    suppressionReason: alert.suppressionReason,
+    resolvedAt: alert.resolvedAt,
+    resolutionReason: alert.resolutionReason,
   };
 }
 

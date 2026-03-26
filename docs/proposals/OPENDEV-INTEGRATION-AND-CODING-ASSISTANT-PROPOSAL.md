@@ -13,6 +13,12 @@
 
 ---
 
+## Current Note
+
+For the current narrowed plan around curated coding process, live feedback, and coding task subagents, use [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md).
+
+This document remains useful as broader background, but its overlapping sections on coding task subagents and operator UX are no longer the current source of truth.
+
 ## Executive Summary
 
 This proposal covers six areas informed by analysis of OpenDev, its accompanying research paper, Koan, deepagents, gru-ai, and Broomy:

@@ -131,6 +131,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Configuration > Security now combines sandbox enforcement and assistant policy-widening gates in one control surface. `Strict` means fail closed when the strong sandbox is unavailable. `Permissive` means Guardian can keep running on a degraded backend, but the risky degraded-backend surfaces still stay off until you explicitly opt in.',
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Allowed paths, commands, and domains should be adjusted deliberately; treat them as policy boundaries, not convenience toggles.',
+                  'A Code session does not silently widen the general `allowedPaths` policy. Repo access for coding work is carried by the active code-session context, and ordinary non-Code chat only gets repo access if the path is explicitly allowlisted or the surface is attached to that code session.',
                   'The `.guardianagent/` data directory is a hard-denied path at the Guardian admission layer. The agent cannot read, write, copy, or delete any files under `~/.guardianagent/` through filesystem tools, even if the operator adds the home directory to `allowedPaths`. This prevents agent self-modification of config, auth tokens, memory stores, and integrity signatures. Internal services (memory, search, OAuth, audit) write to this directory through their own APIs, bypassing the filesystem tool gate.',
                   'When the web dashboard needs to change a protected allowlist or policy setting, it now mints the required privileged ticket automatically. If your dashboard session expired, enter the bearer token once and the interrupted save is retried automatically.',
                 ],
@@ -139,9 +140,21 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Approvals',
                 items: [
                   'Pending tool actions are surfaced in web approvals, CLI native prompts, and Telegram approval flows.',
+                  'Use `package_install` instead of `shell_safe` for public package-manager installs. Guardian stages the requested top-level package artifacts, runs bounded static checks plus native AV when available, and then either blocks, pauses for caution acceptance, or proceeds with the install.',
+                  'The managed package-install path is host-level rather than code-workspace-only. It supports explicit public-registry installs to targets such as the working directory, npm or pnpm `--prefix` locations, and pip `--target` directories.',
                   'Inside code sessions, safe repo-local reads and edits stay low-friction, while repo execution and persistence actions only auto-approve after the workspace trust state reaches `trusted`.',
                   'Use `/approve [approvalId]` and `/deny [approvalId]` as fallback commands when native approval controls are unavailable.',
                   'Recent approval outcomes show up in audit history and assistant policy views, so you can verify what was allowed and why.',
+                ],
+              },
+              {
+                title: 'Managed Package Installs',
+                items: [
+                  'Ask the assistant to perform public package-manager installs through the managed path when you want Guardian to review packages before execution.',
+                  'Supported v1 forms are explicit registry installs for `npm install`, `pnpm add`, `yarn add`, `bun add`, and `pip install`.',
+                  'Guardian rejects command chaining, redirects, local paths, direct URLs, VCS specs, requirements files, and editable installs in this path so the review stays deterministic.',
+                  'If the staged review is `caution`, re-run with explicit caution acceptance. If the staged review is `blocked`, the install does not proceed.',
+                  'Use the Security page to review package-install alerts under the unified alert feed. The alert source for this feature is `install`.',
                 ],
               },
               {
@@ -176,6 +189,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Open `#/code` and create a session with a title plus the workspace root you want Guardian to anchor to.',
                   'Each code session is backend-owned and persists the coding transcript, workspace profile, repo map, trust state, approvals, recent jobs, and verification state.',
+                  'Creating or attaching a code session authorizes repo-local work only for requests that carry that session context. It does not add the workspace root to the general non-Code allowlist.',
                   'The web Code page is the richest coding client, but main chat, CLI, and Telegram can attach to the same backend code session when you want to continue the work from another surface.',
                 ],
               },
@@ -667,7 +681,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Main Operator Surface',
                 items: [
                   'The Security page is the main operator surface for the local defensive suite. It combines posture, Assistant Security, threat intel, the Security Log, and native Windows Defender visibility in one place.',
-                  'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, and native Windows Defender alerts.',
+                  'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, native Windows Defender alerts, and package-install trust alerts.',
                   'Windows host-monitor persistence alerts now use heuristics rather than treating every new autorun as equally severe. Script-host, network-path, and user-writable autoruns stay high risk, while conventional installed-app autoruns under `Program Files` are downgraded to reduce noise.',
                   'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',
                   'Built-in Assistant Security tools exposed to the assistant and automations are `assistant_security_summary`, `assistant_security_scan`, and `assistant_security_findings`; recurring posture reviews can use the `assistant-security-scan` preset.',
@@ -688,6 +702,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Windows Defender is integrated as a native provider, not replaced. Guardian can refresh status, expose provider health and alerts, request quick, full, and custom path scans, and request signature updates from the Security page.',
                   'The Coding Assistant now consumes native AV signals as a secondary repo-assessment input. A native detection can be merged into `workspaceTrust` and force the repo trust state to `blocked`.',
+                  'Managed package installs also consume native AV when the provider is available. A staged package detection forces the install result to `blocked` before the real package-manager install step runs.',
                   'On Unix-like hosts, code-session repo scanning can use `clamscan` or `clamdscan` when installed. That Unix AV signal is currently consumed in code-session workspace trust rather than shown as a first-class Security-page provider. A clean native AV result does not override suspicious static repo findings.',
                 ],
               },

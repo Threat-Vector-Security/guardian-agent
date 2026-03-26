@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AiSecurityService, type AiSecurityRuntimeSnapshot } from './ai-security.js';
+import type { PackageInstallTrustAlert } from './package-install-trust-service.js';
 import {
   acknowledgeUnifiedSecurityAlert,
   availableSecurityAlertSources,
@@ -149,5 +150,47 @@ describe('security alert integration', () => {
     expect(inactive.find((alert) => alert.id === suppressId)?.status).toBe('suppressed');
     expect(assistantSecurity.listFindings(10).find((finding) => finding.id === resolveId)?.status).toBe('resolved');
     expect(assistantSecurity.listFindings(10).find((finding) => finding.id === suppressId)?.status).toBe('suppressed');
+  });
+
+  it('collects and updates package-install trust alerts as a unified install source', () => {
+    const installAlert: PackageInstallTrustAlert = {
+      id: 'install-1',
+      type: 'package_install_caution',
+      severity: 'high',
+      timestamp: 10_000,
+      firstSeenAt: 10_000,
+      lastSeenAt: 10_000,
+      occurrenceCount: 1,
+      description: 'Install requires caution review',
+      dedupeKey: 'install:1',
+      evidence: { packageSpecs: ['left-pad'] },
+      subject: 'left-pad',
+      acknowledged: false,
+      status: 'active',
+      lastStateChangedAt: 10_000,
+    };
+    const installService = {
+      listAlerts: () => [installAlert],
+      acknowledgeAlert: () => ({ success: true, message: "Alert 'install-1' acknowledged." }),
+      resolveAlert: () => ({ success: true, message: "Alert 'install-1' resolved." }),
+      suppressAlert: () => ({ success: true, message: "Alert 'install-1' suppressed." }),
+    };
+
+    const alerts = collectUnifiedSecurityAlerts({
+      packageInstallTrust: installService as any,
+      includeAcknowledged: false,
+    });
+
+    expect(availableSecurityAlertSources({ packageInstallTrust: installService as any })).toEqual(['install']);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.source).toBe('install');
+
+    const acknowledged = acknowledgeUnifiedSecurityAlert({
+      alertId: 'install-1',
+      source: 'install',
+      packageInstallTrust: installService as any,
+    });
+
+    expect(acknowledged.success).toBe(true);
   });
 });

@@ -1602,11 +1602,11 @@ export class WebChannel implements ChannelAdapter {
         const rawSeverity = trimOptionalString(url.searchParams.get('severity'))?.toLowerCase();
 
         if (rawSource && !isSecurityAlertSource(rawSource.toLowerCase())) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'" });
           return;
         }
         if (rawSources.some((value) => !isSecurityAlertSource(value))) {
-          sendJSON(res, 400, { error: "sources must contain only 'host', 'network', 'gateway', 'native', or 'assistant'" });
+          sendJSON(res, 400, { error: "sources must contain only 'host', 'network', 'gateway', 'native', 'assistant', or 'install'" });
           return;
         }
         if (rawSeverity && !isSecurityAlertSeverity(rawSeverity)) {
@@ -1633,7 +1633,7 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/security/alerts/ack — acknowledge host/network/gateway/native alert
+      // POST /api/security/alerts/ack — acknowledge a unified security alert
       if (req.method === 'POST' && url.pathname === '/api/security/alerts/ack') {
         if (!this.dashboard.onSecurityAlertAcknowledge) {
           sendJSON(res, 404, { error: 'Not available' });
@@ -1660,7 +1660,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertAcknowledge({
@@ -1673,7 +1673,7 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/security/alerts/resolve — resolve host/network/gateway/native alert
+      // POST /api/security/alerts/resolve — resolve a unified security alert
       if (req.method === 'POST' && url.pathname === '/api/security/alerts/resolve') {
         if (!this.dashboard.onSecurityAlertResolve) {
           sendJSON(res, 404, { error: 'Not available' });
@@ -1700,7 +1700,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertResolve({
@@ -1714,7 +1714,7 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/security/alerts/suppress — suppress host/network/gateway/native alert
+      // POST /api/security/alerts/suppress — suppress a unified security alert
       if (req.method === 'POST' && url.pathname === '/api/security/alerts/suppress') {
         if (!this.dashboard.onSecurityAlertSuppress) {
           sendJSON(res, 404, { error: 'Not available' });
@@ -1745,7 +1745,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const source = trimOptionalString(parsed.source)?.toLowerCase();
         if (source && !isSecurityAlertSource(source)) {
-          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', or 'assistant'" });
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', 'native', 'assistant', or 'install'" });
           return;
         }
         const result = this.dashboard.onSecurityAlertSuppress({

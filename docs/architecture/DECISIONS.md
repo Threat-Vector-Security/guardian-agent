@@ -616,7 +616,7 @@ Additionally, auto-approving automation tools (`task_create`, `workflow_upsert`)
 - Path validation via `resolveAllowedPath()` for filesystem tools
 - Bearer token authentication on the web channel
 
-The workspace root is also auto-added to the persistent `allowedPaths` on session create and session attach, so the LLM sees the path in `<tool-context>` and does not preemptively call `update_tool_policy`.
+The workspace root is authorized through `codeContext` while the request is inside a Code session. It is not added to the global `allowedPaths` policy, so ordinary non-Code chat does not inherit repo access just because a Code session exists.
 
 **Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/specs/CODING-ASSISTANT-SPEC.md` § codeContext Propagation.
 

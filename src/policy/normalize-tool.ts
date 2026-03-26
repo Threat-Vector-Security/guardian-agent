@@ -71,6 +71,7 @@ function extractResourceAttrs(
 
     // Shell: extract command for subshell/pipe detection
     case 'shell_safe':
+    case 'package_install':
       if (typeof args.command === 'string') {
         const cmd = args.command.trim();
         attrs.command = cmd;

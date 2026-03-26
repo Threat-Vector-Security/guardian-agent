@@ -104,27 +104,27 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
     high: activeAlerts.filter((alert) => alert.severity === 'high').length,
     critical: activeAlerts.filter((alert) => alert.severity === 'critical').length,
   };
-  const bySource: Record<SecurityPostureSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0 };
+  const bySource: Record<SecurityPostureSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0, install: 0 };
   for (const alert of activeAlerts) {
     bySource[alert.source] += 1;
   }
 
   const availableSources = [...new Set((input.availableSources ?? activeAlerts.map((alert) => alert.source)).filter(Boolean))]
-    .filter((value): value is SecurityPostureSource => value === 'host' || value === 'network' || value === 'gateway' || value === 'native' || value === 'assistant');
+    .filter((value): value is SecurityPostureSource => value === 'host' || value === 'network' || value === 'gateway' || value === 'native' || value === 'assistant' || value === 'install');
 
   const criticalAlerts = activeAlerts.filter((alert) => alert.severity === 'critical');
   const highAlerts = activeAlerts.filter((alert) => alert.severity === 'high');
   const mediumAlerts = activeAlerts.filter((alert) => alert.severity === 'medium');
   const actionableMediumAlerts = mediumAlerts.filter((alert) => !LOW_CONFIDENCE_MEDIUM_ALERT_TYPES.has(alert.type));
-  const assistantCriticalAlerts = criticalAlerts.filter((alert) => isAssistantPostureAlert(alert));
+  const postureOnlyCriticalAlerts = criticalAlerts.filter((alert) => isPostureOnlyAlert(alert));
   const corroborationRequiredCriticalAlerts = criticalAlerts.filter((alert) => CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES.has(alert.type));
   const incidentCriticalAlerts = criticalAlerts.filter((alert) => (
     !LOCKDOWN_ALERT_TYPES.has(alert.type)
-    && !isAssistantPostureAlert(alert)
+    && !isPostureOnlyAlert(alert)
     && !CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES.has(alert.type)
   ));
-  const actionableHighAlerts = highAlerts.filter((alert) => !isAssistantPostureAlert(alert));
-  const assistantElevatedAlerts = activeAlerts.filter((alert) => alert.source === 'assistant' && severityRank(alert.severity) >= 3);
+  const actionableHighAlerts = highAlerts.filter((alert) => !isPostureOnlyAlert(alert));
+  const postureOnlyElevatedAlerts = activeAlerts.filter((alert) => isPostureOnlyAlert(alert) && severityRank(alert.severity) >= 3);
   const incidentCriticalSources = new Set(incidentCriticalAlerts.map((alert) => alert.source));
   const hasNonAssistantHighCorroboration = actionableHighAlerts.some((alert) => alert.source !== 'assistant');
   const reasons: string[] = [];
@@ -144,8 +144,8 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
       reasons.push('A critical network signal is corroborated by additional elevated alerts and now warrants investigation mode.');
     } else {
       recommendedMode = 'guarded';
-      if (assistantCriticalAlerts.length > 0) {
-        reasons.push('Critical Assistant Security findings indicate meaningful posture risk, but they are posture-oriented signals rather than direct incident evidence.');
+      if (postureOnlyCriticalAlerts.length > 0) {
+        reasons.push('Critical assistant or package-install findings indicate meaningful posture risk, but they are posture-oriented signals rather than direct incident evidence.');
       }
       if (corroborationRequiredCriticalAlerts.length > 0) {
         reasons.push('A critical alert is active, but this signal class requires corroboration before incident-assist mode is warranted.');
@@ -157,9 +157,9 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
   } else if (actionableHighAlerts.length === 1) {
     recommendedMode = 'guarded';
     reasons.push('A high-severity alert is active and should tighten approvals and outbound actions.');
-  } else if (assistantElevatedAlerts.length > 0) {
+  } else if (postureOnlyElevatedAlerts.length > 0) {
     recommendedMode = 'guarded';
-    reasons.push('Assistant Security has high-risk posture findings. Tighten controls, but avoid incident-response mode until stronger runtime evidence appears.');
+    reasons.push('Assistant Security or package-install trust has high-risk posture findings. Tighten controls, but avoid incident-response mode until stronger runtime evidence appears.');
   } else if (actionableMediumAlerts.length >= 2 && new Set(actionableMediumAlerts.map((alert) => alert.source)).size >= 2) {
     recommendedMode = 'guarded';
     reasons.push('Medium-severity alerts across multiple sources suggest a broader issue than a single noisy signal.');
@@ -229,6 +229,9 @@ function buildSummary(input: {
   return `Profile '${profile}' has ${counts.total} active alerts. Escalate from '${currentMode}' to '${recommendedMode}'.`;
 }
 
-function isAssistantPostureAlert(alert: SecurityPostureAlert): boolean {
-  return alert.source === 'assistant' || alert.type.startsWith('assistant_security_');
+function isPostureOnlyAlert(alert: SecurityPostureAlert): boolean {
+  return alert.source === 'assistant'
+    || alert.source === 'install'
+    || alert.type.startsWith('assistant_security_')
+    || alert.type.startsWith('package_install_');
 }

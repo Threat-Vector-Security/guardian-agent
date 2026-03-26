@@ -516,7 +516,7 @@ Auto-approve bypasses only the `decide()` approval step. All other security laye
 - Output Guardian scanning on all tool results
 - Bearer token authentication on the web channel
 
-The workspace root is also auto-added to the persistent `allowedPaths` on session create and attach, so the LLM sees it in `<tool-context>` and does not attempt to call `update_tool_policy` preemptively.
+The workspace root is authorized through the active Code session's `codeContext`, not by mutating the global `allowedPaths` policy. Non-Code chat surfaces do not inherit access to a repo just because a Code session exists; they must attach to that session or use an explicitly allowlisted path.
 
 ### codeContext Propagation
 
