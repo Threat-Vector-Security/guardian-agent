@@ -5958,9 +5958,13 @@ function buildDashboardCallbacks(
         message: result.message,
       }, 'Dashboard approval decision failed');
     }
-    const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId));
+    const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId))
+      || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
+    const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
+      || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
+    const shouldContinue = continueConversation || continueAutomation;
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
-    if (result.success) {
+    if (result.success && shouldContinue) {
       continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;
       if (!continuedResponse) {
         for (const agent of chatAgents.values()) {
@@ -5973,7 +5977,7 @@ function buildDashboardCallbacks(
       }
     }
     let displayMessage: string | undefined;
-    if (!continueConversation && !continuedResponse) {
+    if (!shouldContinue && !continuedResponse) {
       for (const agent of chatAgents.values()) {
         const followUp = agent.takeApprovalFollowUp(input.approvalId, input.decision);
         if (followUp) {
@@ -5982,7 +5986,7 @@ function buildDashboardCallbacks(
         }
       }
     }
-    if (!displayMessage && !continueConversation) {
+    if (!displayMessage && !shouldContinue) {
       displayMessage = result.message;
     }
     analytics.track({
@@ -5999,7 +6003,7 @@ function buildDashboardCallbacks(
     return {
       success: result.success,
       message: result.message,
-      continueConversation,
+      continueConversation: shouldContinue,
       displayMessage,
       ...(continuedResponse ? { continuedResponse } : {}),
     };

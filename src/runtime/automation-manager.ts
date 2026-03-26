@@ -65,7 +65,14 @@ export function setSavedAutomationEnabled(
   if (!operation) {
     return { success: false, message: `Automation '${automationId}' cannot be toggled.` };
   }
-  return executeMutationOperation(controlPlane, operation);
+  const result = executeMutationOperation(controlPlane, operation);
+  if (!result.success) {
+    return result;
+  }
+  return {
+    success: true,
+    message: enabled ? `Enabled '${selected.name}'.` : `Disabled '${selected.name}'.`,
+  };
 }
 
 export function deleteSavedAutomation(
@@ -281,6 +288,9 @@ function normalizeAutomationRunResult(
   result: Record<string, unknown>,
 ): Record<string, unknown> {
   const normalized: Record<string, unknown> = { ...result };
+  if (normalized.success === true) {
+    normalized.message = `Ran '${entry.name}'.`;
+  }
   if (!entry.workflow) {
     return normalized;
   }

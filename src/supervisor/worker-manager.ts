@@ -715,7 +715,8 @@ export class WorkerManager {
     message: UserMessage,
     metadata: Record<string, unknown> | undefined,
   ): void {
-    const approvalIds = Array.isArray(metadata?.pendingApprovals)
+    const continueConversationAfterApproval = metadata?.continueConversationAfterApproval === true;
+    const approvalIds = Array.isArray(metadata?.pendingApprovals) && continueConversationAfterApproval
       ? metadata.pendingApprovals
         .map((value) => isRecord(value) ? value.id : undefined)
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)

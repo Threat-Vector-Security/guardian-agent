@@ -84,13 +84,19 @@ describe('automation-manager', () => {
   it('toggles workflows and assistant tasks through the unified control plane', () => {
     const controlPlane = makeControlPlane();
 
-    expect(setSavedAutomationEnabled(controlPlane, 'browser-read-smoke', false).success).toBe(true);
+    expect(setSavedAutomationEnabled(controlPlane, 'browser-read-smoke', false)).toEqual({
+      success: true,
+      message: "Disabled 'Browser Read Smoke'.",
+    });
     expect(controlPlane.upsertWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       id: 'browser-read-smoke',
       enabled: false,
     }));
 
-    expect(setSavedAutomationEnabled(controlPlane, 'task-agent-1', false).success).toBe(true);
+    expect(setSavedAutomationEnabled(controlPlane, 'task-agent-1', false)).toEqual({
+      success: true,
+      message: "Disabled 'Inbox Triage'.",
+    });
     expect(controlPlane.updateTask).toHaveBeenCalledWith('task-agent-1', { enabled: false });
   });
 
@@ -99,6 +105,7 @@ describe('automation-manager', () => {
 
     const workflowRun = await runSavedAutomation(controlPlane, 'browser-read-smoke', { origin: 'web', channel: 'web', userId: 'web-user' });
     expect(workflowRun.success).toBe(true);
+    expect(workflowRun.message).toBe("Ran 'Browser Read Smoke'.");
     expect(workflowRun.run).toMatchObject({
       automationId: 'browser-read-smoke',
       automationName: 'Browser Read Smoke',
@@ -111,6 +118,7 @@ describe('automation-manager', () => {
 
     const taskRun = await runSavedAutomation(controlPlane, 'task-agent-1');
     expect(taskRun.success).toBe(true);
+    expect(taskRun.message).toBe("Ran 'Inbox Triage'.");
     expect(controlPlane.runTask).toHaveBeenCalledWith('task-agent-1');
 
     const deleteResult = deleteSavedAutomation(controlPlane, 'browser-read-smoke');

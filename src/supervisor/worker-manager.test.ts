@@ -536,6 +536,7 @@ describe('WorkerManager', () => {
       return {
         content: 'Waiting for approval to create the Outlook draft.',
         metadata: {
+          continueConversationAfterApproval: true,
           pendingApprovals: [
             {
               id: 'approval-outlook-1',
@@ -606,6 +607,68 @@ describe('WorkerManager', () => {
 
     expect(resumed?.content).toBe('The Outlook draft is present in Drafts.');
     expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(false);
+
+    manager.shutdown();
+  });
+
+  it('does not mark direct pending approvals as resumable worker conversations without an explicit continuation flag', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'Waiting for approval to run the automation.',
+      metadata: {
+        pendingApprovals: [
+          {
+            id: 'approval-auto-run-1',
+            toolName: 'automation_run',
+            argsPreview: '{"automationId":"browser-read-smoke"}',
+          },
+        ],
+      },
+    });
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-auto-run',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Run Browser Read Smoke now.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBase: '',
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    expect(manager.hasSuspendedApproval('approval-auto-run-1')).toBe(false);
 
     manager.shutdown();
   });

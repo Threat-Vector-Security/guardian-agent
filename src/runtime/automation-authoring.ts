@@ -579,7 +579,7 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       type: 'tool',
       packId: '',
       toolName: 'browser_read',
-      args: {},
+      args: { url },
     });
   }
 
@@ -590,7 +590,10 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       type: 'tool',
       packId: '',
       toolName: 'browser_links',
-      args: linkLimit ? { maxItems: linkLimit } : {},
+      args: {
+        url,
+        ...(linkLimit ? { maxItems: linkLimit } : {}),
+      },
     });
   }
 
@@ -602,6 +605,7 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       packId: '',
       toolName: 'browser_extract',
       args: {
+        url,
         type: extractType,
       },
     });
@@ -615,7 +619,7 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       type: 'tool',
       packId: '',
       toolName: 'browser_state',
-      args: {},
+      args: { url },
     });
   }
 

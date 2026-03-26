@@ -609,6 +609,7 @@ export class BrokeredWorkerSession {
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0
           ? {
+              continueConversationAfterApproval: true,
               pendingApprovals: pendingApprovalMeta,
               ...(responseSource ? { responseSource } : {}),
             }

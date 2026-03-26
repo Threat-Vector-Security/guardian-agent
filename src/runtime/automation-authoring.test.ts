@@ -129,9 +129,11 @@ describe('compileAutomationAuthoringRequest', () => {
       },
       {
         toolName: 'browser_read',
+        args: { url: 'https://example.com' },
       },
       {
         toolName: 'browser_links',
+        args: { url: 'https://example.com' },
       },
     ]);
   });
@@ -203,7 +205,7 @@ describe('compileAutomationAuthoringRequest', () => {
       },
       {
         toolName: 'browser_extract',
-        args: { type: 'both' },
+        args: { url: 'https://github.com', type: 'both' },
       },
     ]);
   });
@@ -224,7 +226,7 @@ describe('compileAutomationAuthoringRequest', () => {
       },
       {
         toolName: 'browser_links',
-        args: { maxItems: 20 },
+        args: { url: 'https://news.ycombinator.com', maxItems: 20 },
       },
       {
         type: 'instruction',
@@ -275,6 +277,7 @@ describe('compileAutomationAuthoringRequest', () => {
       },
       {
         toolName: 'browser_state',
+        args: { url: 'https://httpbin.org/forms/post' },
       },
       {
         type: 'instruction',
