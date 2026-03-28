@@ -90,6 +90,68 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(seenTools).toContain('code_plan');
   });
 
+  it('suppresses approval-looking text when no real approval metadata exists', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'none',
+            confidence: 'low',
+            summary: 'Stay in the normal assistant path.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: [
+          'Great news — Claude Code is now enabled!',
+          '',
+          'Now let me run the connection test with Claude Code:',
+          '',
+          'Waiting for approval to run coding_backend_run - {"task":"Say hello and confirm you are working.","backend":"claude-code"}.',
+        ].join('\n'),
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-phantom-approval',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Try Claude Code again.',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.content).toBe('I did not create a real approval request for that action. Please try again.');
+    expect(result.metadata).toMatchObject({
+      responseSource: {
+        locality: 'external',
+        providerName: 'anthropic',
+      },
+    });
+    expect(result.metadata).not.toHaveProperty('pendingApprovals');
+  });
+
   it('inspects saved automations through the canonical automation catalog in brokered sessions', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

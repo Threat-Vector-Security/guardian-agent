@@ -18,6 +18,7 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
 - Provider testing and model visibility are built-in
 - Web search settings are decoupled from LLM provider config
 - Telegram enable/token/chat-id configuration is part of the same panel
+- Coding assistant delegation configuration is part of the same panel
 - Web auth mode/token controls are part of the same panel
 - Default provider can be changed live
 - API keys can be cleared (removed) from config, not just set
@@ -33,6 +34,14 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
   - API key fields show `[clear]` button when a key is configured, allowing removal
   - Readiness checklist and status cards
   - Telegram config as a separate section below provider panels
+  - Coding Assistants as a separate integrations section:
+    - master orchestration toggle
+    - max concurrent delegated runs
+    - version-check interval
+    - auto-update toggle
+    - one fixed row for each built-in backend: Claude Code, Codex, Gemini CLI, Aider
+    - row actions: `Enable` / `Disable` and `Set Default`
+    - the simplified UI may preserve custom non-built-in backends in saved config without exposing them for editing
   - Telegram section fields:
     - `Enable Telegram` (on/off)
     - `Bot Token`
@@ -61,6 +70,7 @@ Input fields:
 - Config writes persist to config YAML via backend callbacks
 - LLM/default provider updates apply live through `runtime.applyLLMConfiguration()`
 - Web search config changes apply immediately — `ToolExecutor.updateWebSearchConfig()` is called from `persistAndApplyConfig`, also clearing the search result cache so the new provider takes effect without restart
+- Coding assistant backend config changes apply immediately through the runtime coding-backend service; a restart is not required for enablement, default-backend, concurrency, or update-setting changes
 - Telegram channel structural updates still require restart
 - Web auth mode is fixed to `bearer_required` (no unauthenticated mode)
 - If no token is configured, runtime may generate an ephemeral token for the current process

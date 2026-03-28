@@ -464,6 +464,23 @@ Built-in coding implementation tools:
 
 These remain global tools in the main executor. The Code page uses them through session-aware context, not through a separate coding runtime.
 
+## External Coding Backends
+
+Guardian also supports optional external coding backends for bounded delegation work inside an attached coding session.
+
+As built:
+
+- the runtime exposes `coding_backend_list`, `coding_backend_run`, and `coding_backend_status`
+- delegation is opt-in and should only happen when the user explicitly asks to use an external coding tool such as Claude Code, Codex, Gemini CLI, or Aider
+- backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
+- the web config surface for this lives at `Configuration > Integrations > Coding Assistants`
+- that config panel now shows a fixed built-in list of Claude Code, Codex, Gemini CLI, and Aider rather than a preset add/remove editor
+- each built-in backend row supports `Enable` / `Disable` plus `Set Default`
+- the same panel owns orchestration enablement, max concurrent delegated runs, version-check interval, and auto-update controls
+- custom non-built-in backends may still exist in saved config, but the simplified web panel preserves them without exposing direct editing
+
+This keeps Guardian in control of approvals, audit, routing, and verification while still allowing explicit delegation to terminal-first coding agents when the operator wants that path.
+
 ## Sandbox And Security Model
 
 Assistant-driven coding requests remain repo-scoped.

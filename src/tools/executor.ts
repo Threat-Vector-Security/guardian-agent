@@ -26,6 +26,7 @@ import type {
   AiSecurityScanResult,
   AiSecurityService,
 } from '../runtime/ai-security.js';
+import type { CodingBackendService } from '../runtime/coding-backend-service.js';
 import type { PackageInstallTrustService } from '../runtime/package-install-trust-service.js';
 import {
   isInstallLikePackageManagerCommand,
@@ -637,6 +638,8 @@ export interface ToolExecutorOptions {
   containmentService?: ContainmentService;
   /** Network feature configuration. */
   networkConfig?: AssistantNetworkConfig;
+  /** External coding CLI backend orchestration service. */
+  codingBackendService?: CodingBackendService;
   /** OS-level process sandbox configuration. */
   sandboxConfig?: SandboxConfig;
   /** Current sandbox health summary. */
@@ -922,6 +925,10 @@ export class ToolExecutor {
   setBrowserConfig(browserConfig: BrowserConfig | undefined): void {
     this.options.browserConfig = browserConfig;
     this.hybridBrowser?.setBrowserConfig(browserConfig);
+  }
+
+  setCodingBackendService(codingBackendService: CodingBackendService | undefined): void {
+    this.options.codingBackendService = codingBackendService;
   }
 
   private syncHybridBrowserTools(): void {
@@ -2697,6 +2704,7 @@ export class ToolExecutor {
   /** Dispose resources. Call on shutdown. */
   async dispose(): Promise<void> {
     // Browser sessions are now managed by MCP servers (no local cleanup needed)
+    this.options.codingBackendService?.dispose();
   }
 
   listJobs(limit = 50): ToolJobRecord[] {
@@ -6306,6 +6314,117 @@ export class ToolExecutor {
           cwd: requireString(args.cwd, 'cwd'),
           timeoutMs: asNumber(args.timeoutMs, 30_000),
         }, request);
+      },
+    );
+
+    // ── Coding Backend Orchestration ──────────────────────────
+
+    this.registry.register(
+      {
+        name: 'coding_backend_list',
+        description: 'List available external coding CLI backends (Claude Code, Codex, Gemini CLI, etc.) and their status.',
+        shortDescription: 'List configured coding backends.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: { type: 'object', properties: {} },
+      },
+      async () => {
+        if (!this.options.codingBackendService) {
+          return { success: false, error: 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.' };
+        }
+        const backends = this.options.codingBackendService.listBackends();
+        return {
+          success: true,
+          output: {
+            backends: backends.map((b) => ({
+              id: b.id,
+              name: b.name,
+              enabled: b.enabled,
+              command: b.command,
+              preset: b.preset ?? false,
+              installedVersion: b.installedVersion,
+              updateAvailable: b.updateAvailable,
+            })),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'coding_backend_run',
+        description: 'Launch an external coding CLI (Claude Code, Codex, Gemini CLI, etc.) to perform a coding task in the current workspace. Opens a visible terminal tab so the user can observe progress. Returns structured results when the CLI finishes. After the backend completes, verify the work using code_git_diff, code_test, or code_build.',
+        shortDescription: 'Delegate a coding task to an external coding CLI.',
+        risk: 'mutating',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            task: { type: 'string', description: 'The coding task to delegate to the external CLI.' },
+            backend: { type: 'string', description: 'Backend id (e.g. claude-code, codex, gemini-cli). Uses the default backend if omitted.' },
+          },
+          required: ['task'],
+        },
+        examples: [
+          { input: { task: 'Add unit tests for the auth module', backend: 'claude-code' }, description: 'Delegate test authoring to Claude Code' },
+          { input: { task: 'Fix the TypeScript compilation errors in src/api/' }, description: 'Delegate bug fix to default backend' },
+        ],
+      },
+      async (args, request) => {
+        if (!this.options.codingBackendService) {
+          return { success: false, error: 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.' };
+        }
+        const task = requireString(args.task, 'task');
+        const backendId = typeof args.backend === 'string' ? args.backend.trim() : undefined;
+        const codeSessionId = request.codeContext?.sessionId;
+        if (!codeSessionId) {
+          return { success: false, error: 'No active coding session. Create or attach to a coding session first.' };
+        }
+        const session = this.getCurrentCodeSessionRecord(request);
+        const workspaceRoot = session?.resolvedRoot || session?.workspaceRoot;
+        if (!workspaceRoot) {
+          return { success: false, error: 'Could not determine workspace root for the current coding session.' };
+        }
+        const result = await this.options.codingBackendService.run({
+          task,
+          backendId,
+          codeSessionId,
+          workspaceRoot,
+        });
+        return {
+          success: result.success,
+          output: result,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'coding_backend_status',
+        description: 'Check the status of active or recent coding backend sessions in the current workspace.',
+        shortDescription: 'Check status of coding backend sessions.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', description: 'Specific backend session id. Lists all recent if omitted.' },
+          },
+        },
+      },
+      async (args) => {
+        if (!this.options.codingBackendService) {
+          return { success: false, error: 'Coding backend orchestration is not enabled.' };
+        }
+        const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : undefined;
+        const sessions = this.options.codingBackendService.getStatus(sessionId);
+        return {
+          success: true,
+          output: { sessions },
+        };
       },
     );
 

@@ -632,6 +632,7 @@ Owns:
 Owns:
 
 - Telegram
+- Coding Assistants
 - Google Workspace
 - authentication
 - danger zone

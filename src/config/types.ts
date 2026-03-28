@@ -1175,6 +1175,54 @@ export interface AgentPolicyUpdatesConfig {
   toolPolicies: boolean;
 }
 
+/** Configuration for an external coding CLI backend (e.g. Claude Code, Codex, Gemini CLI). */
+export interface CodingBackendConfig {
+  /** Unique backend id (e.g. 'claude-code', 'codex', 'gemini-cli'). */
+  id: string;
+  /** Human-readable name shown in UI and tool output. */
+  name: string;
+  /** Enable/disable this backend (default: true). */
+  enabled: boolean;
+  /** Shell type for the PTY terminal: 'wsl', 'bash', 'zsh', etc. Defaults to platform default. */
+  shell?: string;
+  /** The CLI command to invoke. */
+  command: string;
+  /** CLI arguments template. Use {{task}} for the task placeholder, {{cwd}} for workspace root. */
+  args: string[];
+  /** Command to check the installed version (e.g. 'claude --version'). */
+  versionCommand?: string;
+  /** Command to update the CLI to the latest version (e.g. 'npm update -g @anthropic-ai/claude-code'). */
+  updateCommand?: string;
+  /** Environment variables to set for the CLI process. */
+  env?: Record<string, string>;
+  /** Maximum execution time in milliseconds (default: 300000 = 5 min). */
+  timeoutMs?: number;
+  /** Whether this backend supports non-interactive/print mode (default: true). */
+  nonInteractive?: boolean;
+  /** Timestamp of last version check. */
+  lastVersionCheck?: number;
+  /** Detected installed version string. */
+  installedVersion?: string;
+  /** True if a newer version was detected. */
+  updateAvailable?: boolean;
+}
+
+/** Coding backends orchestration configuration. */
+export interface CodingBackendsConfig {
+  /** Enable coding backend orchestration. */
+  enabled: boolean;
+  /** Configured coding CLI backends. */
+  backends: CodingBackendConfig[];
+  /** Default backend id to use when user doesn't specify one. */
+  defaultBackend?: string;
+  /** Maximum concurrent backend sessions per code session (default: 2). */
+  maxConcurrentSessions?: number;
+  /** Auto-update CLIs before launch when a check is stale (default: true). */
+  autoUpdate?: boolean;
+  /** How often to check for updates in milliseconds (default: 86400000 = 24h). */
+  versionCheckIntervalMs?: number;
+}
+
 /** Assistant tool execution policy and sandbox settings. */
 export interface AssistantToolsConfig {
   /** Enable assistant tool runtime and LLM tool-calling. */
@@ -1207,6 +1255,8 @@ export interface AssistantToolsConfig {
   cloud?: AssistantCloudConfig;
   /** Native document search engine. Indexes local document collections for BM25 + vector hybrid search. */
   search?: import('../search/types.js').SearchConfig;
+  /** External coding CLI backend orchestration (Claude Code, Codex, Gemini CLI, etc.). */
+  codingBackends?: CodingBackendsConfig;
   /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
   disabledCategories?: ToolCategory[];
   /** OS-level process sandbox configuration. Uses bubblewrap (bwrap) on Linux, ulimit fallback elsewhere. */
@@ -1716,6 +1766,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       providerRoutingEnabled: true,
       preferredProviders: {
         local: 'ollama',
+      },
+      codingBackends: {
+        enabled: false,
+        backends: [],
+        maxConcurrentSessions: 2,
+        autoUpdate: true,
+        versionCheckIntervalMs: 86_400_000,
       },
       disabledCategories: [],
       sandbox: {

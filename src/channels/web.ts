@@ -236,6 +236,8 @@ export class WebChannel implements ChannelAdapter {
   private dashboard: DashboardCallbacks;
   private sseClients: Set<ServerResponse> = new Set();
   private readonly terminalSessions = new Map<string, TerminalSessionRecord>();
+  private readonly terminalOutputListeners = new Map<string, Set<(data: string) => void>>();
+  private readonly terminalExitListeners = new Map<string, Set<(exitCode: number, signal: number) => void>>();
   private readonly privilegedTicketSecret = randomBytes(32);
   private readonly usedPrivilegedTicketNonces = new Map<string, number>();
   private readonly sessions = new Map<string, CookieSession>();
@@ -366,6 +368,95 @@ export class WebChannel implements ChannelAdapter {
         text,
       },
     });
+  }
+
+  /** Returns a CodingBackendTerminalControl implementation for programmatic terminal access. */
+  getCodingBackendTerminalControl(): import('./web-types.js').CodingBackendTerminalControl {
+    return {
+      openTerminal: async (params) => {
+        const terminalId = randomUUID();
+        const { codeSessionId, shell, cwd, cols = 120, rows = 30 } = params;
+        const shellType = shell || (process.platform === 'win32' ? 'wsl' : 'bash');
+        const launch = getPtyShellLaunch(shellType, process.platform, cwd);
+        const ptyCwd = launch.cwd === null ? undefined : (launch.cwd || cwd || process.cwd());
+        const pty = spawnPty(launch.file, launch.args, {
+          name: 'xterm-color',
+          cols,
+          rows,
+          cwd: ptyCwd,
+          env: buildHardenedEnv({ ...process.env, ...launch.env }),
+        });
+        const session: TerminalSessionRecord = {
+          id: terminalId,
+          ownerSessionId: null,
+          pty,
+          shell: shellType,
+          cwd: cwd || process.cwd(),
+          cols,
+          rows,
+          codeSessionId: codeSessionId || null,
+        };
+        this.terminalSessions.set(terminalId, session);
+        this.dashboard.onCodeTerminalEvent?.({
+          action: 'opened',
+          terminalId,
+          shell: session.shell,
+          cwd: session.cwd,
+          cols: session.cols,
+          rows: session.rows,
+          codeSessionId: session.codeSessionId ?? null,
+        });
+        pty.onData((data) => {
+          this.emitSSE({ type: 'terminal.output', data: { terminalId, data } });
+          const listeners = this.terminalOutputListeners.get(terminalId);
+          if (listeners) {
+            for (const cb of listeners) { try { cb(data); } catch { /* listener error */ } }
+          }
+        });
+        pty.onExit((event) => {
+          const exitListeners = this.terminalExitListeners.get(terminalId);
+          if (exitListeners) {
+            for (const cb of exitListeners) { try { cb(event.exitCode ?? 1, event.signal ?? 0); } catch { /* listener error */ } }
+            this.terminalExitListeners.delete(terminalId);
+          }
+          this.terminalOutputListeners.delete(terminalId);
+          this.terminalSessions.delete(terminalId);
+          this.dashboard.onCodeTerminalEvent?.({
+            action: 'exited',
+            terminalId,
+            shell: session.shell,
+            cwd: session.cwd,
+            cols: session.cols,
+            rows: session.rows,
+            codeSessionId: session.codeSessionId ?? null,
+            exitCode: event.exitCode,
+            signal: event.signal,
+          });
+          this.emitSSE({ type: 'terminal.exit', data: { terminalId, exitCode: event.exitCode, signal: event.signal } });
+        });
+        return { terminalId };
+      },
+      writeTerminalInput: (terminalId, input) => {
+        const session = this.terminalSessions.get(terminalId);
+        if (session) session.pty.write(input);
+      },
+      closeTerminal: (terminalId) => {
+        const session = this.terminalSessions.get(terminalId);
+        if (session) session.pty.kill();
+      },
+      onTerminalOutput: (terminalId, cb) => {
+        let set = this.terminalOutputListeners.get(terminalId);
+        if (!set) { set = new Set(); this.terminalOutputListeners.set(terminalId, set); }
+        set.add(cb);
+        return () => { set!.delete(cb); };
+      },
+      onTerminalExit: (terminalId, cb) => {
+        let set = this.terminalExitListeners.get(terminalId);
+        if (!set) { set = new Set(); this.terminalExitListeners.set(terminalId, set); }
+        set.add(cb);
+        return () => { set!.delete(cb); };
+      },
+    };
   }
 
   private emitSSE(event: SSEEvent): void {
@@ -5001,8 +5092,18 @@ export class WebChannel implements ChannelAdapter {
               type: 'terminal.output',
               data: { terminalId, data },
             });
+            const outputListeners = this.terminalOutputListeners.get(terminalId);
+            if (outputListeners) {
+              for (const cb of outputListeners) { try { cb(data); } catch { /* listener error */ } }
+            }
           });
           pty.onExit((event) => {
+            const exitListeners = this.terminalExitListeners.get(terminalId);
+            if (exitListeners) {
+              for (const cb of exitListeners) { try { cb(event.exitCode ?? 1, event.signal ?? 0); } catch { /* listener error */ } }
+              this.terminalExitListeners.delete(terminalId);
+            }
+            this.terminalOutputListeners.delete(terminalId);
             this.terminalSessions.delete(terminalId);
             this.dashboard.onCodeTerminalEvent?.({
               action: 'exited',

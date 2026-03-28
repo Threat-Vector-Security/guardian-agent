@@ -74,6 +74,7 @@ export async function initChatPanel(container) {
   let select = null;
   let modeSelect = null;
   let activeAgentId = null;
+  let approvalHandler = null;
 
   if (hasInternalOnly) {
     // Unified mode: show tier mode toggle instead of agent dropdown
@@ -161,7 +162,7 @@ export async function initChatPanel(container) {
     knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
     currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
     if (history) {
-      renderHistory(history, getHistoryKey());
+      renderHistory(history, getHistoryKey(), approvalHandler);
     }
     return result;
   };
@@ -217,7 +218,7 @@ export async function initChatPanel(container) {
   sendBtn.textContent = 'Send';
   sendBtn.style.padding = '0.5rem 0.8rem';
 
-  renderHistory(history, getHistoryKey() || activeAgentId);
+  renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
 
   if (select) {
     select.addEventListener('change', () => {
@@ -226,7 +227,7 @@ export async function initChatPanel(container) {
         sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
         activeAgentId = selected;
       }
-      renderHistory(history, getHistoryKey() || selected);
+      renderHistory(history, getHistoryKey() || selected, approvalHandler);
     });
   }
 
@@ -247,7 +248,7 @@ export async function initChatPanel(container) {
         await api.resetConversation(apiAgentId, webUserId, 'web');
       }
       chatHistoryByAgent.delete(resetId);
-      renderHistory(history, resetId);
+      renderHistory(history, resetId, approvalHandler);
     } catch (err) {
       console.error('Reset failed', err);
     }
@@ -348,6 +349,8 @@ export async function initChatPanel(container) {
       history.scrollTop = history.scrollHeight;
     }
   };
+  approvalHandler = handleApproval;
+  renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
 
   /**
    * Append an agent message to the chat, with approval buttons when the
@@ -547,7 +550,7 @@ function getHistory(agentId) {
   return chatHistoryByAgent.get(agentId);
 }
 
-function renderHistory(historyEl, agentId) {
+function renderHistory(historyEl, agentId, onApproval) {
   historyEl.innerHTML = '';
   if (!agentId) return;
   const chatHistory = getHistory(agentId);
@@ -555,6 +558,7 @@ function renderHistory(historyEl, agentId) {
     historyEl.appendChild(createMessageEl(msg.role, msg.content, {
       pendingApprovals: msg.pendingApprovals,
       responseSource: msg.responseSource,
+      onApproval,
     }));
   }
   historyEl.scrollTop = historyEl.scrollHeight;

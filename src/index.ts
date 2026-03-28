@@ -22,6 +22,7 @@ import type {
   MCPServerEntry,
   WebSearchConfig,
 } from './config/types.js';
+import { DEFAULT_CONFIG } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
@@ -33,6 +34,8 @@ import type {
   DashboardCallbacks,
   DashboardAgentInfo,
   DashboardAgentDetail,
+  DashboardCodingBackendInfo,
+  DashboardCodingBackendSession,
   DashboardMutationResult,
   DashboardProviderInfo,
   RedactedCloudConfig,
@@ -67,6 +70,8 @@ import {
   shouldRefreshCodeWorkspaceMap,
 } from './runtime/code-workspace-map.js';
 import { resolveManagedPlaywrightLaunch } from './runtime/playwright-launch.js';
+import { CODING_BACKEND_PRESETS } from './runtime/coding-backend-presets.js';
+import { CodingBackendService } from './runtime/coding-backend-service.js';
 import {
   assessCodeWorkspaceTrustSync,
   getEffectiveCodeWorkspaceTrustState,
@@ -5229,6 +5234,90 @@ function mergeCloudConfigForValidation(
   };
 }
 
+function redactCodingBackendsConfig(config: GuardianAgentConfig): RedactedConfig['assistant']['tools']['codingBackends'] {
+  const defaults = DEFAULT_CODING_BACKENDS_CONFIG;
+  const codingBackends = config.assistant.tools.codingBackends ?? defaults;
+  const configuredIds = new Set(codingBackends?.backends.map((backend) => backend.id) ?? []);
+  const mergedBackends: DashboardCodingBackendInfo[] = [];
+
+  for (const backend of codingBackends?.backends ?? []) {
+    const preset = CODING_BACKEND_PRESETS.find((candidate) => candidate.id === backend.id);
+    const merged = preset
+      ? {
+          ...preset,
+          enabled: backend.enabled,
+          ...(backend.shell ? { shell: backend.shell } : {}),
+          ...(backend.env ? { env: { ...backend.env } } : {}),
+          ...(typeof backend.timeoutMs === 'number' ? { timeoutMs: backend.timeoutMs } : {}),
+          ...(typeof backend.nonInteractive === 'boolean' ? { nonInteractive: backend.nonInteractive } : {}),
+          ...(typeof backend.lastVersionCheck === 'number' ? { lastVersionCheck: backend.lastVersionCheck } : {}),
+          ...(typeof backend.installedVersion === 'string' ? { installedVersion: backend.installedVersion } : {}),
+          ...(typeof backend.updateAvailable === 'boolean' ? { updateAvailable: backend.updateAvailable } : {}),
+        }
+      : backend;
+    mergedBackends.push({
+      id: merged.id,
+      name: merged.name,
+      configured: true,
+      preset: !!preset,
+      enabled: merged.enabled,
+      shell: merged.shell,
+      command: merged.command,
+      args: [...merged.args],
+      versionCommand: merged.versionCommand,
+      updateCommand: merged.updateCommand,
+      timeoutMs: merged.timeoutMs,
+      nonInteractive: merged.nonInteractive,
+      envKeys: Object.keys(merged.env ?? {}).sort(),
+      installedVersion: merged.installedVersion,
+      updateAvailable: merged.updateAvailable,
+      lastVersionCheck: merged.lastVersionCheck,
+    });
+  }
+
+  for (const preset of CODING_BACKEND_PRESETS) {
+    if (configuredIds.has(preset.id)) continue;
+    mergedBackends.push({
+      id: preset.id,
+      name: preset.name,
+      configured: false,
+      preset: true,
+      enabled: false,
+      shell: preset.shell,
+      command: preset.command,
+      args: [...preset.args],
+      versionCommand: preset.versionCommand,
+      updateCommand: preset.updateCommand,
+      timeoutMs: preset.timeoutMs,
+      nonInteractive: preset.nonInteractive,
+      envKeys: [],
+    });
+  }
+
+  mergedBackends.sort((left, right) => {
+    if (left.configured !== right.configured) return left.configured ? -1 : 1;
+    if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+    return left.name.localeCompare(right.name);
+  });
+
+  return {
+    enabled: codingBackends?.enabled ?? false,
+    defaultBackend: codingBackends?.defaultBackend,
+    maxConcurrentSessions: codingBackends?.maxConcurrentSessions ?? defaults?.maxConcurrentSessions ?? 2,
+    autoUpdate: codingBackends?.autoUpdate ?? defaults?.autoUpdate ?? true,
+    versionCheckIntervalMs: codingBackends?.versionCheckIntervalMs ?? defaults?.versionCheckIntervalMs ?? 86_400_000,
+    backends: mergedBackends,
+  };
+}
+
+const DEFAULT_CODING_BACKENDS_CONFIG: NonNullable<GuardianAgentConfig['assistant']['tools']['codingBackends']> = DEFAULT_CONFIG.assistant.tools.codingBackends ?? {
+  enabled: false,
+  backends: [],
+  maxConcurrentSessions: 2,
+  autoUpdate: true,
+  versionCheckIntervalMs: 86_400_000,
+};
+
 /** Strip sensitive fields from config for the dashboard. */
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   const llm: Record<string, { provider: string; model: string; baseUrl?: string; credentialRef?: string }> = {};
@@ -5464,6 +5553,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           playwrightBrowser: config.assistant.tools.browser?.playwrightBrowser ?? 'chromium',
           playwrightCaps: config.assistant.tools.browser?.playwrightCaps ?? 'network,storage',
         },
+        codingBackends: redactCodingBackendsConfig(config),
         cloud: redactCloudConfig(config.assistant.tools.cloud),
         agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
       },
@@ -5567,6 +5657,7 @@ function buildDashboardCallbacks(
   microsoftAuthRef: { current: import('./microsoft/microsoft-auth.js').MicrosoftAuth | null },
   microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
+  codingBackendServiceRef: { current: CodingBackendService | null },
 ): DashboardCallbacks & {
   connectorWorkflowOps: {
     upsert: (playbook: AssistantConnectorPlaybookDefinition) => { success: boolean; message: string };
@@ -5892,6 +5983,9 @@ function buildDashboardCallbacks(
       toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
       threatIntelWebSearchConfigRef.current = resolvedNextCredentials.resolvedWebSearch ?? {};
       toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);
+      codingBackendServiceRef.current?.updateConfig(
+        nextConfig.assistant.tools.codingBackends ?? DEFAULT_CODING_BACKENDS_CONFIG,
+      );
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
       webAuthStateRef.current = {
@@ -6790,6 +6884,22 @@ function buildDashboardCallbacks(
         models: models.map((model) => model.id),
       };
     },
+
+    onCodingBackendStatus: (sessionId) => (
+      codingBackendServiceRef.current?.getStatus(sessionId).map((session): DashboardCodingBackendSession => ({
+        id: session.id,
+        backendId: session.backendId,
+        backendName: session.backendName,
+        codeSessionId: session.codeSessionId,
+        terminalId: session.terminalId,
+        task: session.task,
+        status: session.status,
+        startedAt: session.startedAt,
+        completedAt: session.completedAt,
+        exitCode: session.exitCode,
+        durationMs: session.durationMs,
+      })) ?? []
+    ),
 
     onAssistantState: () => {
       const policyTypes = new Set([
@@ -9089,6 +9199,82 @@ function buildDashboardCallbacks(
             }
             if (Array.isArray(searchUpdate.sources)) {
               rawSearch.sources = searchUpdate.sources;
+            }
+          }
+
+          const codingBackendsUpdate = updates.assistant?.tools?.codingBackends;
+          if (codingBackendsUpdate && typeof codingBackendsUpdate === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.codingBackends = (rawTools.codingBackends as Record<string, unknown> | undefined) ?? {};
+            const rawCodingBackends = rawTools.codingBackends as Record<string, unknown>;
+
+            if (typeof codingBackendsUpdate.enabled === 'boolean') {
+              rawCodingBackends.enabled = codingBackendsUpdate.enabled;
+            }
+            if (codingBackendsUpdate.defaultBackend !== undefined) {
+              const trimmed = trimOrUndefined(codingBackendsUpdate.defaultBackend);
+              if (trimmed) rawCodingBackends.defaultBackend = trimmed;
+              else delete rawCodingBackends.defaultBackend;
+            }
+            if (typeof codingBackendsUpdate.maxConcurrentSessions === 'number' && Number.isFinite(codingBackendsUpdate.maxConcurrentSessions)) {
+              rawCodingBackends.maxConcurrentSessions = codingBackendsUpdate.maxConcurrentSessions;
+            }
+            if (typeof codingBackendsUpdate.autoUpdate === 'boolean') {
+              rawCodingBackends.autoUpdate = codingBackendsUpdate.autoUpdate;
+            }
+            if (typeof codingBackendsUpdate.versionCheckIntervalMs === 'number' && Number.isFinite(codingBackendsUpdate.versionCheckIntervalMs)) {
+              rawCodingBackends.versionCheckIntervalMs = codingBackendsUpdate.versionCheckIntervalMs;
+            }
+            if (Array.isArray(codingBackendsUpdate.backends)) {
+              const previousBackends = new Map(
+                (Array.isArray(rawCodingBackends.backends) ? rawCodingBackends.backends : [])
+                  .filter(isRecord)
+                  .map((backend) => [typeof backend.id === 'string' ? backend.id.trim() : '', backend] as const)
+                  .filter(([id]) => !!id),
+              );
+              rawCodingBackends.backends = codingBackendsUpdate.backends
+                .map((backend) => {
+                  const id = backend.id.trim();
+                  const name = backend.name.trim();
+                  const command = backend.command.trim();
+                  if (!id || !name || !command) return null;
+                  const current = previousBackends.get(id);
+                  const next: Record<string, unknown> = {
+                    id,
+                    name,
+                    enabled: backend.enabled !== false,
+                    command,
+                    args: Array.isArray(backend.args)
+                      ? backend.args
+                        .map((arg) => arg?.trim())
+                        .filter((arg): arg is string => !!arg)
+                      : [],
+                  };
+                  if (backend.shell?.trim()) next.shell = backend.shell.trim();
+                  if (backend.versionCommand?.trim()) next.versionCommand = backend.versionCommand.trim();
+                  if (backend.updateCommand?.trim()) next.updateCommand = backend.updateCommand.trim();
+                  if (typeof backend.timeoutMs === 'number' && Number.isFinite(backend.timeoutMs)) {
+                    next.timeoutMs = backend.timeoutMs;
+                  }
+                  if (typeof backend.nonInteractive === 'boolean') {
+                    next.nonInteractive = backend.nonInteractive;
+                  }
+                  if (backend.env && typeof backend.env === 'object') {
+                    const envEntries = Object.entries(backend.env)
+                      .map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : ''] as const)
+                      .filter(([key, value]) => !!key && value.length > 0);
+                    if (envEntries.length > 0) {
+                      next.env = Object.fromEntries(envEntries);
+                    }
+                  } else if (isRecord(current?.env)) {
+                    next.env = current.env;
+                  }
+                  return next;
+                })
+                .filter((backend): backend is Record<string, unknown> => backend !== null);
             }
           }
 
@@ -11406,6 +11592,7 @@ async function main(): Promise<void> {
     externalAgentId: router.findAgentByRole('external')?.id,
   });
   let connectors: ConnectorPlaybookService;
+  const codingBackendServiceRef: { current: CodingBackendService | null } = { current: null };
 
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
@@ -11530,6 +11717,7 @@ async function main(): Promise<void> {
     runGatewayMonitorCheck: runGatewayMonitoring,
     windowsDefender,
     containmentService,
+    codingBackendService: undefined,
     networkConfig: config.assistant.network,
     mcpManager,
     sandboxConfig,
@@ -12749,6 +12937,7 @@ async function main(): Promise<void> {
     microsoftAuthRef,
     microsoftServiceRef,
     { current: toolExecutor },
+    codingBackendServiceRef,
   );
 
   dashboardCallbacks.onCodeTerminalAccessCheck = () => {
@@ -13401,6 +13590,11 @@ async function main(): Promise<void> {
       staticDir: join(__dirname, '..', 'web', 'public'),
       dashboard: dashboardCallbacks,
     });
+    codingBackendServiceRef.current = new CodingBackendService({
+      config: configRef.current.assistant.tools.codingBackends ?? DEFAULT_CODING_BACKENDS_CONFIG,
+      terminalControl: web.getCodingBackendTerminalControl(),
+    });
+    toolExecutor.setCodingBackendService(codingBackendServiceRef.current);
     activeWebChannel = web;
     await web.start(async (msg) => {
       const decision = resolveAgentForIncomingMessage(configRef.current.channels.web?.defaultAgent, msg);
@@ -13421,7 +13615,13 @@ async function main(): Promise<void> {
       }
       return runtime.dispatchMessage(decision.agentId, msg);
     });
-    channels.push({ name: 'web', stop: () => web.stop() });
+    channels.push({
+      name: 'web',
+      stop: async () => {
+        codingBackendServiceRef.current?.dispose();
+        await web.stop();
+      },
+    });
 
     // Log the dashboard URL prominently
     const webUrl = `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`;

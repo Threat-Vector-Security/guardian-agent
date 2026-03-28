@@ -465,6 +465,14 @@ export interface RedactedConfig {
         playwrightBrowser: string;
         playwrightCaps: string;
       };
+      codingBackends?: {
+        enabled: boolean;
+        defaultBackend?: string;
+        maxConcurrentSessions: number;
+        autoUpdate: boolean;
+        versionCheckIntervalMs: number;
+        backends: DashboardCodingBackendInfo[];
+      };
       cloud?: RedactedCloudConfig;
       agentPolicyUpdates?: {
         allowedPaths: boolean;
@@ -648,6 +656,39 @@ export interface DashboardCodeTerminalEvent {
   signal?: number;
 }
 
+export interface DashboardCodingBackendInfo {
+  id: string;
+  name: string;
+  configured: boolean;
+  preset: boolean;
+  enabled: boolean;
+  shell?: string;
+  command: string;
+  args: string[];
+  versionCommand?: string;
+  updateCommand?: string;
+  timeoutMs?: number;
+  nonInteractive?: boolean;
+  envKeys?: string[];
+  installedVersion?: string;
+  updateAvailable?: boolean;
+  lastVersionCheck?: number;
+}
+
+export interface DashboardCodingBackendSession {
+  id: string;
+  backendId: string;
+  backendName: string;
+  codeSessionId: string;
+  terminalId: string;
+  task: string;
+  status: 'running' | 'succeeded' | 'failed' | 'timed_out';
+  startedAt: number;
+  completedAt?: number;
+  exitCode?: number;
+  durationMs?: number;
+}
+
 export interface ScheduledTaskHistoryStep {
   toolName: string;
   status: ScheduledTaskStatus;
@@ -762,6 +803,7 @@ export interface DashboardCallbacks {
   onProviderTypes?: () => DashboardProviderTypeInfo[];
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
   onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
+  onCodingBackendStatus?: (sessionId?: string) => DashboardCodingBackendSession[];
   onAssistantState?: () => DashboardAssistantState;
   onAssistantRuns?: (args: {
     limit?: number;
@@ -1374,6 +1416,26 @@ export interface ConfigUpdate {
         local?: string;
         external?: string;
       };
+      codingBackends?: {
+        enabled?: boolean;
+        defaultBackend?: string;
+        maxConcurrentSessions?: number;
+        autoUpdate?: boolean;
+        versionCheckIntervalMs?: number;
+        backends?: Array<{
+          id: string;
+          name: string;
+          enabled?: boolean;
+          shell?: string;
+          command: string;
+          args: string[];
+          versionCommand?: string;
+          updateCommand?: string;
+          env?: Record<string, string>;
+          timeoutMs?: number;
+          nonInteractive?: boolean;
+        }>;
+      };
       cloud?: {
         enabled?: boolean;
         cpanelProfiles?: Array<{
@@ -1527,4 +1589,30 @@ export interface DashboardCodeSessionSnapshot {
 export interface DashboardCodeSessionsList {
   sessions: CodeSessionRecord[];
   currentSessionId: string | null;
+}
+
+/** Programmatic terminal control for the CodingBackendService.
+ * Implemented by WebChannel and injected during bootstrap. */
+export interface CodingBackendTerminalControl {
+  /** Open a new PTY terminal in a code session. */
+  openTerminal(params: {
+    codeSessionId: string;
+    shell: string;
+    cwd: string;
+    name?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<{ terminalId: string }>;
+
+  /** Write input to a terminal's stdin. */
+  writeTerminalInput(terminalId: string, input: string): void;
+
+  /** Kill and close a terminal. */
+  closeTerminal(terminalId: string): void;
+
+  /** Subscribe to terminal output. Returns unsubscribe function. */
+  onTerminalOutput(terminalId: string, cb: (data: string) => void): () => void;
+
+  /** Subscribe to terminal exit. Returns unsubscribe function. */
+  onTerminalExit(terminalId: string, cb: (exitCode: number, signal: number) => void): () => void;
 }

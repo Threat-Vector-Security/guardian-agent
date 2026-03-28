@@ -58,6 +58,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use the Dashboard page to confirm runtime status, agent health, provider connectivity, and assistant state.',
                   'Open `#/config` to verify the default provider, web auth settings, and channel configuration.',
+                  'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
                   'Open Configuration > Appearance when you want to raise the dashboard text size slightly, switch to a more readable font preset, or reduce interface motion.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want posture, alerts, activity, audit, or threat-intel visibility.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
@@ -143,6 +144,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Approvals',
                 items: [
                   'Pending tool actions are surfaced in web approvals, CLI native prompts, and Telegram approval flows.',
+                  'In the web chat and Coding Workspace, pending approvals should show inline `Approve` and `Deny` buttons. Plain-language replies such as `yes` or `no` remain the fallback path rather than the primary web approval UX.',
                   'Use `package_install` instead of `shell_safe` for public package-manager installs. Guardian stages the requested top-level package artifacts, runs bounded static checks plus native AV when available, and then either blocks, pauses for caution acceptance, or proceeds with the install.',
                   'The managed package-install path is host-level rather than code-workspace-only. It supports explicit public-registry installs to targets such as the working directory, npm or pnpm `--prefix` locations, and pip `--target` directories.',
                   'Inside code sessions, safe repo-local reads and edits stay low-friction, while repo execution and persistence actions only auto-approve after the workspace trust state reaches `trusted`.',
@@ -203,6 +205,16 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
                   'Manual terminals remain operator-controlled. Assistant actions still stay under approvals and policy rather than taking over a terminal directly.',
                   'Terminal activity is still audited, but manual terminals remain operator terminals rather than a substitute for guarded assistant actions.',
+                ],
+              },
+              {
+                title: 'External Coding Backends',
+                items: [
+                  'Configuration > Integrations > Coding Assistants shows the built-in external coding backends Guardian knows how to launch: Claude Code, Codex, Gemini CLI, and Aider.',
+                  'That panel is intentionally simple: one row per built-in backend, plus `Enable` or `Disable` and `Set Default` actions instead of an add-or-remove preset editor.',
+                  'Global controls in the same panel manage orchestration enablement, max concurrent delegated runs, version-check interval, and auto-update behavior.',
+                  'If the saved config contains custom non-built-in coding backends, Guardian preserves them, but the simplified web panel does not edit them.',
+                  'Guardian only uses these backends when the user explicitly asks to delegate coding work to an external tool. Direct coding requests should still run through Guardian’s built-in coding tools by default.',
                 ],
               },
               {

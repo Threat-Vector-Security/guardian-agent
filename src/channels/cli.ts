@@ -3,7 +3,7 @@
  *
  * Interactive readline prompt with full dashboard parity.
  * Commands: /chat, /agents, /agent, /status, /assistant, /providers, /budget, /watchdog,
- * /config, /campaign, /connectors, /automations, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
+ * /config, /coding-backends, /campaign, /connectors, /automations, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
  *
  * Accepts the same DashboardCallbacks interface as the web channel for
  * instant feature parity with zero duplication.
@@ -15,7 +15,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
-import type { DashboardCallbacks, DashboardCodeSessionsList, SSEEvent } from './web-types.js';
+import type { DashboardCallbacks, DashboardCodeSessionsList, DashboardCodingBackendInfo, SSEEvent } from './web-types.js';
 import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
@@ -116,6 +116,31 @@ const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
       'The CLI keeps one focused coding session at a time for implicit repo work.',
       'Attach can resolve a unique session by exact id, title, or workspace match.',
       'Natural-language chat can also ask Guardian to switch or detach on the fly; /code is the explicit fallback control.',
+    ],
+  },
+  {
+    aliases: ['coding-backends', 'codingbackends'],
+    title: '/coding-backends',
+    summary: 'Inspect and manage configured external coding CLI backends such as Claude Code, Codex, Gemini CLI, and Aider.',
+    usage: [
+      '/coding-backends',
+      '/coding-backends list',
+      '/coding-backends status [sessionId]',
+      '/coding-backends enable <backendId>',
+      '/coding-backends disable <backendId>',
+      '/coding-backends default <backendId>',
+      '/coding-backends add <backendId>',
+      '/coding-backends remove <backendId>',
+    ],
+    examples: [
+      '/coding-backends',
+      '/coding-backends add claude-code',
+      '/coding-backends default codex',
+      '/coding-backends status',
+    ],
+    notes: [
+      'add enables a known preset when it is available but not yet configured.',
+      'Runtime session status is only available when the web channel has initialized coding-backend orchestration.',
     ],
   },
   {
@@ -1313,6 +1338,10 @@ export class CLIChannel implements ChannelAdapter {
       case 'config':
         await this.handleConfig(args);
         break;
+      case 'coding-backends':
+      case 'codingbackends':
+        await this.handleCodingBackends(args);
+        break;
       case 'auth':
         await this.handleAuth(args);
         break;
@@ -1453,6 +1482,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
+    this.write('  /coding-backends [list|status|enable|disable|default|add|remove]  Manage external coding CLIs\n');
     this.write('  /auth [status|rotate|reveal]           Manage web auth/token settings\n');
     this.write('\n');
     this.write(this.bold('Tools\n'));
@@ -2380,6 +2410,195 @@ export class CLIChannel implements ChannelAdapter {
       }
     }
     this.write('\n');
+  }
+
+  private async handleCodingBackends(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConfig) {
+      this.write('\nCoding backend configuration is not available.\n\n');
+      return;
+    }
+
+    const coding = this.dashboard.onConfig().assistant.tools.codingBackends;
+    if (!coding) {
+      this.write('\nCoding backends are not configured.\n\n');
+      return;
+    }
+
+    const configuredBackends = (coding.backends || []).filter((backend) => backend.configured);
+    const findBackend = (backendId: string) => coding.backends.find((backend) => backend.id === backendId);
+    const toConfigPatch = (backend: DashboardCodingBackendInfo) => ({
+      id: backend.id,
+      name: backend.name,
+      enabled: backend.enabled,
+      ...(backend.shell ? { shell: backend.shell } : {}),
+      command: backend.command,
+      args: [...backend.args],
+      ...(backend.versionCommand ? { versionCommand: backend.versionCommand } : {}),
+      ...(backend.updateCommand ? { updateCommand: backend.updateCommand } : {}),
+      ...(typeof backend.timeoutMs === 'number' ? { timeoutMs: backend.timeoutMs } : {}),
+      ...(typeof backend.nonInteractive === 'boolean' ? { nonInteractive: backend.nonInteractive } : {}),
+    });
+
+    const printList = () => {
+      this.write('\n');
+      this.write(this.bold('Coding Backends\n'));
+      this.write(`  Orchestration: ${coding.enabled ? this.green('enabled') : this.yellow('disabled')}\n`);
+      this.write(`  Default:       ${coding.defaultBackend || 'none'}\n`);
+      this.write(`  Max concurrent:${String(coding.maxConcurrentSessions)}\n`);
+      this.write(`  Auto-update:   ${coding.autoUpdate ? 'enabled' : 'disabled'}\n`);
+      this.write(`  Check interval:${Math.round(coding.versionCheckIntervalMs / 3_600_000)}h\n`);
+      this.write('\n');
+      if (coding.backends.length === 0) {
+        this.write('  No configured or preset backends found.\n\n');
+        return;
+      }
+      for (const backend of coding.backends) {
+        const state = backend.enabled ? this.green('enabled') : this.yellow('disabled');
+        const source = backend.configured ? (backend.preset ? 'configured preset' : 'custom') : 'available preset';
+        const isDefault = backend.id === coding.defaultBackend ? ' (default)' : '';
+        this.write(`  ${this.cyan(backend.id)}${isDefault}  ${state}  ${source}\n`);
+        this.write(`    name:    ${backend.name}\n`);
+        this.write(`    command: ${backend.command}${backend.args.length > 0 ? ` ${backend.args.join(' ')}` : ''}\n`);
+        if (backend.shell) this.write(`    shell:   ${backend.shell}\n`);
+        if (typeof backend.timeoutMs === 'number') this.write(`    timeout: ${backend.timeoutMs}ms\n`);
+      }
+      this.write('\n');
+    };
+
+    const sub = (args[0] ?? 'list').toLowerCase();
+    if (sub === 'list' || sub === 'show') {
+      printList();
+      return;
+    }
+
+    if (sub === 'status') {
+      if (!this.dashboard.onCodingBackendStatus) {
+        this.write('\nCoding backend runtime status is not available yet.\n\n');
+        return;
+      }
+      const sessionId = args[1]?.trim();
+      const sessions = this.dashboard.onCodingBackendStatus(sessionId);
+      this.write('\n');
+      this.write(this.bold('Coding Backend Sessions\n'));
+      if (sessions.length === 0) {
+        this.write('  No active or recent coding backend sessions.\n\n');
+        return;
+      }
+      for (const session of sessions) {
+        this.write(`  ${this.cyan(session.id)}  ${session.status}  ${session.backendName}\n`);
+        this.write(`    code session: ${session.codeSessionId}\n`);
+        this.write(`    task:         ${session.task}\n`);
+        this.write(`    started:      ${new Date(session.startedAt).toLocaleString()}\n`);
+        if (session.completedAt) this.write(`    completed:    ${new Date(session.completedAt).toLocaleString()}\n`);
+        if (typeof session.durationMs === 'number') this.write(`    duration:     ${session.durationMs}ms\n`);
+        if (typeof session.exitCode === 'number') this.write(`    exit code:    ${session.exitCode}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (!this.dashboard.onConfigUpdate) {
+      this.write('\nCoding backend updates are not available.\n\n');
+      return;
+    }
+
+    if (sub === 'default') {
+      const backendId = args[1]?.trim();
+      if (!backendId) {
+        this.write('\nUsage: /coding-backends default <backendId>\n\n');
+        return;
+      }
+      const target = findBackend(backendId);
+      if (!target || !target.configured) {
+        this.write(`\nBackend "${backendId}" is not configured.\n\n`);
+        return;
+      }
+      const result = await this.dashboard.onConfigUpdate({
+        assistant: {
+          tools: {
+            codingBackends: {
+              defaultBackend: backendId,
+            },
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'enable' || sub === 'disable' || sub === 'add') {
+      const backendId = args[1]?.trim();
+      if (!backendId) {
+        this.write(`\nUsage: /coding-backends ${sub} <backendId>\n\n`);
+        return;
+      }
+      const target = findBackend(backendId);
+      if (!target) {
+        this.write(`\nBackend "${backendId}" was not found.\n\n`);
+        return;
+      }
+      const nextBackends = configuredBackends.map(toConfigPatch);
+      const existingIndex = nextBackends.findIndex((backend) => backend.id === backendId);
+      if (existingIndex >= 0) {
+        nextBackends[existingIndex].enabled = sub !== 'disable';
+      } else if (sub === 'enable' || sub === 'add') {
+        nextBackends.push({
+          ...toConfigPatch(target),
+          enabled: true,
+        });
+      } else {
+        this.write(`\nBackend "${backendId}" is not configured.\n\n`);
+        return;
+      }
+      const result = await this.dashboard.onConfigUpdate({
+        assistant: {
+          tools: {
+            codingBackends: {
+              backends: nextBackends,
+            },
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'remove') {
+      const backendId = args[1]?.trim();
+      if (!backendId) {
+        this.write('\nUsage: /coding-backends remove <backendId>\n\n');
+        return;
+      }
+      const nextBackends = configuredBackends
+        .filter((backend) => backend.id !== backendId)
+        .map(toConfigPatch);
+      if (nextBackends.length === configuredBackends.length) {
+        this.write(`\nBackend "${backendId}" is not configured.\n\n`);
+        return;
+      }
+      const result = await this.dashboard.onConfigUpdate({
+        assistant: {
+          tools: {
+            codingBackends: {
+              backends: nextBackends,
+              defaultBackend: coding.defaultBackend === backendId ? '' : coding.defaultBackend,
+            },
+          },
+        },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write(`\nUnknown /coding-backends subcommand: ${sub}\n`);
+    this.write('Usage:\n');
+    this.write('  /coding-backends\n');
+    this.write('  /coding-backends status [sessionId]\n');
+    this.write('  /coding-backends enable <backendId>\n');
+    this.write('  /coding-backends disable <backendId>\n');
+    this.write('  /coding-backends default <backendId>\n');
+    this.write('  /coding-backends add <backendId>\n');
+    this.write('  /coding-backends remove <backendId>\n\n');
   }
 
   // ─── /auth ───────────────────────────────────────────────────

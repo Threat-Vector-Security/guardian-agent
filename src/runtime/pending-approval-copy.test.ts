@@ -17,7 +17,14 @@ describe('pending approval copy', () => {
   it('detects phantom approval text that should never be shown without metadata', () => {
     expect(isPhantomPendingApprovalMessage('This action needs approval before I can continue.')).toBe(true);
     expect(isPhantomPendingApprovalMessage('This action needs your approval. The approval UI is shown to the user automatically.')).toBe(true);
-    expect(isPhantomPendingApprovalMessage('Waiting for approval to write S:\\Development\\test23.txt.')).toBe(false);
+    expect(isPhantomPendingApprovalMessage('Waiting for approval to write S:\\Development\\test23.txt.')).toBe(true);
+    expect(isPhantomPendingApprovalMessage([
+      'Great news — Claude Code is now enabled!',
+      '',
+      'Waiting for approval to run coding_backend_run - {"task":"Say hello","backend":"claude-code"}.',
+    ].join('\n'))).toBe(true);
+    expect(isPhantomPendingApprovalMessage('Approval required for this action:\ncoding_backend_run: {"task":"Say hello"}')).toBe(true);
+    expect(isPhantomPendingApprovalMessage('The message "Waiting for approval to write S:\\Development\\test23.txt." is what Guardian shows before approval.')).toBe(false);
   });
 
   it('describes policy updates without leaking schema jargon', () => {

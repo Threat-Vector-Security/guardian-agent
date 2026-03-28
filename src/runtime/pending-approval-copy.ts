@@ -195,5 +195,9 @@ export function shouldUseStructuredPendingApprovalMessage(content: string | unde
 export function isPhantomPendingApprovalMessage(content: string | undefined): boolean {
   const normalized = (content ?? '').trim();
   return /^this action needs approval before i can continue\.?$/i.test(normalized)
-    || /^this action needs your approval\. the approval ui is shown to the user automatically\.?$/i.test(normalized);
+    || /^this action needs your approval\. the approval ui is shown to the user automatically\.?$/i.test(normalized)
+    || /(?:^|\n)\s*waiting for approval to\b/i.test(normalized)
+    || /(?:^|\n)\s*approval required for this action:?/i.test(normalized)
+    || /\breply ["']yes["'] to approve or ["']no["'] to deny\b/i.test(normalized)
+    || /(?:^|\n)\s*optional:\s*\/approve\b/i.test(normalized);
 }

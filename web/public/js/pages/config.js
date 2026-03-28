@@ -164,6 +164,12 @@ const CONFIG_HELP = {
       whatCanDo: 'Connect Guardian to Google services before enabling Gmail, Drive, Calendar, or related tool actions.',
       howLinks: 'Successful setup here unlocks Google Workspace tools for use by the assistant and automation layer.',
     },
+    'Coding Assistants': {
+      whatItIs: 'This section manages the external coding CLI backends Guardian can delegate work to, such as Claude Code, Codex, Gemini CLI, and Aider.',
+      whatSeeing: 'You are seeing orchestration settings and a fixed list of the built-in coding assistants Guardian knows how to launch, each with enablement and default-routing controls.',
+      whatCanDo: 'Turn the feature on, choose how many delegated coding runs may execute at once, and enable or disable the built-in assistants Guardian can launch.',
+      howLinks: 'These backends are only used when the coding agent is explicitly asked to delegate work to an external coding CLI instead of editing directly.',
+    },
   },
   system: {
     'Web Authentication': {
@@ -413,13 +419,14 @@ function renderIntegrationSystemTab(panel) {
   panel.appendChild(createIntegrationOverview(sharedConfig, sharedAuthStatus));
   panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
   panel.appendChild(createTelegramPanel(sharedConfig, panel));
+  panel.appendChild(createCodingBackendsPanel(sharedConfig));
   panel.appendChild(createDangerZonePanel());
 
   applyInputTooltips(panel);
   enhanceSectionHelp(
     panel,
     {
-      ...pickHelpSections(CONFIG_HELP.integrations, ['Telegram Channel']),
+      ...pickHelpSections(CONFIG_HELP.integrations, ['Coding Assistants', 'Telegram Channel']),
       ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication', 'Danger Zone']),
     },
     createGenericHelpFactory('Configuration Integration System'),
@@ -3359,6 +3366,294 @@ function createWebSearchPanel(config, panel) {
   });
 
   applyInputTooltips(section);
+  return section;
+}
+
+function createCodingBackendsPanel(config) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const coding = config.assistant?.tools?.codingBackends || {
+    enabled: false,
+    defaultBackend: '',
+    maxConcurrentSessions: 2,
+    autoUpdate: true,
+    versionCheckIntervalMs: 86_400_000,
+    backends: [],
+  };
+  const builtInBackendOrder = ['claude-code', 'codex', 'gemini-cli', 'aider'];
+  const backendInfos = Array.isArray(coding.backends) ? coding.backends : [];
+  const backendInfoById = new Map(backendInfos.map((backend) => [backend.id, backend]));
+
+  const state = {
+    enabled: coding.enabled === true,
+    defaultBackend: coding.defaultBackend || '',
+    maxConcurrentSessions: Math.max(1, Number(coding.maxConcurrentSessions) || 2),
+    autoUpdate: coding.autoUpdate !== false,
+    versionCheckHours: Math.max(1, Math.round((Number(coding.versionCheckIntervalMs) || 86_400_000) / 3_600_000)),
+    backends: builtInBackendOrder
+      .map((backendId) => backendInfoById.get(backendId))
+      .filter(Boolean)
+      .map((backend) => ({
+        id: backend.id,
+        name: backend.name,
+        configured: backend.configured === true,
+        enabled: backend.enabled === true,
+        shell: backend.shell || '',
+        command: backend.command,
+        args: Array.isArray(backend.args) ? [...backend.args] : [],
+        versionCommand: backend.versionCommand || '',
+        updateCommand: backend.updateCommand || '',
+        timeoutMs: typeof backend.timeoutMs === 'number' ? backend.timeoutMs : undefined,
+        nonInteractive: backend.nonInteractive !== false,
+        preset: backend.preset === true,
+        installedVersion: backend.installedVersion || '',
+        updateAvailable: backend.updateAvailable === true,
+        lastVersionCheck: typeof backend.lastVersionCheck === 'number' ? backend.lastVersionCheck : undefined,
+      })),
+    hiddenBackends: backendInfos
+      .filter((backend) => backend.configured === true && !builtInBackendOrder.includes(backend.id))
+      .map((backend) => ({
+        id: backend.id,
+        name: backend.name,
+        enabled: backend.enabled !== false,
+        shell: backend.shell || '',
+        command: backend.command,
+        args: Array.isArray(backend.args) ? [...backend.args] : [],
+        versionCommand: backend.versionCommand || '',
+        updateCommand: backend.updateCommand || '',
+        timeoutMs: typeof backend.timeoutMs === 'number' ? backend.timeoutMs : undefined,
+        nonInteractive: backend.nonInteractive !== false,
+      })),
+  };
+
+  const normalizeDefaultBackend = () => {
+    const visibleDefault = state.backends.find((backend) => backend.id === state.defaultBackend);
+    if (visibleDefault?.enabled) return;
+    const hiddenDefault = state.hiddenBackends.find((backend) => backend.id === state.defaultBackend);
+    if (hiddenDefault?.enabled) return;
+    state.defaultBackend = state.backends.find((backend) => backend.enabled)?.id
+      || state.hiddenBackends.find((backend) => backend.enabled)?.id
+      || '';
+  };
+  normalizeDefaultBackend();
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Coding Assistants</h3>
+      <span class="cfg-header-note">Built-in external coding CLIs with simple enablement controls</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label for="coding-backends-enabled">Orchestration</label>
+          <select id="coding-backends-enabled">
+            <option value="true" ${state.enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!state.enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label for="coding-backends-max-concurrent">Max Concurrent Sessions</label>
+          <input id="coding-backends-max-concurrent" type="number" min="1" max="10" value="${state.maxConcurrentSessions}">
+        </div>
+        <div class="cfg-field">
+          <label for="coding-backends-version-hours">Version Check Interval (hours)</label>
+          <input id="coding-backends-version-hours" type="number" min="1" max="168" value="${state.versionCheckHours}">
+        </div>
+        <div class="cfg-field">
+          <label for="coding-backends-auto-update">Auto Update</label>
+          <select id="coding-backends-auto-update">
+            <option value="true" ${state.autoUpdate ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!state.autoUpdate ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Guardian only uses these backends when the coding agent is explicitly asked to delegate to an external coding CLI. This UI only exposes the built-in assistants Guardian ships with.
+      </div>
+      <div class="cfg-divider"></div>
+      <div id="coding-backends-builtins"></div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="coding-backends-save" type="button">Save Coding Assistants</button>
+        <span id="coding-backends-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const builtInsWrap = section.querySelector('#coding-backends-builtins');
+  const statusEl = section.querySelector('#coding-backends-status');
+
+  const describeVersionState = (backend) => {
+    if (backend.installedVersion) {
+      return backend.updateAvailable
+        ? `${backend.installedVersion} available locally • update available`
+        : `${backend.installedVersion} available locally`;
+    }
+    if (backend.lastVersionCheck) {
+      return 'Not detected on the current machine';
+    }
+    return 'Not checked yet';
+  };
+
+  const renderBackends = () => {
+    builtInsWrap.innerHTML = `
+      <div class="table-header" style="padding-left:0;padding-right:0;margin-top:0;">
+        <h3>Built-in Assistants</h3>
+        <span class="cfg-header-note">Enable, disable, and choose the default assistant Guardian should launch</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Backend</th>
+            <th>Command</th>
+            <th>Version</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${state.backends.map((backend) => `
+            <tr>
+              <td>
+                <strong>${esc(backend.name)}</strong><br>
+                <span style="font-size:0.72rem;color:var(--text-muted);">${esc(backend.id)}</span>
+                ${backend.id === state.defaultBackend ? '<div><span class="badge badge-idle" style="margin-top:0.25rem;">default</span></div>' : ''}
+              </td>
+              <td>
+                <code>${esc(backend.command)}${backend.args.length > 0 ? ` ${esc(backend.args.join(' '))}` : ''}</code>
+                ${backend.shell ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">shell: ${esc(backend.shell)}</div>` : ''}
+                ${typeof backend.timeoutMs === 'number' ? `<div style="font-size:0.72rem;color:var(--text-muted);">timeout: ${esc(String(Math.round(backend.timeoutMs / 1000)))}s</div>` : ''}
+              </td>
+              <td>
+                <div style="font-size:0.74rem;">${esc(describeVersionState(backend))}</div>
+                ${backend.updateAvailable ? '<div><span class="badge badge-queued" style="margin-top:0.25rem;">update available</span></div>' : ''}
+              </td>
+              <td>
+                <span class="badge ${backend.enabled ? 'badge-idle' : 'badge-queued'}">${backend.enabled ? 'enabled' : 'disabled'}</span><br>
+                <span style="font-size:0.72rem;color:var(--text-muted);">${backend.nonInteractive ? 'non-interactive' : 'interactive'}</span>
+              </td>
+              <td>
+                <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+                  <button class="btn btn-secondary btn-sm" type="button" data-coding-backend-toggle="${escAttr(backend.id)}">${backend.enabled ? 'Disable' : 'Enable'}</button>
+                  <button class="btn btn-secondary btn-sm" type="button" data-coding-backend-default="${escAttr(backend.id)}" ${!backend.enabled || backend.id === state.defaultBackend ? 'disabled' : ''}>Set Default</button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${state.hiddenBackends.length > 0
+        ? `<div style="margin-top:0.65rem;font-size:0.72rem;color:var(--text-muted);">
+            ${state.hiddenBackends.length} custom backend${state.hiddenBackends.length === 1 ? ' is' : 's are'} preserved in config but hidden in this simplified UI.
+          </div>`
+        : ''}
+    `;
+
+    builtInsWrap.querySelectorAll('[data-coding-backend-toggle]').forEach((button) => {
+      button.setAttribute('title', 'Enable or disable this built-in coding assistant without editing command templates by hand.');
+      button.addEventListener('click', () => {
+        const backendId = button.getAttribute('data-coding-backend-toggle');
+        const backend = state.backends.find((entry) => entry.id === backendId);
+        if (!backend) return;
+        backend.configured = true;
+        backend.enabled = !backend.enabled;
+        normalizeDefaultBackend();
+        renderBackends();
+      });
+    });
+
+    builtInsWrap.querySelectorAll('[data-coding-backend-default]').forEach((button) => {
+      button.setAttribute('title', 'Choose this enabled assistant when the user asks for an external coding backend without naming one.');
+      button.addEventListener('click', () => {
+        const backendId = button.getAttribute('data-coding-backend-default');
+        const backend = state.backends.find((entry) => entry.id === backendId);
+        if (!backend?.enabled) return;
+        state.defaultBackend = backendId || '';
+        renderBackends();
+      });
+    });
+  };
+
+  section.querySelector('#coding-backends-enabled')?.addEventListener('change', (event) => {
+    state.enabled = event.target.value === 'true';
+  });
+  section.querySelector('#coding-backends-max-concurrent')?.addEventListener('change', (event) => {
+    state.maxConcurrentSessions = Math.max(1, Number(event.target.value) || 2);
+    event.target.value = String(state.maxConcurrentSessions);
+  });
+  section.querySelector('#coding-backends-version-hours')?.addEventListener('change', (event) => {
+    state.versionCheckHours = Math.max(1, Number(event.target.value) || 24);
+    event.target.value = String(state.versionCheckHours);
+  });
+  section.querySelector('#coding-backends-auto-update')?.addEventListener('change', (event) => {
+    state.autoUpdate = event.target.value === 'true';
+  });
+
+  section.querySelector('#coding-backends-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    normalizeDefaultBackend();
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            codingBackends: {
+              enabled: state.enabled,
+              defaultBackend: state.defaultBackend || '',
+              maxConcurrentSessions: state.maxConcurrentSessions,
+              autoUpdate: state.autoUpdate,
+              versionCheckIntervalMs: state.versionCheckHours * 3_600_000,
+              backends: [
+                ...state.backends
+                  .filter((backend) => backend.configured)
+                  .map((backend) => ({
+                    id: backend.id,
+                    name: backend.name,
+                    enabled: backend.enabled,
+                    ...(backend.shell ? { shell: backend.shell } : {}),
+                    command: backend.command,
+                    args: [...backend.args],
+                    ...(backend.versionCommand ? { versionCommand: backend.versionCommand } : {}),
+                    ...(backend.updateCommand ? { updateCommand: backend.updateCommand } : {}),
+                    ...(typeof backend.timeoutMs === 'number' ? { timeoutMs: backend.timeoutMs } : {}),
+                    nonInteractive: backend.nonInteractive !== false,
+                  })),
+                ...state.hiddenBackends.map((backend) => ({
+                  id: backend.id,
+                  name: backend.name,
+                  enabled: backend.enabled,
+                  ...(backend.shell ? { shell: backend.shell } : {}),
+                  command: backend.command,
+                  args: [...backend.args],
+                  ...(backend.versionCommand ? { versionCommand: backend.versionCommand } : {}),
+                  ...(backend.updateCommand ? { updateCommand: backend.updateCommand } : {}),
+                  ...(typeof backend.timeoutMs === 'number' ? { timeoutMs: backend.timeoutMs } : {}),
+                  nonInteractive: backend.nonInteractive !== false,
+                })),
+              ],
+            },
+          },
+        },
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await updateConfig();
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  renderBackends();
+  applyInputTooltips(section, {
+    '#coding-backends-enabled': 'Master switch for delegated external coding assistants. Disable this if you do not want Guardian launching any external coding CLI.',
+    '#coding-backends-max-concurrent': 'Maximum number of delegated coding assistant runs allowed at the same time for one coding session.',
+    '#coding-backends-version-hours': 'How often Guardian should check the built-in coding assistants for version information or available updates.',
+    '#coding-backends-auto-update': 'Choose whether Guardian should automatically run the configured update command for built-in coding assistants when an update check says one is available.',
+    '#coding-backends-save': 'Persist the orchestration settings and built-in coding assistant enablement shown in this panel.',
+  });
   return section;
 }
 
