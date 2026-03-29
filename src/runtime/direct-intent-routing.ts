@@ -2,6 +2,7 @@ import type { IntentGatewayDecision, IntentGatewayRecord } from './intent-gatewa
 
 export type DirectIntentRoutingCandidate =
   | 'filesystem'
+  | 'coding_backend'
   | 'scheduled_email_automation'
   | 'automation'
   | 'automation_control'
@@ -65,9 +66,10 @@ function preferredCandidatesForDecision(
       return ['web_search'];
     case 'filesystem_task':
       return ['filesystem'];
+    case 'coding_task':
+      return decision.entities.codingBackend ? ['coding_backend'] : [];
     case 'coding_session_control':
       return ['coding_session_control'];
-    case 'coding_task':
     case 'security_task':
     case 'general_assistant':
     case 'unknown':

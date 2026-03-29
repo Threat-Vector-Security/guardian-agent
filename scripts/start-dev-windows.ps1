@@ -439,6 +439,61 @@ function Get-WebRotateOnStartupFromContent {
     return $false
 }
 
+function Get-WebAuthModeFromContent {
+    param(
+        [string]$Content
+    )
+
+    $lines = $Content -split "`r?`n"
+    $inWeb = $false
+    $webIndent = 0
+    $inAuth = $false
+    $authIndent = 0
+
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $line = $lines[$i]
+        $trimmed = $line.Trim()
+        $indent = $line.Length - $line.TrimStart().Length
+
+        if (-not $inWeb -and $line -match '^\s*web:\s*$') {
+            $inWeb = $true
+            $webIndent = $indent
+            $inAuth = $false
+            continue
+        }
+
+        if ($inWeb) {
+            $isNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $webIndent)
+            if ($isNextBlock) {
+                $inWeb = $false
+                $inAuth = $false
+                continue
+            }
+        }
+
+        if (-not $inWeb) { continue }
+
+        if (-not $inAuth -and $line -match '^\s*auth:\s*$') {
+            $inAuth = $true
+            $authIndent = $indent
+            continue
+        }
+
+        if ($inAuth) {
+            $isAuthNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $authIndent)
+            if ($isAuthNextBlock) {
+                $inAuth = $false
+            }
+        }
+
+        if ($inAuth -and $line -match '^\s*mode:\s*(.+?)\s*$') {
+            return $Matches[1].Trim().Trim("'`"")
+        }
+    }
+
+    return $null
+}
+
 try {
 
 # --- Pre-flight: kill stale GuardianAgent processes and clean temp configs ---
@@ -716,7 +771,11 @@ if (Test-Path $configFile) {
     if ($webEnabled) {
         $configuredWebAuthToken = Get-WebAuthTokenFromContent -Content $configContent
         $rotateWebAuthOnStartup = Get-WebRotateOnStartupFromContent -Content $configContent
-        if ($rotateWebAuthOnStartup) {
+        $webAuthMode = Get-WebAuthModeFromContent -Content $configContent
+        if ($webAuthMode -eq 'disabled') {
+            Write-Host "  Web dashboard bearer auth is disabled." -ForegroundColor DarkCyan
+            Write-Host "  The dashboard will open without a token. Only use this on trusted networks." -ForegroundColor DarkCyan
+        } elseif ($rotateWebAuthOnStartup) {
             Write-Host "  Web dashboard auth is set to rotate on startup." -ForegroundColor DarkCyan
             Write-Host "  GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup." -ForegroundColor DarkCyan
         } elseif ($configuredWebAuthToken) {

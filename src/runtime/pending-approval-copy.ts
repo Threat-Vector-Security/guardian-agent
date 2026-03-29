@@ -3,6 +3,10 @@ export interface PendingApprovalSummary {
   argsPreview: string;
 }
 
+export interface PendingApprovalMetadata extends PendingApprovalSummary {
+  id: string;
+}
+
 const WEAK_PENDING_PATTERNS = [
   /^\s*$/i,
   /^i need your approval before proceeding\.?$/i,
@@ -185,6 +189,26 @@ export function formatPendingApprovalMessage(approvals: readonly PendingApproval
     `Waiting for approval on ${approvals.length} actions:`,
     ...approvals.map((approval) => `- ${describePendingApproval(approval)}`),
   ].join('\n');
+}
+
+export function buildPendingApprovalMetadata(
+  ids: readonly string[],
+  summaries?: Map<string, PendingApprovalSummary>,
+): PendingApprovalMetadata[] {
+  const seen = new Set<string>();
+  const metadata: PendingApprovalMetadata[] = [];
+  for (const rawId of ids) {
+    const id = rawId.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const summary = summaries?.get(id);
+    metadata.push({
+      id,
+      toolName: summary?.toolName ?? 'unknown',
+      argsPreview: summary?.argsPreview ?? '',
+    });
+  }
+  return metadata;
 }
 
 export function shouldUseStructuredPendingApprovalMessage(content: string | undefined): boolean {

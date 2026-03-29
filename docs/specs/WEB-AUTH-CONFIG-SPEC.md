@@ -18,7 +18,11 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 ## Auth Modes
 - `bearer_required`:
   - Non-health endpoints require a valid bearer token or a valid HttpOnly session cookie.
-  - SSE accepts `?token=<bearer>` or cookie auth.
+  - SSE accepts bearer-header auth for non-browser clients or cookie auth for browser sessions.
+- `disabled`:
+  - Dashboard, API, and SSE access are open without bearer-token or cookie authentication.
+  - Guardian should only surface this as a deliberate trusted-network operator choice.
+  - Runtime may still retain or rotate a bearer token so operators can re-enable auth later without editing config by hand.
 
 ## Token Lifecycle
 - Token sources:
@@ -26,9 +30,10 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
   - Environment token
   - Ephemeral runtime-generated token
 - Startup behavior:
-  - If no token is configured, Guardian generates an ephemeral runtime token for that process.
+  - If auth mode is `bearer_required` and no token is configured, Guardian generates an ephemeral runtime token for that process.
   - If `channels.web.auth.rotateOnStartup` is `true`, Guardian generates a fresh ephemeral runtime token at startup even when a configured token exists.
   - When an ephemeral startup token is generated and Guardian is running in an interactive terminal, the full token is printed once to the terminal for browser sign-in.
+  - If auth mode is `disabled`, Guardian should not require or print a startup token merely to open the dashboard.
 - Persistence behavior:
   - Runtime-generated startup tokens and manually rotated tokens are not written back into config.
   - Configured or env-backed tokens remain stable until the operator changes them.
@@ -52,7 +57,7 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 
 ## Validation + Safety
 - `sessionTtlMinutes` must be positive when set.
-- Auth mode is fixed to `bearer_required`.
+- Auth mode must be `bearer_required` or `disabled`.
 - Status payload always includes:
   - `mode`
   - `tokenConfigured`
@@ -61,12 +66,14 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 - Health endpoint remains unauthenticated for readiness probes.
 
 ## UX Requirements
-- Config Center shows auth mode, token source, TTL, and token controls.
+- Config Center shows auth mode, token source, TTL, token controls, and a clear warning when bearer auth is disabled.
 - Browser login flow should exchange bearer token to cookie session and remove browser token storage after successful exchange.
 - If a privileged dashboard mutation fails because the browser session expired, the login prompt should recover by exchanging the bearer token for a fresh session cookie and retrying the interrupted request once.
 - Startup scripts should not silently pin a newly generated bearer token into config just to make first login work; the interactive-terminal path should surface the ephemeral token directly instead.
-- Windows and Unix development startup scripts should inspect the saved web-auth settings and tell the operator whether the dashboard will reuse a pinned token or print a per-run ephemeral token.
+- Windows and Unix development startup scripts should inspect the saved web-auth settings and tell the operator whether the dashboard is open, will reuse a pinned token, or will print a per-run ephemeral token.
 - CLI supports:
   - `/auth status`
+  - `/auth enable`
+  - `/auth disable`
   - `/auth rotate`
   - `/auth reveal`

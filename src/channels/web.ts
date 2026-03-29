@@ -5,7 +5,7 @@
  * REST API for agent communication + dashboard API + SSE + static file serving.
  *
  * Security:
- *   - Required bearer token authentication
+ *   - Optional bearer token authentication with cookie-session custody when enabled
  *   - Configurable CORS origins (default: same-origin only; wildcard disallowed by config validation)
  *   - Request body size limit (default: 1 MB)
  *   - Path traversal protection for static files
@@ -67,7 +67,7 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-export type WebAuthMode = 'bearer_required';
+export type WebAuthMode = 'bearer_required' | 'disabled';
 type PrivilegedTicketAction =
   | 'auth.config'
   | 'auth.rotate'
@@ -99,7 +99,7 @@ export interface WebChannelOptions {
   host?: string;
   /** Default agent to route messages to. */
   defaultAgent?: string;
-  /** Bearer token for authentication. Non-health requests require this token. */
+  /** Bearer token for authentication when auth mode is bearer_required. */
   authToken?: string;
   /** Structured auth configuration. */
   auth?: WebAuthRuntimeConfig;
@@ -173,6 +173,10 @@ function readSurfaceIdFromSearchParams(url: URL): string | undefined {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function normalizeWebAuthMode(value: unknown): WebAuthMode {
+  return value === 'disabled' ? 'disabled' : 'bearer_required';
 }
 
 function getRequestErrorDetails(err: unknown): { statusCode: number; error: string; errorCode?: string } | null {
@@ -249,9 +253,9 @@ export class WebChannel implements ChannelAdapter {
     this.port = options.port ?? 3000;
     this.host = options.host ?? 'localhost';
     const auth = options.auth;
-    this.authMode = 'bearer_required';
-    if (auth?.mode && auth.mode !== 'bearer_required') {
-      log.warn({ requestedMode: auth.mode }, 'Ignoring unsupported web auth mode; forcing bearer_required');
+    this.authMode = normalizeWebAuthMode(auth?.mode);
+    if (auth?.mode && auth.mode !== this.authMode) {
+      log.warn({ requestedMode: auth.mode, appliedMode: this.authMode }, 'Ignoring unsupported web auth mode');
     }
     this.authToken = auth?.token ?? options.authToken;
     this.authTokenSource = auth?.tokenSource ?? (options.authToken ? 'config' : 'ephemeral');
@@ -298,7 +302,12 @@ export class WebChannel implements ChannelAdapter {
     return new Promise((resolve, reject) => {
       this.server!.listen(this.port, this.host, () => {
         log.info({ port: this.port, host: this.host }, 'Web channel started');
-        if (!this.authToken) {
+        if (this.authMode === 'disabled') {
+          log.warn(
+            { port: this.port, host: this.host, authMode: this.authMode },
+            'Web channel started WITHOUT bearer authentication. Only use this on trusted networks.',
+          );
+        } else if (!this.authToken) {
           log.warn(
             { port: this.port, host: this.host, authMode: this.authMode },
             'Web channel started WITHOUT strict bearer authentication.',
@@ -612,9 +621,9 @@ export class WebChannel implements ChannelAdapter {
   }
 
   setAuthConfig(auth: WebAuthRuntimeConfig): void {
-    this.authMode = 'bearer_required';
-    if (auth.mode !== 'bearer_required') {
-      log.warn({ requestedMode: auth.mode }, 'Ignoring unsupported web auth mode update; forcing bearer_required');
+    this.authMode = normalizeWebAuthMode(auth.mode);
+    if (auth.mode !== this.authMode) {
+      log.warn({ requestedMode: auth.mode, appliedMode: this.authMode }, 'Ignoring unsupported web auth mode update');
     }
     this.authToken = auth.token?.trim() || undefined;
     this.authTokenSource = auth.tokenSource ?? this.authTokenSource;
@@ -650,7 +659,7 @@ export class WebChannel implements ChannelAdapter {
 
   private shouldRequireAuth(req: IncomingMessage): boolean {
     void req;
-    return true;
+    return this.authMode === 'bearer_required';
   }
 
   /** Parse a cookie value from the request. */
@@ -718,6 +727,9 @@ export class WebChannel implements ChannelAdapter {
     const sid = this.parseCookie(req, SESSION_COOKIE_NAME);
     if (sid && this.sessions.has(sid)) {
       return { principalId: `web-session:${sid}`, principalRole: 'owner' };
+    }
+    if (this.authMode === 'disabled') {
+      return { principalId: 'web-open', principalRole: 'owner' };
     }
     return { principalId: 'web-bearer', principalRole: 'owner' };
   }
@@ -929,9 +941,9 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/auth/session — create HttpOnly session cookie (exchanges bearer token for cookie)
+      // POST /api/auth/session — create HttpOnly session cookie (usually exchanges bearer token for cookie)
       if (req.method === 'POST' && url.pathname === '/api/auth/session') {
-        // At this point checkAuth already validated the bearer token
+        // At this point checkAuth already validated the request under the active auth mode.
         const ttlMinutes = this.authSessionTtlMinutes ?? DEFAULT_SESSION_TTL_MINUTES;
         const now = Date.now();
         const sessionId = randomUUID();
@@ -1012,7 +1024,7 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         let parsed: {
-          mode?: 'bearer_required';
+          mode?: 'bearer_required' | 'disabled';
           token?: string;
           rotateOnStartup?: boolean;
           sessionTtlMinutes?: number;
@@ -1021,7 +1033,7 @@ export class WebChannel implements ChannelAdapter {
         try {
           parsed = body.trim()
             ? (JSON.parse(body) as {
-              mode?: 'bearer_required';
+              mode?: 'bearer_required' | 'disabled';
               token?: string;
               rotateOnStartup?: boolean;
               sessionTtlMinutes?: number;

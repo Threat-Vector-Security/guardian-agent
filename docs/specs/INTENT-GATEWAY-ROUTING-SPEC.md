@@ -1,0 +1,331 @@
+# Intent Gateway And Smart Routing Specification
+
+**Status:** Implemented current architecture
+
+This spec defines how Guardian interprets each incoming user turn, resolves clarification and correction turns, and chooses the local or external chat tier in Auto mode.
+
+It is the authoritative spec for:
+- top-level turn interpretation
+- clarification and correction handling
+- Auto-mode local vs external chat routing
+- pre-routed intent metadata reuse across channel dispatch
+
+This spec does **not** define per-tool provider routing. Tool provider routing is a separate control-plane concern.
+
+## Primary Files
+
+- `src/runtime/intent-gateway.ts`
+- `src/runtime/message-router.ts`
+- `src/runtime/pending-clarification-store.ts`
+- `src/index.ts`
+- `src/runtime/direct-intent-routing.ts`
+
+## Goals
+
+- Interpret every normal user turn through one authoritative structured gateway.
+- Route Auto-mode chat tiers from structured intent, not raw keyword heuristics.
+- Preserve corrections and clarification answers across web, CLI, and Telegram.
+- Prevent client-controlled routing metadata from bypassing server-side interpretation.
+
+## Non-Goals
+
+- Replacing approval continuation handling. Approvals remain control-plane resumes.
+- Replacing per-tool smart provider routing in the Tools control plane.
+- Moving all direct actions into a single giant router. Downstream deterministic handlers still exist after gateway interpretation.
+
+## Turn Pipeline
+
+Normal user-turn flow:
+
+```text
+Incoming message
+  -> Slash-command parsing in channel adapter, if applicable
+  -> Real approval / continuation detection, if applicable
+  -> IntentGateway classification
+  -> Clarification or correction resolution
+  -> Auto-mode tier selection from structured intent result
+  -> Dispatch to selected chat agent
+  -> Direct deterministic route handling and/or normal tool loop
+```
+
+Key rule:
+- slash commands and real approval/continuation resumes are the only allowed pre-gateway intercepts
+
+## Intent Gateway Contract
+
+The gateway returns an `IntentGatewayRecord` with:
+- `available`
+- `model`
+- `latencyMs`
+- `decision`
+
+The `decision` is structured and includes:
+- `route`
+- `confidence`
+- `operation`
+- `summary`
+- `turnRelation`
+- `resolution`
+- `missingFields`
+- `resolvedContent`
+- `entities`
+
+### Routes
+
+Current route values:
+- `automation_authoring`
+- `automation_control`
+- `automation_output_task`
+- `ui_control`
+- `browser_task`
+- `workspace_task`
+- `email_task`
+- `search_task`
+- `filesystem_task`
+- `coding_task`
+- `coding_session_control`
+- `security_task`
+- `general_assistant`
+- `unknown`
+
+### Turn Relations
+
+The gateway must classify the current turn as one of:
+- `new_request`
+- `follow_up`
+- `clarification_answer`
+- `correction`
+
+### Resolution
+
+The gateway must classify whether the request is:
+- `ready`
+- `needs_clarification`
+
+When `needs_clarification` is returned, `missingFields` must identify the unresolved requirement.
+
+## Clarification State
+
+Clarification state is stored in `PendingClarificationStore`.
+
+Keying:
+- logical assistant context
+- canonical user id
+- channel
+
+This means clarification state survives local/external tier selection when both tiers share one logical assistant state.
+
+Clarification kinds currently include:
+- `email_provider`
+- `coding_backend`
+- `generic`
+
+Behavior:
+- if the gateway requests clarification, Guardian stores a typed pending clarification
+- if the next user turn is a short answer like `Use Outlook` or `Codex`, the next gateway call sees the pending clarification and resolves it in context
+
+Current implementation details:
+- clarification state is a single pending slot per logical assistant context, canonical user id, and channel
+- clarification state currently uses the same 30 minute TTL as pending approvals
+- if a later turn is fully resolved (`resolution: ready`), Guardian clears the older pending clarification
+
+Current limitation:
+- Guardian does not maintain a full stack of unresolved clarifications
+- if the user pivots to a different resolved request in the middle of a clarification exchange, then later returns with a short answer such as `Use Outlook`, that short answer may no longer attach to the earlier request
+- clarification resume is therefore best-effort recent-context repair, not general multi-task workflow state
+
+## Conversation Context Window
+
+Turn interpretation is not based on the full raw transcript.
+
+Conversation storage and prompt assembly are owned by `ConversationService`.
+
+Current defaults:
+- conversation retention: 30 days
+- stored turns per active session: 12 user/assistant turns
+- stored message cap: 4000 characters per message
+- live prompt history cap: 12000 characters total
+
+Intent Gateway prompt inputs:
+- the current user message
+- the last 6 recent conversation entries, if available
+- any typed pending clarification state
+- enabled provider / coding-backend context
+
+Implications:
+- Guardian usually understands recent pivots and short repairs when the relevant request is still inside the bounded history window
+- older requests outside that bounded window are not guaranteed to be reconstructable from ordinary conversation history alone
+- dropped history can be summarized into the knowledge base, but that summary is not a byte-for-byte replacement for the recent-turn window
+
+## Correction Handling
+
+Corrections are interpreted by the gateway instead of raw keyword repair logic.
+
+Examples:
+- `No, Codex the CLI coding assistant`
+- `Claude Code`
+- `Use Gmail`
+- `the TempInstallTest workspace`
+
+The gateway can return:
+- `turnRelation: correction`
+- `resolvedContent` containing the repaired actionable request
+
+If `resolvedContent` is present, downstream routing and execution use that repaired request content.
+
+Guardian also uses the latest actionable prior user request from bounded recent history when reconstructing corrections such as:
+- `No, Codex the CLI coding assistant`
+- `Use Gmail`
+
+This means short correction turns work best when the original actionable request is still present in recent history.
+
+## Auto-Mode Tier Routing
+
+Auto-mode tier routing is owned by `MessageRouter.routeWithTierFromIntent(...)`.
+
+### Inputs
+
+- structured gateway decision
+- original or repaired request content
+- tier mode
+- complexity threshold
+
+### Preference Rules
+
+Hard local preference:
+- any request with `entities.codingBackend`
+
+Attached coding sessions:
+- an attached coding session may carry a remembered `agentId`, but tier-tagged session agents such as `local` or `external` do not override gateway-first Auto routing
+- explicit coding-backend delegation such as `Use Codex ...` or `Use Claude Code ...` must still prefer the local Guardian tier, because Guardian is orchestrating the CLI rather than acting as the coding model itself
+
+Local-preferred routes:
+- `filesystem_task`
+- `coding_task`
+- `coding_session_control`
+- `ui_control`
+- `automation_control`
+
+External-preferred routes:
+- `browser_task`
+- `workspace_task`
+- `email_task`
+- `search_task`
+- `security_task`
+
+Special case:
+- `automation_authoring` can still use automation-complexity scoring to choose external when the request is substantially orchestration-heavy
+
+Fallback:
+- if no intent-specific preference applies, Auto mode falls back to normal complexity scoring
+
+### Single-Tier Degradation
+
+When only one tier exists:
+- Auto mode routes to the available tier
+- `local-only` falls back to external if local is unavailable
+- `external-only` falls back to local if external is unavailable
+
+This degradation must be explicit and reflected in the route reason.
+
+## Pre-Routed Intent Metadata
+
+The routing layer can classify once before agent dispatch and attach the result to message metadata using the internal key:
+
+- `__guardian_pre_routed_intent_gateway`
+
+Purpose:
+- avoid a second gateway call inside the selected agent
+- preserve one authoritative interpretation across channel dispatch
+
+Security rule:
+- client-supplied pre-routed metadata is not trusted
+- server dispatch strips any incoming copy of that metadata key
+- only server-computed gateway results may be reattached
+
+## Channel Behavior
+
+Web, CLI, and Telegram all use the same prepare-and-dispatch pattern:
+
+```text
+channel message
+  -> prepareIncomingDispatch(...)
+  -> resolveAgentForIncomingMessage(...)
+  -> optional pre-routed gateway metadata attachment
+  -> dashboard/runtime dispatch
+```
+
+This avoids divergent routing behavior between channels.
+
+## Interaction With Direct Deterministic Handlers
+
+The gateway does not directly execute tools.
+
+After routing:
+- deterministic session control handlers
+- deterministic automation/browser/output prerouters
+- normal chat/tool loop
+
+all consume the structured gateway output rather than re-inferring the user’s intent from raw text.
+
+## Observability
+
+Relevant diagnostics:
+- `IntentGatewayRecord.latencyMs`
+- client-safe `intentGateway` metadata on responses
+- route reason and selected tier in routing metadata
+- operator-facing run traces from `src/runtime/orchestrator.ts` and `src/runtime/run-timeline.ts`
+- durable routing trace files under `~/.guardianagent/routing/intent-routing.jsonl`
+
+The durable routing trace is distinct from the existing run timeline:
+- the run timeline is the operator UI story for queueing, approvals, tool progress, verification, and completion
+- the routing trace is the low-level decision log for gateway classification, clarification prompts, tier selection, direct-intent candidates, direct tool execution, and final response locality
+
+Current routing trace stages include:
+- `incoming_dispatch`
+- `gateway_classified`
+- `clarification_requested`
+- `tier_routing_decided`
+- `pre_routed_metadata_attached`
+- `direct_candidates_evaluated`
+- `direct_tool_call_started`
+- `direct_tool_call_completed`
+- `direct_intent_response`
+- `dispatch_response`
+
+Persistence:
+- default path: `~/.guardianagent/routing/intent-routing.jsonl`
+- rotation defaults: 5 MB active file, 5 retained files total
+- config knob: `routing.intentTrace`
+
+Expected operator-visible behavior:
+- clear direct routing when intent is obvious
+- one targeted clarification when a required field is missing
+- short correction replies repairing the previous misunderstanding instead of starting an unrelated new task
+- unrelated questions asked while no formal continuation state exists are handled as ordinary new turns, using bounded recent history rather than a full workflow stack
+
+## Acceptance Criteria
+
+The implementation is correct when all of the following hold:
+
+- `Use Codex to ...` routes through the intent gateway and prefers the local tier in Auto mode.
+- `Check my email.` asks for Gmail vs Outlook only when both providers are enabled and the provider is still unspecified.
+- `Use Outlook.` continues the earlier mailbox request instead of creating a new unrelated task.
+- approval continuations bypass normal gateway interpretation and resume the suspended action.
+- bounded recent history and pending clarification state are sufficient for short repairs, but unrelated resolved pivots can clear the pending clarification slot.
+- if only one tier is configured, Auto mode still works without special-case user handling.
+- a client cannot inject fake pre-routed intent metadata to override server-side interpretation.
+
+## Verification
+
+Primary automated coverage:
+- `src/runtime/intent-gateway.test.ts`
+- `src/runtime/message-router.test.ts`
+- `src/prompts/guardian-core.test.ts`
+- `src/prompts/code-session-core.test.ts`
+- integration and channel tests under `src/channels/` and `src/runtime/`
+
+Recommended harness coverage:
+- `node scripts/test-code-ui-smoke.mjs`
+- `node scripts/test-coding-assistant.mjs`
+- `node scripts/test-contextual-security-uplifts.mjs`

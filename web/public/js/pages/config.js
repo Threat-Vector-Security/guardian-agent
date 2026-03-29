@@ -173,9 +173,9 @@ const CONFIG_HELP = {
   },
   system: {
     'Web Authentication': {
-      whatItIs: 'This section controls how access to the dashboard and API is authenticated, including the current bearer-token posture.',
-      whatSeeing: 'You are seeing auth mode, token source, session timing, and the controls to rotate or reveal the active token.',
-      whatCanDo: 'Rotate web access credentials, verify where the current token came from, and tune how long browser sessions should remain valid.',
+      whatItIs: 'This section controls how access to the dashboard and API is authenticated, including whether bearer-token protection is enforced at all.',
+      whatSeeing: 'You are seeing access mode, token source, session timing, and the controls to rotate or reveal the active token.',
+      whatCanDo: 'Require a bearer token for entry, disable it on trusted networks, rotate web access credentials, and tune how long browser sessions should remain valid.',
       howLinks: 'These settings govern entry into the whole web surface, so every other dashboard feature depends on them being correct.',
     },
     'Security Alerts': {
@@ -378,6 +378,7 @@ function renderSecurityTab(panel) {
     howLinks: 'These settings decide how much real host, network, browser, MCP, and policy surface Guardian can touch and how quickly recurring security findings can tighten controls.',
   }));
 
+  panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
   panel.appendChild(createSandboxPanel(sharedConfig));
   panel.appendChild(createBrowserPanel(sharedConfig, panel));
   const policyPanel = document.createElement('div');
@@ -395,6 +396,7 @@ function renderSecurityTab(panel) {
   enhanceSectionHelp(
     panel,
     {
+      ...pickHelpSections(CONFIG_HELP.system, ['Web Authentication']),
       ...pickHelpSections(CONFIG_HELP.toolsPolicy, ['Allowed Paths', 'Allowed Commands', 'Allowed Domains']),
       ...pickHelpSections(CONFIG_HELP.integrations, ['Browser Automation']),
       ...pickHelpSections(CONFIG_HELP.system, ['Guardian Agent', 'Assistant Security Monitoring', 'Automatic Containment', 'Policy-as-Code Engine', 'Trust Preset', 'Security Alerts', 'Sentinel Audit']),
@@ -2821,7 +2823,9 @@ function renderSettingsTab(panel) {
   const sandboxMode = config.assistant?.tools?.sandbox?.enforcementMode || 'strict';
   const gaConfig = config.guardian?.guardianAgent;
   const trustPreset = config.guardian?.trustPreset || 'custom';
-  const authMode = authStatus?.tokenConfigured ? 'Configured' : 'Not set';
+  const authMode = (authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required') === 'disabled'
+    ? 'Disabled'
+    : 'Protected';
   const notifications = config.assistant?.notifications || {};
   const notificationsBadge = notifications.enabled !== false
     ? (notifications.deliveryMode === 'all'
@@ -2966,6 +2970,7 @@ function createIntegrationOverview(config, authStatus) {
   const telegramSubtitle = telegramEnabled
     ? `${telegramChats} allowed chat${telegramChats === 1 ? '' : 's'}`
     : (telegram.botTokenConfigured ? 'Token configured but channel disabled' : 'Bot token not configured');
+  const authMode = authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required';
   const authConfigured = !!authStatus?.tokenConfigured;
   const authSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
   const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? null;
@@ -2978,9 +2983,11 @@ function createIntegrationOverview(config, authStatus) {
   ));
   cards.appendChild(createMiniCard(
     'Web Auth',
-    authConfigured ? 'Configured' : 'Not set',
-    `${authSource}${ttl ? ` • ${ttl} min TTL` : ''}`,
-    authConfigured ? 'success' : 'warning',
+    authMode === 'disabled' ? 'Disabled' : 'Required',
+    authMode === 'disabled'
+      ? 'Trusted networks only'
+      : `${authSource}${ttl ? ` • ${ttl} min TTL` : ''}`,
+    authMode === 'disabled' ? 'warning' : (authConfigured ? 'success' : 'warning'),
   ));
   wrap.appendChild(cards);
 
@@ -4446,22 +4453,36 @@ function createTrustPresetPanel(config) {
 function createAuthPanel(config, authStatus, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
-  const mode = 'bearer_required';
+  const mode = authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required';
   const tokenConfigured = !!authStatus?.tokenConfigured;
   const tokenSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
   const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? '';
+  const isBearerRequired = mode !== 'disabled';
+  const modeNote = isBearerRequired
+    ? 'Dashboard and API requests require a bearer token or an existing session cookie.'
+    : 'Dashboard and API access is open to anyone who can reach this port. Use only on trusted networks.';
+  void panel;
 
   section.innerHTML = `
-    <div class="table-header"><h3>Web Authentication</h3><span class="cfg-header-note">Bearer token controls for dashboard and API access</span></div>
+    <div class="table-header"><h3>Web Authentication</h3><span class="cfg-header-note">Choose whether the dashboard requires a bearer token or stays open on trusted networks</span></div>
     <div class="cfg-center-body">
       <div class="cfg-form-grid">
-        <div class="cfg-field"><label>Auth Mode</label><input id="auth-mode" type="text" readonly value="${mode}"></div>
+        <div class="cfg-field">
+          <label>Access Mode</label>
+          <select id="auth-mode" title="Choose whether the Web UI and API require a bearer token for entry.">
+            <option value="bearer_required" ${isBearerRequired ? 'selected' : ''}>Bearer token required</option>
+            <option value="disabled" ${!isBearerRequired ? 'selected' : ''}>Disabled on trusted networks</option>
+          </select>
+        </div>
         <div class="cfg-field"><label>Token Source</label><input id="auth-token-source" type="text" value="${esc(tokenSource)}" readonly></div>
         <div class="cfg-field"><label>Session TTL Minutes</label><input id="auth-ttl" type="number" min="1" placeholder="120" value="${esc(String(ttl))}"></div>
         <div class="cfg-field"><label>Current Token</label><input id="auth-token-preview" type="text" readonly value="${tokenConfigured ? esc(authStatus?.tokenPreview || 'configured') : 'not configured'}"></div>
       </div>
+      <div id="auth-mode-note" style="margin-top:0.5rem;font-size:0.74rem;color:${isBearerRequired ? 'var(--text-muted)' : 'var(--warning)'};">
+        ${esc(modeNote)}
+      </div>
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Rotated tokens are runtime-ephemeral and are not written back to local config.
+        Rotated tokens are runtime-ephemeral and are not written back to local config. If you disable bearer auth, Guardian still keeps a runtime token available in case you re-enable it later.
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="auth-save" type="button">Save Auth Settings</button>
@@ -4472,21 +4493,44 @@ function createAuthPanel(config, authStatus, panel) {
     </div>
   `;
 
+  const modeEl = section.querySelector('#auth-mode');
   const ttlEl = section.querySelector('#auth-ttl');
+  const tokenSourceEl = section.querySelector('#auth-token-source');
   const tokenPreviewEl = section.querySelector('#auth-token-preview');
+  const modeNoteEl = section.querySelector('#auth-mode-note');
   const statusEl = section.querySelector('#auth-save-status');
   const setStatus = (text, color) => { statusEl.textContent = text; statusEl.style.color = color; };
+  const applyModeNote = (nextMode) => {
+    if (!modeNoteEl) return;
+    const nextBearerRequired = nextMode !== 'disabled';
+    modeNoteEl.textContent = nextBearerRequired
+      ? 'Dashboard and API requests require a bearer token or an existing session cookie.'
+      : 'Dashboard and API access is open to anyone who can reach this port. Use only on trusted networks.';
+    modeNoteEl.style.color = nextBearerRequired ? 'var(--text-muted)' : 'var(--warning)';
+  };
+  const applyStatus = (status) => {
+    if (!status) return;
+    sharedAuthStatus = status;
+    const nextMode = status.mode || 'bearer_required';
+    if (modeEl) modeEl.value = nextMode;
+    if (tokenSourceEl) tokenSourceEl.value = status.tokenSource || 'ephemeral';
+    if (tokenPreviewEl) tokenPreviewEl.value = status.tokenPreview || (status.tokenConfigured ? 'configured' : 'not configured');
+    applyModeNote(nextMode);
+  };
+  modeEl?.addEventListener('change', () => {
+    applyModeNote(modeEl.value || 'bearer_required');
+  });
 
   section.querySelector('#auth-save')?.addEventListener('click', async () => {
     const payload = {
-      mode: 'bearer_required',
+      mode: modeEl?.value || 'bearer_required',
       sessionTtlMinutes: ttlEl.value ? Number(ttlEl.value) : undefined,
     };
     setStatus('Saving...', 'var(--text-muted)');
     try {
       const result = await api.updateAuth(payload);
       setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
-      if (result.status?.tokenPreview) tokenPreviewEl.value = result.status.tokenPreview;
+      applyStatus(result.status);
     } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
   });
 
@@ -4494,7 +4538,8 @@ function createAuthPanel(config, authStatus, panel) {
     setStatus('Rotating...', 'var(--text-muted)');
     try {
       const result = await api.rotateAuthToken();
-      if (result.token) tokenPreviewEl.value = `${result.token.slice(0, 4)}...${result.token.slice(-4)}`;
+      if (result.token && tokenPreviewEl) tokenPreviewEl.value = `${result.token.slice(0, 4)}...${result.token.slice(-4)}`;
+      applyStatus(result.status);
       setStatus(result.message || 'Ephemeral token rotated.', result.success ? 'var(--success)' : 'var(--warning)');
     } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
   });

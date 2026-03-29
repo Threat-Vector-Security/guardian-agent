@@ -438,6 +438,98 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBe('local');
     });
 
+    it('should route explicit external coding backend requests to the local tier when local patterns match', () => {
+      router.registerAgent('local-coded', ['execute_commands'], {
+        patterns: ['\\b(codex|claude\\s+code|gemini\\s+cli|aider|coding backend|coding assistant)\\b'],
+        priority: 1,
+      }, 'local');
+
+      const result = router.routeWithTier(
+        'Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('local-coded');
+      expect(result.tier).toBe('local');
+      expect(result.confidence).toBe('high');
+      expect(result.reason).toContain('pattern matched');
+      expect(result.fallbackAgentId).toBe('external');
+    });
+
+    it('should route coding backend intent to the local tier without relying on raw-text patterns', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Run Codex for a coding task.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {
+            codingBackend: 'codex',
+          },
+        },
+        'Use Codex to say hello and confirm you are working.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.confidence).toBe('high');
+      expect(result.reason).toContain('coding backend=codex');
+      expect(result.fallbackAgentId).toBe('external');
+    });
+
+    it('should route email intent to the external tier from the gateway decision', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Check email.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+        'Check my email.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.reason).toContain('intent route=email_task');
+      expect(result.fallbackAgentId).toBe('local');
+    });
+
+    it('should degrade cleanly when the preferred intent tier is unavailable', () => {
+      const singleRouter = new MessageRouter({ strategy: 'keyword' });
+      singleRouter.registerAgent('external', ['network_access'], {}, 'external');
+
+      const result = singleRouter.routeWithTierFromIntent(
+        {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Run Codex for a coding task.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {
+            codingBackend: 'codex',
+          },
+        },
+        'Use Codex to say hello and confirm you are working.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.fallbackAgentId).toBeUndefined();
+      expect(result.reason).toContain('coding backend=codex');
+    });
+
     it('should find agents by role', () => {
       expect(router.findAgentByRole('local')?.id).toBe('local');
       expect(router.findAgentByRole('external')?.id).toBe('external');

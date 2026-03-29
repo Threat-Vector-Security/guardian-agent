@@ -25,6 +25,7 @@ function mockGateway(partial: {
 
 const ALL_CANDIDATES = [
   'coding_session_control',
+  'coding_backend',
   'filesystem',
   'scheduled_email_automation',
   'automation',
@@ -47,7 +48,17 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
-  it('maps coding_task route to no candidates (falls through to LLM)', () => {
+  it('maps coding_task route with explicit coding backend to coding_backend candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'coding_task', operation: 'run', entities: { codingBackend: 'codex' } }),
+      [...ALL_CANDIDATES],
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['coding_backend']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps coding_task route without explicit coding backend to no direct candidates', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'coding_task', operation: 'create' }),
       [...ALL_CANDIDATES],

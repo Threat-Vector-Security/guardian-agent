@@ -8,7 +8,7 @@ The Runtime controls every chokepoint where data flows in or out of an agent. Th
 
 Current runtime hardening also treats content trust and authority as first-class execution inputs. Remote/tool output is classified before reinjection, durable memory carries trust/quarantine state, scheduled automations run with bounded authority, and broken tools are stopped by per-chain runaway budgets before they can overspend.
 
-Conversational automation creation is now gateway-routed and compiler-driven. The `IntentGateway` decides whether a request is automation authoring, automation control, browser work, workspace work, search, coding, or general assistant behavior. Automation authoring requests then compile into a typed `AutomationIR`, are repaired and validated, and persist through the canonical automation control-plane contract (`automation_save`) before the generic chat/tool loop runs. This path is shared by both the direct runtime path and the brokered worker path, so agent isolation does not change automation semantics.
+Conversational automation creation is now gateway-routed and compiler-driven. The `IntentGateway` decides whether a request is automation authoring, automation control, browser work, workspace work, search, coding, or general assistant behavior. It also decides whether the current turn is a new request, follow-up, clarification answer, or correction, and can restate a corrected actionable request before execution continues. In Auto mode, Guardian now also chooses the local vs external chat tier from that structured gateway result instead of raw-text routing heuristics. Automation authoring requests then compile into a typed `AutomationIR`, are repaired and validated, and persist through the canonical automation control-plane contract (`automation_save`) before the generic chat/tool loop runs. This path is shared by both the direct runtime path and the brokered worker path, so agent isolation does not change automation semantics.
 
 Deterministic workflows are also no longer just stored step arrays at execution time. The workflow runtime compiles them into a graph-backed run model with stable `runId`s, node-level orchestration events, checkpointed state transitions, and persisted resume context for approval-gated runs. This gives Guardian a cleaner foundation for approval interrupts, richer run history, and replay-safe deterministic resume.
 
@@ -127,7 +127,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Memory (src/runtime/conversation.ts) — SQLite-backed conversation/session persistence
 ├── Analytics (src/runtime/analytics.ts) — SQLite-backed channel interaction telemetry
 ├── Quick Actions (src/quick-actions.ts) — structured assistant workflows
-├── Intent Gateway (src/runtime/intent-gateway.ts) — authoritative top-level direct-action route classification
+├── Intent Gateway (src/runtime/intent-gateway.ts) — authoritative top-level direct-action route classification plus Auto-mode tier preference inputs
 ├── Automation Authoring + Control Plane (src/runtime/automation-authoring.ts, src/runtime/automation-prerouter.ts, src/runtime/automation-control-prerouter.ts, src/runtime/automation-runtime-service.ts) — natural-language automation requests -> canonical automation contract
 ├── Skills (src/skills/)                — native procedural knowledge, templates, and references
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting

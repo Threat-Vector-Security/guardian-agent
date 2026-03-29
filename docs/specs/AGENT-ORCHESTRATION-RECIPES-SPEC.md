@@ -37,6 +37,7 @@ Recipes and saved automations solve different problems.
 
 A saved assistant automation may internally rely on agent composition, but that does not change the automation contract:
 - top-level routing is still owned by `IntentGateway`
+- correction handling and clarification resolution are still owned by the main turn interpreter before any recipe executes
 - automation persistence still goes through `automation_save`
 - runtime admission and approvals still remain outside the recipe
 

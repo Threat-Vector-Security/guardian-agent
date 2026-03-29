@@ -34,6 +34,16 @@ export type IntentGatewayOperation =
   | 'schedule'
   | 'unknown';
 
+export type IntentGatewayTurnRelation =
+  | 'new_request'
+  | 'follow_up'
+  | 'clarification_answer'
+  | 'correction';
+
+export type IntentGatewayResolution =
+  | 'ready'
+  | 'needs_clarification';
+
 export interface IntentGatewayEntities {
   automationName?: string;
   manualOnly?: boolean;
@@ -44,6 +54,8 @@ export interface IntentGatewayEntities {
   query?: string;
   path?: string;
   sessionTarget?: string;
+  emailProvider?: 'gws' | 'm365';
+  codingBackend?: string;
 }
 
 export interface IntentGatewayDecision {
@@ -51,6 +63,10 @@ export interface IntentGatewayDecision {
   confidence: IntentGatewayConfidence;
   operation: IntentGatewayOperation;
   summary: string;
+  turnRelation: IntentGatewayTurnRelation;
+  resolution: IntentGatewayResolution;
+  missingFields: string[];
+  resolvedContent?: string;
   entities: IntentGatewayEntities;
 }
 
@@ -63,9 +79,19 @@ export interface IntentGatewayRecord {
   rawResponsePreview?: string;
 }
 
+export const PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY = '__guardian_pre_routed_intent_gateway';
+
 export interface IntentGatewayInput {
   content: string;
   channel?: string;
+  recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  pendingClarification?: {
+    kind: string;
+    originalRequest: string;
+    prompt: string;
+  } | null;
+  enabledManagedProviders?: string[];
+  availableCodingBackends?: string[];
 }
 
 export type IntentGatewayChatFn = (
@@ -109,6 +135,23 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       summary: {
         type: 'string',
       },
+      turnRelation: {
+        type: 'string',
+        enum: ['new_request', 'follow_up', 'clarification_answer', 'correction'],
+      },
+      resolution: {
+        type: 'string',
+        enum: ['ready', 'needs_clarification'],
+      },
+      missingFields: {
+        type: 'array',
+        items: {
+          type: 'string',
+        },
+      },
+      resolvedContent: {
+        type: 'string',
+      },
       automationName: {
         type: 'string',
       },
@@ -140,6 +183,13 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       sessionTarget: {
         type: 'string',
       },
+      emailProvider: {
+        type: 'string',
+        enum: ['gws', 'm365'],
+      },
+      codingBackend: {
+        type: 'string',
+      },
     },
     required: ['route', 'confidence', 'operation', 'summary'],
   },
@@ -162,7 +212,7 @@ const AUTOMATION_NAME_REPAIR_TOOL: ToolDefinition = {
 
 const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
-  'Your job is only to classify the top-level route for a user request.',
+  'Your job is to classify the top-level route for a user request and determine whether the current turn is a new request, a follow-up, a clarification answer, or a correction.',
   'Never plan, explain, or execute the request.',
   'You must call the route_intent tool exactly once.',
   'Route definitions:',
@@ -172,15 +222,19 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
   '- workspace_task: reading or mutating managed workspace tools such as Gmail, Calendar, Drive, Docs, Sheets, or Microsoft 365.',
-  '- email_task: composing, drafting, sending, or replying to a direct email or Gmail message.',
+  '- email_task: direct mailbox work such as checking inbox contents, reading mail, composing, drafting, sending, replying, or forwarding email.',
   '- search_task: generic web or document search and result retrieval.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
   '- coding_task: code execution, code generation, debugging, or programming work within a coding workspace. NOT session management.',
   '- coding_session_control: managing coding workspace sessions — listing, inspecting current session, switching/attaching, detaching, or creating sessions.',
   '- security_task: security triage, containment, or security-control operations.',
   '- general_assistant: everything else.',
+  'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
+  'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
+  'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
+  'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
-  'Prefer email_task over workspace_task for direct email compose/send requests.',
+  'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for delete/toggle/run/clone/inspect requests.',
   'Requests to analyze, summarize, explain, compare, review, or investigate the output or findings of a previous automation run should route to automation_output_task, not automation_control.',
@@ -192,6 +246,11 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
   'When the request mentions a specific coding session or workspace to switch to, set sessionTarget to the session name, id, or workspace path mentioned.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
+  'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
+  'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
+  'If both Google Workspace and Microsoft 365 are available and the user asks for direct mailbox work without specifying one, keep route=email_task and set resolution=needs_clarification, missingFields=["email_provider"].',
+  'Example: prior user request "Use Codex to say hello and confirm you are working." then user says "Codex, the CLI coding assistant." -> route=coding_task, turnRelation=correction, resolution=ready, codingBackend=codex, resolvedContent="Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files."',
+  'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
 ].join(' ');
 
 const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
@@ -246,6 +305,9 @@ export class IntentGateway {
           confidence: 'low',
           operation: 'unknown',
           summary: error instanceof Error ? error.message : String(error),
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
           entities: {},
         },
       };
@@ -266,12 +328,100 @@ export function toIntentGatewayClientMetadata(
     confidence: record.decision.confidence,
     operation: record.decision.operation,
     summary: record.decision.summary,
+    turnRelation: record.decision.turnRelation,
+    resolution: record.decision.resolution,
+    missingFields: record.decision.missingFields,
+    ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
     entities: record.decision.entities,
   };
 }
 
+export function serializeIntentGatewayRecord(
+  record: IntentGatewayRecord,
+): Record<string, unknown> {
+  return {
+    mode: record.mode,
+    available: record.available,
+    model: record.model,
+    latencyMs: record.latencyMs,
+    ...(record.rawResponsePreview ? { rawResponsePreview: record.rawResponsePreview } : {}),
+    decision: {
+      route: record.decision.route,
+      confidence: record.decision.confidence,
+      operation: record.decision.operation,
+      summary: record.decision.summary,
+      turnRelation: record.decision.turnRelation,
+      resolution: record.decision.resolution,
+      missingFields: [...record.decision.missingFields],
+      ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
+      ...record.decision.entities,
+    },
+  };
+}
+
+export function deserializeIntentGatewayRecord(
+  value: unknown,
+): IntentGatewayRecord | null {
+  if (!isRecord(value)) return null;
+  if (!isRecord(value.decision)) return null;
+  return {
+    mode: 'primary',
+    available: value.available !== false,
+    model: typeof value.model === 'string' && value.model.trim()
+      ? value.model
+      : 'unknown',
+    latencyMs: typeof value.latencyMs === 'number' && Number.isFinite(value.latencyMs)
+      ? value.latencyMs
+      : 0,
+    ...(typeof value.rawResponsePreview === 'string' && value.rawResponsePreview.trim()
+      ? { rawResponsePreview: value.rawResponsePreview }
+      : {}),
+    decision: normalizeIntentGatewayDecision(value.decision),
+  };
+}
+
+export function attachPreRoutedIntentGatewayMetadata(
+  metadata: Record<string, unknown> | undefined,
+  record: IntentGatewayRecord | null | undefined,
+): Record<string, unknown> | undefined {
+  if (!record) return metadata;
+  return {
+    ...(metadata ?? {}),
+    [PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY]: serializeIntentGatewayRecord(record),
+  };
+}
+
+export function readPreRoutedIntentGatewayMetadata(
+  metadata: Record<string, unknown> | undefined,
+): IntentGatewayRecord | null {
+  if (!metadata) return null;
+  return deserializeIntentGatewayRecord(metadata[PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY]);
+}
+
 function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
   const channelLabel = input.channel?.trim() || 'unknown';
+  const historySection = input.recentHistory && input.recentHistory.length > 0
+    ? [
+        'Recent conversation:',
+        ...input.recentHistory.slice(-6).map((entry) => `${entry.role}: ${entry.content}`),
+        '',
+      ].join('\n')
+    : '';
+  const pendingClarificationSection = input.pendingClarification
+    ? [
+        'Pending clarification:',
+        `kind: ${input.pendingClarification.kind}`,
+        `prompt: ${input.pendingClarification.prompt}`,
+        `original request: ${input.pendingClarification.originalRequest}`,
+        '',
+      ].join('\n')
+    : '';
+  const providerSection = input.enabledManagedProviders && input.enabledManagedProviders.length > 0
+    ? `Enabled managed providers: ${input.enabledManagedProviders.join(', ')}\n`
+    : '';
+  const codingBackendSection = input.availableCodingBackends && input.availableCodingBackends.length > 0
+    ? `Available coding backends: ${input.availableCodingBackends.join(', ')}\n`
+    : '';
   return [
     {
       role: 'system',
@@ -281,12 +431,20 @@ function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
       role: 'user',
       content: [
         `Channel: ${channelLabel}`,
+        providerSection.trimEnd(),
+        codingBackendSection.trimEnd(),
         'Classify this request.',
         '',
+        historySection,
+        pendingClarificationSection,
         input.content.trim(),
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
     },
   ];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function buildAutomationNameRepairMessages(
@@ -323,6 +481,9 @@ function parseIntentGatewayDecision(response: ChatResponse): { decision: IntentG
         confidence: 'low',
         operation: 'unknown',
         summary: 'Intent gateway response was not structured.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
         entities: {},
       },
       available: false,
@@ -376,6 +537,17 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
     ? parsed.summary.trim()
     : 'No classification summary provided.';
+  const turnRelation = normalizeTurnRelation(parsed.turnRelation);
+  const resolution = normalizeResolution(parsed.resolution);
+  const missingFields = Array.isArray(parsed.missingFields)
+    ? parsed.missingFields
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean)
+    : [];
+  const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
+    ? parsed.resolvedContent.trim()
+    : undefined;
 
   const automationName = typeof parsed.automationName === 'string' && parsed.automationName.trim()
     ? parsed.automationName.trim()
@@ -399,12 +571,20 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const sessionTarget = typeof parsed.sessionTarget === 'string' && parsed.sessionTarget.trim()
     ? parsed.sessionTarget.trim()
     : undefined;
+  const emailProvider = normalizeEmailProvider(parsed.emailProvider);
+  const codingBackend = typeof parsed.codingBackend === 'string' && parsed.codingBackend.trim()
+    ? parsed.codingBackend.trim()
+    : undefined;
 
   return {
     route,
     confidence,
     operation,
     summary,
+    turnRelation,
+    resolution,
+    missingFields,
+    ...(resolvedContent ? { resolvedContent } : {}),
     entities: {
       ...(automationName ? { automationName } : {}),
       ...(typeof manualOnly === 'boolean' ? { manualOnly } : {}),
@@ -415,6 +595,8 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(query ? { query } : {}),
       ...(path ? { path } : {}),
       ...(sessionTarget ? { sessionTarget } : {}),
+      ...(emailProvider ? { emailProvider } : {}),
+      ...(codingBackend ? { codingBackend } : {}),
     },
   };
 }
@@ -499,6 +681,28 @@ function normalizeOperation(value: unknown): IntentGatewayOperation {
   }
 }
 
+function normalizeTurnRelation(value: unknown): IntentGatewayTurnRelation {
+  switch (value) {
+    case 'new_request':
+    case 'follow_up':
+    case 'clarification_answer':
+    case 'correction':
+      return value;
+    default:
+      return 'new_request';
+  }
+}
+
+function normalizeResolution(value: unknown): IntentGatewayResolution {
+  switch (value) {
+    case 'ready':
+    case 'needs_clarification':
+      return value;
+    default:
+      return 'ready';
+  }
+}
+
 function normalizeUiSurface(
   value: unknown,
 ): IntentGatewayEntities['uiSurface'] | undefined {
@@ -508,6 +712,18 @@ function normalizeUiSurface(
     case 'config':
     case 'chat':
     case 'unknown':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeEmailProvider(
+  value: unknown,
+): IntentGatewayEntities['emailProvider'] | undefined {
+  switch (value) {
+    case 'gws':
+    case 'm365':
       return value;
     default:
       return undefined;

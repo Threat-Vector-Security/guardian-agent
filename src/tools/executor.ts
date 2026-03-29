@@ -17680,7 +17680,10 @@ function extractToolSuccessMessage(
   output: unknown,
   explicitMessage?: string,
 ): string {
-  const message = explicitMessage?.trim() || extractAutomationSuccessMessage(toolName, output) || extractOutputMessage(output);
+  const message = explicitMessage?.trim()
+    || extractAutomationSuccessMessage(toolName, output)
+    || extractCodingBackendSuccessMessage(toolName, output)
+    || extractOutputMessage(output);
   return message || `Tool '${toolName}' completed.`;
 }
 
@@ -17697,6 +17700,16 @@ function extractAutomationSuccessMessage(toolName: string, output: unknown): str
   }
 
   return '';
+}
+
+function extractCodingBackendSuccessMessage(toolName: string, output: unknown): string {
+  if (toolName !== 'coding_backend_run' || !isRecord(output)) return '';
+  const backendName = asString(output.backendName).trim() || 'Coding backend';
+  const rawOutput = asString(output.output).trim();
+  if (!rawOutput || rawOutput === '(no output captured)') {
+    return `${backendName} completed.`;
+  }
+  return `${backendName} completed.\n\n${rawOutput}`;
 }
 
 function extractOutputMessage(output: unknown): string {

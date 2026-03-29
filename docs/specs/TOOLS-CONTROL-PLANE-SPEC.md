@@ -3,6 +3,8 @@
 ## Goal
 Expose a safe, auditable tool-execution plane so the assistant can perform workstation tasks with Guardian policy enforcement.
 
+The control plane assumes top-level user-turn interpretation is already complete before tool execution starts. Provider disambiguation, correction handling, and ordinary clarification turns stay in the `IntentGateway` path; only real approval/continuation resumes bypass that interpreter as control-plane events.
+
 ## Scope
 - Runtime modules:
   - `src/tools/registry.ts`
@@ -211,6 +213,11 @@ For workspace-local JS package mutations executed through `shell_safe`, the runt
   - The UI prompts the user and hits the `/api/tools/approvals/decision` REST endpoint.
   - The UI then sends a "continuation message" back to the agent.
   - `ChatAgent` detects the continuation message, restores the suspended `llmMessages` context, fetches the actual tool execution result from `ToolExecutor`, and injects it as the `tool` role response. This prevents the LLM from losing context and retrying identical calls.
+  - This continuation detection is one of the few allowed pre-gateway intercepts. Normal clarification answers such as `Use Outlook` or `Codex, the CLI coding assistant` remain ordinary interpreted user turns and do not go through the approval continuation path.
+- Current lifetime model:
+  - pending approval ids are tracked per logical user/channel with a 30 minute TTL
+  - approval-backed continuations can therefore survive unrelated intervening turns inside that TTL window
+  - approval resume is more durable than ordinary conversational clarification repair because it is tied to explicit pending approval state rather than only bounded recent history
 - **Immediate Execution on Approval**:
   - When a user approves an action via the REST API or UI, `ToolExecutor.decideApproval` executes the tool handler immediately in the backend, rather than waiting for the LLM to reissue the command.
 - **Retry Caching (Loop Prevention)**:
@@ -222,6 +229,12 @@ For workspace-local JS package mutations executed through `shell_safe`, the runt
 - **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally.
 - **Dedup**: identical pending approvals (same `toolName` + `argsHash`) are deduplicated in `ToolApprovalStore.create()`.
 - Decision history is attached to job records for auditability.
+
+Practical consequence:
+- the user may ask an unrelated question while one or more approvals are still pending
+- if the approval originated from a suspended LLM tool loop, approving later resumes that specific loop
+- if the approval originated from a deterministic direct route, approving later may simply return the stored follow-up copy or direct tool result instead of resuming a suspended planner loop
+- this is a targeted continuation model, not a general-purpose stack of arbitrary paused conversations
 
 ### Verification Status
 

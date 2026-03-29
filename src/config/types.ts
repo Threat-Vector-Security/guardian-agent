@@ -176,6 +176,17 @@ export interface RoutingConfig {
   fallbackOnFailure?: boolean;
   /** Maximum fallback attempts before propagating the error (default: 1). */
   maxFallbackAttempts?: number;
+  /** Durable routing trace configuration for debugging gateway/tier/tool decisions. */
+  intentTrace?: {
+    /** Enable structured routing trace persistence (default: true). */
+    enabled?: boolean;
+    /** Directory for routing trace files (default: ~/.guardianagent/routing/). */
+    directory?: string;
+    /** Max size of the active JSONL trace file before rotation (default: 5 MB). */
+    maxFileSizeBytes?: number;
+    /** Maximum number of rotated files to keep including the active file (default: 5). */
+    maxFiles?: number;
+  };
 }
 
 /** Resource limits for an agent (config layer). */
@@ -226,7 +237,7 @@ export interface ChannelsConfig {
     /** Structured auth configuration (preferred over authToken). */
     auth?: {
       /** Auth mode for web/API endpoints. */
-      mode?: 'bearer_required';
+      mode?: 'bearer_required' | 'disabled';
       /** Bearer token value (supports ${ENV_VAR} interpolation). */
       token?: string;
       /** Rotate token on startup and persist generated value. */
@@ -1475,6 +1486,11 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     complexityThreshold: 0.5,
     fallbackOnFailure: true,
     maxFallbackAttempts: 1,
+    intentTrace: {
+      enabled: true,
+      maxFileSizeBytes: 5_000_000,
+      maxFiles: 5,
+    },
   },
   assistant: {
     setup: {

@@ -278,13 +278,17 @@ const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
   {
     aliases: ['auth'],
     title: '/auth',
-    summary: 'Inspect or rotate the web auth token used by the dashboard.',
+    summary: 'Inspect, enable, disable, or rotate the web auth token used by the dashboard.',
     usage: [
       '/auth status',
+      '/auth enable',
+      '/auth disable',
       '/auth rotate',
       '/auth reveal',
     ],
     notes: [
+      'enable switches Web Authentication back to bearer_required mode.',
+      'disable opens the dashboard without a bearer token and should only be used on trusted networks.',
       'rotate generates a new token when that callback is available.',
       'reveal prints the active token if one is configured.',
     ],
@@ -1483,7 +1487,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
     this.write('  /coding-backends [list|status|enable|disable|default|add|remove]  Manage external coding CLIs\n');
-    this.write('  /auth [status|rotate|reveal]           Manage web auth/token settings\n');
+    this.write('  /auth [status|enable|disable|rotate|reveal]  Manage web auth/token settings\n');
     this.write('\n');
     this.write(this.bold('Tools\n'));
     this.write('  /tools [list|run|approvals|jobs|policy]  Tool runtime control plane\n');
@@ -2639,6 +2643,24 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
+    if (sub === 'enable' || sub === 'disable') {
+      if (!this.dashboard.onAuthUpdate) {
+        this.write('\nAuth updates are not available.\n\n');
+        return;
+      }
+      const nextMode = sub === 'enable' ? 'bearer_required' : 'disabled';
+      const result = await this.dashboard.onAuthUpdate({ mode: nextMode });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n`);
+      if (result.status) {
+        this.write(`  Mode: ${result.status.mode}\n`);
+      }
+      if (result.success && nextMode === 'disabled') {
+        this.write('  Warning: the dashboard is now open without bearer-token protection.\n');
+      }
+      this.write('\n');
+      return;
+    }
+
     if (sub === 'reveal') {
       if (!this.dashboard.onAuthReveal) {
         this.write('\nToken reveal is not available.\n\n');
@@ -2653,7 +2675,7 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    this.write('\nUsage: /auth [status|rotate|reveal]\n\n');
+    this.write('\nUsage: /auth [status|enable|disable|rotate|reveal]\n\n');
   }
 
   // ─── /tools ──────────────────────────────────────────────────

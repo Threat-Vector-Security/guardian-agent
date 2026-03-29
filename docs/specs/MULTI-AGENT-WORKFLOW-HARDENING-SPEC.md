@@ -9,6 +9,8 @@ This specification formalizes the implementation of [MULTI-AGENT-WORKFLOW-HARDEN
 
 GuardianAgent is hardening its multi-agent layer by introducing typed orchestration contracts, strict tool schema validation, dispatch lineage tracking, causal workflow tracing, and conflict-aware parallel tool execution.
 
+This hardening assumes top-level user-turn interpretation has already happened before orchestration begins. Corrections, clarification answers, and route selection are resolved by the main `IntentGateway` path; multi-agent dispatch consumes that structured interpretation rather than re-deciding user intent ad hoc inside downstream agents.
+
 ## Phases
 
 ### Phase 1: Boundary Hardening (Completed)

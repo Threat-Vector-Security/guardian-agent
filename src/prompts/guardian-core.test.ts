@@ -34,4 +34,9 @@ describe('guardian-core prompt', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('answer from the literal executed tool records');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not use memory_save for transient operational notes');
   });
+
+  it('tells general chat agents how to handle explicit external coding backend requests', () => {
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly asks to use an external coding backend such as Codex, Claude Code, Gemini CLI, or Aider, use the coding_backend_run tool');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Coding Workspace / code session must be attached first');
+  });
 });

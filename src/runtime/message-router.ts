@@ -6,13 +6,15 @@
  * - capability: domain heuristic matching only (no regex)
  * - explicit: always returns fallback agent
  *
- * Tier routing layer (auto/local-only/external-only) uses complexity scoring
- * to pick the right tier, with optional fallback to the opposite tier.
+ * Tier routing layer (auto/local-only/external-only) can use either raw-text
+ * complexity scoring or a structured IntentGateway decision to pick the right
+ * tier, with optional fallback to the opposite tier.
  *
  * Pure synchronous router — no LLM calls.
  */
 
 import type { RoutingConfig, RoutingRuleConfig } from '../config/types.js';
+import type { IntentGatewayDecision, IntentGatewayRoute } from './intent-gateway.js';
 import { scoreAutomationOrchestration, scoreComplexity } from './complexity-scorer.js';
 
 /** Confidence level for a routing decision. */
@@ -74,6 +76,22 @@ const DOMAIN_KEYWORDS: Record<string, { keywords: RegExp; capabilities: string[]
     ],
   },
 };
+
+const LOCAL_PREFERRED_INTENT_ROUTES = new Set<IntentGatewayRoute>([
+  'filesystem_task',
+  'coding_task',
+  'coding_session_control',
+  'ui_control',
+  'automation_control',
+]);
+
+const EXTERNAL_PREFERRED_INTENT_ROUTES = new Set<IntentGatewayRoute>([
+  'browser_task',
+  'workspace_task',
+  'email_task',
+  'search_task',
+  'security_task',
+]);
 
 export class MessageRouter {
   private agents: Map<string, RouterAgent> = new Map();
@@ -261,6 +279,85 @@ export class MessageRouter {
     };
   }
 
+  routeWithTierFromIntent(
+    decision: IntentGatewayDecision,
+    content: string,
+    tierMode: 'auto' | 'local-only' | 'external-only',
+    threshold = 0.5,
+  ): RouteDecision {
+    const localAgent = this.findAgentByRole('local');
+    const externalAgent = this.findAgentByRole('external');
+
+    if (!localAgent && !externalAgent) {
+      return this.route(content);
+    }
+
+    if (tierMode === 'local-only') {
+      if (localAgent) {
+        return {
+          agentId: localAgent.id,
+          confidence: 'high',
+          reason: 'tier mode: local-only',
+          tier: 'local',
+        };
+      }
+      return {
+        agentId: externalAgent!.id,
+        confidence: 'medium',
+        reason: 'tier mode: local-only unavailable; only external tier available',
+        tier: 'external',
+      };
+    }
+
+    if (tierMode === 'external-only') {
+      if (externalAgent) {
+        return {
+          agentId: externalAgent.id,
+          confidence: 'high',
+          reason: 'tier mode: external-only',
+          tier: 'external',
+        };
+      }
+      return {
+        agentId: localAgent!.id,
+        confidence: 'medium',
+        reason: 'tier mode: external-only unavailable; only local tier available',
+        tier: 'local',
+      };
+    }
+
+    const preferred = this.preferredTierForIntent(decision, content, threshold);
+    if (!localAgent) {
+      return {
+        agentId: externalAgent!.id,
+        confidence: 'medium',
+        reason: preferred.reason,
+        ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
+        tier: 'external',
+      };
+    }
+    if (!externalAgent) {
+      return {
+        agentId: localAgent.id,
+        confidence: 'medium',
+        reason: preferred.reason,
+        ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
+        tier: 'local',
+      };
+    }
+
+    const primary = preferred.tier === 'local' ? localAgent : externalAgent;
+    const fallback = preferred.tier === 'local' ? externalAgent : localAgent;
+    return {
+      agentId: primary.id,
+      confidence: preferred.confidence,
+      reason: preferred.reason,
+      fallbackAgentId: fallback.id,
+      ...(preferred.complexityScore !== undefined ? { complexityScore: preferred.complexityScore } : {}),
+      tier: preferred.tier,
+    };
+  }
+
   /** Find the first agent with the given role. */
   findAgentByRole(role: 'local' | 'external' | 'general'): RouterAgent | undefined {
     for (const agent of this.agents.values()) {
@@ -291,6 +388,59 @@ export class MessageRouter {
       agentId: best.agent.id,
       confidence: 'high',
       reason: `pattern matched: /${best.pattern}/`,
+    };
+  }
+
+  private preferredTierForIntent(
+    decision: IntentGatewayDecision,
+    content: string,
+    threshold: number,
+  ): {
+    tier: 'local' | 'external';
+    confidence: RouteConfidence;
+    reason: string;
+    complexityScore?: number;
+  } {
+    if (decision.entities.codingBackend) {
+      return {
+        tier: 'local',
+        confidence: 'high',
+        reason: `intent route=${decision.route} coding backend=${decision.entities.codingBackend} → tier local`,
+      };
+    }
+
+    if (LOCAL_PREFERRED_INTENT_ROUTES.has(decision.route)) {
+      return {
+        tier: 'local',
+        confidence: decision.confidence === 'low' ? 'medium' : 'high',
+        reason: `intent route=${decision.route} → tier local`,
+      };
+    }
+
+    if (EXTERNAL_PREFERRED_INTENT_ROUTES.has(decision.route)) {
+      return {
+        tier: 'external',
+        confidence: decision.confidence === 'low' ? 'medium' : 'high',
+        reason: `intent route=${decision.route} → tier external`,
+      };
+    }
+
+    const automationScore = scoreAutomationOrchestration(content);
+    if (decision.route === 'automation_authoring' && automationScore >= 0.75) {
+      return {
+        tier: 'external',
+        confidence: 'high',
+        reason: `intent route=${decision.route} automation complexity=${automationScore.toFixed(2)} → tier external`,
+        complexityScore: automationScore,
+      };
+    }
+
+    const { score, tier } = scoreComplexity(content, threshold);
+    return {
+      tier,
+      confidence: score >= 0.7 || score <= 0.2 ? 'high' : 'medium',
+      reason: `intent route=${decision.route} complexity=${score.toFixed(2)} → tier ${tier}`,
+      complexityScore: score,
     };
   }
 

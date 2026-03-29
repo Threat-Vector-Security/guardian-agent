@@ -8,7 +8,8 @@ export interface DirectGmailWriteIntent {
 const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const WRITE_SIGNAL_PATTERN = /\b(send|draft|compose|write|reply|forward)\b/i;
 const MAILBOX_SIGNAL_PATTERN = /\b(gmail|email|mail)\b/i;
-const DETAIL_SIGNAL_PATTERN = /\b(subject|body|message|recipient)\b/i;
+const SUBJECT_OR_BODY_SIGNAL_PATTERN = /\b(subject|body)\b/i;
+const MESSAGE_SIGNAL_PATTERN = /\bmessage\b/i;
 const LABELED_RECIPIENT_PATTERN = /\bto\s+<?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}>?/i;
 
 export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIntent | null {
@@ -17,11 +18,14 @@ export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIn
 
   const hasWriteSignal = WRITE_SIGNAL_PATTERN.test(text);
   const hasMailboxSignal = MAILBOX_SIGNAL_PATTERN.test(text);
-  const hasDetailSignal = DETAIL_SIGNAL_PATTERN.test(text);
+  const hasSubjectOrBodySignal = SUBJECT_OR_BODY_SIGNAL_PATTERN.test(text);
+  const hasMessageSignal = MESSAGE_SIGNAL_PATTERN.test(text);
+  const hasLabeledRecipient = LABELED_RECIPIENT_PATTERN.test(text);
   const hasAddress = EMAIL_ADDRESS_PATTERN.test(text);
-  const hasStructuredSignal = hasDetailSignal
-    || LABELED_RECIPIENT_PATTERN.test(text)
-    || (hasAddress && /\b(subject|body|message)\b/i.test(text));
+  const hasStructuredSignal = hasSubjectOrBodySignal
+    || hasLabeledRecipient
+    || (hasMessageSignal && (hasWriteSignal || hasAddress || hasLabeledRecipient))
+    || (hasAddress && (hasSubjectOrBodySignal || hasMessageSignal));
 
   if (!hasStructuredSignal && !(hasWriteSignal && hasMailboxSignal)) {
     return null;

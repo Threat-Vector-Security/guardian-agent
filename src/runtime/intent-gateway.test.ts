@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatResponse } from '../llm/types.js';
-import { IntentGateway, toIntentGatewayClientMetadata } from './intent-gateway.js';
+import {
+  IntentGateway,
+  attachPreRoutedIntentGatewayMetadata,
+  readPreRoutedIntentGatewayMetadata,
+  toIntentGatewayClientMetadata,
+} from './intent-gateway.js';
 
 describe('IntentGateway', () => {
   it('parses a tool-called structured intent decision', async () => {
@@ -92,6 +97,9 @@ describe('IntentGateway', () => {
         confidence: 'medium',
         operation: 'navigate',
         summary: 'Refers to a Guardian page.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
         entities: {
           uiSurface: 'automations',
         },
@@ -339,5 +347,108 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.route).not.toBe('coding_session_control');
+  });
+
+  it('captures correction metadata and resolved content for coding backend repairs', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Codex, the CLI coding assistant.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files.' },
+          { role: 'assistant', content: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?' },
+        ],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Corrects the prior misunderstanding and requests Codex for the original coding task.',
+          turnRelation: 'correction',
+          resolution: 'ready',
+          codingBackend: 'codex',
+          resolvedContent: 'Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.turnRelation).toBe('correction');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.resolvedContent).toContain('Use Codex to say hello');
+  });
+
+  it('captures clarification answers for provider-specific mailbox follow-ups', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Use Outlook.',
+        channel: 'web',
+        pendingClarification: {
+          kind: 'email_provider',
+          originalRequest: 'Check my email.',
+          prompt: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Selects Outlook for the previously requested mailbox read.',
+          turnRelation: 'clarification_answer',
+          resolution: 'ready',
+          emailProvider: 'm365',
+          resolvedContent: 'Use Outlook / Microsoft 365 to check my email.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.entities.emailProvider).toBe('m365');
+    expect(result.decision.resolvedContent).toContain('Outlook / Microsoft 365');
+  });
+
+  it('round-trips pre-routed gateway metadata for downstream reuse', () => {
+    const metadata = attachPreRoutedIntentGatewayMetadata(
+      { existing: true },
+      {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 12,
+        decision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Run Codex for the requested coding task.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {
+            codingBackend: 'codex',
+          },
+        },
+      },
+    );
+
+    expect(readPreRoutedIntentGatewayMetadata(metadata)).toMatchObject({
+      available: true,
+      model: 'test-model',
+      decision: {
+        route: 'coding_task',
+        entities: {
+          codingBackend: 'codex',
+        },
+      },
+    });
   });
 });

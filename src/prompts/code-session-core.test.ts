@@ -20,4 +20,14 @@ describe('code-session-core prompt', () => {
     expect(prompt).toContain('"this app"');
     expect(prompt).toContain('refer to the attached workspace');
   });
+
+  it('tells coding-session agents to ground repo summaries in inspected workspace evidence', () => {
+    const prompt = composeCodeSessionSystemPrompt();
+    expect(prompt).toContain('what is this repo');
+    expect(prompt).toContain('Do not infer from the folder name');
+    expect(prompt).toContain('instead of making extra tool calls');
+    expect(prompt).toContain('README.md, package.json');
+    expect(prompt).toContain('outside the allowed paths');
+    expect(prompt).toContain('ignore the stale workspace reference');
+  });
 });

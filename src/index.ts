@@ -173,10 +173,6 @@ import {
   parseScheduledEmailScheduleIntent,
 } from './runtime/email-automation-intent.js';
 import {
-  applyContextualEmailProviderHint,
-  getAmbiguousEmailProviderClarification,
-} from './runtime/email-provider-routing.js';
-import {
   formatSkillInventoryResponse,
   isSkillInventoryQuery,
 } from './runtime/skills-query.js';
@@ -190,6 +186,9 @@ import {
 } from './runtime/direct-intent-routing.js';
 import {
   IntentGateway,
+  PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
+  attachPreRoutedIntentGatewayMetadata,
+  readPreRoutedIntentGatewayMetadata,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRoute,
@@ -219,6 +218,11 @@ import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
+import {
+  PendingClarificationStore,
+  type PendingClarificationState,
+} from './runtime/pending-clarification-store.js';
+import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
@@ -240,6 +244,7 @@ import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
+  buildPendingApprovalMetadata,
   describePendingApproval,
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
@@ -641,6 +646,7 @@ interface AutomationApprovalContinuation {
 
 type DirectIntentShadowCandidate =
   | 'filesystem'
+  | 'coding_backend'
   | 'coding_session_control'
   | 'scheduled_email_automation'
   | 'automation'
@@ -675,6 +681,10 @@ class ChatAgent extends BaseAgent {
   private approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
   /** Native automation requests waiting for remediation approvals before they can be retried. */
   private automationApprovalContinuations = new Map<string, AutomationApprovalContinuation>();
+  /** Shared clarification prompts waiting for a follow-up answer. */
+  private pendingClarificationStore?: PendingClarificationStore;
+  /** Durable trace for intent gateway, tier routing, and direct execution decisions. */
+  private intentRoutingTrace?: IntentRoutingTraceLog;
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
@@ -777,6 +787,8 @@ class ChatAgent extends BaseAgent {
     qualityFallback?: boolean,
     analytics?: AnalyticsService,
     resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined,
+    intentRoutingTrace?: IntentRoutingTraceLog,
+    pendingClarificationStore?: PendingClarificationStore,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -808,7 +820,30 @@ class ChatAgent extends BaseAgent {
     this.qualityFallbackEnabled = qualityFallback ?? true;
     this.analytics = analytics;
     this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
+    this.intentRoutingTrace = intentRoutingTrace;
+    this.pendingClarificationStore = pendingClarificationStore;
     this.intentGateway = new IntentGateway();
+  }
+
+  private recordIntentRoutingTrace(
+    stage: import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage,
+    input: {
+      message?: UserMessage;
+      requestId?: string;
+      details?: Record<string, unknown>;
+      contentPreview?: string;
+    },
+  ): void {
+    this.intentRoutingTrace?.record({
+      stage,
+      requestId: input.requestId,
+      messageId: input.message?.id,
+      userId: input.message?.userId,
+      channel: input.message?.channel,
+      agentId: this.id,
+      contentPreview: input.contentPreview ?? input.message?.content,
+      details: input.details,
+    });
   }
 
   private tryDirectSkillInventoryResponse(content: string): string | null {
@@ -1060,15 +1095,8 @@ class ChatAgent extends BaseAgent {
       userId: conversationUserId,
       channel: conversationChannel,
     }) ?? [];
-    const hintedMessageContent = applyContextualEmailProviderHint(
-      scopedMessage.content,
-      priorHistory,
-      this.enabledManagedProviders,
-    );
-    const contextAwareScopedMessage = hintedMessageContent === scopedMessage.content
-      ? scopedMessage
-      : { ...scopedMessage, content: hintedMessageContent };
-    const groundedScopedMessage = contextAwareScopedMessage;
+    const userKey = `${conversationUserId}:${conversationChannel}`;
+    const groundedScopedMessage = scopedMessage;
     const preResolvedSkills = this.skillResolver?.resolve({
       agentId: this.id,
       channel: message.channel,
@@ -1078,51 +1106,116 @@ class ChatAgent extends BaseAgent {
       availableCapabilities: new Set(ctx.capabilities),
     }) ?? [];
     this.trackResolvedSkills(message, 'chat', preResolvedSkills, 'resolved');
-    const directSkillInventory = this.tryDirectSkillInventoryResponse(groundedScopedMessage.content);
-    if (directSkillInventory) {
+    this.syncPendingApprovalsFromExecutor(userKey, conversationUserId, conversationChannel);
+
+    // Approval continuation is a control-plane path and must not go back through
+    // normal intent classification or worker dispatch.
+    const approvalResult = await this.tryHandleApproval(groundedScopedMessage, userKey, ctx);
+    if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
           conversationKey,
           message.content,
-          directSkillInventory,
+          approvalResult.content,
         );
       }
       if (resolvedCodeSession) {
         this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
       }
       return {
-        content: directSkillInventory,
-        metadata: preResolvedSkills.length > 0
-          ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
-          : undefined,
+        content: approvalResult.content,
+        metadata: {
+          ...(preResolvedSkills.length > 0
+            ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+            : {}),
+          ...(approvalResult.metadata ?? {}),
+        },
       };
     }
-    const ambiguousEmailProviderClarification = getAmbiguousEmailProviderClarification(
-      contextAwareScopedMessage.content,
-      this.enabledManagedProviders,
-    );
-    if (ambiguousEmailProviderClarification) {
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          conversationKey,
-          message.content,
-          ambiguousEmailProviderClarification,
-        );
-      }
-      return {
-        content: ambiguousEmailProviderClarification,
-        metadata: preResolvedSkills.length > 0
-          ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
-          : undefined,
-      };
-    }
+
     // Classify intent early — session control is a control-plane operation that must
     // be handled before the worker path (which would scope the userId to the code-session
     // and return incomplete results). The gateway result is reused later to avoid a
     // redundant LLM call in the non-worker direct-intent routing path.
-    let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = null;
-    if (ctx.llm && this.tools?.isEnabled()) {
-      earlyGateway = await this.classifyIntentGateway(contextAwareScopedMessage, ctx);
+    let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = readPreRoutedIntentGatewayMetadata(groundedScopedMessage.metadata);
+    const pendingClarification = this.getPendingClarification(conversationUserId, conversationChannel);
+    let routedScopedMessage = groundedScopedMessage;
+    if (ctx.llm || earlyGateway) {
+      earlyGateway = earlyGateway ?? await this.classifyIntentGateway(groundedScopedMessage, ctx, {
+        recentHistory: priorHistory,
+        pendingClarification,
+      });
+      const clarificationResponse = this.buildGatewayClarificationResponse({
+        gateway: earlyGateway,
+        userKey,
+        conversationUserId,
+        conversationChannel,
+        message,
+        activeSkills: preResolvedSkills,
+      });
+      if (clarificationResponse) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            clarificationResponse.content,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return clarificationResponse;
+      }
+      const resolvedGatewayContent = this.resolveIntentGatewayContent({
+        gateway: earlyGateway,
+        pendingClarification,
+        priorHistory,
+      });
+      if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
+        routedScopedMessage = {
+          ...groundedScopedMessage,
+          content: resolvedGatewayContent,
+        };
+      }
+      if (earlyGateway?.decision.resolution === 'ready') {
+        this.clearPendingClarification(conversationUserId, conversationChannel);
+      }
+
+      const directSkillInventory = this.tryDirectSkillInventoryResponse(routedScopedMessage.content);
+      if (directSkillInventory) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            directSkillInventory,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return {
+          content: directSkillInventory,
+          metadata: preResolvedSkills.length > 0
+            ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+            : undefined,
+        };
+      }
+
+      const directToolReport = this.tryDirectRecentToolReport(routedScopedMessage);
+      if (directToolReport) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            directToolReport,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return { content: directToolReport };
+      }
+
       if (earlyGateway?.decision.route === 'coding_session_control') {
         const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
           message, ctx, earlyGateway.decision,
@@ -1135,10 +1228,10 @@ class ChatAgent extends BaseAgent {
               candidate: 'coding_session_control',
               result: regexFallback,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: earlyGateway,
               ctx,
-              userKey: `${conversationUserId}:${conversationChannel}`,
+              userKey,
               activeSkills: preResolvedSkills,
               conversationKey,
             });
@@ -1149,10 +1242,10 @@ class ChatAgent extends BaseAgent {
             candidate: 'coding_session_control',
             result: sessionControlResult,
             message,
-            routingMessage: contextAwareScopedMessage,
+            routingMessage: routedScopedMessage,
             intentGateway: earlyGateway,
             ctx,
-            userKey: `${conversationUserId}:${conversationChannel}`,
+            userKey,
             activeSkills: preResolvedSkills,
             conversationKey,
           });
@@ -1160,127 +1253,12 @@ class ChatAgent extends BaseAgent {
       }
     }
 
-    if (workerManager) {
-      try {
-        const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
-        const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
-        // Attach codeContext to the message metadata so the worker can forward it
-        // through the broker to the tool executor for auto-approve decisions.
-        const workerMessage = effectiveCodeContext
-          ? { ...groundedScopedMessage, metadata: { ...groundedScopedMessage.metadata, codeContext: effectiveCodeContext } }
-          : groundedScopedMessage;
-        const result = await workerManager.handleMessage({
-          sessionId: `${conversationUserId}:${conversationChannel}`,
-          agentId: this.id,
-          userId: conversationUserId,
-          grantedCapabilities: [...ctx.capabilities],
-          message: workerMessage,
-          systemPrompt: workerSystemPrompt,
-          history: priorHistory,
-          knowledgeBase,
-          activeSkills: preResolvedSkills,
-          toolContext: this.tools?.getToolContext({
-            userId: conversationUserId,
-            principalId: message.principalId ?? conversationUserId,
-            channel: conversationChannel,
-            codeContext: effectiveCodeContext,
-          }) ?? '',
-          runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
-        });
-        const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
-        // Ensure responseSource is present — if the worker didn't provide one,
-        // derive it from the primary provider context.
-        if (!workerMeta.responseSource) {
-          const primaryName = ctx.llm?.name ?? 'unknown';
-          workerMeta.responseSource = {
-            locality: getProviderLocalityFromName(primaryName),
-            providerName: primaryName,
-          };
-        }
-        if (requestedCodeContext?.sessionId || resolvedCodeSession) {
-          workerMeta.codeSessionResolved = !!resolvedCodeSession;
-          if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;
-        }
-        // Sync pending approvals from the executor into response metadata so the
-        // frontend can render inline approval buttons (worker path does not do this
-        // automatically like the inline ChatAgent LLM loop does).
-        const workerUserKey = `${conversationUserId}:${conversationChannel}`;
-        this.syncPendingApprovalsFromExecutor(workerUserKey, conversationUserId, conversationChannel);
-        const workerPending = this.getPendingApprovals(workerUserKey);
-        if (workerPending && workerPending.ids.length > 0) {
-          const summaries = this.tools?.getApprovalSummaries(workerPending.ids);
-          workerMeta.pendingApprovals = workerPending.ids.map((id: string) => {
-            const s = summaries?.get(id);
-            return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
-          });
-        }
-        if (preResolvedSkills.length > 0) {
-          workerMeta.activeSkills = preResolvedSkills.map((skill) => skill.id);
-        }
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            result.content,
-            { assistantResponseSource: readResponseSourceMetadata(workerMeta) },
-          );
-        }
-        if (resolvedCodeSession) {
-          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-        }
-        return {
-          content: result.content,
-          metadata: Object.keys(workerMeta).length > 0 ? workerMeta : undefined,
-        };
-      } catch (error) {
-        log.error({ agent: this.id, error: error instanceof Error ? error.stack ?? error.message : String(error) }, 'Brokered message execution failed');
-        throw error;
-      }
-    }
-
-    if (!ctx.llm) {
-      return { content: 'No LLM provider configured.' };
-    }
-    const userKey = `${conversationUserId}:${conversationChannel}`;
-    this.syncPendingApprovalsFromExecutor(userKey, conversationUserId, conversationChannel);
-
-    // Check if user is approving a pending tool action (text-based: CLI / Telegram)
-    const approvalResult = await this.tryHandleApproval(contextAwareScopedMessage, userKey, ctx);
-    if (approvalResult) {
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          conversationKey,
-          message.content,
-          approvalResult.content,
-        );
-      }
-      if (resolvedCodeSession) {
-        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-      }
-      return approvalResult;
-    }
-
-    const directToolReport = this.tryDirectRecentToolReport(contextAwareScopedMessage);
-    if (directToolReport) {
-      if (this.conversationService) {
-        this.conversationService.recordTurn(
-          conversationKey,
-          message.content,
-          directToolReport,
-        );
-      }
-      if (resolvedCodeSession) {
-        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-      }
-      return { content: directToolReport };
-    }
-
     const isContinuation = message.content.includes('[User approved the pending tool action(s)') || 
                            message.content.includes('Tool actions have been decided');
     const suspended = this.suspendedSessions.get(userKey);
     const requestIntentContent = (isContinuation && suspended)
       ? suspended.originalMessage.content
-      : contextAwareScopedMessage.content;
+      : routedScopedMessage.content;
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(requestIntentContent);
 
     let llmMessages: import('./llm/types.js').ChatMessage[];
@@ -1344,11 +1322,11 @@ class ChatAgent extends BaseAgent {
         ? this.conversationService.buildMessages(
           conversationKey,
           enrichedSystemPrompt,
-          groundedScopedMessage.content,
+          routedScopedMessage.content,
         )
         : [
           { role: 'system', content: enrichedSystemPrompt },
-          { role: 'user', content: groundedScopedMessage.content },
+          { role: 'user', content: routedScopedMessage.content },
         ];
     }
 
@@ -1358,13 +1336,17 @@ class ChatAgent extends BaseAgent {
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
-      ? (earlyGateway ?? await this.classifyIntentGateway(contextAwareScopedMessage, ctx))
+      ? (earlyGateway ?? await this.classifyIntentGateway(routedScopedMessage, ctx, {
+        recentHistory: priorHistory,
+        pendingClarification: this.getPendingClarification(conversationUserId, conversationChannel),
+      }))
       : null;
     const directIntentRouting = !skipDirectTools
       ? resolveDirectIntentRoutingCandidates(
         directIntent,
         [
           'coding_session_control',
+          'coding_backend',
           'filesystem',
           'scheduled_email_automation',
           'automation',
@@ -1377,6 +1359,7 @@ class ChatAgent extends BaseAgent {
         ],
         [
           'coding_session_control',
+          'coding_backend',
           'filesystem',
           'scheduled_email_automation',
           'automation',
@@ -1394,7 +1377,7 @@ class ChatAgent extends BaseAgent {
         gatewayUnavailable: false,
       };
     const directBrowserIntent = directIntent?.decision.route === 'browser_task'
-      || (directIntentRouting.gatewayUnavailable && isDirectBrowserAutomationIntent(contextAwareScopedMessage.content));
+      || (directIntentRouting.gatewayUnavailable && isDirectBrowserAutomationIntent(routedScopedMessage.content));
     const skipDirectWebSearch = !!resolvedCodeSession
       || !!effectiveCodeContext
       || directBrowserIntent
@@ -1403,22 +1386,24 @@ class ChatAgent extends BaseAgent {
         || skill.id === 'weather'
         || skill.id === 'blogwatcher'
       ));
+
+    if (!skipDirectTools) {
+      this.recordIntentRoutingTrace('direct_candidates_evaluated', {
+        message,
+        details: {
+          gatewayDirected: directIntentRouting.gatewayDirected,
+          gatewayUnavailable: directIntentRouting.gatewayUnavailable,
+          route: directIntent?.decision.route,
+          codingBackend: directIntent?.decision.entities.codingBackend,
+          candidates: directIntentRouting.candidates,
+          skipDirectWebSearch,
+          codeSessionResolved: !!resolvedCodeSession,
+          codeSessionId: effectiveCodeContext?.sessionId,
+        },
+      });
+    }
     
     if (!skipDirectTools) {
-      if (ambiguousEmailProviderClarification) {
-        finalContent = ambiguousEmailProviderClarification;
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            finalContent,
-          );
-        }
-        return {
-          content: finalContent,
-          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
-        };
-      }
       for (const candidate of directIntentRouting.candidates) {
         switch (candidate) {
           case 'coding_session_control': {
@@ -1433,7 +1418,28 @@ class ChatAgent extends BaseAgent {
               candidate: 'coding_session_control',
               result: sessionControlResult,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'coding_backend': {
+            const directCodingBackend = await this.tryDirectCodingBackendDelegation(
+              routedScopedMessage,
+              ctx,
+              userKey,
+              directIntent?.decision,
+              effectiveCodeContext,
+            );
+            if (!directCodingBackend) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directCodingBackend,
+              message,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1443,8 +1449,9 @@ class ChatAgent extends BaseAgent {
           }
           case 'filesystem': {
             const directSearch = await this.tryDirectFilesystemSearch(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
+              userKey,
               effectiveCodeContext,
             );
             if (!directSearch) break;
@@ -1452,7 +1459,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directSearch,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1462,7 +1469,7 @@ class ChatAgent extends BaseAgent {
           }
           case 'scheduled_email_automation': {
             const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
               userKey,
               stateAgentId,
@@ -1472,7 +1479,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directScheduledEmailAutomation,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1482,7 +1489,7 @@ class ChatAgent extends BaseAgent {
           }
           case 'automation': {
             const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
               userKey,
               effectiveCodeContext,
@@ -1497,7 +1504,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directAutomationAuthoring,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1507,7 +1514,7 @@ class ChatAgent extends BaseAgent {
           }
           case 'automation_control': {
             const directAutomationControl = await this.tryDirectAutomationControl(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
               userKey,
               directIntent?.decision,
@@ -1518,7 +1525,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directAutomationControl,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1528,7 +1535,7 @@ class ChatAgent extends BaseAgent {
           }
           case 'automation_output': {
             const directAutomationOutput = await this.tryDirectAutomationOutput(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
               directIntent?.decision,
             );
@@ -1537,7 +1544,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directAutomationOutput,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1546,13 +1553,13 @@ class ChatAgent extends BaseAgent {
             });
           }
           case 'workspace_write': {
-            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(contextAwareScopedMessage, ctx, userKey);
+            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(routedScopedMessage, ctx, userKey);
             if (!directWorkspaceWrite) break;
             return this.buildDirectIntentResponse({
               candidate,
               result: directWorkspaceWrite,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1561,13 +1568,13 @@ class ChatAgent extends BaseAgent {
             });
           }
           case 'workspace_read': {
-            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(contextAwareScopedMessage, ctx);
+            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(routedScopedMessage, ctx, userKey);
             if (!directWorkspaceRead) break;
             return this.buildDirectIntentResponse({
               candidate,
               result: directWorkspaceRead,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1577,7 +1584,7 @@ class ChatAgent extends BaseAgent {
           }
           case 'browser': {
             const directBrowserAutomation = await this.tryDirectBrowserAutomation(
-              contextAwareScopedMessage,
+              routedScopedMessage,
               ctx,
               userKey,
               effectiveCodeContext,
@@ -1589,7 +1596,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: directBrowserAutomation,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1601,7 +1608,7 @@ class ChatAgent extends BaseAgent {
             if (skipDirectWebSearch) break;
             let webSearchResult: string | null = null;
             try {
-              webSearchResult = await this.tryDirectWebSearch(contextAwareScopedMessage, ctx);
+              webSearchResult = await this.tryDirectWebSearch(routedScopedMessage, ctx);
             } catch {
               webSearchResult = null;
             }
@@ -1638,7 +1645,7 @@ class ChatAgent extends BaseAgent {
               candidate,
               result: finalContent,
               message,
-              routingMessage: contextAwareScopedMessage,
+              routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
               userKey,
@@ -1652,12 +1659,91 @@ class ChatAgent extends BaseAgent {
       }
     }
 
-    // If GWS provider is configured and the message looks like a workspace request,
+    if (workerManager) {
+      try {
+        const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
+        const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+        // Attach codeContext to the message metadata so the worker can forward it
+        // through the broker to the tool executor for auto-approve decisions.
+        const workerMessage = effectiveCodeContext
+          ? { ...routedScopedMessage, metadata: { ...routedScopedMessage.metadata, codeContext: effectiveCodeContext } }
+          : routedScopedMessage;
+        const result = await workerManager.handleMessage({
+          sessionId: `${conversationUserId}:${conversationChannel}`,
+          agentId: this.id,
+          userId: conversationUserId,
+          grantedCapabilities: [...ctx.capabilities],
+          message: workerMessage,
+          systemPrompt: workerSystemPrompt,
+          history: priorHistory,
+          knowledgeBase,
+          activeSkills: preResolvedSkills,
+          toolContext: this.tools?.getToolContext({
+            userId: conversationUserId,
+            principalId: message.principalId ?? conversationUserId,
+            channel: conversationChannel,
+            codeContext: effectiveCodeContext,
+          }) ?? '',
+          runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+        });
+        const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
+        // Ensure responseSource is present — if the worker didn't provide one,
+        // derive it from the primary provider context.
+        if (!workerMeta.responseSource) {
+          const primaryName = ctx.llm?.name ?? 'unknown';
+          workerMeta.responseSource = {
+            locality: getProviderLocalityFromName(primaryName),
+            providerName: primaryName,
+          };
+        }
+        if (requestedCodeContext?.sessionId || resolvedCodeSession) {
+          workerMeta.codeSessionResolved = !!resolvedCodeSession;
+          if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;
+        }
+        // Sync pending approvals from the executor into response metadata so the
+        // frontend can render inline approval buttons (worker path does not do this
+        // automatically like the inline ChatAgent LLM loop does).
+        const workerUserKey = `${conversationUserId}:${conversationChannel}`;
+        this.syncPendingApprovalsFromExecutor(workerUserKey, conversationUserId, conversationChannel);
+        const workerPending = this.getPendingApprovals(workerUserKey);
+        if (workerPending && workerPending.ids.length > 0) {
+          const summaries = this.tools?.getApprovalSummaries(workerPending.ids);
+          workerMeta.pendingApprovals = buildPendingApprovalMetadata(workerPending.ids, summaries);
+        }
+        if (preResolvedSkills.length > 0) {
+          workerMeta.activeSkills = preResolvedSkills.map((skill) => skill.id);
+        }
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            result.content,
+            { assistantResponseSource: readResponseSourceMetadata(workerMeta) },
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return {
+          content: result.content,
+          metadata: Object.keys(workerMeta).length > 0 ? workerMeta : undefined,
+        };
+      } catch (error) {
+        log.error({ agent: this.id, error: error instanceof Error ? error.stack ?? error.message : String(error) }, 'Brokered message execution failed');
+        throw error;
+      }
+    }
+
+    if (!ctx.llm) {
+      return { content: 'No LLM provider configured.' };
+    }
+
+    // If GWS provider is configured and the structured interpretation says this is
+    // workspace/email work, prefer the external provider for the tool-calling loop.
     // swap to the external model for the tool-calling loop so it handles
     // structured tool calls correctly (local models often struggle with complex schemas).
-    const gwsProvider = !ambiguousEmailProviderClarification
-      && this.enabledManagedProviders?.has('gws')
-      && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(contextAwareScopedMessage.content)
+    const gwsProvider = this.enabledManagedProviders?.has('gws')
+      && (directIntent?.decision.route === 'workspace_task' || directIntent?.decision.route === 'email_task')
       ? this.resolveGwsProvider?.()
       : undefined;
     let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
@@ -1993,7 +2079,7 @@ class ChatAgent extends BaseAgent {
               userKey,
               llmMessages: [...llmMessages],
               pendingTools,
-              originalMessage: suspended?.originalMessage ?? contextAwareScopedMessage,
+              originalMessage: suspended?.originalMessage ?? routedScopedMessage,
               ctx,
             });
             break;
@@ -2187,7 +2273,7 @@ class ChatAgent extends BaseAgent {
                   userKey,
                   llmMessages: [...fbMessages],
                   pendingTools,
-                  originalMessage: suspended?.originalMessage ?? contextAwareScopedMessage,
+                  originalMessage: suspended?.originalMessage ?? routedScopedMessage,
                   ctx,
                 });
               } else {
@@ -2243,10 +2329,7 @@ class ChatAgent extends BaseAgent {
         // Build structured approval metadata — all channels render native approval UI
         // (web: buttons, CLI: readline prompt, Telegram: inline keyboard).
         // No text prompt is appended to finalContent; the metadata is the canonical source.
-        pendingApprovalMeta = merged.map((id) => {
-          const s = summaries?.get(id);
-          return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
-        });
+        pendingApprovalMeta = buildPendingApprovalMetadata(merged, summaries);
         if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent)) {
           finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
         }
@@ -2688,6 +2771,148 @@ class ChatAgent extends BaseAgent {
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
+  private buildGatewayClarificationResponse(input: {
+    gateway: IntentGatewayRecord | null;
+    userKey: string;
+    conversationUserId: string;
+    conversationChannel: string;
+    message: UserMessage;
+    activeSkills: ResolvedSkill[];
+  }): AgentResponse | null {
+    const decision = input.gateway?.decision;
+    if (!decision) return null;
+
+    const missingFields = new Set(decision.missingFields);
+    const needsEmailProvider = (decision.route === 'email_task')
+      && this.enabledManagedProviders?.has('gws')
+      && this.enabledManagedProviders.has('m365')
+      && !decision.entities.emailProvider
+      && (decision.resolution === 'needs_clarification' || missingFields.has('email_provider'));
+    if (needsEmailProvider) {
+      const prompt = 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?';
+      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
+        kind: 'email_provider',
+        originalUserContent: input.message.content,
+        prompt,
+      });
+      this.recordIntentRoutingTrace('clarification_requested', {
+        message: input.message,
+        details: {
+          kind: 'email_provider',
+          route: decision.route,
+          missingFields: [...missingFields],
+          prompt,
+        },
+      });
+      return {
+        content: prompt,
+        metadata: {
+          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
+        },
+      };
+    }
+
+    if (decision.resolution === 'needs_clarification' && missingFields.has('coding_backend')) {
+      const prompt = 'Which coding backend do you want me to use: Codex, Claude Code, Gemini CLI, or Aider?';
+      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
+        kind: 'coding_backend',
+        originalUserContent: input.message.content,
+        prompt,
+      });
+      this.recordIntentRoutingTrace('clarification_requested', {
+        message: input.message,
+        details: {
+          kind: 'coding_backend',
+          route: decision.route,
+          missingFields: [...missingFields],
+          prompt,
+        },
+      });
+      return {
+        content: prompt,
+        metadata: {
+          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
+        },
+      };
+    }
+
+    if (decision.resolution === 'needs_clarification' && decision.summary.trim()) {
+      const prompt = decision.summary.trim();
+      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
+        kind: 'generic',
+        originalUserContent: input.message.content,
+        prompt,
+      });
+      this.recordIntentRoutingTrace('clarification_requested', {
+        message: input.message,
+        details: {
+          kind: 'generic',
+          route: decision.route,
+          missingFields: [...missingFields],
+          prompt,
+        },
+      });
+      return {
+        content: prompt,
+        metadata: {
+          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
+        },
+      };
+    }
+
+    return null;
+  }
+
+  private resolveIntentGatewayContent(input: {
+    gateway: IntentGatewayRecord | null;
+    pendingClarification: PendingClarificationState | null;
+    priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }): string | null {
+    const decision = input.gateway?.decision;
+    if (!decision) return null;
+    if (decision.resolvedContent?.trim()) {
+      return decision.resolvedContent.trim();
+    }
+
+    if (input.pendingClarification?.kind === 'email_provider' && decision.entities.emailProvider) {
+      const providerLabel = decision.entities.emailProvider === 'm365'
+        ? 'Outlook / Microsoft 365'
+        : 'Gmail / Google Workspace';
+      return `Use ${providerLabel} for this request: ${input.pendingClarification.originalUserContent}`;
+    }
+
+    if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
+      const priorRequest = this.findLatestActionableUserRequest(input.priorHistory);
+      if (priorRequest) {
+        if (priorRequest.toLowerCase().includes(decision.entities.codingBackend.toLowerCase())) {
+          return priorRequest;
+        }
+        return `Use ${decision.entities.codingBackend} for this request: ${priorRequest}`;
+      }
+    }
+
+    return null;
+  }
+
+  private findLatestActionableUserRequest(
+    history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  ): string | null {
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const entry = history[index];
+      if (entry.role !== 'user') continue;
+      const text = entry.content.trim();
+      if (!text || text.length < 16) continue;
+      if (/^(?:no|yes|yeah|yep|gmail|outlook|codex|claude code|gemini|aider)\b/i.test(text)) {
+        continue;
+      }
+      return text;
+    }
+    return null;
+  }
+
   private async buildDirectIntentResponse(input: {
     candidate: DirectIntentShadowCandidate;
     result: string | { content: string; metadata?: Record<string, unknown> };
@@ -2714,6 +2939,17 @@ class ChatAgent extends BaseAgent {
     const intentGateway = input.intentGateway ?? await this.classifyIntentGateway(routingMessage, input.ctx);
     this.logIntentGateway(input.candidate, routingMessage, intentGateway, true);
     const gatewayMeta = toIntentGatewayClientMetadata(intentGateway);
+    this.recordIntentRoutingTrace('direct_intent_response', {
+      message: input.message,
+      details: {
+        candidate: input.candidate,
+        route: intentGateway?.decision.route,
+        gatewayAvailable: intentGateway?.available ?? false,
+        handled: true,
+        metadataKeys: normalized.metadata ? Object.keys(normalized.metadata) : [],
+      },
+      contentPreview: normalized.content,
+    });
     const metadata = {
       ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
       ...(normalized.metadata ?? {}),
@@ -2757,6 +2993,106 @@ class ChatAgent extends BaseAgent {
         agentContext: { checkAction: ctx.checkAction },
       },
     );
+  }
+
+  private async tryDirectCodingBackendDelegation(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
+    codeContext?: { sessionId?: string; workspaceRoot: string },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    if (!decision || decision.route !== 'coding_task') return null;
+    const backendId = decision.entities.codingBackend?.trim();
+    if (!backendId) return null;
+
+    this.recordIntentRoutingTrace('direct_tool_call_started', {
+      message,
+      details: {
+        toolName: 'coding_backend_run',
+        backendId,
+        codeSessionId: codeContext?.sessionId,
+        workspaceRoot: codeContext?.workspaceRoot,
+      },
+    });
+    const result = await this.tools.executeModelTool(
+      'coding_backend_run',
+      {
+        task: decision.resolvedContent?.trim() || message.content,
+        backend: backendId,
+      },
+      {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: message.userId,
+        surfaceId: message.surfaceId,
+        principalId: message.principalId ?? message.userId,
+        principalRole: message.principalRole,
+        channel: message.channel,
+        requestId: message.id,
+        agentContext: { checkAction: ctx.checkAction },
+        ...(codeContext ? { codeContext } : {}),
+      },
+    );
+
+    this.recordIntentRoutingTrace('direct_tool_call_completed', {
+      message,
+      details: {
+        toolName: 'coding_backend_run',
+        backendId,
+        status: result.status,
+        success: toBoolean(result.success),
+        message: toString(result.message),
+      },
+      contentPreview: toString(result.output && isRecord(result.output) ? result.output.output : undefined),
+    });
+
+    if (result.status === 'pending_approval') {
+      const approvalId = toString(result.approvalId);
+      if (approvalId) {
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+      } else {
+        this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
+      }
+      const pendingIds = this.getPendingApprovals(userKey)?.ids ?? (approvalId ? [approvalId] : []);
+      const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+      const pendingApprovalMeta = buildPendingApprovalMetadata(pendingIds, summaries);
+      return {
+        content: `I need approval to run ${backendId} for this coding task. Once approved, I'll launch it in the active coding workspace.`,
+        metadata: {
+          ...(codeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: codeContext.sessionId } : {}),
+          ...(pendingApprovalMeta.length > 0 ? { pendingApprovals: pendingApprovalMeta } : {}),
+        },
+      };
+    }
+
+    const runResult = isRecord(result.output) ? result.output : null;
+    const backendName = toString(runResult?.backendName) || backendId;
+    const backendOutput = toString(runResult?.output)?.trim();
+    const sessionId = codeContext?.sessionId || toString(runResult?.codeSessionId);
+
+    const metadata: Record<string, unknown> = {
+      codingBackendDelegated: true,
+      codingBackendId: backendId,
+      ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
+    };
+
+    if (toBoolean(result.success)) {
+      return {
+        content: backendOutput || `${backendName} completed successfully.`,
+        metadata,
+      };
+    }
+
+    const failureMessage = backendOutput
+      || toString(result.message)
+      || `${backendName} could not complete the requested task.`;
+    return {
+      content: failureMessage,
+      metadata,
+    };
   }
 
   private async tryDirectCodeSessionControlFromGateway(
@@ -3252,6 +3588,43 @@ class ChatAgent extends BaseAgent {
       ids: uniqueIds,
       createdAt: existing?.createdAt ?? nowMs,
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private getPendingClarification(
+    userId: string,
+    channel: string,
+    nowMs: number = Date.now(),
+  ): PendingClarificationState | null {
+    return this.pendingClarificationStore?.get({
+      agentId: this.stateAgentId,
+      userId,
+      channel,
+    }, nowMs) ?? null;
+  }
+
+  private setPendingClarification(
+    userId: string,
+    channel: string,
+    input: Pick<PendingClarificationState, 'kind' | 'originalUserContent' | 'prompt'>,
+    nowMs: number = Date.now(),
+  ): void {
+    this.pendingClarificationStore?.set({
+      agentId: this.stateAgentId,
+      userId,
+      channel,
+    }, {
+      ...input,
+      createdAt: nowMs,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private clearPendingClarification(userId: string, channel: string): void {
+    this.pendingClarificationStore?.clear({
+      agentId: this.stateAgentId,
+      userId,
+      channel,
     });
   }
 
@@ -3756,15 +4129,68 @@ class ChatAgent extends BaseAgent {
   private async classifyIntentGateway(
     message: UserMessage,
     ctx: AgentContext,
+    options?: {
+      recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+      pendingClarification?: PendingClarificationState | null;
+    },
   ): Promise<IntentGatewayRecord | null> {
+    const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
+    if (preRouted) {
+      this.recordIntentRoutingTrace('gateway_classified', {
+        message,
+        details: {
+          source: 'pre_routed',
+          route: preRouted.decision.route,
+          confidence: preRouted.decision.confidence,
+          operation: preRouted.decision.operation,
+          turnRelation: preRouted.decision.turnRelation,
+          resolution: preRouted.decision.resolution,
+          missingFields: preRouted.decision.missingFields,
+          emailProvider: preRouted.decision.entities.emailProvider,
+          codingBackend: preRouted.decision.entities.codingBackend,
+          latencyMs: preRouted.latencyMs,
+          model: preRouted.model,
+        },
+      });
+      return preRouted;
+    }
     if (!ctx.llm) return null;
-    return this.intentGateway.classify(
+    const classified = await this.intentGateway.classify(
       {
         content: message.content,
         channel: message.channel,
+        recentHistory: options?.recentHistory,
+        pendingClarification: options?.pendingClarification
+          ? {
+              kind: options.pendingClarification.kind,
+              originalRequest: options.pendingClarification.originalUserContent,
+              prompt: options.pendingClarification.prompt,
+            }
+          : null,
+        enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
+        availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
       },
       (messages, options) => this.chatWithFallback(ctx, messages, options),
     );
+    this.recordIntentRoutingTrace('gateway_classified', {
+      message,
+      details: classified
+        ? {
+            source: 'agent',
+            route: classified.decision.route,
+            confidence: classified.decision.confidence,
+            operation: classified.decision.operation,
+            turnRelation: classified.decision.turnRelation,
+            resolution: classified.decision.resolution,
+            missingFields: classified.decision.missingFields,
+            emailProvider: classified.decision.entities.emailProvider,
+            codingBackend: classified.decision.entities.codingBackend,
+            latencyMs: classified.latencyMs,
+            model: classified.model,
+          }
+        : { source: 'agent', available: false },
+    });
+    return classified;
   }
 
   private logIntentGateway(
@@ -3786,6 +4212,9 @@ class ChatAgent extends BaseAgent {
       route: intentGateway.decision.route,
       confidence: intentGateway.decision.confidence,
       operation: intentGateway.decision.operation,
+      turnRelation: intentGateway.decision.turnRelation,
+      resolution: intentGateway.decision.resolution,
+      missingFields: intentGateway.decision.missingFields,
       summary: intentGateway.decision.summary,
       latencyMs: intentGateway.latencyMs,
       model: intentGateway.model,
@@ -3796,6 +4225,8 @@ class ChatAgent extends BaseAgent {
     candidate: DirectIntentShadowCandidate,
   ): Set<IntentGatewayRoute> {
     switch (candidate) {
+      case 'coding_backend':
+        return new Set(['coding_task']);
       case 'coding_session_control':
         return new Set(['coding_session_control', 'coding_task', 'general_assistant']);
       case 'filesystem':
@@ -3988,7 +4419,8 @@ class ChatAgent extends BaseAgent {
   private async tryDirectGoogleWorkspaceRead(
     message: UserMessage,
     ctx: AgentContext,
-  ): Promise<string | null> {
+    userKey: string,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     const intent = parseDirectGoogleWorkspaceIntent(message.content);
@@ -4025,8 +4457,26 @@ class ChatAgent extends BaseAgent {
     if (!toBoolean(listResult.success)) {
       const status = toString(listResult.status);
       if (status === 'pending_approval') {
-        const approvalId = toString(listResult.approvalId) || 'unknown';
-        return `I prepared a Gmail inbox check, but it needs approval first (approval ID: ${approvalId}).`;
+        const approvalId = toString(listResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: 'I completed the Gmail inbox check.',
+            denied: 'I did not check Gmail.',
+          });
+        }
+        const pendingIds = approvalId ? [approvalId] : [];
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        return {
+          content: [
+            'I prepared a Gmail inbox check, but it needs approval first.',
+            prompt,
+          ].filter(Boolean).join('\n\n'),
+          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
+        };
       }
       const msg = toString(listResult.message) || toString(listResult.error) || 'Google Workspace request failed.';
       return `I tried to check Gmail for unread messages, but it failed: ${msg}`;
@@ -4140,8 +4590,9 @@ class ChatAgent extends BaseAgent {
   private async tryDirectFilesystemSearch(
     message: UserMessage,
     ctx: AgentContext,
+    userKey: string,
     codeContext?: { workspaceRoot: string; sessionId?: string },
-  ): Promise<string | null> {
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     const intent = parseDirectFileSearchIntent(message.content, this.tools.getPolicy());
@@ -4170,8 +4621,26 @@ class ChatAgent extends BaseAgent {
     if (!toBoolean(toolResult.success)) {
       const status = toString(toolResult.status);
       if (status === 'pending_approval') {
-        const approvalId = toString(toolResult.approvalId) || 'unknown';
-        return `I prepared a filesystem search for "${intent.query}" but it needs approval first (approval ID: ${approvalId}).`;
+        const approvalId = toString(toolResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: `I completed the filesystem search for "${intent.query}".`,
+            denied: `I did not run the filesystem search for "${intent.query}".`,
+          });
+        }
+        const pendingIds = approvalId ? [approvalId] : [];
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        return {
+          content: [
+            `I prepared a filesystem search for "${intent.query}" but it needs approval first.`,
+            prompt,
+          ].filter(Boolean).join('\n\n'),
+          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
+        };
       }
       const msg = toString(toolResult.message) || 'Search failed.';
       return `I attempted a filesystem search in "${intent.path}" for "${intent.query}" but it failed: ${msg}`;
@@ -5349,7 +5818,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         port: config.channels.web.port,
         host: config.channels.web.host,
         auth: {
-          mode: 'bearer_required',
+          mode: config.channels.web.auth?.mode ?? 'bearer_required',
           tokenConfigured: !!(config.channels.web.auth?.token?.trim() || config.channels.web.authToken?.trim()),
           tokenSource: config.channels.web.auth?.tokenSource,
           rotateOnStartup: config.channels.web.auth?.rotateOnStartup ?? false,
@@ -5597,6 +6066,16 @@ function resolveTelegramBotToken(config: GuardianAgentConfig, secretStore: Local
   return direct || undefined;
 }
 
+interface IncomingDispatchMessage {
+  content: string;
+  userId?: string;
+  surfaceId?: string;
+  principalId?: string;
+  principalRole?: import('./tools/types.js').PrincipalRole;
+  channel?: string;
+  metadata?: Record<string, unknown>;
+}
+
 /** Build dashboard callbacks wired to runtime internals. */
 function buildDashboardCallbacks(
   runtime: Runtime,
@@ -5609,6 +6088,7 @@ function buildDashboardCallbacks(
   runTimeline: RunTimelineStore,
   refreshRunTimelineSnapshots: () => void,
   orchestrator: AssistantOrchestrator,
+  intentRoutingTrace: IntentRoutingTraceLog,
   jobTracker: AssistantJobTracker,
   aiSecurity: AiSecurityService,
   runAssistantSecurityScan: (input: {
@@ -5658,6 +6138,14 @@ function buildDashboardCallbacks(
   microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
   codingBackendServiceRef: { current: CodingBackendService | null },
+  prepareIncomingDispatch: (
+    channelDefault: string | undefined,
+    msg: IncomingDispatchMessage,
+  ) => Promise<{
+    decision: RouteDecision;
+    gateway: IntentGatewayRecord | null;
+    routedMessage: IncomingDispatchMessage;
+  }>,
 ): DashboardCallbacks & {
   connectorWorkflowOps: {
     upsert: (playbook: AssistantConnectorPlaybookDefinition) => { success: boolean; message: string };
@@ -5773,21 +6261,6 @@ function buildDashboardCallbacks(
       userId: session.conversationUserId,
       channel: session.conversationChannel,
     };
-  };
-  const resolveConfiguredAutoRoute = (channelDefault: string | undefined, content: string): RouteDecision => {
-    if (channelDefault) {
-      return { agentId: channelDefault, confidence: 'high', reason: 'channel default override' };
-    }
-    const routingCfg = configRef.current.routing;
-    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
-    const threshold = routingCfg?.complexityThreshold ?? 0.5;
-
-    // Only use tier routing when role-tagged agents exist
-    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
-    if (hasRoles) {
-      return router.routeWithTier(content, tierMode, threshold);
-    }
-    return router.route(content);
   };
   const resolveDashboardCodeSessionRequest = (args: {
     sessionId: string;
@@ -5988,13 +6461,17 @@ function buildDashboardCallbacks(
       );
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
+      const nextWebAuthMode = nextConfig.channels.web?.auth?.mode ?? 'bearer_required';
+      const nextRuntimeToken = persistedToken
+        || webAuthStateRef.current.token
+        || (nextWebAuthMode === 'bearer_required' ? generateSecureToken() : undefined);
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode: 'bearer_required',
-        token: persistedToken || webAuthStateRef.current.token || generateSecureToken(),
+        mode: nextWebAuthMode,
+        token: nextRuntimeToken,
         tokenSource: persistedToken
           ? 'config'
-          : (webAuthStateRef.current.tokenSource ?? 'ephemeral'),
+          : (nextRuntimeToken ? (webAuthStateRef.current.tokenSource ?? 'ephemeral') : 'ephemeral'),
         rotateOnStartup: nextConfig.channels.web?.auth?.rotateOnStartup ?? false,
         sessionTtlMinutes: nextConfig.channels.web?.auth?.sessionTtlMinutes,
       };
@@ -6191,7 +6668,7 @@ function buildDashboardCallbacks(
     const rawWeb = (rawChannels.web as Record<string, unknown> | undefined) ?? {};
     rawWeb.enabled = rawWeb.enabled ?? true;
     rawWeb.auth = {
-      mode: 'bearer_required',
+      mode: webAuthStateRef.current.mode,
       rotateOnStartup: webAuthStateRef.current.rotateOnStartup ?? false,
       sessionTtlMinutes: webAuthStateRef.current.sessionTtlMinutes,
       tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
@@ -6442,9 +6919,10 @@ function buildDashboardCallbacks(
       channel?: string;
       metadata?: Record<string, unknown>;
     };
-    routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string };
+    routeDecision?: RouteDecision;
     options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string; requestId?: string };
     resolvedCodeSession?: ResolvedCodeSessionContext | null;
+    precomputedIntentGateway?: IntentGatewayRecord | null;
   }) => {
     const channel = args.msg.channel?.trim() || 'web';
     const channelUserId = args.msg.userId?.trim() || `${channel}-user`;
@@ -6487,19 +6965,27 @@ function buildDashboardCallbacks(
 
     const dispatchUserId = dispatchCodeSession?.session.conversationUserId ?? canonicalUserId;
     const dispatchChannel = dispatchCodeSession?.session.conversationChannel ?? channel;
+    const sanitizedIncomingMetadata = isRecord(args.msg.metadata)
+      ? Object.fromEntries(
+          Object.entries(args.msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
+        )
+      : args.msg.metadata;
     const existingCodeContext = isRecord(args.msg.metadata?.codeContext)
       ? args.msg.metadata.codeContext
       : undefined;
-    const effectiveMetadata = dispatchCodeSession
+    const baseMetadata = dispatchCodeSession
       ? {
-          ...(args.msg.metadata ?? {}),
+          ...(sanitizedIncomingMetadata ?? {}),
           codeContext: {
             ...(existingCodeContext ?? {}),
             sessionId: dispatchCodeSession.session.id,
             workspaceRoot: dispatchCodeSession.session.resolvedRoot,
           },
         }
-      : args.msg.metadata;
+      : sanitizedIncomingMetadata;
+    const effectiveMetadata = args.precomputedIntentGateway
+      ? attachPreRoutedIntentGatewayMetadata(baseMetadata, args.precomputedIntentGateway)
+      : baseMetadata;
 
     analytics.track({
       type: 'message_sent',
@@ -6581,9 +7067,29 @@ function buildDashboardCallbacks(
             channelUserId,
             agentId: args.agentId,
           });
+          const mergedMetadata = mergeResponseSourceMetadata(response.metadata);
+          const responseSource = readResponseSourceMetadata(mergedMetadata);
+          intentRoutingTrace.record({
+            stage: 'dispatch_response',
+            requestId: dispatchCtx.requestId,
+            messageId: message.id,
+            userId: canonicalUserId,
+            channel,
+            agentId: args.agentId,
+            contentPreview: response.content,
+            details: {
+              selectedAgentId: args.agentId,
+              fallbackUsed: false,
+              requestedTier,
+              routeReason: args.routeDecision?.reason,
+              responseLocality: responseSource?.locality,
+              responseProviderName: responseSource?.providerName,
+              pendingApprovals: Array.isArray(mergedMetadata?.pendingApprovals) ? mergedMetadata.pendingApprovals.length : 0,
+            },
+          });
           return {
             ...response,
-            metadata: mergeResponseSourceMetadata(response.metadata),
+            metadata: mergedMetadata,
           };
         } catch (err) {
           const routingCfg = configRef.current.routing;
@@ -6627,6 +7133,25 @@ function buildDashboardCallbacks(
                   usedFallback: true,
                 },
               });
+              const responseSource = readResponseSourceMetadata(mergedMetadata);
+              intentRoutingTrace.record({
+                stage: 'dispatch_response',
+                requestId: dispatchCtx.requestId,
+                messageId: message.id,
+                userId: canonicalUserId,
+                channel,
+                agentId: fallbackId,
+                contentPreview: fallbackResponse.content,
+                details: {
+                  selectedAgentId: fallbackId,
+                  fallbackUsed: true,
+                  primaryAgentId: args.agentId,
+                  requestedTier,
+                  routeReason: args.routeDecision?.reason,
+                  responseLocality: responseSource?.locality,
+                  responseProviderName: responseSource?.providerName,
+                },
+              });
               return {
                 ...fallbackResponse,
                 metadata: mergedMetadata,
@@ -6647,6 +7172,22 @@ function buildDashboardCallbacks(
             channelUserId,
             agentId: args.agentId,
             metadata: { error: messageText },
+          });
+          intentRoutingTrace.record({
+            stage: 'dispatch_response',
+            requestId: dispatchCtx.requestId,
+            messageId: message.id,
+            userId: canonicalUserId,
+            channel,
+            agentId: args.agentId,
+            contentPreview: messageText,
+            details: {
+              selectedAgentId: args.agentId,
+              fallbackUsed: false,
+              requestedTier,
+              routeReason: args.routeDecision?.reason,
+              error: messageText,
+            },
           });
           throw err;
         }
@@ -6773,14 +7314,17 @@ function buildDashboardCallbacks(
           status: getAuthStatus(),
         };
       }
-      const nextToken = webAuthStateRef.current.token || generateSecureToken();
+      const nextMode = input.mode ?? webAuthStateRef.current.mode;
+      const nextToken = nextMode === 'bearer_required'
+        ? (webAuthStateRef.current.token || generateSecureToken())
+        : webAuthStateRef.current.token;
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode: 'bearer_required',
+        mode: nextMode,
         token: nextToken,
         rotateOnStartup: input.rotateOnStartup ?? webAuthStateRef.current.rotateOnStartup,
         sessionTtlMinutes: input.sessionTtlMinutes ?? webAuthStateRef.current.sessionTtlMinutes,
-        tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
+        tokenSource: nextToken ? (webAuthStateRef.current.tokenSource ?? 'ephemeral') : 'ephemeral',
       };
       applyWebAuthRuntime(webAuthStateRef.current);
       const persisted = persistAuthState();
@@ -6791,7 +7335,7 @@ function buildDashboardCallbacks(
         type: 'auth_updated',
         channel: 'system',
         canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { mode: 'bearer_required' },
+        metadata: { mode: nextMode },
       });
       return { success: true, message: 'Web auth settings saved.', status: getAuthStatus() };
     },
@@ -6800,7 +7344,6 @@ function buildDashboardCallbacks(
       const token = generateSecureToken();
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode: 'bearer_required',
         token,
         tokenSource: 'ephemeral',
       };
@@ -6926,6 +7469,7 @@ function buildDashboardCallbacks(
 
       return {
         orchestrator: orchestrator.getState(),
+        intentRoutingTrace: intentRoutingTrace.getStatus(),
         jobs: jobTracker.getState(30),
         lastPolicyDecisions: decisions,
         defaultProvider: configRef.current.defaultProvider,
@@ -7737,85 +8281,18 @@ function buildDashboardCallbacks(
       };
     },
 
-    onDispatch: async (agentId, msg, routeDecision, options) => {
+    onDispatch: async (agentId, msg, routeDecision, options, precomputedIntentGateway) => {
       return dispatchDashboardMessage({
         agentId,
         msg,
         routeDecision,
         options,
+        precomputedIntentGateway,
       });
     },
 
     onStreamDispatch: async (agentId, msg, emitSSE) => {
       const requestId = msg.requestId?.trim() || randomUUID();
-      const routeDecision = (() => {
-        if (agentId?.trim()) return undefined;
-        const resolvedChannel = msg.channel?.trim() || 'web';
-        const channelUserId = msg.userId?.trim() || `${resolvedChannel}-user`;
-        const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-        const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
-        const surfaceId = getCodeSessionSurfaceId({
-          surfaceId: msg.surfaceId,
-          userId: canonicalUserId,
-          principalId: msg.principalId,
-        });
-        const resolvedCodeSession = codeSessionStore.resolveForRequest({
-          requestedSessionId: requestedCodeContext?.sessionId,
-          userId: canonicalUserId,
-          principalId: msg.principalId,
-          channel: resolvedChannel,
-          surfaceId,
-          touchAttachment: false,
-        });
-        const channelDefault = configRef.current.channels.web?.defaultAgent;
-        const defaultStreamAgentId = configRef.current.agents[0]?.id
-          ?? (router.findAgentByRole('local')?.id || router.findAgentByRole('external')?.id || 'default');
-        if (resolvedCodeSession) {
-          const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
-          if (pinnedAgentId) {
-            return {
-              agentId: pinnedAgentId,
-              confidence: 'high' as const,
-              reason: requestedCodeContext?.sessionId
-                ? 'explicit backend-owned coding session'
-                : 'attached backend-owned coding session',
-            };
-          }
-          return {
-            ...resolveConfiguredAutoRoute(channelDefault, msg.content),
-            reason: requestedCodeContext?.sessionId
-              ? 'explicit backend-owned coding session with auto routing'
-              : 'attached backend-owned coding session with auto routing',
-          };
-        }
-        if (requestedCodeContext?.workspaceRoot) {
-          return {
-            agentId: router.findAgentByRole('local')?.id || channelDefault || defaultStreamAgentId,
-            confidence: 'high' as const,
-            reason: 'code workspace context',
-          };
-        }
-        if (channelDefault) {
-          return {
-            agentId: channelDefault,
-            confidence: 'high' as const,
-            reason: 'channel default override',
-          };
-        }
-        const routingCfg = configRef.current.routing;
-        const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
-        const threshold = routingCfg?.complexityThreshold ?? 0.5;
-        const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
-        return hasRoles
-          ? router.routeWithTier(msg.content, tierMode, threshold)
-          : router.route(msg.content);
-      })();
-      const resolvedAgentId = agentId?.trim()
-        || routeDecision?.agentId
-        || configRef.current.channels.web?.defaultAgent
-        || configRef.current.agents[0]?.id
-        || 'default';
-
       emitSSE({
         type: 'chat.thinking',
         data: {
@@ -7825,18 +8302,31 @@ function buildDashboardCallbacks(
       });
 
       try {
+        const prepared = agentId?.trim()
+          ? {
+              decision: undefined,
+              gateway: null,
+              routedMessage: {
+                content: msg.content,
+                userId: msg.userId,
+                surfaceId: msg.surfaceId,
+                principalId: msg.principalId,
+                principalRole: msg.principalRole,
+                channel: msg.channel,
+                metadata: msg.metadata,
+              },
+            }
+          : await prepareIncomingDispatch(configRef.current.channels.web?.defaultAgent, msg);
+        const resolvedAgentId = agentId?.trim()
+          || prepared.decision?.agentId
+          || configRef.current.channels.web?.defaultAgent
+          || configRef.current.agents[0]?.id
+          || 'default';
         const response = await dispatchDashboardMessage({
           agentId: resolvedAgentId,
-          msg: {
-            content: msg.content,
-            userId: msg.userId,
-            surfaceId: msg.surfaceId,
-            principalId: msg.principalId,
-            principalRole: msg.principalRole,
-            channel: msg.channel,
-            metadata: msg.metadata,
-          },
-          routeDecision,
+          msg: prepared.routedMessage,
+          routeDecision: prepared.decision,
+          precomputedIntentGateway: prepared.gateway,
           options: {
             priority: 'high',
             requestType: 'chat',
@@ -12256,14 +12746,18 @@ async function main(): Promise<void> {
   }
 
   const configuredToken = config.channels.web?.auth?.token?.trim() || config.channels.web?.authToken?.trim();
+  const configuredWebAuthMode = config.channels.web?.auth?.mode ?? 'bearer_required';
   const rotateOnStartup = config.channels.web?.auth?.rotateOnStartup ?? false;
-  const shouldGenerateToken = !configuredToken || rotateOnStartup;
+  const shouldGenerateToken = configuredWebAuthMode === 'bearer_required' && (!configuredToken || rotateOnStartup);
   const effectiveToken = shouldGenerateToken ? generateSecureToken() : configuredToken;
+  const effectiveTokenSource = configuredToken && !shouldGenerateToken
+    ? 'config'
+    : 'ephemeral';
   const webAuthStateRef: { current: WebAuthRuntimeConfig } = {
     current: {
-      mode: 'bearer_required',
+      mode: configuredWebAuthMode,
       token: effectiveToken,
-      tokenSource: configuredToken && !rotateOnStartup ? 'config' : 'ephemeral',
+      tokenSource: effectiveTokenSource,
       rotateOnStartup,
       sessionTtlMinutes: config.channels.web?.auth?.sessionTtlMinutes,
     },
@@ -12395,6 +12889,9 @@ async function main(): Promise<void> {
     ? [...TRUST_PRESETS[presetName].capabilities]
     : DEFAULT_AGENT_CAPABILITIES;
   const chatAgents = new Map<string, ChatAgent>();
+  const pendingClarificationStore = new PendingClarificationStore();
+  const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
+  await intentRoutingTrace.init();
 
   if (config.agents.length > 0) {
     // Config-driven agents: register all and build router from config rules
@@ -12429,6 +12926,8 @@ async function main(): Promise<void> {
         config.qualityFallback,
         analytics ?? undefined,
         resolveRoutedProviderForTools,
+        intentRoutingTrace,
+        pendingClarificationStore,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -12472,6 +12971,8 @@ async function main(): Promise<void> {
       config.qualityFallback,
       analytics ?? undefined,
       resolveRoutedProviderForTools,
+      intentRoutingTrace,
+      pendingClarificationStore,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -12502,6 +13003,8 @@ async function main(): Promise<void> {
       config.qualityFallback,
       analytics ?? undefined,
       resolveRoutedProviderForTools,
+      intentRoutingTrace,
+      pendingClarificationStore,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -12516,6 +13019,7 @@ async function main(): Promise<void> {
       patterns: [
         '\\b(file|folder|directory|path|create|delete|move|copy|rename|save|open)\\b',
         '\\b(git|commit|branch|merge|pull request|build|compile|lint|test|npm|node)\\b',
+        '\\b(codex|claude\\s+code|gemini\\s+cli|aider|coding backend|coding assistant)\\b',
       ],
       priority: 5,
     }, 'local');
@@ -12557,6 +13061,8 @@ async function main(): Promise<void> {
       config.qualityFallback,
       analytics ?? undefined,
       resolveRoutedProviderForTools,
+      intentRoutingTrace,
+      pendingClarificationStore,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -12590,6 +13096,8 @@ async function main(): Promise<void> {
       config.qualityFallback,
       analytics ?? undefined,
       resolveRoutedProviderForTools,
+      intentRoutingTrace,
+      pendingClarificationStore,
     );
     chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -12682,27 +13190,91 @@ async function main(): Promise<void> {
   const channels: { name: string; stop: () => Promise<void> }[] = [];
 
   const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
+  const routingIntentGateway = new IntentGateway();
+  const resolveRoutingStateAgentId = (preferredAgentId?: string): string => (
+    resolveSharedStateAgentId(preferredAgentId)
+    ?? ((router.findAgentByRole('local') || router.findAgentByRole('external'))
+      ? SHARED_TIER_AGENT_STATE_ID
+      : (preferredAgentId ?? defaultAgentId))
+  );
+  const classifyIntentForRouting = async (
+    msg: IncomingDispatchMessage,
+    stateAgentId: string,
+  ): Promise<IntentGatewayRecord | null> => {
+    const channel = msg.channel?.trim() || 'web';
+    const channelUserId = msg.userId?.trim() || `${channel}-user`;
+    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
+    const currentConfig = configRef.current;
+    const primaryProviderName = findProviderByLocality(currentConfig, 'local')
+      ?? currentConfig.defaultProvider
+      ?? findProviderByLocality(currentConfig, 'external')
+      ?? null;
+    const fallbackProviderName = findProviderByLocality(currentConfig, 'external');
+    const recentHistory = conversations.getHistoryForContext({
+      agentId: stateAgentId,
+      userId: canonicalUserId,
+      channel,
+    });
+    const pendingClarification = pendingClarificationStore.get({
+      agentId: stateAgentId,
+      userId: canonicalUserId,
+      channel,
+    });
+    const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
+      if (!providerName) return null;
+      const provider = runtime.getProvider(providerName);
+      if (!provider) return null;
+      return routingIntentGateway.classify(
+        {
+          content: msg.content,
+          channel,
+          recentHistory,
+          pendingClarification: pendingClarification
+            ? {
+                kind: pendingClarification.kind,
+                originalRequest: pendingClarification.originalUserContent,
+                prompt: pendingClarification.prompt,
+              }
+            : null,
+          enabledManagedProviders: enabledManagedProviders ? [...enabledManagedProviders] : [],
+          availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
+        },
+        (messages, options) => provider.chat(messages, options),
+      );
+    };
 
-  /** Resolve target agent with tier routing: channel override → tier router → plain router. */
-  const resolveAgentWithTier = (channelDefault: string | undefined, content: string): RouteDecision => {
-    if (channelDefault) {
-      return { agentId: channelDefault, confidence: 'high', reason: 'channel default override' };
+    const primary = await classifyWithProvider(primaryProviderName);
+    if (primary?.available) {
+      return primary;
     }
-    const routingCfg = configRef.current.routing;
-    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
-    const threshold = routingCfg?.complexityThreshold ?? 0.5;
-
-    // Only use tier routing when role-tagged agents exist
-    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
-    if (hasRoles) {
-      return router.routeWithTier(content, tierMode, threshold);
+    if (!fallbackProviderName || fallbackProviderName === primaryProviderName) {
+      return primary;
     }
-    return router.route(content);
+    const fallback = await classifyWithProvider(fallbackProviderName);
+    return fallback?.available ? fallback : (primary ?? fallback);
   };
-  const resolveAgentForIncomingMessage = (
+  const recordIntentRoutingTrace = (
+    stage: import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage,
+    input: {
+      msg: IncomingDispatchMessage;
+      agentId?: string;
+      details?: Record<string, unknown>;
+      contentPreview?: string;
+    },
+  ): void => {
+    intentRoutingTrace.record({
+      stage,
+      userId: input.msg.userId,
+      channel: input.msg.channel,
+      agentId: input.agentId,
+      contentPreview: input.contentPreview ?? input.msg.content,
+      details: input.details,
+    });
+  };
+  const resolveAgentForIncomingMessage = async (
     channelDefault: string | undefined,
-    msg: Pick<UserMessage, 'content' | 'userId' | 'surfaceId' | 'principalId' | 'channel' | 'metadata'>,
-  ): RouteDecision => {
+    msg: IncomingDispatchMessage,
+  ): Promise<{ decision: RouteDecision; gateway: IntentGatewayRecord | null }> => {
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
@@ -12720,32 +13292,170 @@ async function main(): Promise<void> {
       surfaceId: resolvedSurfaceId,
       touchAttachment: false,
     });
+    const recordResolvedRoute = (decision: RouteDecision, gateway: IntentGatewayRecord | null): void => {
+      if (gateway) {
+        recordIntentRoutingTrace('gateway_classified', {
+          msg,
+          details: {
+            source: 'routing',
+            route: gateway.decision.route,
+            confidence: gateway.decision.confidence,
+            operation: gateway.decision.operation,
+            turnRelation: gateway.decision.turnRelation,
+            resolution: gateway.decision.resolution,
+            missingFields: gateway.decision.missingFields,
+            emailProvider: gateway.decision.entities.emailProvider,
+            codingBackend: gateway.decision.entities.codingBackend,
+            latencyMs: gateway.latencyMs,
+            model: gateway.model,
+          },
+        });
+      }
+      recordIntentRoutingTrace('tier_routing_decided', {
+        msg,
+        agentId: decision.agentId,
+        details: {
+          confidence: decision.confidence,
+          reason: decision.reason,
+          fallbackAgentId: decision.fallbackAgentId,
+          complexityScore: decision.complexityScore,
+          tier: decision.tier,
+          route: gateway?.decision.route,
+        },
+      });
+    };
     if (resolvedCodeSession) {
       const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
-      if (pinnedAgentId) {
-        return {
+      const localTierAgentId = router.findAgentByRole('local')?.id;
+      const externalTierAgentId = router.findAgentByRole('external')?.id;
+      const pinnedTierAgent = pinnedAgentId
+        && (pinnedAgentId === localTierAgentId || pinnedAgentId === externalTierAgentId);
+      if (pinnedAgentId && !pinnedTierAgent) {
+        const decision = {
           agentId: pinnedAgentId,
-          confidence: 'high',
+          confidence: 'high' as const,
           reason: requestedCodeContext?.sessionId
-            ? 'explicit backend-owned coding session'
-            : 'attached backend-owned coding session',
+            ? 'explicit coding session pinned to a specific agent'
+            : 'attached coding session pinned to a specific agent',
+        };
+        recordResolvedRoute(decision, null);
+        return {
+          decision,
+          gateway: null,
         };
       }
-      return {
-        ...resolveAgentWithTier(channelDefault, msg.content),
+      const stateAgentId = resolveRoutingStateAgentId(channelDefault);
+      const gateway = channelDefault
+        ? null
+        : await classifyIntentForRouting(msg, stateAgentId);
+      const routingCfg = configRef.current.routing;
+      const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
+      const threshold = routingCfg?.complexityThreshold ?? 0.5;
+      const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
+      const decision = channelDefault
+        ? { agentId: channelDefault, confidence: 'high' as const, reason: 'channel default override' }
+        : gateway?.available && hasRoles
+          ? router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
+          : hasRoles
+            ? router.routeWithTier(msg.content, tierMode, threshold)
+            : router.route(msg.content);
+      const resolvedDecision = {
+        ...decision,
         reason: requestedCodeContext?.sessionId
-          ? 'explicit backend-owned coding session with auto routing'
-          : 'attached backend-owned coding session with auto routing',
+          ? 'explicit attached coding session with gateway-first auto routing'
+          : 'attached coding session with gateway-first auto routing',
+      };
+      recordResolvedRoute(resolvedDecision, gateway);
+      return {
+        decision: resolvedDecision,
+        gateway,
       };
     }
     if (requestedCodeContext?.workspaceRoot) {
-      return {
+      const decision = {
         agentId: router.findAgentByRole('local')?.id || channelDefault || defaultAgentId,
-        confidence: 'high',
+        confidence: 'high' as const,
         reason: 'code workspace context',
       };
+      recordResolvedRoute(decision, null);
+      return {
+        decision,
+        gateway: null,
+      };
     }
-    return resolveAgentWithTier(channelDefault, msg.content);
+    if (channelDefault) {
+      const decision = {
+        agentId: channelDefault,
+        confidence: 'high' as const,
+        reason: 'channel default override',
+      };
+      recordResolvedRoute(decision, null);
+      return {
+        decision,
+        gateway: null,
+      };
+    }
+    const routingCfg = configRef.current.routing;
+    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
+    const threshold = routingCfg?.complexityThreshold ?? 0.5;
+    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
+    const stateAgentId = resolveRoutingStateAgentId(channelDefault);
+    const gateway = await classifyIntentForRouting(msg, stateAgentId);
+    const decision = gateway?.available && hasRoles
+      ? router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
+      : hasRoles
+        ? router.routeWithTier(msg.content, tierMode, threshold)
+        : router.route(msg.content);
+    recordResolvedRoute(decision, gateway);
+    return { decision, gateway };
+  };
+  const prepareIncomingDispatch = async (
+    channelDefault: string | undefined,
+    msg: IncomingDispatchMessage,
+  ): Promise<{
+    decision: RouteDecision;
+    gateway: IntentGatewayRecord | null;
+    routedMessage: IncomingDispatchMessage;
+  }> => {
+    recordIntentRoutingTrace('incoming_dispatch', {
+      msg,
+      details: {
+        hasMetadata: !!msg.metadata,
+        channelDefault,
+      },
+    });
+    const routed = await resolveAgentForIncomingMessage(channelDefault, msg);
+    const sanitizedMetadata = isRecord(msg.metadata)
+      ? Object.fromEntries(
+          Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
+        )
+      : msg.metadata;
+    const routedMetadata = routed.gateway
+      ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
+      : sanitizedMetadata;
+    if (routed.gateway) {
+      recordIntentRoutingTrace('pre_routed_metadata_attached', {
+        msg,
+        agentId: routed.decision.agentId,
+        details: {
+          route: routed.gateway.decision.route,
+          selectedAgentId: routed.decision.agentId,
+        },
+      });
+    }
+    return {
+      decision: routed.decision,
+      gateway: routed.gateway,
+      routedMessage: {
+        content: msg.content,
+        userId: msg.userId,
+        surfaceId: msg.surfaceId,
+        principalId: msg.principalId,
+        principalRole: msg.principalRole,
+        channel: msg.channel,
+        metadata: routedMetadata,
+      },
+    };
   };
   // ─── Policy-as-Code Engine Bootstrap ─────────────────────────────
   const policyConfig = config.guardian?.policy ?? { enabled: true, mode: 'shadow' as const, rulesPath: 'policies/', mismatchLogLimit: 1000 };
@@ -12899,6 +13609,7 @@ async function main(): Promise<void> {
     runTimeline,
     refreshRunTimelineSnapshots,
     orchestrator,
+    intentRoutingTrace,
     jobTracker,
     aiSecurity,
     runAssistantSecurityScan,
@@ -12938,6 +13649,7 @@ async function main(): Promise<void> {
     microsoftServiceRef,
     { current: toolExecutor },
     codingBackendServiceRef,
+    prepareIncomingDispatch,
   );
 
   dashboardCallbacks.onCodeTerminalAccessCheck = () => {
@@ -13357,23 +14069,20 @@ async function main(): Promise<void> {
       }),
     });
     await cliChannel.start(async (msg) => {
-      const decision = resolveAgentForIncomingMessage(configRef.current.channels.cli?.defaultAgent, msg);
+      const prepared = await prepareIncomingDispatch(configRef.current.channels.cli?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          decision.agentId,
-          {
-            content: msg.content,
-            userId: msg.userId,
-            surfaceId: msg.surfaceId,
-            principalId: msg.principalId,
-            principalRole: msg.principalRole,
-            channel: msg.channel,
-            metadata: msg.metadata,
-          },
-          decision,
+          prepared.decision.agentId,
+          prepared.routedMessage,
+          prepared.decision,
+          undefined,
+          prepared.gateway,
         );
       }
-      return runtime.dispatchMessage(decision.agentId, msg);
+      return runtime.dispatchMessage(prepared.decision.agentId, {
+        ...msg,
+        metadata: prepared.routedMessage.metadata,
+      });
     });
     channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
   } else if (config.channels.cli?.enabled) {
@@ -13430,23 +14139,20 @@ async function main(): Promise<void> {
       },
     });
     await telegram.start(async (msg) => {
-      const decision = resolveAgentForIncomingMessage(configRef.current.channels.telegram?.defaultAgent, msg);
+      const prepared = await prepareIncomingDispatch(configRef.current.channels.telegram?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          decision.agentId,
-          {
-            content: msg.content,
-            userId: msg.userId,
-            surfaceId: msg.surfaceId,
-            principalId: msg.principalId,
-            principalRole: msg.principalRole,
-            channel: msg.channel,
-            metadata: msg.metadata,
-          },
-          decision,
+          prepared.decision.agentId,
+          prepared.routedMessage,
+          prepared.decision,
+          undefined,
+          prepared.gateway,
         );
       }
-      return runtime.dispatchMessage(decision.agentId, msg);
+      return runtime.dispatchMessage(prepared.decision.agentId, {
+        ...msg,
+        metadata: prepared.routedMessage.metadata,
+      });
     });
     activeTelegram = telegram;
     // Update channels array for graceful shutdown
@@ -13549,14 +14255,31 @@ async function main(): Promise<void> {
   }
 
   if (config.channels.web?.enabled) {
-    if (!webAuthStateRef.current.token) {
+    if (webAuthStateRef.current.mode === 'bearer_required' && !webAuthStateRef.current.token) {
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
         token: generateSecureToken(),
         tokenSource: 'ephemeral',
       };
     }
-    if (webAuthStateRef.current.tokenSource === 'ephemeral') {
+    if (webAuthStateRef.current.mode === 'disabled') {
+      log.warn(
+        {
+          mode: webAuthStateRef.current.mode,
+          host: config.channels.web.host ?? 'localhost',
+          port: config.channels.web.port ?? 3000,
+        },
+        'Web dashboard bearer authentication is disabled. Only use this on trusted networks.',
+      );
+      if (process.stdout.isTTY && !process.env['LOG_FILE']) {
+        console.log('');
+        console.log('  Web Dashboard Auth');
+        console.log(`  URL:   http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`);
+        console.log('  Mode:  disabled');
+        console.log('  The web dashboard is open without a bearer token. Use only on trusted networks.');
+        console.log('');
+      }
+    } else if (webAuthStateRef.current.tokenSource === 'ephemeral') {
       const ephemeralStartupReason = configuredToken && rotateOnStartup
         ? 'Web auth rotate-on-startup is enabled. Generated a fresh ephemeral token for this run.'
         : 'No web auth token configured. Generated an ephemeral token for this run.';
@@ -13597,23 +14320,20 @@ async function main(): Promise<void> {
     toolExecutor.setCodingBackendService(codingBackendServiceRef.current);
     activeWebChannel = web;
     await web.start(async (msg) => {
-      const decision = resolveAgentForIncomingMessage(configRef.current.channels.web?.defaultAgent, msg);
+      const prepared = await prepareIncomingDispatch(configRef.current.channels.web?.defaultAgent, msg);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          decision.agentId,
-          {
-            content: msg.content,
-            userId: msg.userId,
-            surfaceId: msg.surfaceId,
-            principalId: msg.principalId,
-            principalRole: msg.principalRole,
-            channel: msg.channel,
-            metadata: msg.metadata,
-          },
-          decision,
+          prepared.decision.agentId,
+          prepared.routedMessage,
+          prepared.decision,
+          undefined,
+          prepared.gateway,
         );
       }
-      return runtime.dispatchMessage(decision.agentId, msg);
+      return runtime.dispatchMessage(prepared.decision.agentId, {
+        ...msg,
+        metadata: prepared.routedMessage.metadata,
+      });
     });
     channels.push({
       name: 'web',

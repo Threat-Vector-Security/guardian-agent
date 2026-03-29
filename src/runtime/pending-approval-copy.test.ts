@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPendingApprovalMetadata,
   describePendingApproval,
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
@@ -67,5 +68,17 @@ describe('pending approval copy', () => {
       '- add S:\\Development to allowed paths',
       '- write S:\\Development\\test23.txt',
     ].join('\n'));
+  });
+
+  it('builds structured approval metadata with fallback values', () => {
+    expect(buildPendingApprovalMetadata(
+      ['approval-1', 'approval-2', 'approval-1', ''],
+      new Map([
+        ['approval-1', { toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' }],
+      ]),
+    )).toEqual([
+      { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+      { id: 'approval-2', toolName: 'unknown', argsPreview: '' },
+    ]);
   });
 });

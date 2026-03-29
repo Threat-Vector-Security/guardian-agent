@@ -79,6 +79,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Choose an agent in the web chat panel or with CLI `/chat <agentId>` when you want to pin work to one agent.',
                   'Conversation memory is scoped per user, channel, and logical assistant. Switching chat mode does not start a separate conversation by itself.',
                   'Use the web New Conversation control, CLI `/reset [agentId]`, or Telegram `/reset [agentId]` to clear context.',
+                  'Short corrective replies such as `Use Outlook`, `No, Codex the CLI coding assistant`, or `the Guardian workspace` should now be treated as repairs of the active misunderstanding when there is recent context, not as unrelated brand-new tasks.',
                 ],
               },
               {
@@ -107,6 +108,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
                   'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
                   'Use the execution timeline when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed.',
+                  'Gateway-first routing also writes a durable JSONL decision trace to `~/.guardianagent/routing/intent-routing.jsonl` so operators can debug intent classification, clarification prompts, tier selection, direct backend delegation, and final response locality after the fact.',
                   'Configuration > Tools exposes tool enablement, routing, approvals, and recent jobs. Configuration > Security owns sandbox enforcement, allowlists, degraded-backend overrides, browser risk controls, and policy posture.',
                   'Security is the main operator surface for posture, unified alerts, agentic activity history, audit evidence, threat-intel workflows, and native Windows Defender state. It is not the main home for generic run playback.',
                 ],
@@ -117,6 +119,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `/assistant summary`, `/assistant sessions`, `/assistant jobs`, `/assistant traces`, and `/assistant policy` for the same orchestration state in the terminal.',
                   'Use `/tools` to inspect tool policy and pending approvals, and `/approve` or `/deny` as fallback commands if native prompts are not suitable.',
                   'Use `/mode` to switch between auto, local-only, and external-only routing without changing agent definitions.',
+                  'Auto mode now interprets the request through the Intent Gateway first, then chooses the local or external tier from that structured result. If only one tier is configured, Guardian degrades cleanly to the available tier.',
                 ],
                 note: 'Approval prompts should normally be handled through the native buttons or inline prompt flow first. Fallback commands remain useful for remote or scripted sessions.',
               },
@@ -145,6 +148,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Pending tool actions are surfaced in web approvals, CLI native prompts, and Telegram approval flows.',
                   'In the web chat and Coding Workspace, pending approvals should show inline `Approve` and `Deny` buttons. Plain-language replies such as `yes` or `no` remain the fallback path rather than the primary web approval UX.',
+                  'Approval resumptions are control-plane events. Ordinary clarification answers like `Use Gmail` or `Codex` stay in the normal interpreted chat flow and should not be mistaken for approval commands.',
                   'Use `package_install` instead of `shell_safe` for public package-manager installs. Guardian stages the requested top-level package artifacts, runs bounded static checks plus native AV when available, and then either blocks, pauses for caution acceptance, or proceeds with the install.',
                   'The managed package-install path is host-level rather than code-workspace-only. It supports explicit public-registry installs to targets such as the working directory, npm or pnpm `--prefix` locations, and pip `--target` directories.',
                   'Inside code sessions, safe repo-local reads and edits stay low-friction, while repo execution and persistence actions only auto-approve after the workspace trust state reaches `trusted`.',
@@ -215,6 +219,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Global controls in the same panel manage orchestration enablement, max concurrent delegated runs, version-check interval, and auto-update behavior.',
                   'If the saved config contains custom non-built-in coding backends, Guardian preserves them, but the simplified web panel does not edit them.',
                   'Guardian only uses these backends when the user explicitly asks to delegate coding work to an external tool. Direct coding requests should still run through Guardian’s built-in coding tools by default.',
+                  'In Auto mode, explicit backend delegation such as `Use Codex ...` is treated as a local orchestration task even inside an attached Coding Workspace session. The local Guardian tier should launch the CLI; the hosted model should not roleplay its result.',
                 ],
               },
               {
@@ -475,7 +480,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Instruction steps can also be evidence-grounded so reports and summaries carry forward citations or structured evidence captured by earlier search or retrieval steps.',
                   'The tool picker (Browse button) lets you search tools by name or description and shows integration requirements (e.g. Google Workspace connected, AWS profile configured).',
                   'If a single-tool automation also needs a written summary, the editor can help you expand it into a multi-step workflow.',
-                  'The LLM Provider selector controls which model handles instruction steps and agent tasks. Auto uses smart routing; Local/External force a specific provider type.',
+                  'The LLM Provider selector controls which model handles instruction steps and agent tasks. Auto uses gateway-first smart routing; Local/External force a specific provider type.',
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
                   'Advanced JSON editing is available for power users, but normal updates should stay in the structured form. Built-in examples must be copied before editing.',
                   'Use the `Use Example` action on built-in starter rows to create a saved automation such as Agent Host Guard or Firewall Sentry, and use `Create Copy` to fork an already-saved automation.',
@@ -765,7 +770,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'First Checks',
                 items: [
-                  'If the web dashboard rejects you, confirm the bearer token or session cookie state in Web Authentication settings.',
+                  'If the web dashboard rejects you, confirm whether Web Authentication is set to bearer_required and then check the bearer token or session cookie state.',
                   'If a dashboard save or browser-config action drops you back to the auth prompt, the secure web session expired. Re-enter the current dashboard token and retry the change.',
                   'If a model appears offline, verify connectivity in Configuration > AI Providers or with CLI `/providers`.',
                   'If file or command execution is blocked, review Configuration > Tools, Configuration > Security, and the relevant allowed path or command settings before retrying.',
@@ -778,8 +783,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
                   'New code sessions authorize the workspace path for repo-local access, but they do not treat the attached repo as automatically safe for execution.',
-                  'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
-                  'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
+                  'Web Authentication can be disabled on trusted networks, but bearer_required remains the safer default for the dashboard.',
+                  'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`; toggle bearer protection from CLI with `/auth enable` or `/auth disable`.',
                   'Security alerts default to CLI-only delivery for primary security events; triage and automation summaries stay in Security until you explicitly add `automation_finding` notification fanout.',
                   'Default notification filters also mute low-confidence drift families and expected guardrail denials such as degraded-backend terminal blocks or containment-enforced action denials, so the stream stays focused on primary detections.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',

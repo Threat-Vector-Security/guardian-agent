@@ -194,6 +194,58 @@ get_web_rotate_on_startup_from_file() {
   return 1
 }
 
+get_web_auth_mode_from_file() {
+  local file="$1"
+  local in_web=false
+  local web_indent=0
+  local in_auth=false
+  local auth_indent=0
+  local line trimmed indent
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    indent=$(( ${#line} - ${#trimmed} ))
+
+    if [ "$in_web" = false ] && [[ "$trimmed" == "web:" ]]; then
+      in_web=true
+      web_indent=$indent
+      in_auth=false
+      continue
+    fi
+
+    if [ "$in_web" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $web_indent ]]; then
+      in_web=false
+      in_auth=false
+    fi
+
+    [ "$in_web" = true ] || continue
+
+    if [ "$in_auth" = false ] && [[ "$trimmed" == "auth:" ]]; then
+      in_auth=true
+      auth_indent=$indent
+      continue
+    fi
+
+    if [ "$in_auth" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $auth_indent ]]; then
+      in_auth=false
+    fi
+
+    if [ "$in_auth" = true ] && [[ "$trimmed" =~ ^mode:[[:space:]]*(.+)$ ]]; then
+      local raw="${BASH_REMATCH[1]}"
+      raw="${raw#"${raw%%[![:space:]]*}"}"
+      raw="${raw%"${raw##*[![:space:]]}"}"
+      raw="${raw#\"}"
+      raw="${raw%\"}"
+      raw="${raw#\'}"
+      raw="${raw%\'}"
+      printf '%s\n' "$raw"
+      return 0
+    fi
+  done < "$file"
+
+  return 1
+}
+
 wait_for_process_with_messages() {
   local pid=$1
   local interval_seconds=$2
@@ -574,7 +626,11 @@ else
   echo -e "  ${GREEN}Config: $CONFIG_FILE${RESET}"
 fi
 
-if get_web_rotate_on_startup_from_file "$CONFIG_FILE"; then
+web_auth_mode=$(get_web_auth_mode_from_file "$CONFIG_FILE" 2>/dev/null || true)
+if [ "$web_auth_mode" = "disabled" ]; then
+  echo -e "  ${DIM}Web dashboard bearer auth is disabled.${RESET}"
+  echo -e "  ${DIM}The dashboard will open without a token. Only use this on trusted networks.${RESET}"
+elif get_web_rotate_on_startup_from_file "$CONFIG_FILE"; then
   echo -e "  ${DIM}Web dashboard auth is set to rotate on startup.${RESET}"
   echo -e "  ${DIM}GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup.${RESET}"
 elif configured_web_auth_token=$(get_web_auth_token_from_file "$CONFIG_FILE"); then

@@ -1419,6 +1419,45 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  // ─── /auth ─────────────────────────────────────────────
+
+  it('/auth disable should update web auth mode', async () => {
+    const onAuthUpdate = vi.fn(async (input: { mode?: 'bearer_required' | 'disabled' }) => ({
+      success: true,
+      message: 'Web auth settings saved.',
+      status: {
+        mode: input.mode ?? 'bearer_required',
+        tokenConfigured: true,
+        tokenSource: 'ephemeral' as const,
+        rotateOnStartup: false,
+        host: 'localhost',
+        port: 3000,
+      },
+    }));
+    const { input, output, cli } = makeCli({
+      onAuthStatus: () => ({
+        mode: 'bearer_required',
+        tokenConfigured: true,
+        tokenSource: 'config',
+        rotateOnStartup: false,
+        host: 'localhost',
+        port: 3000,
+      }),
+      onAuthUpdate,
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/auth disable');
+    const text = readOutput(output);
+
+    expect(onAuthUpdate).toHaveBeenCalledWith({ mode: 'disabled' });
+    expect(text).toContain('Web auth settings saved.');
+    expect(text).toContain('Mode: disabled');
+    expect(text).toContain('dashboard is now open without bearer-token protection');
+
+    await cli.stop();
+  });
+
   // ─── /agents ───────────────────────────────────────────
 
   it('/agents should show enhanced table with dashboard data', async () => {
@@ -2634,6 +2673,48 @@ describe('WebChannel', () => {
         headers: { Authorization: 'Bearer secret-token-123' },
       });
       expect(res.status).toBe(200);
+    });
+
+    it('should allow API access without auth when web auth is disabled', async () => {
+      web = new WebChannel({
+        port: 18978,
+        auth: {
+          mode: 'disabled',
+          token: 'secret-token-123',
+          tokenSource: 'config',
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18978/api/status');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('running');
+    });
+
+    it('should report disabled mode in auth status', async () => {
+      const dashboard: DashboardCallbacks = {
+        onAuthStatus: () => ({
+          mode: 'disabled',
+          tokenConfigured: false,
+          tokenSource: 'ephemeral',
+          rotateOnStartup: false,
+          host: 'localhost',
+          port: 18979,
+        }),
+      };
+      web = new WebChannel({
+        port: 18979,
+        auth: { mode: 'disabled' },
+        dashboard,
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18979/api/auth/status');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { mode: string; tokenConfigured: boolean };
+      expect(body.mode).toBe('disabled');
+      expect(body.tokenConfigured).toBe(false);
     });
   });
 

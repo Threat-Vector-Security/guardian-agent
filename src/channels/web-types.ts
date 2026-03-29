@@ -15,6 +15,7 @@ import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
 import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
+import type { RouteDecision } from '../runtime/message-router.js';
 import type { AssistantConnectorPackConfig, AssistantConnectorPlaybookDefinition, ConnectorExecutionMode } from '../config/types.js';
 import type {
   AiSecurityFinding,
@@ -258,7 +259,7 @@ export interface RedactedConfig {
       port?: number;
       host?: string;
       auth?: {
-        mode: 'bearer_required';
+        mode: 'bearer_required' | 'disabled';
         tokenConfigured: boolean;
         tokenSource?: 'config' | 'env' | 'ephemeral';
         rotateOnStartup: boolean;
@@ -486,7 +487,7 @@ export interface RedactedConfig {
 }
 
 export interface DashboardAuthStatus {
-  mode: 'bearer_required';
+  mode: 'bearer_required' | 'disabled';
   tokenConfigured: boolean;
   tokenSource: 'config' | 'env' | 'ephemeral';
   tokenPreview?: string;
@@ -595,6 +596,11 @@ export interface DashboardProviderModelsInput {
 /** Assistant orchestrator snapshot for UI/CLI visibility. */
 export interface DashboardAssistantState {
   orchestrator: AssistantOrchestratorState;
+  intentRoutingTrace?: {
+    enabled: boolean;
+    filePath: string;
+    lastError?: string;
+  };
   jobs: {
     summary: {
       total: number;
@@ -826,8 +832,9 @@ export interface DashboardCallbacks {
       channel?: string;
       metadata?: Record<string, unknown>;
     },
-    routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string },
+    routeDecision?: RouteDecision,
     options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
+    precomputedIntentGateway?: import('../runtime/intent-gateway.js').IntentGatewayRecord | null,
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
   onConversationReset?: (args: {
@@ -999,7 +1006,7 @@ export interface DashboardCallbacks {
   onThreatIntelSetResponseMode?: (mode: IntelResponseMode) => { success: boolean; message: string };
   onAuthStatus?: () => DashboardAuthStatus;
   onAuthUpdate?: (input: {
-    mode?: 'bearer_required';
+    mode?: 'bearer_required' | 'disabled';
     token?: string;
     rotateOnStartup?: boolean;
     sessionTtlMinutes?: number;

@@ -69,6 +69,12 @@ describe('gmail-compose helpers', () => {
     expect(parseDirectGmailWriteIntent('Who sent the latest Gmail email?')).toBeNull();
   });
 
+  it('does not treat coding-backend confirmation prompts as compose requests', () => {
+    expect(parseDirectGmailWriteIntent(
+      'Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files.',
+    )).toBeNull();
+  });
+
   it('builds a base64url-encoded RFC822 Gmail payload', () => {
     const raw = buildGmailRawMessage({
       to: 'alexanderkenley@gmail.com',

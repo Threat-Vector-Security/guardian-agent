@@ -3779,6 +3779,65 @@ describe('ToolExecutor', () => {
     expect(text).toBe('');
   });
 
+  it('surfaces coding backend output after approval', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Coding Backend Session',
+      workspaceRoot: root,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      codingBackendService: {
+        listBackends: () => [],
+        getStatus: () => [],
+        run: async () => ({
+          success: true,
+          backendId: 'codex',
+          backendName: 'OpenAI Codex CLI',
+          task: 'Say hello',
+          status: 'succeeded',
+          durationMs: 123,
+          output: 'Hello from Codex.',
+          terminalTabId: 'term-1',
+        }),
+      },
+    });
+
+    const run = await executor.runTool({
+      toolName: 'coding_backend_run',
+      args: { task: 'Say hello', backend: 'codex' },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const approved = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.message).toContain('OpenAI Codex CLI completed.');
+    expect(approved.message).toContain('Hello from Codex.');
+  });
+
   it('rejects invalid tool args before creating approval requests', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

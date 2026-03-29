@@ -8,7 +8,9 @@ Guardian has distinct orchestration layers. They solve different problems and sh
 
 **Primary files:** `src/runtime/intent-gateway.ts`, `src/runtime/direct-intent-routing.ts`, `src/index.ts`, `src/worker/worker-session.ts`
 
-This layer owns top-level direct-action route selection.
+This layer owns top-level turn interpretation and direct-action route selection.
+
+Dedicated implementation spec: `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
 
 It classifies requests into routes such as:
 - `automation_authoring`
@@ -27,7 +29,11 @@ Key rules:
 - classification is structured, not freeform prose
 - no tool execution happens during classification
 - the gateway is authoritative in the normal path
-- heuristic intent parsing exists only as a fail-safe when the gateway is unavailable
+- in Auto tier mode, the local vs external tier decision is made from the structured gateway result, not from raw-text heuristics
+- the gateway also determines whether the current turn is a new request, follow-up, clarification answer, or correction
+- typed clarification state is resolved through the gateway, not by raw keyword interception
+- pre-gateway interception is limited to slash-command parsing and real approval/continuation control-plane resumes
+- deterministic fallbacks are allowed only when the gateway is unavailable or after a structured gateway decision has already narrowed the request
 
 ## 2. Automation Authoring And Control
 
@@ -138,6 +144,7 @@ Sub-agent work still flows through runtime dispatch, so approval, capability, ta
 ```text
 User message / scheduled trigger / manual automation trigger
   -> IntentGateway
+  -> Optional tier selection from structured intent result
   -> Optional automation authoring or automation control layer
   -> Request orchestration
   -> Optional deterministic workflow runtime
