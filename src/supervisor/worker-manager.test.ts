@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
@@ -26,6 +27,27 @@ function approvalPendingActionMetadata(
       },
     },
   };
+}
+
+function automationAuthoringMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'automation_authoring',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Creates a Guardian automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+    },
+  });
 }
 
 class FakeWorkerChild extends EventEmitter {
@@ -655,6 +677,7 @@ describe('WorkerManager', () => {
         principalId: 'tester',
         principalRole: 'owner',
         channel: 'web',
+        metadata: automationAuthoringMetadata(),
         content: 'Build a weekday lead research workflow that reads ./companies.csv, researches each company\'s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ./lead-research-output.csv, and creates ./lead-research-summary.md. Use built-in Guardian tools only. Do not create any shell script, Python script, or code file.',
         timestamp: Date.now(),
       },
@@ -793,6 +816,7 @@ describe('WorkerManager', () => {
         principalId: 'tester',
         principalRole: 'owner' as const,
         channel: 'web' as const,
+        metadata: automationAuthoringMetadata(),
         content: `Create a daily 8:00 AM automation that reads ./companies.csv, writes a summary report to ${externalPath}, and uses built-in Guardian tools only.`,
         timestamp: Date.now(),
       },
@@ -948,6 +972,7 @@ describe('WorkerManager', () => {
         principalId: 'tester',
         principalRole: 'owner' as const,
         channel: 'web' as const,
+        metadata: automationAuthoringMetadata(),
         content: `Create a sequential Guardian workflow that first reads ./companies.csv, then runs a fixed summarization step, then writes ${externalPath}.`,
         timestamp: Date.now(),
       },

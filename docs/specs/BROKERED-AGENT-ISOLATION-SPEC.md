@@ -21,6 +21,7 @@ The worker process owns:
 - conversation-context assembly from supervisor-provided state
 - the LLM chat/tool loop
 - pending-approval continuation state
+- post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
 
 For Code-session turns, that supervisor-provided state now includes the resolved backend coding-session context, including workspace root, workspace profile, repo map, working set, and Code-session memory scope. The brokered worker should reason from that session-owned context rather than from Guardian host-app identity or global memory.
 
@@ -184,6 +185,7 @@ Implemented and accurate:
 - all tool execution still flows through supervisor-side `ToolExecutor`
 - LLM API calls are proxied through the broker — the worker has no network access
 - approvals remain supervisor-side
+- brokered direct routes still respect the gateway-first contract; weak or unavailable gateway results do not trigger heuristic capability-lane fallback
 - supervisor-owned delegated follow-up policy can normalize delegated completion output before it reaches channels, while keeping the worker unable to widen authority
 - final responses are still scanned by `OutputGuardian`
 - tool results returned across the broker now include `trustLevel` and `taintReasons`

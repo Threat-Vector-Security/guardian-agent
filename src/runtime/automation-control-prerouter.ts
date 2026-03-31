@@ -61,7 +61,7 @@ interface AutomationCatalogLookupResult {
 
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
-  options?: { intentDecision?: IntentGatewayDecision | null; allowHeuristicFallback?: boolean },
+  options?: { intentDecision?: IntentGatewayDecision | null },
 ): Promise<AutomationControlPreRouteResult | null> {
   if (looksLikeAutomationOutputAnalysisRequest(params.message.content)) {
     return null;
@@ -69,7 +69,6 @@ export async function tryAutomationControlPreRoute(
   const intent = resolveAutomationControlIntent(
     params.message.content,
     options?.intentDecision,
-    options?.allowHeuristicFallback === true,
   );
   if (!intent || intent.operation === 'clone' || intent.operation === 'unknown') return null;
 
@@ -140,16 +139,14 @@ async function listAutomationCatalog(
 }
 
 function resolveAutomationControlIntent(
-  content: string,
+  _content: string,
   decision?: IntentGatewayDecision | null,
-  allowHeuristicFallback = false,
 ): AutomationControlIntent | null {
   if (decision) {
     const routed = resolveDecisionBackedIntent(decision);
     if (routed) return routed;
   }
-  if (!allowHeuristicFallback) return null;
-  return resolveHeuristicAutomationControlIntent(content);
+  return null;
 }
 
 function resolveDecisionBackedIntent(
@@ -172,28 +169,6 @@ function resolveDecisionBackedIntent(
       ? { enabled: decision.entities.enabled }
       : {}),
   };
-}
-
-function extractAutomationReference(text: string): string | undefined {
-  const cleaned = text
-    .replace(/\s+\b(?:now|please)\b[.!?]*$/i, '')
-    .trim();
-  const quoted = cleaned.match(/\b(?:automation|workflow|task)\b[\s\S]{0,40}\b(?:called|named)\s+["'`]([^"'`]+)["'`]/i)
-    ?? cleaned.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+["'`]([^"'`]+)["'`]/i);
-  if (quoted?.[1]?.trim()) {
-    return quoted[1].trim();
-  }
-
-  const namedAutomation = cleaned.match(/\b(?:show|inspect|details?|status)\b(?:\s+me)?(?:\s+the)?\s+(?:saved\s+)?(?:automation|workflow|task)\s+([A-Z0-9][A-Za-z0-9]+(?:\s+[A-Z0-9][A-Za-z0-9]+){0,7})\b/i);
-  if (namedAutomation?.[1]?.trim()) {
-    return namedAutomation[1].trim();
-  }
-
-  const titled = cleaned.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+([A-Z0-9][A-Za-z0-9]+(?:\s+[A-Z0-9][A-Za-z0-9]+){0,7})\b/i);
-  if (titled?.[1]?.trim()) {
-    return titled[1].trim();
-  }
-  return undefined;
 }
 
 function renderAutomationInspectCopy(
@@ -251,38 +226,6 @@ function renderAutomationInspectCopy(
     listLines.push(`- ...and ${catalog.length - 20} more`);
   }
   return listLines.join('\n');
-}
-
-function resolveHeuristicAutomationControlIntent(content: string): AutomationControlIntent | null {
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  if (looksLikeAutomationOutputAnalysisRequest(trimmed)) return null;
-  const lower = trimmed.toLowerCase();
-  const hasAutomationContext = /\b(automations?|automation catalog|workflow(?:s)?|scheduled task|manual assistant automation|assistant automation|assistant task|task)\b/i.test(trimmed);
-  if (/\b(list|show|what are)\b/.test(lower) && /\b(automations|automation catalog|workflows|scheduled tasks)\b/.test(lower)) {
-    return { operation: 'inspect' };
-  }
-
-  const automationName = extractAutomationReference(trimmed);
-  if (hasAutomationContext && /\b(delete|remove)\b/i.test(trimmed)) {
-    return { operation: 'delete', automationName };
-  }
-  if (hasAutomationContext && /\b(run|execute|start)\b/i.test(trimmed)) {
-    return { operation: 'run', automationName };
-  }
-  if (hasAutomationContext && /\b(enable|turn on)\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName, enabled: true };
-  }
-  if (hasAutomationContext && /\b(disable|turn off)\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName, enabled: false };
-  }
-  if (hasAutomationContext && /\btoggle\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName };
-  }
-  if (hasAutomationContext && /\b(show|inspect|details?|status)\b/i.test(trimmed)) {
-    return { operation: 'inspect', automationName };
-  }
-  return null;
 }
 
 function looksLikeAutomationOutputAnalysisRequest(content: string): boolean {

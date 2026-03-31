@@ -203,7 +203,6 @@ import {
   type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
 import {
-  isDirectBrowserAutomationIntent,
   parseDirectFileSearchIntent,
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
@@ -334,6 +333,9 @@ const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|n
 const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|switch|replace|switch it|switch to (?:that|the new one|the new request)|replace it|do that instead)\b/i;
+const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
+const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
 const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
 const MAX_TOOL_RESULT_STRING_CHARS = 600;
 const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
@@ -353,6 +355,27 @@ interface PendingApprovalState {
   ids: string[];
   createdAt: number;
   expiresAt: number;
+}
+
+interface PendingActionSetResult {
+  action: PendingActionRecord | null;
+  collisionPrompt?: string;
+}
+
+interface PendingActionReplacementInput {
+  status: PendingActionRecord['status'];
+  transferPolicy: PendingActionRecord['transferPolicy'];
+  blocker: PendingActionRecord['blocker'];
+  intent: PendingActionRecord['intent'];
+  resume?: PendingActionRecord['resume'];
+  codeSessionId?: PendingActionRecord['codeSessionId'];
+  expiresAt: number;
+}
+
+interface PendingActionSwitchCandidatePayload {
+  type: typeof PENDING_ACTION_SWITCH_CANDIDATE_TYPE;
+  previousResume?: PendingActionRecord['resume'];
+  replacement: PendingActionReplacementInput;
 }
 
 function generateSecureToken(byteLength = 16): string {
@@ -700,12 +723,6 @@ type DirectIntentShadowCandidate =
   | 'browser'
   | 'web_search';
 
-type DirectCodeSessionControlIntent =
-  | { kind: 'current' }
-  | { kind: 'list' }
-  | { kind: 'detach' }
-  | { kind: 'attach'; target: string };
-
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private codeSessionSystemPrompt: string;
@@ -905,6 +922,63 @@ class ChatAgent extends BaseAgent {
     if (!this.skillRegistry) return null;
     if (!isSkillInventoryQuery(content)) return null;
     return formatSkillInventoryResponse(this.skillRegistry.listStatus());
+  }
+
+  private tryDirectToolInventoryResponse(content: string): string | null {
+    if (!/\bwhat tools do you have available\b|\bwhich tools do you have available\b|\bwhat tools can you use\b|\bwhich tools can you use\b/i.test(content)) {
+      return null;
+    }
+    if (!this.tools?.isEnabled()) return null;
+    const definitions = this.tools.listToolDefinitions();
+    if (definitions.length === 0) {
+      return 'No assistant-visible tools are currently available on this surface.';
+    }
+
+    const categoryLabels: Record<string, string> = {
+      coding: 'Coding',
+      filesystem: 'Filesystem',
+      browser: 'Browser',
+      search: 'Search',
+      memory: 'Memory',
+      shell: 'Shell',
+      automation: 'Automation',
+      workspace: 'Workspace',
+      system: 'System',
+      security: 'Security',
+      mcp: 'MCP',
+      google_workspace: 'Google Workspace',
+      microsoft_365: 'Microsoft 365',
+    };
+    const grouped = definitions.reduce<Map<string, string[]>>((acc, definition) => {
+      const category = definition.category ?? 'other';
+      const names = acc.get(category) ?? [];
+      names.push(definition.name);
+      acc.set(category, names);
+      return acc;
+    }, new Map<string, string[]>());
+
+    const lines = ['Available tools on this surface right now:'];
+    for (const [category, names] of [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(`- ${categoryLabels[category] ?? category}: ${names.sort((a, b) => a.localeCompare(b)).join(', ')}`);
+    }
+    lines.push('If a coding session is attached, repo-local coding actions stay anchored to that workspace, but broader Guardian tools remain available from this chat surface.');
+    return lines.join('\n');
+  }
+
+  private tryDirectAutomationCapabilitiesResponse(content: string): string | null {
+    if (!/\b(?:what|which)\b[\s\S]*\b(?:automate|automation|automations)\b/i.test(content)
+      && !/\bwhat can you automate\b/i.test(content)) {
+      return null;
+    }
+    return [
+      'Guardian can automate three main shapes:',
+      '- step workflows: fixed deterministic tool steps that can run manually or on a schedule',
+      '- assistant automations: scheduled or manual prompt-driven tasks such as summaries, reports, or triage runs',
+      '- standalone tool tasks: single-tool jobs behind the same approval and policy controls',
+      '',
+      'It can also inspect outputs, run saved automations, enable or disable them, and delete them.',
+      'If you want to create one, describe the goal, whether it should be manual or scheduled, and any fixed steps or browser actions it must follow.',
+    ].join('\n');
   }
 
   private trackResolvedSkills(
@@ -1227,6 +1301,28 @@ class ChatAgent extends BaseAgent {
         pendingAction,
         continuityThread,
       });
+      const pendingActionSwitchDecision = await this.tryHandlePendingActionSwitchDecision({
+        message,
+        pendingAction,
+        gateway: earlyGateway,
+        activeSkills: preResolvedSkills,
+        surfaceUserId: pendingActionUserId,
+        surfaceChannel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+      });
+      if (pendingActionSwitchDecision) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            pendingActionSwitchDecision.content,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return pendingActionSwitchDecision;
+      }
       const clarificationResponse = this.buildGatewayClarificationResponse({
         gateway: earlyGateway,
         surfaceUserId: pendingActionUserId,
@@ -1273,7 +1369,11 @@ class ChatAgent extends BaseAgent {
         this.completePendingAction(pendingAction.id);
       }
 
-      const directSkillInventory = this.tryDirectSkillInventoryResponse(routedScopedMessage.content);
+      const allowGeneralShortcut = earlyGateway?.decision.route === 'general_assistant'
+        || earlyGateway?.decision.route === 'unknown';
+      const directSkillInventory = allowGeneralShortcut
+        ? this.tryDirectSkillInventoryResponse(routedScopedMessage.content)
+        : null;
       if (directSkillInventory) {
         if (this.conversationService) {
           this.conversationService.recordTurn(
@@ -1293,7 +1393,43 @@ class ChatAgent extends BaseAgent {
         };
       }
 
-      const directToolReport = this.tryDirectRecentToolReport(routedScopedMessage);
+      const directAutomationCapabilities = allowGeneralShortcut
+        ? this.tryDirectAutomationCapabilitiesResponse(routedScopedMessage.content)
+        : null;
+      if (directAutomationCapabilities) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            directAutomationCapabilities,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return { content: directAutomationCapabilities };
+      }
+
+      const directToolInventory = allowGeneralShortcut
+        ? this.tryDirectToolInventoryResponse(routedScopedMessage.content)
+        : null;
+      if (directToolInventory) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            directToolInventory,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return { content: directToolInventory };
+      }
+
+      const directToolReport = allowGeneralShortcut
+        ? this.tryDirectRecentToolReport(routedScopedMessage)
+        : null;
       if (directToolReport) {
         if (this.conversationService) {
           this.conversationService.recordTurn(
@@ -1312,22 +1448,6 @@ class ChatAgent extends BaseAgent {
         const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
           message, ctx, earlyGateway.decision,
         );
-        if (!sessionControlResult && earlyGateway.available === false) {
-          // Gateway unavailable — try regex fallback
-          const regexFallback = await this.tryDirectCodeSessionControl(message, ctx);
-          if (regexFallback) {
-            return this.buildDirectIntentResponse({
-              candidate: 'coding_session_control',
-              result: regexFallback,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: earlyGateway,
-              ctx,
-              activeSkills: preResolvedSkills,
-              conversationKey,
-            });
-          }
-        }
         if (sessionControlResult) {
           return this.buildDirectIntentResponse({
             candidate: 'coding_session_control',
@@ -1464,28 +1584,13 @@ class ChatAgent extends BaseAgent {
           'browser',
           'web_search',
         ],
-        [
-          'coding_session_control',
-          'coding_backend',
-          'filesystem',
-          'scheduled_email_automation',
-          'automation',
-          'automation_control',
-          'automation_output',
-          'workspace_write',
-          'workspace_read',
-          'browser',
-          'web_search',
-        ],
       )
       : {
         candidates: [] as DirectIntentRoutingCandidate[],
         gatewayDirected: false,
         gatewayUnavailable: false,
-        gatewayHeuristicFallback: false,
       };
-    const directBrowserIntent = directIntent?.decision.route === 'browser_task'
-      || (directIntentRouting.gatewayHeuristicFallback && isDirectBrowserAutomationIntent(routedScopedMessage.content));
+    const directBrowserIntent = directIntent?.decision.route === 'browser_task';
     const skipDirectWebSearch = !!resolvedCodeSession
       || !!effectiveCodeContext
       || directBrowserIntent
@@ -1501,7 +1606,6 @@ class ChatAgent extends BaseAgent {
         details: {
           gatewayDirected: directIntentRouting.gatewayDirected,
           gatewayUnavailable: directIntentRouting.gatewayUnavailable,
-          gatewayHeuristicFallback: directIntentRouting.gatewayHeuristicFallback,
           route: directIntent?.decision.route,
           codingBackend: directIntent?.decision.entities.codingBackend,
           candidates: directIntentRouting.candidates,
@@ -1516,12 +1620,9 @@ class ChatAgent extends BaseAgent {
       for (const candidate of directIntentRouting.candidates) {
         switch (candidate) {
           case 'coding_session_control': {
-            let sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
+            const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
               message, ctx, directIntent?.decision,
             );
-            if (!sessionControlResult && directIntentRouting.gatewayHeuristicFallback) {
-              sessionControlResult = await this.tryDirectCodeSessionControl(message, ctx);
-            }
             if (!sessionControlResult) break;
             return this.buildDirectIntentResponse({
               candidate: 'coding_session_control',
@@ -1601,7 +1702,6 @@ class ChatAgent extends BaseAgent {
               {
                 intentDecision: directIntent?.decision,
                 assumeAuthoring: directIntentRouting.gatewayDirected,
-                allowHeuristicFallback: directIntentRouting.gatewayHeuristicFallback,
               },
             );
             if (!directAutomationAuthoring) break;
@@ -1622,7 +1722,6 @@ class ChatAgent extends BaseAgent {
               ctx,
               pendingActionUserKey,
               directIntent?.decision,
-              directIntentRouting.gatewayHeuristicFallback,
             );
             if (!directAutomationControl) break;
             return this.buildDirectIntentResponse({
@@ -1699,7 +1798,6 @@ class ChatAgent extends BaseAgent {
               pendingActionUserKey,
               effectiveCodeContext,
               directIntent?.decision,
-              directIntentRouting.gatewayHeuristicFallback,
             );
             if (!directBrowserAutomation) break;
             return this.buildDirectIntentResponse({
@@ -2484,7 +2582,7 @@ class ChatAgent extends BaseAgent {
             argsPreview: summary?.argsPreview ?? '',
           };
         });
-        const pendingAction = this.setPendingApprovalAction(
+        const pendingActionResult = this.setPendingApprovalAction(
           pendingActionUserId,
           pendingActionChannel,
           pendingActionSurfaceId,
@@ -2495,10 +2593,12 @@ class ChatAgent extends BaseAgent {
             originalUserContent: routedScopedMessage.content,
           },
         );
-        pendingActionMeta = toPendingActionClientMetadata(pendingAction);
-        if (pendingAction?.blocker.approvalSummaries?.length
+        pendingActionMeta = toPendingActionClientMetadata(pendingActionResult.action);
+        if (pendingActionResult.collisionPrompt) {
+          finalContent = pendingActionResult.collisionPrompt;
+        } else if (pendingActionResult.action?.blocker.approvalSummaries?.length
           && (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent))) {
-          finalContent = formatPendingApprovalMessage(pendingAction.blocker.approvalSummaries);
+          finalContent = formatPendingApprovalMessage(pendingActionResult.action.blocker.approvalSummaries);
         }
       }
 
@@ -2979,6 +3079,7 @@ class ChatAgent extends BaseAgent {
         : 'compactedSummary: (none)',
       'Use this backend session as the authoritative coding context for subsequent tool calls.',
       'This coding session is workspace-centered. Broader tools remain available from this surface without changing the session anchor.',
+      'Do not treat the attached workspace as the subject of every reply. For greetings, general Guardian capability questions, configuration questions, and other non-repo requests, answer at the broader product surface first and mention the coding session only when it is directly relevant.',
       'Coding-session long-term memory is session-local only. Cross-memory access must be explicit and read-only.',
       'Keep file edits, shell commands, git actions, tests, and builds inside workspaceRoot unless the user explicitly changes session scope.',
       workspaceTrust && effectiveTrustState !== 'trusted'
@@ -3090,15 +3191,18 @@ class ChatAgent extends BaseAgent {
     userId: string,
     channel: string,
     surfaceId?: string,
+    options?: { includePendingAction?: boolean },
   ): Record<string, unknown> | undefined {
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) {
       metadata.activeSkills = activeSkills.map((skill) => skill.id);
     }
-    const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
-    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
-    if (pendingActionMeta) {
-      metadata.pendingAction = pendingActionMeta;
+    if (options?.includePendingAction === true) {
+      const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
+      const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+      if (pendingActionMeta) {
+        metadata.pendingAction = pendingActionMeta;
+      }
     }
     const continuityMeta = toContinuityThreadClientMetadata(this.getContinuityThread(userId));
     if (continuityMeta) {
@@ -3114,18 +3218,29 @@ class ChatAgent extends BaseAgent {
     channel: string,
     surfaceId?: string,
   ): Record<string, unknown> | undefined {
-    const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
-    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
     const next = { ...(metadata ?? {}) };
+    const shouldAttachPendingAction = this.shouldAttachCurrentPendingActionMetadata(metadata);
     delete next.pendingApprovals;
-    if (pendingActionMeta) {
-      next.pendingAction = pendingActionMeta;
+    if (shouldAttachPendingAction) {
+      const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
+      const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+      if (pendingActionMeta) {
+        next.pendingAction = pendingActionMeta;
+      }
     }
     const continuityMeta = toContinuityThreadClientMetadata(this.getContinuityThread(userId));
     if (continuityMeta) {
       next.continuity = continuityMeta;
     }
     return Object.keys(next).length > 0 ? next : undefined;
+  }
+
+  private shouldAttachCurrentPendingActionMetadata(
+    metadata: Record<string, unknown> | undefined,
+  ): boolean {
+    if (!metadata) return false;
+    if (isRecord(metadata.pendingAction)) return true;
+    return Array.isArray(metadata.pendingApprovals);
   }
 
   private buildGatewayClarificationResponse(input: {
@@ -3148,7 +3263,7 @@ class ChatAgent extends BaseAgent {
       && (decision.resolution === 'needs_clarification' || missingFields.has('email_provider'));
     if (needsEmailProvider) {
       const prompt = 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?';
-      this.setClarificationPendingAction(
+      const pendingActionResult = this.setClarificationPendingAction(
         input.surfaceUserId,
         input.surfaceChannel,
         input.surfaceId,
@@ -3170,23 +3285,25 @@ class ChatAgent extends BaseAgent {
           ],
         },
       );
+      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
           kind: 'email_provider',
           route: decision.route,
           missingFields: [...missingFields],
-          prompt,
+          prompt: responseContent,
         },
       });
       return {
-        content: prompt,
+        content: responseContent,
         metadata: {
           ...(this.buildImmediateResponseMetadata(
             input.activeSkills,
             input.surfaceUserId,
             input.surfaceChannel,
             input.surfaceId,
+            { includePendingAction: true },
           ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
@@ -3195,7 +3312,7 @@ class ChatAgent extends BaseAgent {
 
     if (decision.resolution === 'needs_clarification' && missingFields.has('coding_backend')) {
       const prompt = 'Which coding backend do you want me to use: Codex, Claude Code, Gemini CLI, or Aider?';
-      this.setClarificationPendingAction(
+      const pendingActionResult = this.setClarificationPendingAction(
         input.surfaceUserId,
         input.surfaceChannel,
         input.surfaceId,
@@ -3219,23 +3336,25 @@ class ChatAgent extends BaseAgent {
           ],
         },
       );
+      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
           kind: 'coding_backend',
           route: decision.route,
           missingFields: [...missingFields],
-          prompt,
+          prompt: responseContent,
         },
       });
       return {
-        content: prompt,
+        content: responseContent,
         metadata: {
           ...(this.buildImmediateResponseMetadata(
             input.activeSkills,
             input.surfaceUserId,
             input.surfaceChannel,
             input.surfaceId,
+            { includePendingAction: true },
           ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
@@ -3244,7 +3363,7 @@ class ChatAgent extends BaseAgent {
 
     if (decision.resolution === 'needs_clarification' && decision.summary.trim()) {
       const prompt = decision.summary.trim();
-      this.setClarificationPendingAction(
+      const pendingActionResult = this.setClarificationPendingAction(
         input.surfaceUserId,
         input.surfaceChannel,
         input.surfaceId,
@@ -3261,23 +3380,25 @@ class ChatAgent extends BaseAgent {
           entities: this.toPendingActionEntities(decision.entities),
         },
       );
+      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
           kind: 'generic',
           route: decision.route,
           missingFields: [...missingFields],
-          prompt,
+          prompt: responseContent,
         },
       });
       return {
-        content: prompt,
+        content: responseContent,
         metadata: {
           ...(this.buildImmediateResponseMetadata(
             input.activeSkills,
             input.surfaceUserId,
             input.surfaceChannel,
             input.surfaceId,
+            { includePendingAction: true },
           ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
@@ -3347,16 +3468,85 @@ class ChatAgent extends BaseAgent {
     return null;
   }
 
+  private async tryHandlePendingActionSwitchDecision(input: {
+    message: UserMessage;
+    pendingAction: PendingActionRecord | null;
+    gateway: IntentGatewayRecord | null;
+    activeSkills: ResolvedSkill[];
+    surfaceUserId: string;
+    surfaceChannel: string;
+    surfaceId?: string;
+  }): Promise<AgentResponse | null> {
+    const switchCandidate = this.readPendingActionSwitchCandidatePayload(input.pendingAction);
+    if (!input.pendingAction || !switchCandidate) return null;
+    const trimmed = stripLeadingContextPrefix(input.message.content).trim();
+    if (!trimmed) return null;
+
+    if (PENDING_ACTION_SWITCH_CONFIRM_PATTERN.test(trimmed)) {
+      const replacement = this.replacePendingAction(
+        input.surfaceUserId,
+        input.surfaceChannel,
+        input.surfaceId,
+        {
+          id: input.pendingAction.id,
+          ...switchCandidate.replacement,
+        },
+      );
+      return {
+        content: replacement
+          ? `Switched the active blocked request.\n\n${replacement.blocker.prompt}`
+          : 'I could not switch the active blocked request.',
+        metadata: {
+          ...(this.buildImmediateResponseMetadata(
+            input.activeSkills,
+            input.surfaceUserId,
+            input.surfaceChannel,
+            input.surfaceId,
+            { includePendingAction: true },
+          ) ?? {}),
+          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
+        },
+      };
+    }
+
+    if (PENDING_ACTION_SWITCH_DENY_PATTERN.test(trimmed)) {
+      const restored = this.updatePendingAction(input.pendingAction.id, {
+        resume: switchCandidate.previousResume ?? undefined,
+      });
+      return {
+        content: restored
+          ? `Kept the current blocked request active.\n\n${restored.blocker.prompt}`
+          : 'Kept the current blocked request active.',
+        metadata: {
+          ...(this.buildImmediateResponseMetadata(
+            input.activeSkills,
+            input.surfaceUserId,
+            input.surfaceChannel,
+            input.surfaceId,
+            { includePendingAction: true },
+          ) ?? {}),
+          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
+        },
+      };
+    }
+
+    return null;
+  }
+
   private shouldClearPendingActionAfterTurn(
     decision: IntentGatewayDecision | undefined,
     pendingAction: PendingActionRecord | null,
   ): boolean {
-    if (!decision || decision.resolution !== 'ready') return false;
-    if (!pendingAction) return true;
-    if (pendingAction.blocker.kind === 'workspace_switch'
-      && decision.route === 'coding_session_control'
-      && decision.operation === 'update') {
-      return false;
+    if (!decision || !pendingAction || decision.resolution !== 'ready') return false;
+    if (pendingAction.blocker.kind === 'approval') return false;
+    if (pendingAction.blocker.kind === 'workspace_switch') return false;
+    if (decision.turnRelation === 'new_request') return false;
+    if (pendingAction.intent.route && decision.route !== pendingAction.intent.route) return false;
+    if (pendingAction.blocker.field === 'email_provider') {
+      return Boolean(decision.entities.emailProvider);
+    }
+    if (pendingAction.blocker.field === 'coding_backend') {
+      return Boolean(decision.entities.codingBackend);
     }
     return true;
   }
@@ -3540,7 +3730,7 @@ class ChatAgent extends BaseAgent {
           ];
       lines.push(`I won't run ${backendId || 'the coding backend'} in the wrong workspace.`);
       lines.push(`Switch this chat to ${mentionedSessionResolution.targetSession.title} first, then ask me to run it there.`);
-      this.setClarificationPendingAction(
+      const pendingActionResult = this.setClarificationPendingAction(
         pendingUserId,
         pendingChannel,
         message.surfaceId,
@@ -3562,6 +3752,7 @@ class ChatAgent extends BaseAgent {
           targetSessionLabel: formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
         },
       );
+      const responseContent = pendingActionResult.collisionPrompt ?? lines.join('\n');
       this.recordIntentRoutingTrace('clarification_requested', {
         message,
         details: {
@@ -3571,17 +3762,20 @@ class ChatAgent extends BaseAgent {
           currentSessionId: currentSessionRecord?.id,
           targetSessionId: mentionedSessionResolution.targetSession.id,
           targetSessionTitle: mentionedSessionResolution.targetSession.title,
-          prompt: lines.join('\n'),
+          prompt: responseContent,
         },
       });
       return {
-        content: lines.join('\n'),
-        metadata: currentSessionRecord
-          ? {
-              codeSessionResolved: true,
-              codeSessionId: currentSessionRecord.id,
-            }
-          : undefined,
+        content: responseContent,
+        metadata: {
+          ...(currentSessionRecord
+            ? {
+                codeSessionResolved: true,
+                codeSessionId: currentSessionRecord.id,
+              }
+            : {}),
+          ...(toPendingActionClientMetadata(pendingActionResult.action) ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
+        },
       };
     }
     if (!backendId && !isCodingRunStatusCheck) return null;
@@ -3736,7 +3930,7 @@ class ChatAgent extends BaseAgent {
           ? formatDirectCodeSessionLine(currentSessionRecord, true)
           : `- CURRENT: ${codeContext?.workspaceRoot ?? '(unknown workspace)'}`,
       ].join('\n');
-      const pendingAction = this.setPendingApprovalAction(
+      const pendingActionResult = this.setPendingApprovalAction(
         pendingUserId,
         pendingChannel,
         message.surfaceId,
@@ -3763,10 +3957,10 @@ class ChatAgent extends BaseAgent {
         },
       );
       return {
-        content: prompt,
+        content: pendingActionResult.collisionPrompt ?? prompt,
         metadata: {
           ...(codeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: codeContext.sessionId } : {}),
-          ...(toPendingActionClientMetadata(pendingAction) ? { pendingAction: toPendingActionClientMetadata(pendingAction) } : {}),
+          ...(toPendingActionClientMetadata(pendingActionResult.action) ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
         },
       };
     }
@@ -3835,21 +4029,6 @@ class ChatAgent extends BaseAgent {
 
     // Unknown operation — list is the safest default for session control
     return this.handleCodeSessionList(message, ctx);
-  }
-
-  /** Regex-based fallback for session control when Intent Gateway is unavailable. */
-  private async tryDirectCodeSessionControl(
-    message: UserMessage,
-    ctx: AgentContext,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const intent = parseDirectCodeSessionControlIntent(message.content);
-    if (!intent) return null;
-
-    if (intent.kind === 'current') return this.handleCodeSessionCurrent(message, ctx);
-    if (intent.kind === 'list') return this.handleCodeSessionList(message, ctx);
-    if (intent.kind === 'detach') return this.handleCodeSessionDetach(message, ctx);
-    return this.handleCodeSessionAttach(message, ctx, intent.target ?? '');
   }
 
   private async handleCodeSessionCurrent(
@@ -4408,7 +4587,7 @@ class ChatAgent extends BaseAgent {
           argsPreview: summary?.argsPreview ?? '',
         };
       });
-      const nextAction = this.setPendingApprovalAction(
+      const nextActionResult = this.setPendingApprovalAction(
         message.userId,
         message.channel,
         message.surfaceId,
@@ -4429,8 +4608,11 @@ class ChatAgent extends BaseAgent {
         },
       );
       return {
-        content: results.join('\n'),
-        metadata: nextAction ? { pendingAction: toPendingActionClientMetadata(nextAction) } : undefined,
+        content: [
+          results.join('\n'),
+          nextActionResult.collisionPrompt ?? '',
+        ].filter(Boolean).join('\n\n'),
+        metadata: nextActionResult.action ? { pendingAction: toPendingActionClientMetadata(nextActionResult.action) } : undefined,
       };
     }
     if (pendingAction) {
@@ -4546,6 +4728,230 @@ class ChatAgent extends BaseAgent {
   ): PendingActionRecord | null {
     const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
     return this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
+  }
+
+  private createPendingActionReplacementInput(
+    input: Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'>,
+  ): PendingActionReplacementInput {
+    return {
+      status: input.status,
+      transferPolicy: input.transferPolicy,
+      blocker: {
+        ...input.blocker,
+        ...(input.blocker.options ? { options: input.blocker.options.map((option) => ({ ...option })) } : {}),
+        ...(input.blocker.approvalIds ? { approvalIds: [...input.blocker.approvalIds] } : {}),
+        ...(input.blocker.approvalSummaries ? { approvalSummaries: input.blocker.approvalSummaries.map((item) => ({ ...item })) } : {}),
+        ...(input.blocker.metadata ? { metadata: { ...input.blocker.metadata } } : {}),
+      },
+      intent: {
+        ...input.intent,
+        ...(input.intent.missingFields ? { missingFields: [...input.intent.missingFields] } : {}),
+        ...(input.intent.entities ? { entities: { ...input.intent.entities } } : {}),
+      },
+      ...(input.resume
+        ? {
+            resume: {
+              kind: input.resume.kind,
+              payload: { ...input.resume.payload },
+            },
+          }
+        : {}),
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+      expiresAt: input.expiresAt,
+    };
+  }
+
+  private isEquivalentPendingActionReplacement(
+    active: PendingActionRecord,
+    replacement: PendingActionReplacementInput,
+  ): boolean {
+    const activeRoute = active.intent.route?.trim() || '';
+    const nextRoute = replacement.intent.route?.trim() || '';
+    const activeOperation = active.intent.operation?.trim() || '';
+    const nextOperation = replacement.intent.operation?.trim() || '';
+    const activeOriginal = active.intent.originalUserContent.trim();
+    const nextOriginal = replacement.intent.originalUserContent.trim();
+    const sameOriginal = activeOriginal === nextOriginal
+      || activeOriginal.length === 0
+      || nextOriginal.length === 0;
+    return active.blocker.kind === replacement.blocker.kind
+      && (active.blocker.field ?? '') === (replacement.blocker.field ?? '')
+      && activeRoute === nextRoute
+      && activeOperation === nextOperation
+      && sameOriginal;
+  }
+
+  private formatPendingActionSwitchSummary(
+    input: PendingActionReplacementInput,
+  ): string {
+    const route = input.intent.route?.trim() || 'task';
+    const operation = input.intent.operation?.trim() || 'continue';
+    const original = input.intent.originalUserContent.trim();
+    const blockerPrompt = input.blocker.prompt.trim();
+    const fragments = [
+      `${route} · ${operation}`,
+      original || blockerPrompt,
+    ].filter(Boolean);
+    return fragments.join(' — ');
+  }
+
+  private formatPendingActionSwitchPrompt(
+    active: PendingActionRecord,
+    replacement: PendingActionReplacementInput,
+  ): string {
+    const currentSummary = this.formatPendingActionSwitchSummary(this.createPendingActionReplacementInput(active));
+    const nextSummary = this.formatPendingActionSwitchSummary(replacement);
+    return [
+      'You already have blocked work waiting for input or approval.',
+      `Current blocked slot: ${currentSummary}`,
+      `New blocked request: ${nextSummary}`,
+      'Reply "yes" to switch the active blocked slot, or "no" to keep the current one.',
+    ].join('\n');
+  }
+
+  private buildPendingActionSwitchCandidatePayload(
+    active: PendingActionRecord,
+    replacement: PendingActionReplacementInput,
+  ): PendingActionRecord['resume'] {
+    const payload: PendingActionSwitchCandidatePayload = {
+      type: PENDING_ACTION_SWITCH_CANDIDATE_TYPE,
+      replacement,
+      ...(active.resume ? { previousResume: { kind: active.resume.kind, payload: { ...active.resume.payload } } } : {}),
+    };
+    return {
+      kind: 'direct_route',
+      payload: payload as unknown as Record<string, unknown>,
+    };
+  }
+
+  private normalizePendingActionReplacementInput(
+    value: Record<string, unknown>,
+  ): PendingActionReplacementInput | null {
+    if (!isRecord(value.blocker) || !isRecord(value.intent)) return null;
+    const blockerPrompt = typeof value.blocker.prompt === 'string' ? value.blocker.prompt.trim() : '';
+    const originalUserContent = typeof value.intent.originalUserContent === 'string'
+      ? value.intent.originalUserContent.trim()
+      : '';
+    if (!blockerPrompt || !originalUserContent) return null;
+
+    const blockerKind = value.blocker.kind === 'approval'
+      || value.blocker.kind === 'clarification'
+      || value.blocker.kind === 'workspace_switch'
+      || value.blocker.kind === 'auth'
+      || value.blocker.kind === 'policy'
+      || value.blocker.kind === 'missing_context'
+      ? value.blocker.kind
+      : 'clarification';
+    const resume = isRecord(value.resume)
+      && typeof value.resume.kind === 'string'
+      && isRecord(value.resume.payload)
+      ? {
+          kind: value.resume.kind as NonNullable<PendingActionRecord['resume']>['kind'],
+          payload: { ...value.resume.payload },
+        }
+      : undefined;
+
+    return {
+      status: value.status === 'pending'
+        || value.status === 'resolving'
+        || value.status === 'running'
+        || value.status === 'completed'
+        || value.status === 'cancelled'
+        || value.status === 'expired'
+        || value.status === 'failed'
+        ? value.status
+        : 'pending',
+      transferPolicy: value.transferPolicy === 'origin_surface_only'
+        || value.transferPolicy === 'linked_surfaces_same_user'
+        || value.transferPolicy === 'explicit_takeover_only'
+        ? value.transferPolicy
+        : defaultPendingActionTransferPolicy(blockerKind),
+      blocker: {
+        ...(value.blocker as unknown as PendingActionRecord['blocker']),
+        kind: blockerKind,
+        prompt: blockerPrompt,
+        ...(Array.isArray(value.blocker.options)
+          ? { options: value.blocker.options.filter(isRecord).map((option) => ({ ...option })) as unknown as PendingActionBlocker['options'] }
+          : {}),
+        ...(Array.isArray(value.blocker.approvalIds)
+          ? { approvalIds: value.blocker.approvalIds.filter((id): id is string => typeof id === 'string') }
+          : {}),
+        ...(Array.isArray(value.blocker.approvalSummaries)
+          ? { approvalSummaries: value.blocker.approvalSummaries.filter(isRecord).map((item) => ({ ...item })) as unknown as PendingActionApprovalSummary[] }
+          : {}),
+        ...(isRecord(value.blocker.metadata) ? { metadata: { ...value.blocker.metadata } } : {}),
+      },
+      intent: {
+        ...(value.intent as unknown as PendingActionRecord['intent']),
+        originalUserContent,
+        ...(Array.isArray(value.intent.missingFields)
+          ? { missingFields: value.intent.missingFields.filter((field): field is string => typeof field === 'string') }
+          : {}),
+        ...(isRecord(value.intent.entities) ? { entities: { ...value.intent.entities } } : {}),
+      },
+      ...(resume ? { resume } : {}),
+      ...(typeof value.codeSessionId === 'string' && value.codeSessionId.trim()
+        ? { codeSessionId: value.codeSessionId.trim() }
+        : {}),
+      expiresAt: typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt)
+        ? value.expiresAt
+        : Date.now() + PENDING_APPROVAL_TTL_MS,
+    };
+  }
+
+  private readPendingActionSwitchCandidatePayload(
+    pendingAction: PendingActionRecord | null | undefined,
+  ): PendingActionSwitchCandidatePayload | null {
+    const payload = pendingAction?.resume?.payload;
+    if (!isRecord(payload) || payload.type !== PENDING_ACTION_SWITCH_CANDIDATE_TYPE || !isRecord(payload.replacement)) {
+      return null;
+    }
+
+    const replacement = this.normalizePendingActionReplacementInput(payload.replacement);
+    if (!replacement) return null;
+    const previousResume = isRecord(payload.previousResume)
+      && typeof payload.previousResume.kind === 'string'
+      && isRecord(payload.previousResume.payload)
+      ? {
+          kind: payload.previousResume.kind as NonNullable<PendingActionRecord['resume']>['kind'],
+          payload: { ...payload.previousResume.payload },
+        }
+      : undefined;
+    return {
+      type: PENDING_ACTION_SWITCH_CANDIDATE_TYPE,
+      replacement,
+      ...(previousResume ? { previousResume } : {}),
+    };
+  }
+
+  private replacePendingActionWithGuard(
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'> & { id?: string },
+    nowMs: number = Date.now(),
+  ): PendingActionSetResult {
+    const active = this.getActivePendingAction(userId, channel, surfaceId, nowMs);
+    const replacement = this.createPendingActionReplacementInput(input);
+    if (!active || (input.id && active.id === input.id) || this.isEquivalentPendingActionReplacement(active, replacement)) {
+      return {
+        action: this.replacePendingAction(
+          userId,
+          channel,
+          surfaceId,
+          active && !input.id ? { ...input, id: active.id } : input,
+          nowMs,
+        ),
+      };
+    }
+
+    const updatedActive = this.updatePendingAction(active.id, {
+      resume: this.buildPendingActionSwitchCandidatePayload(active, replacement),
+    }, nowMs);
+    return {
+      action: updatedActive ?? active,
+      collisionPrompt: this.formatPendingActionSwitchPrompt(active, replacement),
+    };
   }
 
   private replacePendingAction(
@@ -4685,6 +5091,46 @@ class ChatAgent extends BaseAgent {
     return this.getPendingApprovalAction(userId, channel, surfaceId, nowMs)?.blocker.approvalIds ?? [];
   }
 
+  private setPendingApprovalActionForRequest(
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      entities?: Record<string, unknown>;
+      resume?: PendingActionRecord['resume'];
+      codeSessionId?: string;
+    },
+    nowMs: number = Date.now(),
+  ): PendingActionSetResult {
+    const { userId, channel } = this.parsePendingActionUserKey(userKey);
+    return this.setPendingApprovalAction(
+      userId,
+      channel,
+      surfaceId,
+      input,
+      nowMs,
+    );
+  }
+
+  private buildPendingApprovalBlockedResponse(
+    result: PendingActionSetResult,
+    fallbackContent: string,
+  ): { content: string; metadata?: Record<string, unknown> } {
+    return {
+      content: result.collisionPrompt ?? fallbackContent,
+      metadata: result.action ? { pendingAction: toPendingActionClientMetadata(result.action) } : undefined,
+    };
+  }
+
   private setPendingApprovalAction(
     userId: string,
     channel: string,
@@ -4705,13 +5151,13 @@ class ChatAgent extends BaseAgent {
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
-  ): PendingActionRecord | null {
+  ): PendingActionSetResult {
     const approvalIds = [...new Set(input.approvalIds.map((id) => id.trim()).filter(Boolean))];
     if (approvalIds.length === 0) {
       this.clearActivePendingAction(userId, channel, surfaceId, nowMs);
-      return null;
+      return { action: null };
     }
-    return this.replacePendingAction(userId, channel, surfaceId, {
+    return this.replacePendingActionWithGuard(userId, channel, surfaceId, {
       status: 'pending',
       transferPolicy: 'origin_surface_only',
       blocker: {
@@ -4759,10 +5205,11 @@ class ChatAgent extends BaseAgent {
       targetSessionId?: string;
       targetSessionLabel?: string;
       metadata?: Record<string, unknown>;
+      resume?: PendingActionRecord['resume'];
     },
     nowMs: number = Date.now(),
-  ): PendingActionRecord | null {
-    return this.replacePendingAction(userId, channel, surfaceId, {
+  ): PendingActionSetResult {
+    return this.replacePendingActionWithGuard(userId, channel, surfaceId, {
       status: 'pending',
       transferPolicy: defaultPendingActionTransferPolicy(input.blockerKind),
       blocker: {
@@ -4786,6 +5233,7 @@ class ChatAgent extends BaseAgent {
         originalUserContent: input.originalUserContent,
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
+      ...(input.resume ? { resume: input.resume } : {}),
       ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     }, nowMs);
@@ -5057,7 +5505,7 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     decision?: IntentGatewayDecision,
-  ): Promise<string | null> {
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
@@ -5115,11 +5563,8 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(toolResult.approvalId);
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(userKey, [
-            ...existingIds,
-            approvalId,
-          ]);
           this.setApprovalFollowUp(approvalId, {
             approved: intent.mode === 'send'
               ? 'I sent the Gmail message.'
@@ -5129,11 +5574,27 @@ class ChatAgent extends BaseAgent {
               : 'I did not draft the Gmail message.',
           });
         }
-        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
-        return [
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
+            prompt,
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'email_task',
+            operation: intent.mode,
+            summary: intent.mode === 'send' ? 'Sends a Gmail message.' : 'Creates a Gmail draft.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
           `I prepared a Gmail ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
           prompt,
-        ].filter(Boolean).join('\n\n');
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(toolResult.message) || toString(toolResult.error) || 'Google Workspace request failed.';
       return `I tried to ${intent.mode} the Gmail message, but it failed: ${msg}`;
@@ -5152,7 +5613,6 @@ class ChatAgent extends BaseAgent {
     options?: {
       allowRemediation?: boolean;
       assumeAuthoring?: boolean;
-      allowHeuristicFallback?: boolean;
       intentDecision?: IntentGatewayDecision | null;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
@@ -5172,8 +5632,6 @@ class ChatAgent extends BaseAgent {
       executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
       trackPendingApproval: (approvalId) => {
         trackedPendingApprovalIds.push(approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
       },
       onPendingApproval: ({ approvalId, automationName, artifactLabel, verb }) => {
         this.setApprovalFollowUp(approvalId, {
@@ -5200,6 +5658,35 @@ class ChatAgent extends BaseAgent {
       this.clearAutomationApprovalContinuation(userKey);
       return null;
     }
+    if (trackedPendingApprovalIds.length > 0) {
+      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
+        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
+        ? result.metadata.pendingAction.blocker.prompt
+        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
+      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
+      const pendingActionResult = this.setPendingApprovalActionForRequest(
+        userKey,
+        message.surfaceId,
+        {
+          prompt,
+          approvalIds: trackedPendingApprovalIds,
+          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
+          originalUserContent: message.content,
+          route: options?.intentDecision?.route ?? 'automation_authoring',
+          operation: options?.intentDecision?.operation ?? 'create',
+          summary: options?.intentDecision?.summary ?? 'Creates or updates a Guardian automation.',
+          turnRelation: options?.intentDecision?.turnRelation ?? 'new_request',
+          resolution: options?.intentDecision?.resolution ?? 'ready',
+          entities: this.toPendingActionEntities(options?.intentDecision?.entities),
+        },
+      );
+      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
+      result.content = mergedResult.content;
+      result.metadata = {
+        ...(result.metadata ?? {}),
+        ...(mergedResult.metadata ?? {}),
+      };
+    }
     if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
       this.setAutomationApprovalContinuation(userKey, message, ctx, trackedPendingApprovalIds);
     } else {
@@ -5213,17 +5700,16 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     intentDecision?: IntentGatewayDecision | null,
-    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
-    return tryAutomationControlPreRoute({
+    const trackedPendingApprovalIds: string[] = [];
+    const result = await tryAutomationControlPreRoute({
       agentId: this.id,
       message,
       checkAction: ctx.checkAction,
       executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
       trackPendingApproval: (approvalId) => {
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+        trackedPendingApprovalIds.push(approvalId);
       },
       onPendingApproval: ({ approvalId, approved, denied }) => {
         this.setApprovalFollowUp(approvalId, { approved, denied });
@@ -5242,10 +5728,40 @@ class ChatAgent extends BaseAgent {
           };
         });
       },
-    }, {
-      intentDecision,
-      allowHeuristicFallback,
-    });
+    }, { intentDecision });
+    if (!result) return null;
+    if (trackedPendingApprovalIds.length > 0) {
+      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
+        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
+        ? result.metadata.pendingAction.blocker.prompt
+        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
+      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
+      const pendingActionResult = this.setPendingApprovalActionForRequest(
+        userKey,
+        message.surfaceId,
+        {
+          prompt,
+          approvalIds: trackedPendingApprovalIds,
+          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
+          originalUserContent: message.content,
+          route: intentDecision?.route ?? 'automation_control',
+          operation: intentDecision?.operation ?? 'run',
+          summary: intentDecision?.summary ?? 'Runs or updates an existing automation.',
+          turnRelation: intentDecision?.turnRelation ?? 'new_request',
+          resolution: intentDecision?.resolution ?? 'ready',
+          entities: this.toPendingActionEntities(intentDecision?.entities),
+        },
+      );
+      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
+      return {
+        content: mergedResult.content,
+        metadata: {
+          ...(result.metadata ?? {}),
+          ...(mergedResult.metadata ?? {}),
+        },
+      };
+    }
+    return result;
   }
 
   private async tryDirectAutomationOutput(
@@ -5270,13 +5786,13 @@ class ChatAgent extends BaseAgent {
     userKey: string,
     codeContext?: { workspaceRoot?: string; sessionId?: string },
     intentDecision?: IntentGatewayDecision | null,
-    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const scopedCodeContext = codeContext?.workspaceRoot
       ? { workspaceRoot: codeContext.workspaceRoot, ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}) }
       : undefined;
 
+    const trackedPendingApprovalIds: string[] = [];
     const result = await tryBrowserPreRoute({
       agentId: this.id,
       message,
@@ -5286,8 +5802,7 @@ class ChatAgent extends BaseAgent {
         ...(scopedCodeContext ? { codeContext: scopedCodeContext } : {}),
       }),
       trackPendingApproval: (approvalId) => {
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+        trackedPendingApprovalIds.push(approvalId);
       },
       onPendingApproval: ({ approvalId, approved, denied }) => {
         this.setApprovalFollowUp(approvalId, { approved, denied });
@@ -5306,10 +5821,40 @@ class ChatAgent extends BaseAgent {
           };
         });
       },
-    }, {
-      intentDecision,
-      allowHeuristicFallback,
-    });
+    }, { intentDecision });
+    if (!result) return null;
+    if (trackedPendingApprovalIds.length > 0) {
+      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
+        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
+        ? result.metadata.pendingAction.blocker.prompt
+        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
+      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
+      const pendingActionResult = this.setPendingApprovalActionForRequest(
+        userKey,
+        message.surfaceId,
+        {
+          prompt,
+          approvalIds: trackedPendingApprovalIds,
+          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
+          originalUserContent: message.content,
+          route: intentDecision?.route ?? 'browser_task',
+          operation: intentDecision?.operation ?? 'navigate',
+          summary: intentDecision?.summary ?? 'Runs a direct browser action.',
+          turnRelation: intentDecision?.turnRelation ?? 'new_request',
+          resolution: intentDecision?.resolution ?? 'ready',
+          entities: this.toPendingActionEntities(intentDecision?.entities),
+          ...(scopedCodeContext?.sessionId ? { codeSessionId: scopedCodeContext.sessionId } : {}),
+        },
+      );
+      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
+      return {
+        content: mergedResult.content,
+        metadata: {
+          ...(result.metadata ?? {}),
+          ...(mergedResult.metadata ?? {}),
+        },
+      };
+    }
     return result;
   }
 
@@ -5443,7 +5988,7 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     stateAgentId: string,
-  ): Promise<string | null> {
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled() || !this.conversationService) return null;
 
     const directScheduledIntent = parseScheduledEmailAutomationIntent(message.content);
@@ -5526,7 +6071,7 @@ class ChatAgent extends BaseAgent {
     message: UserMessage;
     ctx: AgentContext;
     userKey: string;
-  }): Promise<string> {
+  }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
     const to = input.detail.to?.trim() || input.schedule.to;
     const subject = input.detail.subject?.trim() || '';
     const body = normalizeScheduledEmailBody(input.detail.body, subject);
@@ -5578,8 +6123,8 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(toolResult.approvalId);
         const existingIds = this.getPendingApprovals(input.userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(input.userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: input.schedule.runOnce
               ? `I created the one-shot email automation to ${to}.`
@@ -5587,11 +6132,29 @@ class ChatAgent extends BaseAgent {
             denied: 'I did not create the scheduled email automation.',
           });
         }
-        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
-        return [
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          input.userKey,
+          input.message.surfaceId,
+          {
+            prompt,
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: input.message.content,
+            route: 'automation_authoring',
+            operation: 'schedule',
+            summary: input.schedule.runOnce
+              ? 'Creates a one-shot scheduled email automation.'
+              : 'Creates a recurring scheduled email automation.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
           `I prepared a ${input.schedule.runOnce ? 'one-shot' : 'recurring'} email automation to ${to}.`,
           prompt,
-        ].filter(Boolean).join('\n\n');
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(toolResult.message) || toString(toolResult.error) || 'Scheduled email automation creation failed.';
       return `I tried to create the scheduled email automation, but it failed: ${msg}`;
@@ -5650,24 +6213,34 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(listResult.approvalId);
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: 'I completed the Gmail inbox check.',
             denied: 'I did not check Gmail.',
           });
         }
-        const pendingIds = approvalId ? [approvalId] : [];
         const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
         const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        return {
-          content: [
-            'I prepared a Gmail inbox check, but it needs approval first.',
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
             prompt,
-          ].filter(Boolean).join('\n\n'),
-          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
-        };
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'email_task',
+            operation: 'read',
+            summary: 'Checks Gmail for unread messages.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+          'I prepared a Gmail inbox check, but it needs approval first.',
+          prompt,
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(listResult.message) || toString(listResult.error) || 'Google Workspace request failed.';
       return `I tried to check Gmail for unread messages, but it failed: ${msg}`;
@@ -5782,7 +6355,7 @@ class ChatAgent extends BaseAgent {
     message: UserMessage,
     ctx: AgentContext,
     userKey: string,
-  ): Promise<string | null> {
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     const intent = parseDirectGmailWriteIntent(message.content);
@@ -5820,8 +6393,8 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(toolResult.approvalId);
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: intent.mode === 'send'
               ? 'I sent the Outlook message.'
@@ -5831,11 +6404,28 @@ class ChatAgent extends BaseAgent {
               : 'I did not draft the Outlook message.',
           });
         }
-        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
-        return [
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
+            prompt,
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'email_task',
+            operation: intent.mode,
+            summary: intent.mode === 'send' ? 'Sends an Outlook message.' : 'Creates an Outlook draft.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            entities: { emailProvider: 'm365' },
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
           `I prepared an Outlook ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
           prompt,
-        ].filter(Boolean).join('\n\n');
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(toolResult.message) || toString(toolResult.error) || 'Microsoft 365 request failed.';
       return `I tried to ${intent.mode} the Outlook message, but it failed: ${msg}`;
@@ -5890,24 +6480,35 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(listResult.approvalId);
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: 'I completed the Outlook inbox check.',
             denied: 'I did not check Outlook.',
           });
         }
-        const pendingIds = approvalId ? [approvalId] : [];
         const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
         const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        return {
-          content: [
-            'I prepared an Outlook inbox check, but it needs approval first.',
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
             prompt,
-          ].filter(Boolean).join('\n\n'),
-          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
-        };
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'email_task',
+            operation: 'read',
+            summary: 'Checks Outlook for recent messages.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            entities: { emailProvider: 'm365' },
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+          'I prepared an Outlook inbox check, but it needs approval first.',
+          prompt,
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(listResult.message) || toString(listResult.error) || 'Microsoft 365 request failed.';
       return `I tried to check Outlook for messages, but it failed: ${msg}`;
@@ -6006,24 +6607,34 @@ class ChatAgent extends BaseAgent {
       if (status === 'pending_approval') {
         const approvalId = toString(toolResult.approvalId);
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
         if (approvalId) {
-          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
             approved: `I completed the filesystem search for "${intent.query}".`,
             denied: `I did not run the filesystem search for "${intent.query}".`,
           });
         }
-        const pendingIds = approvalId ? [approvalId] : [];
         const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
         const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        return {
-          content: [
-            `I prepared a filesystem search for "${intent.query}" but it needs approval first.`,
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
             prompt,
-          ].filter(Boolean).join('\n\n'),
-          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
-        };
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'filesystem_task',
+            operation: 'search',
+            summary: 'Runs a filesystem search in the requested path.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+          `I prepared a filesystem search for "${intent.query}" but it needs approval first.`,
+          prompt,
+        ].filter(Boolean).join('\n\n'));
       }
       const msg = toString(toolResult.message) || 'Search failed.';
       return `I attempted a filesystem search in "${intent.path}" for "${intent.query}" but it failed: ${msg}`;
@@ -6092,50 +6703,6 @@ function normalizeScheduledEmailBody(body: string | undefined, subject: string):
   if (/^the same as the subject\.?$/i.test(trimmed)) return subject;
   if (/^same as the subject\.?$/i.test(trimmed)) return subject;
   return trimmed;
-}
-
-function parseDirectCodeSessionControlIntent(content: string): DirectCodeSessionControlIntent | null {
-  const text = content.trim();
-  if (!text) return null;
-
-  if (
-    /^\s*(?:what|which)\s+coding\s+(?:workspace|session)\b/i.test(text)
-    || /^\s*are you attached to any coding workspace\b/i.test(text)
-    || /\b(?:coding workspace|code session)\b[\s\S]*\b(?:current|attached|using)\b/i.test(text)
-  ) {
-    return { kind: 'current' };
-  }
-
-  if (/^\s*(?:list|show)(?:\s+me)?\s+(?:the\s+)?(?:coding workspaces|coding sessions|code sessions?)\b/i.test(text)) {
-    return { kind: 'list' };
-  }
-
-  if (/\b(?:detach|disconnect|leave)\b[\s\S]*\b(?:coding workspace|code session)\b/i.test(text)) {
-    return { kind: 'detach' };
-  }
-
-  const attachPatterns = [
-    /^(?:switch|attach|change|move|set)(?:\s+this\s+chat)?\s+(?:to|into)?\s*(?:the\s+)?(?:coding workspace|code session)(?:\s+(?:for|to|named))?\s+(.+)$/i,
-    /^(?:switch|attach|change|move|set)\s+this\s+chat\s+to\s+(.+?)(?:\s+(?:coding workspace|code session))?$/i,
-    /^(?:use|focus on)\s+(?:the\s+)?(?:coding workspace|code session)(?:\s+(?:for|to|named))?\s+(.+)$/i,
-  ];
-  for (const pattern of attachPatterns) {
-    const match = text.match(pattern);
-    const target = normalizeDirectCodeSessionTarget(match?.[1]);
-    if (target) {
-      return { kind: 'attach', target };
-    }
-  }
-
-  return null;
-}
-
-function normalizeDirectCodeSessionTarget(value: string | undefined): string {
-  return (value ?? '')
-    .trim()
-    .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
-    .replace(/[.?!]+$/g, '')
-    .trim();
 }
 
 function formatDirectCodeSessionLine(

@@ -1,7 +1,6 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import {
   compileAutomationAuthoringOutcome,
-  isAutomationAuthoringRequest,
   type AutomationAuthoringCompilation,
   type AutomationAuthoringDraft,
 } from './automation-authoring.js';
@@ -73,14 +72,12 @@ export async function tryAutomationPreRoute(
   options?: {
     allowRemediation?: boolean;
     assumeAuthoring?: boolean;
-    allowHeuristicFallback?: boolean;
     intentDecision?: IntentGatewayDecision | null;
   },
 ): Promise<AutomationPreRouteResult | null> {
   const gatewayAuthoring = options?.intentDecision?.route === 'automation_authoring';
   const authoringIntent = options?.assumeAuthoring
-    || gatewayAuthoring
-    || (options?.allowHeuristicFallback === true && isAutomationAuthoringRequest(params.message.content));
+    || gatewayAuthoring;
   const outcome = compileAutomationAuthoringOutcome(params.message.content, {
     channel: params.message.channel,
     userId: params.message.userId,

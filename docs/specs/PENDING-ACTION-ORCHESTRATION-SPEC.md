@@ -35,7 +35,7 @@ Only one active pending action is allowed per logical surface:
 - same channel
 - same surface id
 
-A newer blocked request replaces the older active pending action unless it is clearly resolving the same action.
+A newer blocked request does not silently replace the older active pending action. If it is clearly resolving the same blocked work, Guardian updates the active slot. If it is a genuinely different blocked request, Guardian asks whether to switch the slot.
 
 Pending-action lookup may also return a portable action from another linked surface for the same assistant and canonical user when the action's transfer policy explicitly allows that.
 
@@ -163,10 +163,7 @@ The runtime must not rely on a later user message to discover that an approval e
 
 When a blocker is satisfied and the original request is still valid, Guardian resumes the stored action directly.
 
-This is different from older behavior that relied on synthetic follow-up messages such as:
-- `[User approved the pending tool action(s)...]`
-
-Those message shims may still appear as compatibility behavior in some older paths, but they are not the target architecture. The canonical design is direct resume from the stored pending action.
+The canonical design is direct resume from the stored pending action rather than trying to reconstruct blocked work from transcript heuristics.
 
 ## Channel Behavior
 
@@ -177,7 +174,8 @@ The web chat renders the assistant message normally and uses `pendingAction.bloc
 Web requirements:
 - approval buttons should appear on the same blocked response that asks for approval
 - approving or denying from native web buttons must clear the same shared pending approval ids that plain-language `yes` / `no` or `/approve` / `/deny` would clear
-- `/api/chat/pending-action` is the canonical surface-state fallback when streamed response metadata is missing or delayed
+- the transcript should only inline blocker UI when the current response carries `response.metadata.pendingAction`
+- `/api/chat/pending-action` is the canonical recovery/status fallback when streamed response metadata is missing, delayed, or the page reconnects
 - the fallback lookup must use the canonical user id and the current chat surface id
 - switching the focused coding workspace must not swap the visible Guardian chat transcript; pending actions remain surface-scoped and continue inside the same transcript
 
@@ -214,6 +212,7 @@ This means:
 - approval follow-ups can reuse the original request summary
 - channels no longer need a separate approval-only orchestration model
 - if a surface is attached to a coding workspace, approval submission may still need surface-specific routing, but the pending-action model remains the canonical blocked-work contract
+- unrelated turns can proceed normally while the approval-backed slot remains durable in shared state
 
 ## Design Rule
 

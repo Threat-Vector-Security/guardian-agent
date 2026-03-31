@@ -152,6 +152,62 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
   });
 
+  it('answers tool-report questions only after the gateway classifies the turn as general assistant', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'unknown',
+            summary: 'General assistant question.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat tool ${firstTool}`);
+    });
+    const listJobs = vi.fn(async () => [{
+      toolName: 'browser_read',
+      status: 'succeeded',
+      argsRedacted: { url: 'https://example.com' },
+      completedAt: Date.now(),
+    }]);
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs,
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-tool-report',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'What tools did you use?',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.content).toContain('browser_read');
+    expect(result.metadata).toMatchObject({
+      intentGateway: {
+        route: 'general_assistant',
+      },
+    });
+    expect(listJobs).toHaveBeenCalledWith('owner', undefined, 50);
+    expect(llmChat).toHaveBeenCalledTimes(1);
+  });
+
   it('inspects saved automations through the canonical automation catalog in brokered sessions', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

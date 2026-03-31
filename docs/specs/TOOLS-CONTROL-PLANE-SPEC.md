@@ -227,6 +227,7 @@ For workspace-local JS package mutations executed through `shell_safe`, the runt
   - Repeated identical failed calls are blocked after a small number of attempts.
   - These guards exist to stop broken tools or broken planner loops from overspending before higher-level budgets are exhausted.
 - **Non-blocking**: pending approvals do not block new messages. The LLM receives a context note about pending approvals but continues processing normally.
+- **Gateway-first**: every new normal user turn still goes through the Intent Gateway first. Approval continuations are one of the few allowed pre-gateway control-plane exceptions.
 - **Dedup**: identical pending approvals (same `toolName` + `argsHash`) are deduplicated in `ToolApprovalStore.create()`.
 - Decision history is attached to job records for auditability.
 
@@ -235,6 +236,7 @@ Practical consequence:
 - if the approval originated from a suspended LLM tool loop, approving later resumes that specific loop
 - if the approval originated from a deterministic direct route, approving later may simply return the stored follow-up copy or direct tool result instead of resuming a suspended planner loop
 - this is a targeted continuation model, not a general-purpose stack of arbitrary paused conversations
+- unrelated replies should not keep re-inlining old approval UI unless the current response explicitly carries `response.metadata.pendingAction`
 
 ### Verification Status
 
