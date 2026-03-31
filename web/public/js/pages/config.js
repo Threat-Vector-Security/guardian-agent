@@ -3,6 +3,12 @@
  */
 
 import { api } from '../api.js';
+import {
+  getApprovalUiState,
+  markApprovalUiError,
+  markApprovalUiProcessing,
+  markApprovalUiResolved,
+} from '../approval-ui-state.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
@@ -1554,10 +1560,7 @@ async function renderToolsTab(panel) {
                   <td>${esc(approval.origin)}</td>
                   <td>${esc(formatDate(approval.createdAt))}</td>
                   <td>
-                    ${approval.status === 'pending' ? `
-                      <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="approved">Approve</button>
-                      <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="denied">Deny</button>
-                    ` : `<span class="badge ${approval.status === 'approved' ? 'badge-running' : 'badge-errored'}">${esc(approval.status)}</span>`}
+                    ${renderConfigApprovalActionsMarkup(approval)}
                   </td>
                 </tr>
               `).join('')}
@@ -1681,10 +1684,21 @@ async function renderToolsTab(panel) {
         const decision = button.getAttribute('data-decision');
         if (!approvalId || !decision) return;
         try {
-          const result = await api.decideToolApproval({ approvalId, decision, actor: 'web-user' });
-          if (!result.success) alert(result.message || 'Failed to update approval.');
+          markApprovalUiProcessing(approvalId, decision);
           await renderToolsTab(panel);
-        } catch (err) { alert(err.message || 'Failed to update approval.'); }
+          const result = await api.decideToolApproval({ approvalId, decision, actor: 'web-user' });
+          if (!result.success) {
+            markApprovalUiError(approvalId, result.message || 'Failed to update approval.');
+            alert(result.message || 'Failed to update approval.');
+          } else {
+            markApprovalUiResolved(approvalId, decision);
+          }
+          await renderToolsTab(panel);
+        } catch (err) {
+          markApprovalUiError(approvalId, err.message || 'Failed to update approval.');
+          alert(err.message || 'Failed to update approval.');
+          await renderToolsTab(panel);
+        }
       });
     });
 
@@ -1694,6 +1708,30 @@ async function renderToolsTab(panel) {
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
   }
+}
+
+function renderConfigApprovalActionsMarkup(approval) {
+  if (approval.status !== 'pending') {
+    return `<span class="badge ${approval.status === 'approved' ? 'badge-running' : 'badge-errored'}">${esc(approval.status)}</span>`;
+  }
+  const uiState = getApprovalUiState(approval.id);
+  if (uiState?.status === 'approved') {
+    return `<span class="badge badge-running">${esc(uiState.message || 'Approved')}</span>`;
+  }
+  if (uiState?.status === 'denied') {
+    return `<span class="badge badge-errored">${esc(uiState.message || 'Denied')}</span>`;
+  }
+  if (uiState?.status === 'processing') {
+    return `<span class="badge badge-warn">${esc(uiState.message || 'Processing…')}</span>`;
+  }
+  const errorMarkup = uiState?.status === 'error'
+    ? `<div class="code-approval-error">${esc(uiState.message || 'Approval update failed')}</div>`
+    : '';
+  return `
+    <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="approved">Approve</button>
+    <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="denied">Deny</button>
+    ${errorMarkup}
+  `;
 }
 
 // ─── Policy Tab (Interactive Allowlist Editor) ───────────

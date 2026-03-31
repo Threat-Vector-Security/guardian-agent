@@ -78,6 +78,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Choose an agent in the web chat panel or with CLI `/chat <agentId>` when you want to pin work to one agent.',
                   'Conversation memory is scoped per user, channel, and logical assistant. Switching chat mode does not start a separate conversation by itself.',
+                  'Web chat now shows a source badge on every assistant reply so you can see whether the answer came from the local lane, external lane, fallback path, or a non-model system response.',
+                  'The web `Ask the agent...` field supports multiline drafting. Press `Enter` to send and `Shift+Enter` to add a new line.',
                   'Use the web New Conversation control, CLI `/reset [agentId]`, or Telegram `/reset [agentId]` to clear context.',
                   'Short corrective replies such as `Use Outlook`, `No, Codex the CLI coding assistant`, or `the Guardian workspace` should now be treated as repairs of the active misunderstanding when there is recent context, not as unrelated brand-new tasks.',
                 ],
@@ -161,6 +163,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Pending tool actions are surfaced through the shared pending-action system in web approvals, CLI native prompts, and Telegram approval flows.',
                   'In the web chat and Coding Workspace, pending approvals should show inline `Approve` and `Deny` buttons on the same blocked response that asks for approval. Plain-language replies such as `yes` or `no` remain the fallback path rather than the primary web approval UX, and both paths should clear the same blocked approval state.',
+                  'If you click a web approval button and then switch panels, the clicked approval state should persist instead of resetting back to fresh buttons.',
                   'Approval resumptions are control-plane events. Ordinary clarification answers like `Use Gmail` or `Codex` stay in the normal interpreted chat flow and should not be mistaken for approval commands.',
                   'Other blockers such as `Use Outlook`, `switch to Test Tactical Game App`, or `connect Google Workspace first` also use the same pending-action model, so Guardian can resume the original request instead of guessing from loose conversation history alone.',
                   'When a coding request is blocked on a workspace switch and the chat is then attached to the required Coding Workspace, Guardian should resume the stored coding request automatically instead of making you repeat it.',
@@ -222,6 +225,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian chat stays available while you are in the Coding Workspace and follows the currently focused code session.',
                   'When the workbench is opened from a trace or run deep link, it can temporarily open a session in `VIEWING` mode without changing which session is currently attached to Guardian chat. Click that session card again if you want to make it current for chat.',
                   'The workbench activity rail shows the session timeline for approvals, verification, and recent work.',
+                  'Workspace Activity cards now show the same response-source badge treatment as the main chat rail, so delegated coding replies keep their provenance when you inspect them from the workbench.',
                   'Code deep links now support `assistantRunId` and `assistantRunItemId`, open the `Workspace Activity` rail automatically, and highlight the exact requested event with nearby context when that event exists for the session.',
                   'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',

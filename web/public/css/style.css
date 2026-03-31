@@ -45,8 +45,8 @@
   --code-diff-hunk-fg: #7dd3fc;
   --code-diff-meta-bg: rgba(148, 163, 184, 0.08);
   --code-diff-meta-fg: #c6d4ef;
-  --layout-chat-column: 390px;
-  --layout-chat-column-wide: 430px;
+  --layout-chat-column: 460px;
+  --layout-chat-column-wide: 460px;
   --code-side-panel-width: clamp(372px, 24vw, 408px);
   --code-side-panel-width-wide: clamp(392px, 27vw, 448px);
 }
@@ -1268,7 +1268,7 @@ tr:hover td {
 
 .chat-message {
   margin-bottom: 1rem;
-  max-width: 80%;
+  max-width: 88%;
 }
 
 .chat-message.user {
@@ -1290,6 +1290,21 @@ tr:hover td {
   word-break: break-word;
   user-select: text;
   -webkit-user-select: text;
+}
+
+.chat-msg-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .chat-history,
@@ -1380,9 +1395,10 @@ tr:hover td {
 .chat-input-area {
   display: flex;
   gap: 0.5rem;
+  align-items: flex-end;
 }
 
-.chat-input-area input {
+.chat-input-area textarea {
   flex: 1;
   padding: 0.75rem 1rem;
   background: var(--bg-input);
@@ -1391,11 +1407,24 @@ tr:hover td {
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.85rem;
+  line-height: 1.45;
+  min-height: 3rem;
+  max-height: 220px;
+  resize: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.chat-input-area input:focus {
+.chat-input-area textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.code-approval-error {
+  color: var(--error);
+  font-size: 0.72rem;
+  line-height: 1.4;
 }
 
 .chat-quick-actions {

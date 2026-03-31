@@ -1,7 +1,14 @@
 import { api } from '../api.js';
 import { onSSE } from '../app.js';
+import {
+  getApprovalUiState,
+  markApprovalUiError,
+  markApprovalUiProcessing,
+  markApprovalUiResolved,
+} from '../approval-ui-state.js';
 import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import { registerAllThemes, THEME_REGISTRY } from '../monaco-themes.js';
+import { renderResponseSourceBadgeMarkup } from '../response-source.js';
 import { themes, getSavedTheme } from '../theme.js';
 
 const STORAGE_KEY = 'guardianagent_code_sessions_v2';
@@ -2675,7 +2682,7 @@ function normalizeVisibleHistoryEntry(entry) {
 
 function normalizeCodeResponseSource(value) {
   if (!value || typeof value !== 'object') return null;
-  const locality = value.locality === 'local' || value.locality === 'external'
+  const locality = value.locality === 'local' || value.locality === 'external' || value.locality === 'system'
     ? value.locality
     : null;
   if (!locality) return null;
@@ -3942,6 +3949,7 @@ function renderActivityMessages(session) {
             <strong>${esc(message.role === 'error' ? 'Workbench Notice' : 'Workbench Update')}</strong>
             <span class="code-status-card__meta">${esc(formatRelativeTime(message.timestamp))}</span>
           </div>
+          ${renderResponseSourceBadgeMarkup(message.responseSource, esc, escAttr)}
           <div class="code-status-card__detail">${esc(message.content || '')}</div>
         </article>
       `).join('')}
@@ -4079,12 +4087,32 @@ function renderApprovalList(session) {
           </div>
           <div class="approval-card__preview">${esc(approval.argsPreview || 'No preview available.')}</div>
           <div class="approval-card__actions">
-            <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="approved">Approve</button>
-            <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="denied">Deny</button>
+            ${renderCodeApprovalActionsMarkup(approval)}
           </div>
         </article>
       `).join('')}
     </div>
+  `;
+}
+
+function renderCodeApprovalActionsMarkup(approval) {
+  const uiState = getApprovalUiState(approval?.id);
+  if (uiState?.status === 'approved') {
+    return `<span class="badge badge-running">${esc(uiState.message || 'Approved')}</span>`;
+  }
+  if (uiState?.status === 'denied') {
+    return `<span class="badge badge-errored">${esc(uiState.message || 'Denied')}</span>`;
+  }
+  if (uiState?.status === 'processing') {
+    return `<span class="badge badge-warn">${esc(uiState.message || 'Processing…')}</span>`;
+  }
+  const errorMarkup = uiState?.status === 'error'
+    ? `<span class="code-approval-error">${esc(uiState.message || 'Approval update failed')}</span>`
+    : '';
+  return `
+    <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="approved">Approve</button>
+    <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="denied">Deny</button>
+    ${errorMarkup}
   `;
 }
 
@@ -6011,7 +6039,14 @@ function appendChatMessage(session, role, content, meta = {}) {
   if (!Array.isArray(session.activityMessages)) {
     session.activityMessages = [];
   }
-  session.activityMessages.push({ role, content, ...meta, timestamp: Date.now() });
+  const responseSource = normalizeCodeResponseSource(meta?.responseSource);
+  session.activityMessages.push({
+    role,
+    content,
+    ...meta,
+    ...(responseSource ? { responseSource } : {}),
+    timestamp: Date.now(),
+  });
   if (session.activityMessages.length > 20) {
     session.activityMessages = session.activityMessages.slice(-20);
   }
@@ -6059,6 +6094,7 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
 
 async function handleCodeApprovalDecision(session, approvalIds, decision) {
   if (!session || !Array.isArray(approvalIds) || approvalIds.length === 0) return;
+  markApprovalUiProcessing(approvalIds, decision);
   const sessionId = session.id;
   let refreshSessionId = sessionId;
 
@@ -6084,10 +6120,13 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
   const continuedResponses = approvalResponses
     .map((result) => result.continuedResponse)
     .filter((value) => value && typeof value.content === 'string');
+  const allSucceeded = approvalResponses.every((result) => result?.success !== false);
 
   const currentSession = resolveLiveSession(sessionId, session);
   immediateMessages.forEach((message) => appendChatMessage(currentSession, 'agent', message));
-  continuedResponses.forEach((response) => appendChatMessage(currentSession, 'agent', response.content));
+  continuedResponses.forEach((response) => appendChatMessage(currentSession, 'agent', response.content, {
+    responseSource: response.metadata?.responseSource,
+  }));
 
   if (decision === 'approved' && continuedResponses.length === 0 && approvalResponses.some((result) => result.continueConversation !== false)) {
     const summary = approvalResponses
@@ -6126,9 +6165,29 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
         continuationPendingApprovals = responsePendingApprovals;
         liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
       }
-      appendChatMessage(liveSession, 'agent', response.content || 'Approval processed.');
+      if (allSucceeded) {
+        markApprovalUiResolved(approvalIds, decision);
+      } else {
+        const summary = approvalResponses
+          .map((result) => result.success ? (result.message || decision) : `Failed: ${result.message || 'unknown error'}`)
+          .join('; ');
+        markApprovalUiError(approvalIds, summary);
+      }
+      appendChatMessage(liveSession, 'agent', response.content || 'Approval processed.', {
+        responseSource: response.metadata?.responseSource,
+      });
     } catch (err) {
+      markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
       appendChatMessage(resolveLiveSession(sessionId, currentSession || session), 'error', err instanceof Error ? err.message : String(err));
+    }
+  } else {
+    if (allSucceeded) {
+      markApprovalUiResolved(approvalIds, decision);
+    } else {
+      const summary = approvalResponses
+        .map((result) => result.success ? (result.message || decision) : `Failed: ${result.message || 'unknown error'}`)
+        .join('; ');
+      markApprovalUiError(approvalIds, summary);
     }
   }
 

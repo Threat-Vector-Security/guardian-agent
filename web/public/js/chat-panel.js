@@ -8,8 +8,15 @@
 
 import { api } from './api.js';
 import { onSSE, offSSE } from './app.js';
+import {
+  getApprovalUiGroupState,
+  markApprovalUiError,
+  markApprovalUiProcessing,
+  markApprovalUiResolved,
+} from './approval-ui-state.js';
 import { decideChatApproval } from './chat-approval.js';
 import { resolveChatHistoryKey } from './chat-history.js';
+import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
 const chatHistoryByAgent = new Map();
@@ -208,8 +215,8 @@ export async function initChatPanel(container) {
   const inputArea = document.createElement('div');
   inputArea.className = 'chat-input-area';
 
-  const input = document.createElement('input');
-  input.type = 'text';
+  const input = document.createElement('textarea');
+  input.rows = 2;
   input.placeholder = 'Ask the agent...';
   input.id = 'chat-input';
   input.style.fontSize = '0.75rem';
@@ -269,6 +276,7 @@ export async function initChatPanel(container) {
    * continuation message so the LLM can proceed with the original task.
    */
   const handleApproval = async (approvalIds, decision) => {
+    markApprovalUiProcessing(approvalIds, decision);
     const historyKey = getHistoryKey();
     const chatHistory = getHistory(historyKey);
     const focusedSessionId = currentCodeSessionId;
@@ -299,8 +307,14 @@ export async function initChatPanel(container) {
     const continuedResponses = approvalResponses
       .map((result) => result.continuedResponse)
       .filter((value) => value && typeof value.content === 'string');
+    const allSucceeded = approvalResponses.every((result) => result?.success !== false);
 
     if (continuedResponses.length > 0) {
+      if (allSucceeded) {
+        markApprovalUiResolved(approvalIds, decision);
+      } else {
+        markApprovalUiError(approvalIds, results.join('; '));
+      }
       if (immediateMessages.length > 0) {
         addAgentMessage(immediateMessages.join('\n'));
       }
@@ -319,7 +333,6 @@ export async function initChatPanel(container) {
 
       try {
         const summary = results.join('; ');
-        const allSucceeded = results.every(r => !r.startsWith('Failed:') && !r.startsWith('Error:'));
         const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`;
         const response = await api.sendMessage(
           msg,
@@ -330,9 +343,15 @@ export async function initChatPanel(container) {
           GUARDIAN_CHAT_SURFACE_ID,
         );
         thinkingEl.remove();
+        if (allSucceeded) {
+          markApprovalUiResolved(approvalIds, decision);
+        } else {
+          markApprovalUiError(approvalIds, summary);
+        }
         addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       } catch (err) {
         thinkingEl.remove();
+        markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
         history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
       }
       history.scrollTop = history.scrollHeight;
@@ -340,15 +359,28 @@ export async function initChatPanel(container) {
     }
 
     if (immediateMessages.length > 0) {
+      if (allSucceeded) {
+        markApprovalUiResolved(approvalIds, decision);
+      } else {
+        markApprovalUiError(approvalIds, results.join('; '));
+      }
       addAgentMessage(immediateMessages.join('\n'));
       history.scrollTop = history.scrollHeight;
       return;
     }
 
     if (results.length > 0) {
+      if (allSucceeded) {
+        markApprovalUiResolved(approvalIds, decision);
+      } else {
+        markApprovalUiError(approvalIds, results.join('; '));
+      }
       addAgentMessage(results.join('\n'));
       history.scrollTop = history.scrollHeight;
+      return;
     }
+
+    markApprovalUiError(approvalIds);
   };
   approvalHandler = handleApproval;
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
@@ -366,6 +398,7 @@ export async function initChatPanel(container) {
   const restoreInput = () => {
     input.disabled = false;
     sendBtn.disabled = false;
+    autoResizeChatInput(input);
     input.focus();
   };
 
@@ -394,6 +427,7 @@ export async function initChatPanel(container) {
     const chatHistory = getHistory(historyKey);
 
     input.value = '';
+    autoResizeChatInput(input);
     input.disabled = true;
     sendBtn.disabled = true;
 
@@ -529,13 +563,20 @@ export async function initChatPanel(container) {
 
   sendBtn.addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') send();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  input.addEventListener('input', () => {
+    autoResizeChatInput(input);
   });
 
   inputArea.append(input, sendBtn);
   wrapper.appendChild(inputArea);
 
   container.appendChild(wrapper);
+  autoResizeChatInput(input);
   input.focus();
 }
 
@@ -741,7 +782,7 @@ function createMessageEl(role, content, opts) {
   contentEl.className = 'chat-msg-content';
   contentEl.style.whiteSpace = 'pre-wrap';
   contentEl.textContent = content;
-  const sourceEl = buildSourceBadge(opts?.responseSource);
+  const sourceEl = role === 'user' ? null : buildSourceBadge(opts?.responseSource);
   if (sourceEl) {
     body.appendChild(sourceEl);
   }
@@ -772,25 +813,7 @@ function extractPendingActionApprovals(pendingAction) {
 }
 
 function buildSourceBadge(responseSource) {
-  if (!responseSource || !responseSource.locality) return null;
-  const badge = document.createElement('div');
-  badge.className = 'chat-msg-source';
-  badge.style.cssText = 'display:inline-flex;align-items:center;gap:0.35rem;margin-bottom:0.35rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:999px;background:var(--bg-secondary);font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
-  let label = responseSource.locality;
-  if (responseSource.providerName) {
-    label += ` · ${responseSource.providerName}`;
-  }
-  if (responseSource.usedFallback) {
-    label += ' fallback';
-  }
-  badge.textContent = label;
-  const titleParts = [];
-  if (responseSource.notice) titleParts.push(responseSource.notice);
-  if (responseSource.tier && responseSource.tier !== responseSource.locality) {
-    titleParts.push(`Requested ${responseSource.tier} route.`);
-  }
-  if (titleParts.length > 0) badge.title = titleParts.join(' ');
-  return badge;
+  return createResponseSourceBadge(responseSource);
 }
 
 /**
@@ -799,6 +822,8 @@ function buildSourceBadge(responseSource) {
 function buildApprovalButtons(approvals, onApproval) {
   const container = document.createElement('div');
   container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);';
+  const approvalIds = approvals.map((approval) => approval.id);
+  const uiState = getApprovalUiGroupState(approvalIds);
 
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-bottom:0.4rem;';
@@ -835,6 +860,39 @@ function buildApprovalButtons(approvals, onApproval) {
   const statusEl = document.createElement('span');
   statusEl.style.cssText = 'font-size:0.65rem;color:var(--text-muted);';
 
+  const applyUiState = (state) => {
+    if (!state) return false;
+    approveBtn.disabled = true;
+    denyBtn.disabled = true;
+    approveBtn.style.opacity = '0.5';
+    denyBtn.style.opacity = '0.5';
+    if (state.status === 'processing') {
+      statusEl.textContent = state.message || (state.decision === 'denied' ? 'Denying…' : 'Approving…');
+      statusEl.style.color = 'var(--text-muted)';
+      return true;
+    }
+    if (state.status === 'approved') {
+      statusEl.textContent = state.message || 'Approved';
+      statusEl.style.color = 'var(--success)';
+      return true;
+    }
+    if (state.status === 'denied') {
+      statusEl.textContent = state.message || 'Denied';
+      statusEl.style.color = 'var(--error)';
+      return true;
+    }
+    if (state.status === 'error') {
+      approveBtn.disabled = false;
+      denyBtn.disabled = false;
+      approveBtn.style.opacity = '1';
+      denyBtn.style.opacity = '1';
+      statusEl.textContent = state.message || 'Approval update failed';
+      statusEl.style.color = 'var(--error)';
+      return true;
+    }
+    return false;
+  };
+
   const disable = () => {
     approveBtn.disabled = true;
     denyBtn.disabled = true;
@@ -859,8 +917,15 @@ function buildApprovalButtons(approvals, onApproval) {
   });
 
   btnRow.append(approveBtn, denyBtn, statusEl);
+  applyUiState(uiState);
   container.appendChild(btnRow);
   return container;
+}
+
+function autoResizeChatInput(input) {
+  if (!(input instanceof HTMLTextAreaElement)) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
 }
 
 function normalizeApprovalPreview(preview) {
