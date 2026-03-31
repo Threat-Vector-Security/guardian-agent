@@ -24,6 +24,7 @@ import {
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import type { PromptAssemblyContinuity, PromptAssemblyPendingAction } from '../runtime/context-assembly.js';
+import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 
 const log = createLogger('worker-manager');
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
@@ -146,8 +147,16 @@ export class WorkerManager {
     const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
     if (approvalResponse) return approvalResponse;
 
-    const directAutomation = await this.tryDirectAutomationAuthoring(input);
-    if (directAutomation) return directAutomation;
+    const preRoutedGateway = readPreRoutedIntentGatewayMetadata(input.message.metadata);
+    const canDirectAutomation = preRoutedGateway?.decision.route === 'automation_authoring'
+      && ['create', 'update', 'schedule'].includes(preRoutedGateway.decision.operation);
+    if (canDirectAutomation) {
+      const directAutomation = await this.tryDirectAutomationAuthoring(input, {
+        assumeAuthoring: true,
+        intentDecision: preRoutedGateway.decision,
+      });
+      if (directAutomation) return directAutomation;
+    }
 
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
@@ -490,7 +499,7 @@ export class WorkerManager {
 
   private async tryDirectAutomationAuthoring(
     input: WorkerMessageRequest,
-    options?: { allowRemediation?: boolean },
+    options?: { allowRemediation?: boolean; assumeAuthoring?: boolean; intentDecision?: IntentGatewayDecision | null },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const allowedPaths = this.tools.getPolicy?.().sandbox.allowedPaths ?? [process.cwd()];
     const workspaceRoot = allowedPaths[0] || process.cwd();

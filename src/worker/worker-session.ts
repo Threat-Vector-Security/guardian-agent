@@ -20,6 +20,7 @@ import {
 } from '../runtime/direct-intent-routing.js';
 import {
   IntentGateway,
+  readPreRoutedIntentGatewayMetadata,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRecord,
@@ -206,22 +207,6 @@ export class BrokeredWorkerSession {
     const chatFn = (msgs: ChatMessage[], opts?: ChatOptions): Promise<ChatResponse> =>
       this.client.llmChat(msgs, opts);
 
-    // Direct tool report: answer "what tools did you use?" from broker job list.
-    // Don't filter by channel — brokered tool calls use channel 'broker' regardless of origin.
-    if (isToolReportQuery(params.message.content)) {
-      try {
-        const jobs = await this.client.listJobs(params.message.userId, undefined, 50);
-        if (jobs.length > 0) {
-          const report = formatToolReport(jobs);
-          if (report) {
-            return { content: report };
-          }
-        }
-      } catch {
-        // Fall through to normal LLM path if job listing fails
-      }
-    }
-
     if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
       return this.resumeSuspendedSession(params.message, chatFn, toolExecutor, params);
     }
@@ -235,15 +220,27 @@ export class BrokeredWorkerSession {
     const directRouting = resolveDirectIntentRoutingCandidates(
       directIntent,
       ['automation', 'automation_control', 'automation_output', 'browser'],
-      ['automation', 'automation_control', 'automation_output', 'browser'],
     );
+    if ((directIntent?.decision.route === 'general_assistant' || directIntent?.decision.route === 'unknown')
+      && isToolReportQuery(params.message.content)) {
+      try {
+        const jobs = await this.client.listJobs(params.message.userId, undefined, 50);
+        if (jobs.length > 0) {
+          const report = formatToolReport(jobs);
+          if (report) {
+            return this.attachIntentGatewayMetadata({ content: report }, directIntent);
+          }
+        }
+      } catch {
+        // Fall through to the normal LLM path if broker job listing fails.
+      }
+    }
     for (const candidate of directRouting.candidates) {
       switch (candidate) {
         case 'automation': {
           const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(params.message, toolExecutor, {
             intentDecision: directIntent?.decision,
             assumeAuthoring: directRouting.gatewayDirected,
-            allowHeuristicFallback: directRouting.gatewayUnavailable,
           });
           if (!directAutomationAuthoring) break;
           return this.attachIntentGatewayMetadata(directAutomationAuthoring, directIntent);
@@ -253,7 +250,6 @@ export class BrokeredWorkerSession {
             params.message,
             toolExecutor,
             directIntent?.decision,
-            directRouting.gatewayUnavailable,
           );
           if (!directAutomationControl) break;
           return this.attachIntentGatewayMetadata(directAutomationControl, directIntent);
@@ -272,7 +268,6 @@ export class BrokeredWorkerSession {
             params.message,
             toolExecutor,
             directIntent?.decision,
-            directRouting.gatewayUnavailable,
           );
           if (!directBrowserAutomation) break;
           return this.attachIntentGatewayMetadata(directBrowserAutomation, directIntent);
@@ -405,7 +400,6 @@ export class BrokeredWorkerSession {
     options?: {
       allowRemediation?: boolean;
       assumeAuthoring?: boolean;
-      allowHeuristicFallback?: boolean;
       intentDecision?: IntentGatewayDecision | null;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
@@ -461,7 +455,6 @@ export class BrokeredWorkerSession {
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
     intentDecision?: IntentGatewayDecision | null,
-    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     return tryAutomationControlPreRoute({
       agentId: 'brokered-worker',
@@ -491,10 +484,7 @@ export class BrokeredWorkerSession {
         const resolved = toolExecutor.getApprovalMetadata(ids);
         return resolved.length > 0 ? resolved : fallback;
       },
-    }, {
-      intentDecision,
-      allowHeuristicFallback,
-    });
+    }, { intentDecision });
   }
 
   private async tryDirectAutomationOutput(
@@ -521,7 +511,6 @@ export class BrokeredWorkerSession {
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
     intentDecision?: IntentGatewayDecision | null,
-    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     return tryBrowserPreRoute({
       agentId: 'brokered-worker',
@@ -551,16 +540,17 @@ export class BrokeredWorkerSession {
         const resolved = toolExecutor.getApprovalMetadata(ids);
         return resolved.length > 0 ? resolved : fallback;
       },
-    }, {
-      intentDecision,
-      allowHeuristicFallback,
-    });
+    }, { intentDecision });
   }
 
   private async classifyIntentGateway(
     message: UserMessage,
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
   ): Promise<IntentGatewayRecord | null> {
+    const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
+    if (preRouted) {
+      return preRouted;
+    }
     return this.intentGateway.classify(
       {
         content: message.content,

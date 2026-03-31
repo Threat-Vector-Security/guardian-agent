@@ -50,6 +50,7 @@ Incoming message
 
 Key rule:
 - slash commands and real approval/continuation resumes are the only allowed pre-gateway intercepts
+- every other normal turn must be classified by the gateway before capability-specific handling runs
 
 Approval fallback detail:
 - plain-text approval detection is a control-plane path
@@ -139,7 +140,9 @@ Gateway behavior:
 Current implementation details:
 - pending action state is a single active slot per logical assistant context, canonical user id, channel, and surface
 - blocked-work state currently uses the same 30 minute TTL family as approval flows
-- if a later turn fully resolves the blocker or replaces the blocked request, the older pending action is completed or cancelled
+- unrelated turns do not clear the active slot
+- if a later turn fully resolves the blocker, the pending action is completed or cancelled
+- if a new blocked request collides with the active slot, Guardian asks whether to switch the slot instead of silently replacing it
 
 Continuity summary currently includes:
 - continuity key
@@ -286,6 +289,11 @@ After routing:
 
 all consume the structured gateway output rather than re-inferring the user’s intent from raw text.
 
+Direct-lane rule:
+- capability-specific deterministic handlers only run from an explicit structured gateway decision
+- gateway-unavailable and low-confidence `general_assistant` / `unknown` results do not trigger heuristic capability fallback
+- bounded degraded behavior may still exist, but it does not impersonate a successful capability-lane classification
+
 ## Observability
 
 Relevant diagnostics:
@@ -325,6 +333,7 @@ Expected operator-visible behavior:
 - clear direct routing when intent is obvious
 - one targeted clarification when a required field is missing
 - short correction replies repairing the previous misunderstanding instead of starting an unrelated new task
+- unrelated questions asked while blocked work exists stay in normal assistant flow without clearing the blocked slot
 - unrelated questions asked while no formal continuation state exists are handled as ordinary new turns, using bounded recent history rather than a full workflow stack
 
 ## Acceptance Criteria
@@ -335,7 +344,7 @@ The implementation is correct when all of the following hold:
 - `Check my email.` asks for Gmail vs Outlook only when both providers are enabled and the provider is still unspecified.
 - `Use Outlook.` continues the earlier mailbox request instead of creating a new unrelated task.
 - approval continuations bypass normal gateway interpretation and resume the suspended action.
-- bounded recent history plus active pending-action context are sufficient for short repairs, while unrelated replacement actions can still supersede the older blocked request.
+- bounded recent history plus active pending-action context are sufficient for short repairs, while a colliding new blocked request requires explicit switch confirmation before it takes over the active slot.
 - if only one tier is configured, Auto mode still works without special-case user handling.
 - a client cannot inject fake pre-routed intent metadata to override server-side interpretation.
 

@@ -136,7 +136,7 @@ describe('tryAutomationControlPreRoute', () => {
     );
   });
 
-  it('uses heuristic name recovery only as an explicit gateway-unavailable fallback', async () => {
+  it('requires an explicit gateway decision before running automation control', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
         return {
@@ -175,11 +175,10 @@ describe('tryAutomationControlPreRoute', () => {
         content: 'Show me the automation Browser Read Smoke.',
       },
       executeTool,
-    }, {
-      allowHeuristicFallback: true,
     });
 
-    expect(result?.content).toContain('Browser Read Smoke (workflow)');
+    expect(result).toBeNull();
+    expect(executeTool).not.toHaveBeenCalled();
   });
 
   it('does not hijack automation-output analysis requests as automation control', async () => {

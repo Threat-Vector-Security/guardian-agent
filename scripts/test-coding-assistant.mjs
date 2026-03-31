@@ -348,6 +348,51 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         toolMessages: toolMessages.map((message) => String(message.content ?? '')),
       });
 
+      if (tools.includes('route_intent')) {
+        let decision = {
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'No direct route for this coding harness turn.',
+        };
+        if (/what coding workspace is this chat currently attached to|what coding session am i on|which coding workspace is this chat currently attached to/i.test(latestUser)) {
+          decision = {
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the current coding workspace attachment.',
+          };
+        } else if (/list the coding sessions|list my coding workspaces|show me the coding sessions/i.test(latestUser)) {
+          decision = {
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'navigate',
+            summary: 'List available coding workspace sessions.',
+          };
+        } else if (/switch this chat to the coding workspace for temp install test/i.test(latestUser)) {
+          decision = {
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'update',
+            summary: 'Switch to a specific coding workspace session.',
+            sessionTarget: 'Temp install test',
+          };
+        } else if (/detach this chat from the current coding workspace/i.test(latestUser)) {
+          decision = {
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'delete',
+            summary: 'Detach this chat from the current coding workspace session.',
+          };
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'coding-harness-model',
+          content: JSON.stringify(decision),
+        })));
+        return;
+      }
+
       if (/write an implementation plan for adding archived routines/i.test(latestUser)) {
         const writingPlansSkill = extractSkillLocation(systemPrompt, 'Writing Plans');
         const sawAcceptanceGates = toolMessages.some((message) => /acceptance gates/i.test(String(message.content ?? message)));

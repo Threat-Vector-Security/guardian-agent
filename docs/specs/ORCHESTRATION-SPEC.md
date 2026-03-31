@@ -33,7 +33,8 @@ Key rules:
 - the gateway also determines whether the current turn is a new request, follow-up, clarification answer, or correction
 - typed clarification state is resolved through the gateway, not by raw keyword interception
 - pre-gateway interception is limited to slash-command parsing and real approval/continuation control-plane resumes
-- deterministic fallbacks are allowed only when the gateway is unavailable or after a structured gateway decision has already narrowed the request
+- direct capability lanes only run from explicit structured gateway decisions
+- gateway-unavailable and low-confidence `general_assistant` / `unknown` results fall back to normal assistant or bounded degraded handling instead of heuristic capability capture
 
 ## 2. Pending Action Orchestration
 
@@ -55,9 +56,12 @@ Key rules:
 - one active pending action per logical surface, with explicit transfer policy deciding whether the blocked work may also resolve from linked surfaces for the same assistant and user
 - pending actions are durable and scoped by logical assistant, canonical user, channel, and surface
 - follow-up turns should resolve against the stored pending action before trying to reconstruct intent from bounded history
+- unrelated turns do not clear the active pending slot
+- a colliding new blocked request requires explicit switch confirmation before it replaces the current slot
 - approvals and policy mutations remain origin-surface only even when other blocker kinds are portable
 - user-facing blocked-work metadata uses `response.metadata.pendingAction`
 - channel adapters render blocker-specific UX from the same shared metadata contract
+- channels only inline blocked-work UI when the current response itself carries `response.metadata.pendingAction`; durable slot state is still available for explicit recovery/status views
 
 ## 3. Cross-Surface Continuity And Shared Context Assembly
 

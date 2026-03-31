@@ -42,15 +42,31 @@ const ALL_CANDIDATES = [
 ] as const;
 
 describe('resolveDirectIntentRoutingCandidates', () => {
+  it('maps create-style automation authoring routes to automation candidates', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'automation_authoring', operation: 'create' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['scheduled_email_automation', 'automation']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('does not map exploratory automation authoring routes with unknown operation to direct automation candidates', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'automation_authoring', operation: 'unknown' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('maps coding_session_control route to coding_session_control candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'coding_session_control', operation: 'navigate' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['coding_session_control']);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('maps coding_task route with an explicitly requested coding backend to coding_backend candidate', () => {
@@ -61,11 +77,9 @@ describe('resolveDirectIntentRoutingCandidates', () => {
         entities: { codingBackend: 'codex', codingBackendRequested: true },
       }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['coding_backend']);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('does not map coding_task route to coding_backend when the backend is only mentioned as the subject', () => {
@@ -76,22 +90,18 @@ describe('resolveDirectIntentRoutingCandidates', () => {
         entities: { codingBackend: 'codex', codingBackendRequested: false },
       }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('maps coding_task route without explicit coding backend to no direct candidates', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'coding_task', operation: 'create' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('maps coding_task follow-up status checks to coding_backend candidate even without explicit backend', () => {
@@ -103,89 +113,74 @@ describe('resolveDirectIntentRoutingCandidates', () => {
         entities: { codingRunStatusCheck: true },
       }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['coding_backend']);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('does not map generic coding inspect follow-ups to coding_backend without status-check metadata', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'coding_task', operation: 'inspect', turnRelation: 'follow_up' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('keeps email_task on workspace candidates so provider-aware direct handlers can dispatch mailbox reads', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'email_task', operation: 'read', entities: { emailProvider: 'm365' } }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['workspace_read', 'workspace_write']);
     expect(result.gatewayDirected).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
   it('maps high-confidence general_assistant route to no candidates', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'general_assistant', operation: 'unknown' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
     expect(result.gatewayUnavailable).toBe(false);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 
-  it('uses fallback order when gateway is unavailable', () => {
+  it('returns no direct candidates when the gateway is unavailable', () => {
     const result = resolveDirectIntentRoutingCandidates(
       null,
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
     expect(result.gatewayUnavailable).toBe(true);
-    expect(result.gatewayHeuristicFallback).toBe(true);
-    expect(result.candidates).toEqual([...ALL_CANDIDATES]);
+    expect(result.gatewayDirected).toBe(false);
+    expect(result.candidates).toEqual([]);
   });
 
-  it('uses heuristic fallback order when the gateway returns low-confidence unknown', () => {
+  it('returns no direct candidates when the gateway returns low-confidence unknown', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'unknown', operation: 'unknown', confidence: 'low' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
-    expect(result.candidates).toEqual([...ALL_CANDIDATES]);
+    expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(false);
     expect(result.gatewayUnavailable).toBe(false);
-    expect(result.gatewayHeuristicFallback).toBe(true);
   });
 
-  it('uses heuristic fallback order when the gateway returns low-confidence general_assistant', () => {
+  it('returns no direct candidates when the gateway returns low-confidence general_assistant', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'general_assistant', operation: 'unknown', confidence: 'low' }),
       [...ALL_CANDIDATES],
-      [...ALL_CANDIDATES],
     );
-    expect(result.candidates).toEqual([...ALL_CANDIDATES]);
+    expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(false);
     expect(result.gatewayUnavailable).toBe(false);
-    expect(result.gatewayHeuristicFallback).toBe(true);
   });
 
   it('filters candidates by available set', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'coding_session_control', operation: 'inspect' }),
-      [...ALL_CANDIDATES],
       ['filesystem', 'browser'], // coding_session_control is not available
     );
     expect(result.candidates).toEqual([]);
-    expect(result.gatewayHeuristicFallback).toBe(false);
   });
 });

@@ -15,30 +15,27 @@ export type DirectIntentRoutingCandidate =
 
 export function resolveDirectIntentRoutingCandidates(
   gateway: IntentGatewayRecord | null | undefined,
-  fallbackOrder: DirectIntentRoutingCandidate[],
   available: ReadonlyArray<DirectIntentRoutingCandidate>,
 ): {
   candidates: DirectIntentRoutingCandidate[];
   gatewayDirected: boolean;
   gatewayUnavailable: boolean;
-  gatewayHeuristicFallback: boolean;
 } {
   const availableSet = new Set(available);
   if (!gateway || gateway.available === false) {
     return {
-      candidates: fallbackOrder.filter((candidate) => availableSet.has(candidate)),
+      candidates: [],
       gatewayDirected: false,
       gatewayUnavailable: true,
-      gatewayHeuristicFallback: true,
     };
   }
 
-  if (shouldUseHeuristicFallback(gateway.decision)) {
+  if (gateway.decision.confidence === 'low'
+    && (gateway.decision.route === 'unknown' || gateway.decision.route === 'general_assistant')) {
     return {
-      candidates: fallbackOrder.filter((candidate) => availableSet.has(candidate)),
+      candidates: [],
       gatewayDirected: false,
       gatewayUnavailable: false,
-      gatewayHeuristicFallback: true,
     };
   }
 
@@ -48,13 +45,7 @@ export function resolveDirectIntentRoutingCandidates(
     candidates: dedupeCandidates(ordered),
     gatewayDirected: true,
     gatewayUnavailable: false,
-    gatewayHeuristicFallback: false,
   };
-}
-
-function shouldUseHeuristicFallback(decision: IntentGatewayDecision): boolean {
-  return decision.confidence === 'low'
-    && (decision.route === 'unknown' || decision.route === 'general_assistant');
 }
 
 function preferredCandidatesForDecision(
@@ -62,7 +53,9 @@ function preferredCandidatesForDecision(
 ): DirectIntentRoutingCandidate[] {
   switch (decision.route) {
     case 'automation_authoring':
-      return ['scheduled_email_automation', 'automation'];
+      return ['create', 'update', 'schedule'].includes(decision.operation)
+        ? ['scheduled_email_automation', 'automation']
+        : [];
     case 'automation_control':
       return ['automation_control'];
     case 'automation_output_task':
@@ -105,7 +98,6 @@ function preferredCandidatesForDecision(
       return [];
   }
 }
-
 function dedupeCandidates(
   candidates: DirectIntentRoutingCandidate[],
 ): DirectIntentRoutingCandidate[] {

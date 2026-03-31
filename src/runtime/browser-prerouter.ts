@@ -62,10 +62,10 @@ type DirectBrowserTargetSelector =
 
 export async function tryBrowserPreRoute(
   params: BrowserPreRouteParams,
-  options?: { intentDecision?: IntentGatewayDecision | null; allowHeuristicFallback?: boolean },
+  options?: { intentDecision?: IntentGatewayDecision | null },
 ): Promise<BrowserPreRouteResult | null> {
   const gatewayBrowser = options?.intentDecision?.route === 'browser_task';
-  if (!gatewayBrowser && options?.allowHeuristicFallback !== true) return null;
+  if (!gatewayBrowser) return null;
   const intent = parseDirectBrowserIntent(params.message.content);
   if (!intent) return null;
   if (isGoogleWorkspaceBrowserIntent(intent)) return null;

@@ -569,6 +569,26 @@ function createProviderPanel(config, providers, panel) {
 
   const localNames = Object.keys(providerMap).filter(name => providerMap[name].locality === 'local');
   const externalNames = Object.keys(providerMap).filter(name => providerMap[name].locality !== 'local');
+  const defaultProviderEntry = config.defaultProvider ? providerMap[config.defaultProvider] : null;
+  const activeProviderSelection = (() => {
+    const localSelected = configUiState.selectedProviderProfiles.local;
+    if (localSelected && providerMap[localSelected]?.locality === 'local') {
+      return { side: 'local', name: localSelected };
+    }
+    const externalSelected = configUiState.selectedProviderProfiles.external;
+    if (externalSelected && providerMap[externalSelected]?.locality === 'external') {
+      return { side: 'external', name: externalSelected };
+    }
+    if (defaultProviderEntry) {
+      return {
+        side: defaultProviderEntry.locality === 'local' ? 'local' : 'external',
+        name: config.defaultProvider,
+      };
+    }
+    if (localNames[0]) return { side: 'local', name: localNames[0] };
+    if (externalNames[0]) return { side: 'external', name: externalNames[0] };
+    return null;
+  })();
   const localProviderTypeOptions = providerTypes
     .filter((type) => type.locality === 'local')
     .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
@@ -725,11 +745,9 @@ function createProviderPanel(config, providers, panel) {
         if (!credentialRefCheckbox.checked) credentialRefEl.value = '';
       });
     }
-    let selectedProfile = names.includes(configUiState.selectedProviderProfiles[side])
-      ? configUiState.selectedProviderProfiles[side]
-      : names.includes(config.defaultProvider)
-      ? config.defaultProvider
-      : (names[0] || null);
+    let selectedProfile = activeProviderSelection?.side === side && names.includes(activeProviderSelection.name)
+      ? activeProviderSelection.name
+      : null;
 
     // Model accessor — reads from whichever element is visible
     const modelEl = {
@@ -1091,6 +1109,9 @@ function createProviderPanel(config, providers, panel) {
         statusEl.textContent = result.message;
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
         if (result.success) {
+          const otherSide = isLocal ? 'external' : 'local';
+          configUiState.selectedProviderProfiles[side] = providerName;
+          configUiState.selectedProviderProfiles[otherSide] = null;
           await updateConfig();
         }
       } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }

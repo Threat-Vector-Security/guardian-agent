@@ -188,6 +188,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Pending tool actions show up through web approvals, CLI prompts, and Telegram approval flows.',
                   'In web chat and the Coding Workspace, approvals should appear inline on the same blocked response that asked for approval.',
+                  'Blocked approval or clarification state should stay durable even if you ask an unrelated question, but unrelated replies should not keep repeating the old blocker UI inline.',
                   'If you click a web approval button and then switch panels, the clicked approval state should persist instead of resetting back to fresh buttons.',
                   'Ordinary clarification answers like `Use Gmail` or `Codex` should stay in normal chat flow and not be mistaken for approval commands.',
                   'Other blockers such as `Use Outlook`, `switch to Test Tactical Game App`, or `connect Google Workspace first` should resume the original request instead of starting a new unrelated one.',
