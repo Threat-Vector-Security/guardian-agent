@@ -29,6 +29,7 @@ import {
   buildChatMessagesFromHistory,
   buildSystemPromptWithContext,
   type PromptAssemblyContinuity,
+  type PromptAssemblyKnowledgeBase,
   type PromptAssemblyPendingAction,
 } from '../runtime/context-assembly.js';
 import { runLlmLoop } from './worker-llm-loop.js';
@@ -79,8 +80,7 @@ export interface WorkerMessageHandleParams {
   message: UserMessage;
   systemPrompt: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
-  knowledgeBase: string;
-  knowledgeBaseScope?: 'global' | 'coding_session';
+  knowledgeBases: PromptAssemblyKnowledgeBase[];
   activeSkills: Array<{ id: string; name: string; summary: string }>;
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
@@ -721,14 +721,7 @@ export class BrokeredWorkerSession {
 function buildWorkerSystemPrompt(params: WorkerMessageHandleParams): string {
   return buildSystemPromptWithContext({
     baseSystemPrompt: params.systemPrompt,
-    ...(params.knowledgeBase
-      ? {
-          knowledgeBase: {
-            scope: params.knowledgeBaseScope ?? 'global',
-            content: params.knowledgeBase,
-          },
-        }
-      : {}),
+    knowledgeBases: params.knowledgeBases,
     activeSkills: params.activeSkills,
     toolContext: params.toolContext,
     runtimeNotices: params.runtimeNotices,

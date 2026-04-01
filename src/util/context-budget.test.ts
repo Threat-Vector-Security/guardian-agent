@@ -18,8 +18,9 @@ describe('compactMessagesIfOverBudget', () => {
       { role: 'assistant', content: 'world' },
     ];
 
-    compactMessagesIfOverBudget(messages, 1000);
+    const result = compactMessagesIfOverBudget(messages, 1000);
 
+    expect(result.applied).toBe(false);
     expect(messages).toEqual([
       { role: 'system', content: 'system' },
       { role: 'user', content: 'hello' },
@@ -46,8 +47,12 @@ describe('compactMessagesIfOverBudget', () => {
       { role: 'tool', toolCallId: 'tool-2', content: 'recent tool result should remain intact' },
     ];
 
-    compactMessagesIfOverBudget(messages, 1400);
+    const result = compactMessagesIfOverBudget(messages, 1400);
 
+    expect(result.applied).toBe(true);
+    expect(result.stages).toContain('truncate_tool_calls');
+    expect(result.stages).toContain('truncate_tool_results');
+    expect(result.afterChars).toBeLessThan(result.beforeChars);
     const compactedTool = messages.find((message) => message.role === 'tool' && String(message.content).includes('compacted'));
     expect(compactedTool).toBeDefined();
     expect(messages[messages.length - 3]).toEqual(recentUser);
@@ -67,8 +72,11 @@ describe('compactMessagesIfOverBudget', () => {
       { role: 'assistant', content: 'final answer in progress' },
     ];
 
-    compactMessagesIfOverBudget(messages, 80);
+    const result = compactMessagesIfOverBudget(messages, 80);
 
+    expect(result.applied).toBe(true);
+    expect(result.stages).toContain('aggressive_trim');
+    expect(result.summary).toContain('Compacted prior work summary');
     expect(messages.length).toBeLessThan(8);
     expect(messages.some((message) => message.role === 'system' && message.content.includes('Compacted prior work summary'))).toBe(true);
     expect(messages[messages.length - 1].content).toBe('final answer in progress');

@@ -1,9 +1,20 @@
+export interface ResponseUsageMetadata {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+}
+
 export interface ResponseSourceMetadata {
   locality: 'local' | 'external';
   providerName?: string;
+  model?: string;
   tier?: 'local' | 'external';
   usedFallback?: boolean;
   notice?: string;
+  durationMs?: number;
+  usage?: ResponseUsageMetadata;
 }
 
 export type LocalModelComplexityGuardEnv = Record<string, string | undefined>;
@@ -38,12 +49,43 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
   const record = value as Record<string, unknown>;
   const locality = record.locality;
   if (locality !== 'local' && locality !== 'external') return undefined;
+  const usageRecord = record.usage && typeof record.usage === 'object' && !Array.isArray(record.usage)
+    ? record.usage as Record<string, unknown>
+    : null;
+  const promptTokens = typeof usageRecord?.promptTokens === 'number' && Number.isFinite(usageRecord.promptTokens)
+    ? usageRecord.promptTokens
+    : undefined;
+  const completionTokens = typeof usageRecord?.completionTokens === 'number' && Number.isFinite(usageRecord.completionTokens)
+    ? usageRecord.completionTokens
+    : undefined;
+  const totalTokens = typeof usageRecord?.totalTokens === 'number' && Number.isFinite(usageRecord.totalTokens)
+    ? usageRecord.totalTokens
+    : undefined;
   return {
     locality,
     providerName: typeof record.providerName === 'string' ? record.providerName : undefined,
+    model: typeof record.model === 'string' ? record.model : undefined,
     tier: record.tier === 'local' || record.tier === 'external' ? record.tier : undefined,
     usedFallback: record.usedFallback === true,
     notice: typeof record.notice === 'string' ? record.notice : undefined,
+    durationMs: typeof record.durationMs === 'number' && Number.isFinite(record.durationMs)
+      ? record.durationMs
+      : undefined,
+    ...(typeof promptTokens === 'number' && typeof completionTokens === 'number' && typeof totalTokens === 'number'
+      ? {
+          usage: {
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            ...(typeof usageRecord?.cacheCreationTokens === 'number' && Number.isFinite(usageRecord.cacheCreationTokens)
+              ? { cacheCreationTokens: usageRecord.cacheCreationTokens }
+              : {}),
+            ...(typeof usageRecord?.cacheReadTokens === 'number' && Number.isFinite(usageRecord.cacheReadTokens)
+              ? { cacheReadTokens: usageRecord.cacheReadTokens }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 

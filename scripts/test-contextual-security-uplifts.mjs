@@ -317,7 +317,10 @@ guardian:
       userId: harnessUserId,
       content: 'remember that I prefer concise status updates',
     });
-    assert.match(String(rememberedViaChat?.content ?? ''), /stored|concise status updates|keep status updates concise|preference/i);
+    assert.match(
+      String(rememberedViaChat?.content ?? ''),
+      /stored|saved that to (?:global|code-session) memory|concise status updates|keep status updates concise|preference/i,
+    );
     const pendingApprovals = await requestJson(baseUrl, token, 'GET', `/api/tools/approvals/pending?userId=${encodeURIComponent(harnessUserId)}&channel=web&limit=20`);
     assert.equal(Array.isArray(pendingApprovals) ? pendingApprovals.some((approval) => approval.toolName === 'memory_save') : false, false);
     await waitForMemorySearch(baseUrl, token, harnessUserId, 'concise status updates');

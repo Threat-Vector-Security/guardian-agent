@@ -1145,6 +1145,9 @@ export interface DashboardCallbacks {
     decision: 'approved' | 'denied';
     actor: string;
     actorRole?: import('../tools/types.js').PrincipalRole;
+    userId?: string;
+    channel?: string;
+    surfaceId?: string;
     reason?: string;
   }) => Promise<{
     success: boolean;

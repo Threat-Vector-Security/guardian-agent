@@ -194,6 +194,31 @@ describe('RunTimelineStore', () => {
     expect(run?.items.some((item) => item.title === 'Agent is working')).toBe(true);
   });
 
+  it('renders provider-call trace nodes with bounded usage detail', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-provider',
+      runId: 'req-provider',
+      steps: [],
+      nodes: [{
+        id: 'provider-1',
+        kind: 'provider_call',
+        name: 'Model response: ollama • llama3.1',
+        startedAt: 118,
+        completedAt: 132,
+        status: 'succeeded',
+        metadata: {
+          detail: 'provider=ollama; model=llama3.1; locality=local; duration=14ms; 920 tokens | 800 prompt | 120 completion',
+        },
+      }],
+    }));
+
+    const run = store.getRun('req-provider');
+    const item = run?.items.find((entry) => entry.id === 'node:provider-1:note');
+    expect(item?.title).toBe('Model response: ollama • llama3.1');
+    expect(item?.detail).toContain('920 tokens');
+  });
+
   it('surfaces context assembly trace details from compile nodes', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({
@@ -208,16 +233,24 @@ describe('RunTimelineStore', () => {
         completedAt: 119,
         status: 'succeeded',
         metadata: {
-          summary: 'global memory loaded | continuity 2 surfaces | blocker approval',
-          detail: 'memoryScope=global; knowledgeBase=188 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval',
+          summary: 'global memory loaded | coding memory loaded | continuity 2 surfaces | blocker approval',
+          detail: 'memoryScope=global; knowledgeBase=188 chars; codingMemory=76 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval',
           memoryScope: 'global',
           knowledgeBaseLoaded: true,
+          codingMemoryLoaded: true,
+          codingMemoryChars: 76,
+          contextCompactionApplied: true,
+          contextCharsBeforeCompaction: 9800,
+          contextCharsAfterCompaction: 4200,
+          contextCompactionStages: ['truncate_tool_calls', 'truncate_tool_results'],
+          compactedSummaryPreview: 'Compacted prior work summary: importer retries and verification steps.',
           knowledgeBaseQueryPreview: 'importer overhaul verification checkpoints',
           activeExecutionRefs: ['code_session:Repo Fix', 'pending_action:approval-1'],
           selectedMemoryEntryCount: 2,
           omittedMemoryEntryCount: 1,
           selectedMemoryEntries: [
             {
+              scope: 'coding_session',
               category: 'Project Notes',
               createdAt: '2026-03-20',
               preview: 'Importer overhaul note covering checkpoints, migration, retries, and verification.',
@@ -234,12 +267,20 @@ describe('RunTimelineStore', () => {
     const run = store.getRun('req-context-assembly');
     expect(run?.items.some((item) =>
       item.title === 'Assembled context'
-      && item.detail === 'memoryScope=global; knowledgeBase=188 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval'
+      && item.detail === 'memoryScope=global; knowledgeBase=188 chars; codingMemory=76 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval'
     )).toBe(true);
     const contextItem = run?.items.find((item) => item.title === 'Assembled context');
     expect(contextItem?.contextAssembly?.memoryScope).toBe('global');
+    expect(contextItem?.contextAssembly?.codingMemoryLoaded).toBe(true);
+    expect(contextItem?.contextAssembly?.codingMemoryChars).toBe(76);
+    expect(contextItem?.contextAssembly?.contextCompactionApplied).toBe(true);
+    expect(contextItem?.contextAssembly?.contextCharsBeforeCompaction).toBe(9800);
+    expect(contextItem?.contextAssembly?.contextCharsAfterCompaction).toBe(4200);
+    expect(contextItem?.contextAssembly?.contextCompactionStages).toEqual(['truncate_tool_calls', 'truncate_tool_results']);
+    expect(contextItem?.contextAssembly?.compactedSummaryPreview).toContain('Compacted prior work summary');
     expect(contextItem?.contextAssembly?.knowledgeBaseQueryPreview).toBe('importer overhaul verification checkpoints');
     expect(contextItem?.contextAssembly?.activeExecutionRefs).toEqual(['code_session:Repo Fix', 'pending_action:approval-1']);
+    expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.scope).toBe('coding_session');
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.category).toBe('Project Notes');
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
   });

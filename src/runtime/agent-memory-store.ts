@@ -107,6 +107,7 @@ export interface MemoryContextQuery {
 
 export interface MemoryContextLoadOptions {
   query?: string | MemoryContextQuery;
+  maxChars?: number;
 }
 
 interface MemoryIndexFile {
@@ -527,13 +528,14 @@ export class AgentMemoryStore {
 
   loadForContext(agentId: string, options?: MemoryContextLoadOptions): string {
     const indexPath = this.indexPath(agentId);
+    const maxChars = this.resolveContextLimit(options);
     const full = existsSync(indexPath)
       ? this.renderContextMarkdownResult(agentId, this.readIndex(agentId), options).content
       : this.load(agentId);
     if (!full) return '';
 
-    if (full.length <= this.config.maxContextChars) return full;
-    return full.slice(0, this.config.maxContextChars) + '\n\n[... knowledge base truncated — use memory_search to find specific facts]';
+    if (full.length <= maxChars) return full;
+    return full.slice(0, maxChars) + '\n\n[... knowledge base truncated — use memory_search to find specific facts]';
   }
 
   loadForContextWithSelection(agentId: string, options?: MemoryContextLoadOptions): MemoryContextLoadResult {
@@ -705,6 +707,10 @@ export class AgentMemoryStore {
     return this.config.readOnly;
   }
 
+  getMaxContextChars(): number {
+    return this.config.maxContextChars;
+  }
+
   updateConfig(next: Partial<AgentMemoryStoreConfig>): void {
     const merged = { ...this.config, ...next };
     const nextBasePath = merged.basePath ?? join(homedir(), '.guardianagent', 'memory');
@@ -774,6 +780,7 @@ export class AgentMemoryStore {
     options?: MemoryContextLoadOptions,
   ): MemoryContextLoadResult {
     const query = this.normalizeContextQueryInput(options);
+    const maxChars = this.resolveContextLimit(options);
     const grouped = new Map<string, Array<{
       entry: StoredMemoryEntry;
       heading: string;
@@ -805,19 +812,19 @@ export class AgentMemoryStore {
         const fullChunk = `${prefix}${entry.fullLine}`;
         const summaryChunk = entry.summaryLine ? `${prefix}${entry.summaryLine}` : null;
         const preferSummary = entry.preferSummary;
-        if (preferSummary && summaryChunk && output.length + summaryChunk.length <= this.config.maxContextChars) {
+        if (preferSummary && summaryChunk && output.length + summaryChunk.length <= maxChars) {
           output += summaryChunk;
           headingRendered = true;
           selectedEntries.push(this.buildContextSelectionEntry(entry, 'summary'));
           continue;
         }
-        if (output.length + fullChunk.length <= this.config.maxContextChars) {
+        if (output.length + fullChunk.length <= maxChars) {
           output += fullChunk;
           headingRendered = true;
           selectedEntries.push(this.buildContextSelectionEntry(entry, 'full'));
           continue;
         }
-        if (summaryChunk && output.length + summaryChunk.length <= this.config.maxContextChars) {
+        if (summaryChunk && output.length + summaryChunk.length <= maxChars) {
           output += summaryChunk;
           headingRendered = true;
           selectedEntries.push(this.buildContextSelectionEntry(entry, 'summary'));
@@ -829,7 +836,7 @@ export class AgentMemoryStore {
 
     if (omittedEntries > 0) {
       const note = `${output ? '\n\n' : ''}[... ${omittedEntries} additional memory entr${omittedEntries === 1 ? 'y' : 'ies'} omitted — use memory_recall for full details]`;
-      if (output.length + note.length <= this.config.maxContextChars) {
+      if (output.length + note.length <= maxChars) {
         output += note;
       }
     }
@@ -841,6 +848,14 @@ export class AgentMemoryStore {
       omittedEntries,
       ...(query?.preview ? { queryPreview: query.preview } : {}),
     };
+  }
+
+  private resolveContextLimit(options?: MemoryContextLoadOptions): number {
+    const requested = options?.maxChars;
+    if (typeof requested === 'number' && Number.isFinite(requested)) {
+      return Math.max(1, Math.floor(requested));
+    }
+    return this.config.maxContextChars;
   }
 
   private prepareContextEntries(

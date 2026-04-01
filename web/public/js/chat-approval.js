@@ -36,5 +36,8 @@ export async function decideChatApproval(input) {
     approvalId,
     decision,
     actor: 'web-user',
+    userId: webUserId,
+    channel: 'web',
+    surfaceId,
   });
 }

@@ -58,6 +58,7 @@ export interface DashboardRunTimelineItem {
 }
 
 export interface DashboardRunTimelineContextMemoryEntry {
+  scope?: 'global' | 'coding_session';
   category: string;
   createdAt: string;
   preview: string;
@@ -72,6 +73,8 @@ export interface DashboardRunTimelineContextAssembly {
   detail?: string;
   memoryScope?: 'global' | 'coding_session' | 'none';
   knowledgeBaseLoaded?: boolean;
+  codingMemoryLoaded?: boolean;
+  codingMemoryChars?: number;
   knowledgeBaseQueryPreview?: string;
   continuityKey?: string;
   activeExecutionRefs?: string[];
@@ -79,6 +82,11 @@ export interface DashboardRunTimelineContextAssembly {
   selectedMemoryEntryCount?: number;
   omittedMemoryEntryCount?: number;
   selectedMemoryEntries?: DashboardRunTimelineContextMemoryEntry[];
+  contextCompactionApplied?: boolean;
+  contextCharsBeforeCompaction?: number;
+  contextCharsAfterCompaction?: number;
+  contextCompactionStages?: string[];
+  compactedSummaryPreview?: string;
 }
 
 export interface DashboardRunSummary {
@@ -1025,6 +1033,9 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     ? metadata.selectedMemoryEntries
       .map((entry) => {
         if (!isRecord(entry)) return null;
+        const scope = entry.scope === 'global' || entry.scope === 'coding_session'
+          ? entry.scope
+          : undefined;
         const category = nonEmptyText(typeof entry.category === 'string' ? entry.category : undefined);
         const createdAt = nonEmptyText(typeof entry.createdAt === 'string' ? entry.createdAt : undefined);
         const preview = nonEmptyText(typeof entry.preview === 'string' ? entry.preview : undefined);
@@ -1036,6 +1047,7 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
           : 0;
         if (!category || !createdAt || !preview || !renderMode) return null;
         return {
+          ...(scope ? { scope } : {}),
           category,
           createdAt,
           preview,
@@ -1064,6 +1076,10 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     ...(nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
     ...(memoryScope ? { memoryScope } : {}),
     ...(typeof metadata.knowledgeBaseLoaded === 'boolean' ? { knowledgeBaseLoaded: metadata.knowledgeBaseLoaded } : {}),
+    ...(typeof metadata.codingMemoryLoaded === 'boolean' ? { codingMemoryLoaded: metadata.codingMemoryLoaded } : {}),
+    ...(typeof metadata.codingMemoryChars === 'number' && Number.isFinite(metadata.codingMemoryChars)
+      ? { codingMemoryChars: metadata.codingMemoryChars }
+      : {}),
     ...(nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined)
       ? { knowledgeBaseQueryPreview: nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined) }
       : {}),
@@ -1083,6 +1099,23 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     ...(typeof selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount } : {}),
     ...(typeof omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount } : {}),
     ...(selectedMemoryEntries.length > 0 ? { selectedMemoryEntries } : {}),
+    ...(metadata.contextCompactionApplied === true ? { contextCompactionApplied: true } : {}),
+    ...(typeof metadata.contextCharsBeforeCompaction === 'number' && Number.isFinite(metadata.contextCharsBeforeCompaction)
+      ? { contextCharsBeforeCompaction: metadata.contextCharsBeforeCompaction }
+      : {}),
+    ...(typeof metadata.contextCharsAfterCompaction === 'number' && Number.isFinite(metadata.contextCharsAfterCompaction)
+      ? { contextCharsAfterCompaction: metadata.contextCharsAfterCompaction }
+      : {}),
+    ...(Array.isArray(metadata.contextCompactionStages)
+      ? {
+          contextCompactionStages: metadata.contextCompactionStages
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .map((value) => value.trim()),
+        }
+      : {}),
+    ...(nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined)
+      ? { compactedSummaryPreview: nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined) }
+      : {}),
   };
   return Object.keys(contextAssembly).length > 0 ? contextAssembly : undefined;
 }

@@ -2,6 +2,8 @@ import type { IntentGatewayDecision, IntentGatewayRecord } from './intent-gatewa
 
 export type DirectIntentRoutingCandidate =
   | 'filesystem'
+  | 'memory_write'
+  | 'memory_read'
   | 'coding_backend'
   | 'scheduled_email_automation'
   | 'automation'
@@ -48,6 +50,13 @@ export function resolveDirectIntentRoutingCandidates(
   };
 }
 
+export function shouldAllowBoundedDegradedMemorySaveFallback(
+  gateway: IntentGatewayRecord | null | undefined,
+): boolean {
+  if (!gateway) return true;
+  return gateway.available === false && gateway.decision.route === 'unknown';
+}
+
 function preferredCandidatesForDecision(
   decision: IntentGatewayDecision,
 ): DirectIntentRoutingCandidate[] {
@@ -78,6 +87,12 @@ function preferredCandidatesForDecision(
         : ['workspace_read', 'workspace_write'];
     case 'search_task':
       return ['web_search'];
+    case 'memory_task':
+      return decision.operation === 'save'
+        ? ['memory_write']
+        : (decision.operation === 'read' || decision.operation === 'search')
+          ? ['memory_read']
+          : [];
     case 'filesystem_task':
       return ['filesystem'];
     case 'coding_task':

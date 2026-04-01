@@ -23,7 +23,11 @@ import {
 } from '../runtime/assistant-jobs.js';
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
-import type { PromptAssemblyContinuity, PromptAssemblyPendingAction } from '../runtime/context-assembly.js';
+import type {
+  PromptAssemblyContinuity,
+  PromptAssemblyKnowledgeBase,
+  PromptAssemblyPendingAction,
+} from '../runtime/context-assembly.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 
 const log = createLogger('worker-manager');
@@ -45,8 +49,7 @@ export interface WorkerMessageRequest {
   message: UserMessage;
   systemPrompt: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
-  knowledgeBase?: string;
-  knowledgeBaseScope?: 'global' | 'coding_session';
+  knowledgeBases?: PromptAssemblyKnowledgeBase[];
   activeSkills?: ResolvedSkill[];
   toolContext?: string;
   runtimeNotices?: Array<{ level: 'info' | 'warn'; message: string }>;
@@ -201,8 +204,7 @@ export class WorkerManager {
         message: input.message,
         systemPrompt: input.systemPrompt,
         history: input.history,
-        knowledgeBase: input.knowledgeBase ?? '',
-        knowledgeBaseScope: input.knowledgeBaseScope,
+        knowledgeBases: input.knowledgeBases ?? [],
         activeSkills: input.activeSkills ?? [],
         toolContext: input.toolContext ?? '',
         runtimeNotices: input.runtimeNotices ?? [],
@@ -877,8 +879,7 @@ export class WorkerManager {
       message: UserMessage;
       systemPrompt: string;
       history: Array<{ role: 'user' | 'assistant'; content: string }>;
-      knowledgeBase: string;
-      knowledgeBaseScope?: 'global' | 'coding_session';
+      knowledgeBases: PromptAssemblyKnowledgeBase[];
       activeSkills: ResolvedSkill[];
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
@@ -1105,7 +1106,7 @@ export class WorkerManager {
       },
       systemPrompt: '',
       history: [],
-      knowledgeBase: '',
+      knowledgeBases: [],
       activeSkills: [],
       toolContext: '',
       runtimeNotices: [],

@@ -157,6 +157,32 @@ describe('AgentMemoryStore context packing', () => {
     expect(result.selectedEntries.some((entry) => entry.preview.includes('Current weather note'))).toBe(false);
   });
 
+  it('supports a tighter per-load maxChars override for bounded prompt packing', () => {
+    const store = makeStore(400);
+    store.append('agent1', {
+      content: 'User prefers concise status updates.',
+      createdAt: '2026-03-20',
+      category: 'Preferences',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: 'Importer overhaul note with parser checkpoints, migration reminders, retry handling, and verification follow-up.',
+      summary: 'Importer overhaul note.',
+      createdAt: '2026-03-21',
+      category: 'Project Notes',
+      sourceType: 'user',
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: 'importer overhaul',
+      maxChars: 90,
+    });
+
+    expect(result.content.length).toBeLessThanOrEqual(90);
+    expect(result.content).toContain('Importer overhaul note.');
+    expect(result.content).not.toContain('verification follow-up');
+  });
+
   it('supports structured context queries with blocker and route signals', () => {
     const store = makeStore(260);
     store.append('agent1', {

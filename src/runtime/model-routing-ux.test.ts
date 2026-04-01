@@ -21,15 +21,31 @@ describe('model-routing-ux', () => {
       responseSource: {
         locality: 'external',
         providerName: 'openai',
+        model: 'gpt-5.4',
         tier: 'external',
         usedFallback: true,
+        durationMs: 512,
+        usage: {
+          promptTokens: 800,
+          completionTokens: 120,
+          totalTokens: 920,
+          cacheCreationTokens: 400,
+        },
       },
     })).toEqual({
       locality: 'external',
       providerName: 'openai',
+      model: 'gpt-5.4',
       tier: 'external',
       usedFallback: true,
       notice: undefined,
+      durationMs: 512,
+      usage: {
+        promptTokens: 800,
+        completionTokens: 120,
+        totalTokens: 920,
+        cacheCreationTokens: 400,
+      },
     });
   });
 

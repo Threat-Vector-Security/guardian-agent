@@ -51,6 +51,9 @@ describe('decideChatApproval', () => {
       approvalId: 'approval-2',
       decision: 'approved',
       actor: 'web-user',
+      userId: 'web-user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
     });
     expect(result).toEqual({ success: true, message: 'Approved globally.' });
   });

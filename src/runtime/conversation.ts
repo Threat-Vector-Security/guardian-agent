@@ -905,12 +905,39 @@ export class ConversationService {
       ...(typeof value.providerName === 'string' && value.providerName.trim()
         ? { providerName: value.providerName.trim() }
         : {}),
+      ...(typeof value.model === 'string' && value.model.trim()
+        ? { model: value.model.trim() }
+        : {}),
       ...(value.tier === 'local' || value.tier === 'external'
         ? { tier: value.tier }
         : {}),
       ...(value.usedFallback === true ? { usedFallback: true } : {}),
       ...(typeof value.notice === 'string' && value.notice.trim()
         ? { notice: value.notice.trim() }
+        : {}),
+      ...(typeof value.durationMs === 'number' && Number.isFinite(value.durationMs)
+        ? { durationMs: value.durationMs }
+        : {}),
+      ...(value.usage
+        && typeof value.usage.promptTokens === 'number'
+        && Number.isFinite(value.usage.promptTokens)
+        && typeof value.usage.completionTokens === 'number'
+        && Number.isFinite(value.usage.completionTokens)
+        && typeof value.usage.totalTokens === 'number'
+        && Number.isFinite(value.usage.totalTokens)
+        ? {
+            usage: {
+              promptTokens: value.usage.promptTokens,
+              completionTokens: value.usage.completionTokens,
+              totalTokens: value.usage.totalTokens,
+              ...(typeof value.usage.cacheCreationTokens === 'number' && Number.isFinite(value.usage.cacheCreationTokens)
+                ? { cacheCreationTokens: value.usage.cacheCreationTokens }
+                : {}),
+              ...(typeof value.usage.cacheReadTokens === 'number' && Number.isFinite(value.usage.cacheReadTokens)
+                ? { cacheReadTokens: value.usage.cacheReadTokens }
+                : {}),
+            },
+          }
         : {}),
     };
   }

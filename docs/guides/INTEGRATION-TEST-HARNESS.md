@@ -142,6 +142,20 @@ node scripts/test-code-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
+For local debugging, you can preserve the coding-harness temp directory without shell env wrappers:
+
+```bash
+node scripts/test-coding-assistant.mjs --keep-tmp
+```
+
+To inspect recent coding-harness artifacts without shell pipelines:
+
+```bash
+node scripts/inspect-latest-coding-harness.mjs --list 3
+node scripts/inspect-latest-coding-harness.mjs --file guardian.log.err --lines 120
+node scripts/inspect-latest-coding-harness.mjs --file guardian.log --lines 120
+```
+
 If you are using the WSL-local real-Ollama lane and `ollama list` cannot reach a local server, start it first in WSL with `ollama serve` before running the smoke commands.
 
 For real-Ollama smoke runs, the harness sets `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1` by default so local-model tool-call formatting failures surface as the original Ollama error instead of the friendly “too complicated” shortcut. Set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce production-style guard behavior exactly.
@@ -156,8 +170,9 @@ This harness imports local TypeScript skill modules directly, so use the `tsx` l
 
 When validating the current Coding Assistant architecture, also assert:
 
-- Code turns do not preload Guardian global memory
-- `memory_recall` and `memory_save` bind to Code-session memory while inside Code
+- Code turns keep Guardian global memory as the primary durable memory scope
+- Code turns only load Code-session memory as bounded session-local augment context
+- `memory_recall` and `memory_save` default to global memory while inside Code unless they explicitly request `scope=code_session`
 - `memory_bridge_search` is the only built-in cross-memory path, and it remains read-only
 - Code-session prompts stay grounded in the active repo/session without reusing Guardian host-app prompt identity
 - Code-session snapshots expose a non-empty `workspaceMap` after repo-aware turns
@@ -443,9 +458,9 @@ Also tests the **approval flow** by switching between policy modes and approving
 #### Memory Tools
 | Prompt | Expected Tool | What It Validates |
 |--------|--------------|-------------------|
-| "save this to your memory" | `memory_save` | Persist knowledge into the current memory scope |
-| "show your long-term memory" | `memory_recall` | Retrieve persistent memory for the current scope; inside Code this is Code-session memory |
-| "search memory for X" | `memory_search` | FTS5 search over the current conversation history |
+| "save this to your memory" | `memory_save` | Persist knowledge into global memory by default |
+| "show your long-term memory" | `memory_recall` | Retrieve persistent memory; default scope is global |
+| "search memory for X" | `memory_search` | Search conversation history and/or persistent memory, with persistent search defaulting to global outside Code and both global plus session memory inside Code |
 | "search global memory for X without changing context" | `memory_bridge_search` | Read-only lookup across the global/code-session memory boundary |
 
 #### Web, Threat Intel, Tasks

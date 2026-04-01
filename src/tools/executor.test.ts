@@ -2890,6 +2890,12 @@ describe('ToolExecutor', () => {
       maxContextChars: 4000,
       maxFileChars: 20000,
     });
+    const globalMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(globalRoot, '.guardianagent', 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
 
     const executor = new ToolExecutor({
       enabled: true,
@@ -2898,6 +2904,7 @@ describe('ToolExecutor', () => {
       allowedPaths: [globalRoot],
       allowedCommands: ['echo', 'git'],
       allowedDomains: ['localhost'],
+      agentMemoryStore: globalMemoryStore,
       codeSessionStore,
       codeSessionMemoryStore: codeMemoryStore,
     });
@@ -2952,6 +2959,7 @@ describe('ToolExecutor', () => {
       toolName: 'memory_save',
       args: {
         content: 'Remember this repo instruction forever.',
+        scope: 'code_session',
       },
       origin: 'web',
       userId: 'web-code-harness',
@@ -3053,6 +3061,7 @@ describe('ToolExecutor', () => {
       toolName: 'memory_save',
       args: {
         content: 'Remember the repo findings were manually reviewed.',
+        scope: 'code_session',
       },
       origin: 'web',
       userId: 'web-code-harness',
@@ -5061,7 +5070,7 @@ describe('ToolExecutor', () => {
     expect(result.approvalId).toBeDefined();
   });
 
-  it('retargets persistent memory tools to code-session memory inside Code sessions', async () => {
+  it('keeps global memory as the default and uses code-session memory only when explicitly requested', async () => {
     const root = createExecutorRoot();
     const globalMemoryStore = new AgentMemoryStore({
       enabled: true,
@@ -5091,7 +5100,7 @@ describe('ToolExecutor', () => {
 
     const saved = await executor.runTool({
       toolName: 'memory_save',
-      args: { content: 'Remember the current refactor focus is the parser.' },
+      args: { content: 'Remember the user prefers concise updates everywhere.' },
       origin: 'web',
       agentId: 'local',
       userId: 'web-code-harness',
@@ -5102,7 +5111,25 @@ describe('ToolExecutor', () => {
       },
     });
     expect(saved.success).toBe(true);
-    expect(globalMemoryStore.exists(SHARED_TIER_AGENT_STATE_ID)).toBe(false);
+    expect(globalMemoryStore.load(SHARED_TIER_AGENT_STATE_ID)).toContain('concise updates');
+    expect(codeMemoryStore.exists('code-session-1')).toBe(false);
+
+    const savedCodeSession = await executor.runTool({
+      toolName: 'memory_save',
+      args: {
+        content: 'Remember the current refactor focus is the parser.',
+        scope: 'code_session',
+      },
+      origin: 'web',
+      agentId: 'local',
+      userId: 'web-code-harness',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: 'code-session-1',
+      },
+    });
+    expect(savedCodeSession.success).toBe(true);
     expect(codeMemoryStore.load('code-session-1')).toContain('parser');
 
     const recalled = await executor.runTool({
@@ -5119,10 +5146,35 @@ describe('ToolExecutor', () => {
     });
     expect(recalled.success).toBe(true);
     expect(recalled.output).toMatchObject({
-      scope: 'code_session',
-      codeSessionId: 'code-session-1',
+      scope: 'global',
+      agentId: SHARED_TIER_AGENT_STATE_ID,
     });
-    expect(String((recalled.output as { content: string }).content)).toContain('parser');
+    expect(String((recalled.output as { content: string }).content)).toContain('concise updates');
+
+    const recalledBoth = await executor.runTool({
+      toolName: 'memory_recall',
+      args: { scope: 'both' },
+      origin: 'web',
+      agentId: 'external',
+      userId: 'web-code-harness',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: 'code-session-1',
+      },
+    });
+    expect(recalledBoth.success).toBe(true);
+    expect(recalledBoth.output).toMatchObject({
+      scope: 'both',
+      global: expect.objectContaining({
+        scope: 'global',
+        agentId: SHARED_TIER_AGENT_STATE_ID,
+      }),
+      codeSession: expect.objectContaining({
+        scope: 'code_session',
+        codeSessionId: 'code-session-1',
+      }),
+    });
   });
 
   it('persists optional memory summaries and exposes them through memory_recall', async () => {
@@ -5462,13 +5514,25 @@ describe('ToolExecutor', () => {
     conversations.close();
   });
 
-  it('searches the current code-session persistent memory when scope=persistent', async () => {
+  it('searches both global and current code-session persistent memory by default inside Code', async () => {
     const root = createExecutorRoot();
+    const globalMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-global'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
     const codeMemoryStore = new AgentMemoryStore({
       enabled: true,
       basePath: join(root, 'memory-code'),
       maxContextChars: 4000,
       maxFileChars: 20000,
+    });
+    globalMemoryStore.append(SHARED_TIER_AGENT_STATE_ID, {
+      content: 'Global parser preference: keep status updates concise during parser work.',
+      summary: 'Global parser preference.',
+      createdAt: '2026-03-19',
+      category: 'Preferences',
     });
     codeMemoryStore.append('code-session-1', {
       content: 'Parser refactor note: keep scanner and parser errors isolated.',
@@ -5484,12 +5548,16 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
+      agentMemoryStore: globalMemoryStore,
       codeSessionMemoryStore: codeMemoryStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
     });
 
     const searched = await executor.runTool({
       toolName: 'memory_search',
-      args: { query: 'parser refactor', scope: 'persistent' },
+      args: { query: 'parser', scope: 'persistent' },
       origin: 'web',
       agentId: 'local',
       userId: 'web-code-harness',
@@ -5503,15 +5571,69 @@ describe('ToolExecutor', () => {
     expect(searched.success).toBe(true);
     const output = searched.output as {
       currentPersistentScope: string | null;
+      persistentScopesSearched: string[];
       results: Array<{ source: string; summary?: string; content: string }>;
     };
-    expect(output.currentPersistentScope).toBe('code_session');
-    expect(output.results).toHaveLength(1);
-    expect(output.results[0]).toMatchObject({
-      source: 'code_session',
-      summary: 'Parser refactor note.',
+    expect(output.currentPersistentScope).toBe('global');
+    expect(output.persistentScopesSearched).toEqual(['global', 'code_session']);
+    expect(output.results.some((row) => row.source === 'global')).toBe(true);
+    expect(output.results.some((row) => row.source === 'code_session')).toBe(true);
+    expect(output.results.some((row) => row.summary === 'Parser refactor note.')).toBe(true);
+  });
+
+  it('matches close persistent-memory variants across wrapped hyphenated markers', async () => {
+    const root = createExecutorRoot();
+    const memoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
     });
-    expect(output.results[0]?.content).toContain('scanner and parser errors isolated');
+    memoryStore.append(SHARED_TIER_AGENT_STATE_ID, {
+      content: 'my test marker is global-memory-\n marker-maple-58',
+      createdAt: '2026-04-01',
+      category: 'Test Marker',
+    });
+    memoryStore.append(SHARED_TIER_AGENT_STATE_ID, {
+      content: 'Test marker for global use — global-memory-marker-cedar-47',
+      createdAt: '2026-04-01',
+      category: 'Test Marker',
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: memoryStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const searched = await executor.runTool({
+      toolName: 'memory_search',
+      args: {
+        query: 'global-memory-marker-maple-58',
+        scope: 'persistent',
+      },
+      origin: 'web',
+      agentId: 'local',
+      userId: 'u1',
+      channel: 'web',
+    });
+
+    expect(searched.success).toBe(true);
+    const output = searched.output as {
+      resultCount: number;
+      results: Array<{ source: string; content: string }>;
+    };
+    expect(output.resultCount).toBeGreaterThan(0);
+    expect(output.results.some((row) => row.source === 'global')).toBe(true);
+    expect(output.results.some((row) => row.content.includes('global-memory'))).toBe(true);
+    expect(output.results.some((row) => row.content.includes('cedar-47'))).toBe(false);
   });
 
   describe('web_search', () => {

@@ -4353,6 +4353,45 @@ describe('WebChannel', () => {
       }]);
     });
 
+    it('POST /api/tools/approvals/decision forwards surface identity to onToolsApprovalDecision', async () => {
+      const calls: Array<{ approvalId: string; userId?: string; channel?: string; surfaceId?: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onToolsApprovalDecision: async (input) => {
+          calls.push({
+            approvalId: input.approvalId,
+            userId: input.userId,
+            channel: input.channel,
+            surfaceId: input.surfaceId,
+          });
+          return { success: true, message: 'Approved.' };
+        },
+      };
+
+      web = new WebChannel({ port: 18978, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18978/api/tools/approvals/decision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          approvalId: 'approval-memory-1',
+          decision: 'approved',
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([{
+        approvalId: 'approval-memory-1',
+        userId: 'web-user',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
     it('POST /api/message/stream rejects non-string content', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,

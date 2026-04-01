@@ -17,7 +17,7 @@ The Coding Workspace is Guardian’s repo-scoped coding workflow surface.
 It provides:
 
 - backend-owned coding sessions
-- repo-aware assistant chat with backend workspace profiling, bounded repo indexing, and retrieval-backed working context
+- repo-aware Guardian chat with backend workspace profiling, bounded repo indexing, and retrieval-backed working context
 - explorer and source/diff inspection
 - approval-aware coding execution
 - PTY terminals for manual operator shell work
@@ -25,6 +25,12 @@ It provides:
 - broader Guardian actions performed from the active workspace context
 
 It is not a separate runtime. It is a coding mode built on the main Guardian runtime, tool executor, conversation service, and policy system.
+
+Guardian no longer has a separate built-in "coding assistant" identity. The product model is:
+
+- one Guardian agent
+- zero or one attached coding session per surface at a time
+- a session-local coding transcript and session-local long-term memory scope while that attachment is active
 
 ## Architecture Summary
 
@@ -159,9 +165,10 @@ Each coding session gets its own backend conversation identity:
 That means:
 
 - a coding session has one durable coding transcript
-- the transcript is separate from the normal main-chat transcript
+- the transcript is separate from the regular Guardian chat transcript on that surface
 - web Code, main chat, CLI, and Telegram can all attach to the same coding session and continue that same coding transcript
 - sharing the same backend coding transcript does not make those clients equivalent; the web Code page remains the dedicated coding-session client, while main chat, CLI, and Telegram remain their own chat surfaces
+- the attachment model is surface-local: each surface can focus one coding session at a time without creating a second Guardian identity
 
 The Code page is still a separate coding conversation surface in UX terms, but it is no longer a browser-only conversation.
 
@@ -206,7 +213,7 @@ That means:
 - the default reasoning context comes from the active backend code session: workspace root, workspace profile, indexed repo map, current working set, focus summary, selected file, recent work, approvals, and checks
 - Guardian's own host-app repo/application context is not part of the default Code-session context
 - Code uses a dedicated Code-session prompt architecture rather than inheriting the main Guardian host prompt and trying to rewrite it after the fact
-- Code sessions use a separate durable long-term memory store instead of preloading Guardian's global memory
+- Code sessions use a separate durable long-term memory store as bounded workspace-scoped augment context while still keeping Guardian global memory as the primary durable memory scope
 - repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
 - Coding-session shell execution prefers structured direct exec for simple repo-local binaries and blocks known interpreter/launcher trampoline forms instead of treating every command as an opaque shell string
 - broader Guardian capabilities remain available from within the Coding Workspace, including research, web/docs lookup, automation creation, and unrelated assistant tasks
@@ -411,14 +418,16 @@ Chat flow:
 - if the session is missing or stale, the request returns a structured error instead of silently falling back to normal Guardian chat
 - `ChatAgent` and tool dispatch receive the authoritative backend session context
 - prompt assembly includes structured coding-session context plus the durable workspace profile and focus summary
-- prompt assembly for Code uses Code-session memory only; Guardian global memory is not injected into Code-session turns
+- prompt assembly for Code keeps Guardian global memory as the primary persistent memory scope and injects bounded Code-session memory as session-local augment context
+- when the coding prompt is compacted for budget, the session now keeps a bounded `compactedSummary` plus trace-safe compaction diagnostics instead of silently dropping that context
 - tool execution gets a repo-scoped `codeContext`
 - session snapshots expose `pendingApprovals` and `recentJobs` derived from records bound to that code session id
+- the session timeline now also surfaces bounded model-response provenance and context-compaction diagnostics for recent runs
 - chat/blocking state for coding flows is tracked separately through the cross-channel `PendingActionStore`
 
 ## Main Chat And Remote Channels
 
-The main Guardian agent can see coding sessions through coding-session tools:
+The single Guardian agent can see coding sessions through coding-session tools:
 
 - `code_session_list`
 - `code_session_current`
@@ -448,8 +457,8 @@ Built-in coding session tools:
 
 Memory behavior:
 
-- `memory_recall` and `memory_save` bind to Code-session memory when the current request is inside a Code session
-- `memory_search` can search Code-session conversation history, Code-session persistent memory, or both; `scope: "persistent"` targets the current Code-session memory by default
+- `memory_recall` and `memory_save` default to Guardian global memory even when the current request is inside a Code session; `scope: "code_session"` is the explicit session-local path
+- `memory_search` can search Code-session conversation history, persistent memory, or both; inside Code, persistent search defaults to both global memory and the attached Code-session memory unless `persistentScope` narrows it
 - `memory_bridge_search` provides explicit read-only lookup across the global/code-session memory boundary without changing the current session context or objective
 - the shared `assistant.memory.knowledgeBase.readOnly` freeze also applies to Code-session durable memory, so `memory_save` and automatic flush writes are blocked while it is enabled
 - Code-session memory context is rebuilt from the verified `codeSessionId.index.json` state; if that index is tampered with, the session memory is treated as empty rather than trusting the markdown cache
@@ -477,7 +486,7 @@ As built:
 
 - the runtime exposes `coding_backend_list`, `coding_backend_run`, and `coding_backend_status`
 - delegation is opt-in and should only happen when the user explicitly asks to use an external coding tool such as Claude Code, Codex, Gemini CLI, or Aider
-- mentioning Codex or another backend as the subject of a question should not relaunch it by itself; explanation or investigation questions about backend-produced artifacts should stay on the normal assistant path unless the user explicitly asks Guardian to use that backend
+- mentioning Codex or another backend as the subject of a question should not relaunch it by itself; explanation or investigation questions about backend-produced artifacts should stay on the normal Guardian chat path unless the user explicitly asks Guardian to use that backend
 - backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
 - approval copy for delegated backend runs names the active coding workspace before launch so the operator can verify the target repo
 - if a delegated coding request explicitly names a different coding workspace than the current attachment, Guardian should stop and require the operator to switch that chat surface first rather than silently writing into the wrong repo
@@ -593,7 +602,7 @@ General memory system:
 Code-session memory system:
 
 - durable long-term memory keyed by `codeSessionId`
-- prompt-time memory injection only for that Code session
+- prompt-time memory injection only when that Code session is active, and only as bounded augment context layered after global memory
 - Code-session-only memory flush/compaction targets
 - explicit read-only bridge lookup into global memory when requested
 

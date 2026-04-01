@@ -333,7 +333,7 @@ export async function initChatPanel(container) {
 
       try {
         const summary = results.join('; ');
-        const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`;
+        const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`;
         const response = await api.sendMessage(
           msg,
           getAgentId(),

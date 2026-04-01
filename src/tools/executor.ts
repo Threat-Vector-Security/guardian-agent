@@ -191,6 +191,12 @@ type PersistentMemorySearchCandidate = {
   scoreHint: number;
 };
 type UnifiedMemorySearchCandidate = ConversationMemorySearchCandidate | PersistentMemorySearchCandidate;
+type PersistentMemoryContextTarget = {
+  source: 'global' | 'code_session';
+  id: string;
+  store?: AgentMemoryStore;
+  guardPath: string;
+};
 const CODE_ASSISTANT_ALLOWED_COMMANDS = [
   'git',
   'node',
@@ -1962,22 +1968,45 @@ export class ToolExecutor {
     query: string,
     limit: number,
   ): PersistentMemorySearchMatch[] {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = this.normalizePersistentMemorySearchText(query);
     if (!normalizedQuery) {
       return [];
     }
 
-    const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
+    const queryTerms = this.extractPersistentMemorySearchTerms(normalizedQuery);
+    const identifierFragments = this.extractPersistentMemorySearchIdentifiers(query);
     const preview = (value: string) => value.length > 500 ? `${value.slice(0, 500)}...` : value;
 
-    const matches: Array<PersistentMemorySearchMatch & { recencyIndex: number }> = [];
+    const matches: Array<PersistentMemorySearchMatch & {
+      recencyIndex: number;
+      fullComparableHit: boolean;
+      matchedIdentifierCount: number;
+    }> = [];
     store.getEntries(targetId).forEach((entry, index) => {
-      const content = entry.content.toLowerCase();
-      const summary = entry.summary?.toLowerCase() ?? '';
-      const category = entry.category?.toLowerCase() ?? '';
-      const tags = Array.isArray(entry.tags) ? entry.tags.join(' ').toLowerCase() : '';
+      const content = this.normalizePersistentMemorySearchText(entry.content);
+      const summary = this.normalizePersistentMemorySearchText(entry.summary ?? '');
+      const category = this.normalizePersistentMemorySearchText(entry.category ?? '');
+      const tags = Array.isArray(entry.tags) ? this.normalizePersistentMemorySearchText(entry.tags.join(' ')) : '';
+      const comparableContent = this.buildPersistentMemoryComparable(content);
+      const comparableSummary = this.buildPersistentMemoryComparable(summary);
+      const comparableCategory = this.buildPersistentMemoryComparable(category);
+      const comparableTags = this.buildPersistentMemoryComparable(tags);
+      const comparableQuery = this.buildPersistentMemoryComparable(normalizedQuery);
+      const fullComparableHit = comparableQuery.length > 0 && (
+        comparableContent.includes(comparableQuery)
+        || comparableSummary.includes(comparableQuery)
+        || comparableCategory.includes(comparableQuery)
+        || comparableTags.includes(comparableQuery)
+      );
+      const matchedIdentifierCount = identifierFragments.filter((fragment) => (
+        comparableContent.includes(fragment)
+        || comparableSummary.includes(fragment)
+        || comparableCategory.includes(fragment)
+        || comparableTags.includes(fragment)
+      )).length;
 
       let matchScore = 0;
+      if (fullComparableHit) matchScore += 240;
       if (content.includes(normalizedQuery)) matchScore += 120;
       if (summary.includes(normalizedQuery)) matchScore += 150;
       if (category.includes(normalizedQuery)) matchScore += 90;
@@ -2008,13 +2037,51 @@ export class ToolExecutor {
         provenance: entry.provenance ? { ...entry.provenance } as Record<string, unknown> : undefined,
         matchScore,
         recencyIndex: index,
+        fullComparableHit,
+        matchedIdentifierCount,
       });
     });
 
-    return matches
+    const filtered = identifierFragments.length > 0
+      ? matches.filter((entry) => entry.matchedIdentifierCount > 0)
+      : (matches.some((entry) => entry.fullComparableHit)
+          ? matches.filter((entry) => entry.fullComparableHit)
+          : matches);
+
+    return filtered
       .sort((a, b) => b.matchScore - a.matchScore || a.recencyIndex - b.recencyIndex)
       .slice(0, limit)
-      .map(({ recencyIndex: _recencyIndex, ...entry }) => entry);
+      .map(({ recencyIndex: _recencyIndex, fullComparableHit: _fullComparableHit, matchedIdentifierCount: _matchedIdentifierCount, ...entry }) => entry);
+  }
+
+  private normalizePersistentMemorySearchText(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/\s*-\s*/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private extractPersistentMemorySearchTerms(value: string): string[] {
+    return [...new Set(
+      value
+        .split(/[^a-z0-9]+/)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2),
+    )];
+  }
+
+  private extractPersistentMemorySearchIdentifiers(query: string): string[] {
+    return [...new Set(
+      query
+        .split(/\b(?:and|or)\b|[,;]+/i)
+        .map((fragment) => this.buildPersistentMemoryComparable(fragment))
+        .filter((fragment) => fragment.length >= 10 && /\d/.test(fragment)),
+    )];
+  }
+
+  private buildPersistentMemoryComparable(value: string): string {
+    return value.replace(/[^a-z0-9]+/g, '');
   }
 
   private normalizeMemorySearchScope(input: unknown): 'conversation' | 'persistent' | 'both' | null {
@@ -2023,6 +2090,63 @@ export class ToolExecutor {
       return scope;
     }
     return null;
+  }
+
+  private normalizePersistentMemoryScope(
+    input: unknown,
+    request?: Partial<ToolExecutionRequest>,
+    fallbackScope?: 'global' | 'code_session' | 'both',
+  ): 'global' | 'code_session' | 'both' | null {
+    const explicit = typeof input === 'string' && input.trim().length > 0;
+    const fallback = fallbackScope ?? (request?.codeContext?.sessionId?.trim() ? 'both' : 'global');
+    const scope = asString(input, explicit ? '' : fallback).trim().toLowerCase();
+    if (!scope) return fallback;
+    if (scope === 'global' || scope === 'code_session' || scope === 'both') {
+      return scope;
+    }
+    return null;
+  }
+
+  private normalizeMemoryMutationScope(input: unknown): 'global' | 'code_session' | null {
+    const scope = asString(input, 'global').trim().toLowerCase();
+    if (scope === 'global' || scope === 'code_session') {
+      return scope;
+    }
+    return null;
+  }
+
+  private resolvePersistentMemoryContexts(
+    targetScope: 'global' | 'code_session' | 'both',
+    sessionId: string | undefined,
+    request?: Partial<ToolExecutionRequest>,
+    explicitGlobalAgentId?: string,
+  ): { contexts: PersistentMemoryContextTarget[]; error?: string } {
+    const contexts: PersistentMemoryContextTarget[] = [];
+    if (targetScope === 'global' || targetScope === 'both') {
+      const globalMemory = this.getGlobalMemoryContext(request, explicitGlobalAgentId);
+      contexts.push({
+        source: 'global',
+        id: globalMemory.agentId,
+        store: globalMemory.store,
+        guardPath: 'memory:knowledge_base',
+      });
+    }
+    if (targetScope === 'code_session' || targetScope === 'both') {
+      const codeMemory = this.resolveCodeSessionMemoryContext(sessionId, request);
+      if (!codeMemory) {
+        return {
+          contexts,
+          error: 'A reachable code session is required to access code-session memory.',
+        };
+      }
+      contexts.push({
+        source: 'code_session',
+        id: codeMemory.sessionId,
+        store: codeMemory.store,
+        guardPath: `memory:code_session:${codeMemory.sessionId}`,
+      });
+    }
+    return { contexts };
   }
 
   private fuseRankedMemorySearchResults(
@@ -3649,7 +3773,7 @@ export class ToolExecutor {
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
     if (isMemoryMutationToolName(toolName)) {
-      return this.getMemoryMutationReadOnlyError(request);
+      return this.getMemoryMutationReadOnlyError(args, request);
     }
 
     if (toolName === 'shell_safe') {
@@ -4329,14 +4453,22 @@ export class ToolExecutor {
   }
 
   private getMemoryMutationReadOnlyError(
+    args?: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ): string | null {
-    const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
-    if (codeMemory?.store?.isReadOnly()) {
-      return 'Code-session memory is read-only.';
+    const targetScope = this.normalizeMemoryMutationScope(args?.scope);
+    if (targetScope === 'code_session') {
+      const codeMemory = this.resolveCodeSessionMemoryContext(asString(args?.sessionId), request);
+      if (!codeMemory) {
+        return 'A reachable code session is required to save code-session memory.';
+      }
+      if (codeMemory?.store?.isReadOnly()) {
+        return 'Code-session memory is read-only.';
+      }
+      return null;
     }
     const globalMemory = this.getGlobalMemoryContext(request);
-    if (!codeMemory && globalMemory.store?.isReadOnly()) {
+    if (globalMemory.store?.isReadOnly()) {
       return 'Persistent memory is read-only.';
     }
     return null;
@@ -13524,7 +13656,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_search',
-        description: 'Search conversation history, persistent memory, or both. Conversation results use FTS5 BM25 ranking when available; persistent-memory results use deterministic field-aware ranking. Results are merged into one ranked list.',
+        description: 'Search conversation history, persistent memory, or both. Conversation results use FTS5 BM25 ranking when available; persistent-memory results use deterministic field-aware ranking. In Code sessions, persistent search defaults to both global and code-session memory unless persistentScope is set.',
         shortDescription: 'Search conversation history and persistent memory.',
         risk: 'read_only',
         category: 'memory',
@@ -13536,6 +13668,15 @@ export class ToolExecutor {
               type: 'string',
               enum: ['conversation', 'persistent', 'both'],
               description: 'Which memory surface to search. Defaults to both.',
+            },
+            persistentScope: {
+              type: 'string',
+              enum: ['global', 'code_session', 'both'],
+              description: 'Which persistent memory scope to search when scope includes persistent memory. Defaults to global outside Code and both inside Code.',
+            },
+            sessionId: {
+              type: 'string',
+              description: 'Required when persistentScope includes code_session and the current request is not already attached to that coding session.',
             },
             limit: { type: 'number', description: 'Maximum results to return (default: 10, max: 50).' },
           },
@@ -13549,6 +13690,11 @@ export class ToolExecutor {
         if (!scope) {
           return { success: false, error: 'scope must be one of "conversation", "persistent", or "both".' };
         }
+        const persistentScope = this.normalizePersistentMemoryScope(args.persistentScope, request);
+        if (!persistentScope) {
+          return { success: false, error: 'persistentScope must be one of "global", "code_session", or "both".' };
+        }
+        const persistentSessionId = asString(args.sessionId).trim() || undefined;
 
         const conversationService = this.options.conversationService;
         const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 50);
@@ -13580,53 +13726,47 @@ export class ToolExecutor {
           });
         }
 
-        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
-        const persistentContext = codeMemory
-          ? {
-            source: 'code_session' as const,
-            id: codeMemory.sessionId,
-            store: codeMemory.store,
-            guardPath: `memory:code_session:${codeMemory.sessionId}`,
-          }
-          : {
-            source: 'global' as const,
-            id: this.getGlobalMemoryContext(request).agentId,
-            store: this.getGlobalMemoryContext(request).store,
-            guardPath: 'memory:knowledge_base',
-          };
-
         const persistentRanked: PersistentMemorySearchCandidate[] = [];
-        if (searchPersistent && persistentContext.store) {
-          this.guardAction(request, 'read_file', { path: persistentContext.guardPath, query });
-          const results = this.searchPersistentMemoryEntries(
-            persistentContext.store,
-            persistentContext.id,
-            query,
-            Math.min(limit * 2, 100),
-          );
-          results.forEach((entry) => {
-            persistentRanked.push({
-              key: `${persistentContext.source}:${entry.id}`,
-              source: persistentContext.source,
-              type: 'memory_entry',
-              entryId: entry.id,
-              createdAt: entry.createdAt,
-              category: entry.category,
-              summary: entry.summary,
-              content: entry.content,
-              trustLevel: entry.trustLevel,
-              status: entry.status,
-              tags: entry.tags,
-              provenance: entry.provenance,
-              scoreHint: entry.matchScore,
+        const searchedPersistentScopes: Array<'global' | 'code_session'> = [];
+        if (searchPersistent) {
+          const resolvedPersistent = this.resolvePersistentMemoryContexts(persistentScope, persistentSessionId, request);
+          if (resolvedPersistent.error) {
+            return { success: false, error: resolvedPersistent.error };
+          }
+          for (const persistentContext of resolvedPersistent.contexts) {
+            if (!persistentContext.store) continue;
+            searchedPersistentScopes.push(persistentContext.source);
+            this.guardAction(request, 'read_file', { path: persistentContext.guardPath, query });
+            const results = this.searchPersistentMemoryEntries(
+              persistentContext.store,
+              persistentContext.id,
+              query,
+              Math.min(limit * 2, 100),
+            );
+            results.forEach((entry) => {
+              persistentRanked.push({
+                key: `${persistentContext.source}:${entry.id}`,
+                source: persistentContext.source,
+                type: 'memory_entry',
+                entryId: entry.id,
+                createdAt: entry.createdAt,
+                category: entry.category,
+                summary: entry.summary,
+                content: entry.content,
+                trustLevel: entry.trustLevel,
+                status: entry.status,
+                tags: entry.tags,
+                provenance: entry.provenance,
+                scoreHint: entry.matchScore,
+              });
             });
-          });
+          }
         }
 
         if (scope === 'conversation' && !conversationService) {
           return { success: false, error: 'Conversation memory is not enabled.' };
         }
-        if (scope === 'persistent' && !persistentContext.store) {
+        if (scope === 'persistent' && searchedPersistentScopes.length === 0) {
           return { success: false, error: 'Persistent memory is not enabled.' };
         }
 
@@ -13644,7 +13784,8 @@ export class ToolExecutor {
             query,
             scope,
             hasFTS: conversationService?.hasFTS ?? false,
-            currentPersistentScope: persistentContext.store ? persistentContext.source : null,
+            currentPersistentScope: 'global',
+            persistentScopesSearched: searchedPersistentScopes,
             resultCount: fusedResults.length,
             results: fusedResults.map((result) => ({
               rank: result.rank,
@@ -13680,8 +13821,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_recall',
-        description: 'Retrieve persistent long-term memory. In a Code session, this reads the session-specific coding memory. Outside Code, it reads the current agent knowledge base.',
-        shortDescription: 'Retrieve the current scope\'s persistent long-term memory.',
+        description: 'Retrieve persistent long-term memory. Global memory remains the primary scope. Code-session memory is available explicitly as session-local augment memory.',
+        shortDescription: 'Retrieve global or code-session persistent memory.',
         risk: 'read_only',
         category: 'memory',
         deferLoading: true,
@@ -13689,56 +13830,63 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             agentId: { type: 'string', description: 'Agent ID to retrieve knowledge base for (defaults to current agent).' },
+            scope: {
+              type: 'string',
+              enum: ['global', 'code_session', 'both'],
+              description: 'Which persistent memory scope to retrieve. Defaults to global.',
+            },
+            sessionId: {
+              type: 'string',
+              description: 'Required when scope includes code_session and the current request is not already attached to that coding session.',
+            },
           },
         },
       },
       async (args, request) => {
-        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
-        if (codeMemory) {
-          this.guardAction(request, 'read_file', { path: `memory:code_session:${codeMemory.sessionId}` });
-          if (!codeMemory.store) {
-            return { success: false, error: 'Code-session memory is not enabled.' };
+        const scope = this.normalizePersistentMemoryScope(args.scope, request, 'global');
+        if (!scope) {
+          return { success: false, error: 'scope must be one of "global", "code_session", or "both".' };
+        }
+        const resolved = this.resolvePersistentMemoryContexts(scope, asString(args.sessionId), request, asString(args.agentId));
+        if (resolved.error) {
+          return { success: false, error: resolved.error };
+        }
+
+        const outputs: Array<{
+          scope: 'global' | 'code_session';
+          agentId?: string;
+          codeSessionId?: string;
+          exists: boolean;
+          sizeChars: number;
+          entries: Array<{
+            id: string;
+            createdAt: string;
+            category?: string;
+            summary?: string;
+            content: string;
+            trustLevel?: string;
+            status?: string;
+          }>;
+          content: string;
+        }> = [];
+
+        for (const context of resolved.contexts) {
+          this.guardAction(request, 'read_file', { path: context.guardPath });
+          if (!context.store) {
+            return {
+              success: false,
+              error: context.source === 'global'
+                ? 'Knowledge base is not enabled.'
+                : 'Code-session memory is not enabled.',
+            };
           }
-          const content = codeMemory.store.load(codeMemory.sessionId);
-          return {
-            success: true,
-            output: {
-              scope: 'code_session',
-              codeSessionId: codeMemory.sessionId,
-              exists: codeMemory.store.exists(codeMemory.sessionId),
-              sizeChars: codeMemory.store.size(codeMemory.sessionId),
-              entries: codeMemory.store.getEntries(codeMemory.sessionId).map((entry) => ({
-                id: entry.id,
-                createdAt: entry.createdAt,
-                category: entry.category,
-                summary: entry.summary,
-                content: entry.content,
-                trustLevel: entry.trustLevel,
-                status: entry.status,
-              })),
-              content: content || '(empty — no coding memories stored yet)',
-            },
-          };
-        }
-
-        this.guardAction(request, 'read_file', { path: 'memory:knowledge_base' });
-
-        const globalMemory = this.getGlobalMemoryContext(request, asString(args.agentId));
-        if (!globalMemory.store) {
-          return { success: false, error: 'Knowledge base is not enabled.' };
-        }
-
-        const content = globalMemory.store.load(globalMemory.agentId);
-        const size = globalMemory.store.size(globalMemory.agentId);
-
-        return {
-          success: true,
-          output: {
-            scope: 'global',
-            agentId: globalMemory.agentId,
-            exists: globalMemory.store.exists(globalMemory.agentId),
-            sizeChars: size,
-            entries: globalMemory.store.getEntries(globalMemory.agentId).map((entry) => ({
+          const content = context.store.load(context.id);
+          outputs.push({
+            scope: context.source,
+            ...(context.source === 'global' ? { agentId: context.id } : { codeSessionId: context.id }),
+            exists: context.store.exists(context.id),
+            sizeChars: context.store.size(context.id),
+            entries: context.store.getEntries(context.id).map((entry) => ({
               id: entry.id,
               createdAt: entry.createdAt,
               category: entry.category,
@@ -13747,8 +13895,27 @@ export class ToolExecutor {
               trustLevel: entry.trustLevel,
               status: entry.status,
             })),
-            content: content || '(empty — no memories stored yet)',
-          },
+            content: content || (context.source === 'global'
+              ? '(empty — no memories stored yet)'
+              : '(empty — no coding memories stored yet)'),
+          });
+        }
+
+        if (scope === 'both') {
+          return {
+            success: true,
+            output: {
+              scope: 'both',
+              global: outputs.find((entry) => entry.scope === 'global') ?? null,
+              codeSession: outputs.find((entry) => entry.scope === 'code_session') ?? null,
+            },
+          };
+        }
+
+        const only = outputs[0];
+        return {
+          success: true,
+          output: only,
         };
       },
     );
@@ -13756,8 +13923,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_save',
-        description: 'Save a fact, preference, decision, or summary to persistent long-term memory. In a Code session, this writes to the session-specific coding memory. Outside Code, it writes to the current agent knowledge base.',
-        shortDescription: 'Save a fact or summary to the current scope\'s persistent memory.',
+        description: 'Save a fact, preference, decision, or summary to persistent long-term memory. Global memory is the default target. Use scope=code_session for session-local coding memory.',
+        shortDescription: 'Save a fact or summary to global or code-session memory.',
         risk: 'mutating',
         category: 'memory',
         parameters: {
@@ -13766,6 +13933,15 @@ export class ToolExecutor {
             content: { type: 'string', description: 'The fact, preference, or summary to remember.' },
             summary: { type: 'string', description: 'Optional short gist used when memory is packed back into prompt context.' },
             category: { type: 'string', description: 'Optional category heading (e.g., "Preferences", "Decisions", "Facts", "Project Notes").' },
+            scope: {
+              type: 'string',
+              enum: ['global', 'code_session'],
+              description: 'Which persistent memory scope to write. Defaults to global.',
+            },
+            sessionId: {
+              type: 'string',
+              description: 'Required when scope=code_session and the current request is not already attached to that coding session.',
+            },
           },
           required: ['content'],
         },
@@ -13775,7 +13951,11 @@ export class ToolExecutor {
         if (!content) return { success: false, error: 'Content is required.' };
         const summary = asString(args.summary).trim() || undefined;
         const category = asString(args.category).trim() || undefined;
-        const readOnlyError = this.getMemoryMutationReadOnlyError(request);
+        const targetScope = this.normalizeMemoryMutationScope(args.scope);
+        if (!targetScope) {
+          return { success: false, error: 'scope must be one of "global" or "code_session".' };
+        }
+        const readOnlyError = this.getMemoryMutationReadOnlyError(args, request);
         if (readOnlyError) {
           return { success: false, error: readOnlyError };
         }
@@ -13785,8 +13965,11 @@ export class ToolExecutor {
           ? 'active'
           : 'quarantined';
 
-        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
-        if (codeMemory) {
+        if (targetScope === 'code_session') {
+          const codeMemory = this.resolveCodeSessionMemoryContext(asString(args.sessionId), request);
+          if (!codeMemory) {
+            return { success: false, error: 'A reachable code session is required to save code-session memory.' };
+          }
           this.guardAction(request, 'write_file', { path: `memory:code_session:${codeMemory.sessionId}`, content });
           if (!codeMemory.store) {
             return { success: false, error: 'Code-session memory is not enabled.' };

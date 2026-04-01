@@ -78,6 +78,7 @@ const DOMAIN_KEYWORDS: Record<string, { keywords: RegExp; capabilities: string[]
 };
 
 const LOCAL_PREFERRED_INTENT_ROUTES = new Set<IntentGatewayRoute>([
+  'memory_task',
   'filesystem_task',
   'coding_task',
   'coding_session_control',

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { IntentGatewayRecord } from './intent-gateway.js';
-import { resolveDirectIntentRoutingCandidates } from './direct-intent-routing.js';
+import {
+  resolveDirectIntentRoutingCandidates,
+  shouldAllowBoundedDegradedMemorySaveFallback,
+} from './direct-intent-routing.js';
 
 function mockGateway(partial: {
   route: string;
@@ -31,6 +34,8 @@ const ALL_CANDIDATES = [
   'coding_session_control',
   'coding_backend',
   'filesystem',
+  'memory_write',
+  'memory_read',
   'scheduled_email_automation',
   'automation',
   'automation_control',
@@ -136,6 +141,33 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('maps memory_task save requests to the memory_write candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'save' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['memory_write']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps memory_task read requests to the memory_read candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'read' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['memory_read']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps memory_task search requests to the memory_read candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'search' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['memory_read']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('maps high-confidence general_assistant route to no candidates', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'general_assistant', operation: 'unknown' }),
@@ -182,5 +214,42 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       ['filesystem', 'browser'], // coding_session_control is not available
     );
     expect(result.candidates).toEqual([]);
+  });
+});
+
+describe('shouldAllowBoundedDegradedMemorySaveFallback', () => {
+  it('allows the bounded fallback when the gateway is unavailable', () => {
+    expect(shouldAllowBoundedDegradedMemorySaveFallback(null)).toBe(true);
+  });
+
+  it('allows the bounded fallback for unavailable unknown results', () => {
+    expect(shouldAllowBoundedDegradedMemorySaveFallback({
+      mode: 'primary',
+      available: false,
+      model: 'test-model',
+      latencyMs: 10,
+      decision: {
+        route: 'unknown',
+        confidence: 'low',
+        operation: 'unknown',
+        summary: 'Intent gateway response was not structured.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {},
+      },
+    })).toBe(true);
+  });
+
+  it('does not allow the bounded fallback for low-confidence general_assistant results', () => {
+    expect(shouldAllowBoundedDegradedMemorySaveFallback(
+      mockGateway({ route: 'general_assistant', operation: 'unknown', confidence: 'low' }),
+    )).toBe(false);
+  });
+
+  it('does not allow the bounded fallback for ordinary structured memory routing', () => {
+    expect(shouldAllowBoundedDegradedMemorySaveFallback(
+      mockGateway({ route: 'memory_task', operation: 'save' }),
+    )).toBe(false);
   });
 });

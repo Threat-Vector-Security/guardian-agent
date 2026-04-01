@@ -190,6 +190,7 @@ import { tryAutomationOutputPreRoute } from './runtime/automation-output-prerout
 import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
 import {
   resolveDirectIntentRoutingCandidates,
+  shouldAllowBoundedDegradedMemorySaveFallback,
   type DirectIntentRoutingCandidate,
 } from './runtime/direct-intent-routing.js';
 import {
@@ -197,6 +198,7 @@ import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
   attachPreRoutedIntentGatewayMetadata,
   readPreRoutedIntentGatewayMetadata,
+  shouldReusePreRoutedIntentGateway,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRoute,
@@ -249,6 +251,7 @@ import {
   buildPromptAssemblyDiagnostics,
   buildSystemPromptWithContext,
   type PromptAssemblyDiagnostics,
+  type PromptAssemblyKnowledgeBase,
 } from './runtime/context-assembly.js';
 import {
   isGenericPendingActionContinuationRequest,
@@ -291,6 +294,13 @@ import {
   shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
+import {
+  buildApprovalContinuationScopeKey,
+  findSuspendedApprovalState,
+  normalizeApprovalContinuationScope,
+  selectSuspendedOriginalMessage,
+  type ApprovalContinuationScope,
+} from './runtime/approval-continuations.js';
 
 function getCodeSessionSurfaceId(args: { surfaceId?: string; userId?: string; principalId?: string }): string {
   const surfaceId = typeof args.surfaceId === 'string' && args.surfaceId.trim()
@@ -305,11 +315,18 @@ function getCodeSessionSurfaceId(args: { surfaceId?: string; userId?: string; pr
 }
 import {
   getMemoryMutationIntentDeniedMessage,
+  parseDirectMemoryReadRequest,
+  isDirectMemorySaveRequest,
   isMemoryMutationToolName,
+  parseDirectMemorySaveRequest,
+  resolveAffirmativeMemoryContinuationFromHistory,
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
-import { compactMessagesIfOverBudget as _compactMessagesIfOverBudget } from './util/context-budget.js';
+import {
+  compactMessagesIfOverBudget as _compactMessagesIfOverBudget,
+  type ContextCompactionResult,
+} from './util/context-budget.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 
 const log = createLogger('main');
@@ -691,7 +708,7 @@ interface SuspendedToolCall {
 }
 
 interface SuspendedSession {
-  userKey: string;
+  scope: Required<ApprovalContinuationScope>;
   llmMessages: import('./llm/types.js').ChatMessage[];
   pendingTools: SuspendedToolCall[];
   originalMessage: UserMessage;
@@ -712,6 +729,8 @@ interface AutomationApprovalContinuation {
 
 type DirectIntentShadowCandidate =
   | 'filesystem'
+  | 'memory_write'
+  | 'memory_read'
   | 'coding_backend'
   | 'coding_session_control'
   | 'scheduled_email_automation'
@@ -733,7 +752,7 @@ class ChatAgent extends BaseAgent {
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
-  /** Suspended tool loops waiting for approval, keyed by user+channel. */
+  /** Suspended tool loops waiting for approval, keyed by logical chat surface. */
   private suspendedSessions = new Map<string, SuspendedSession>();
   /** Direct-tool approval follow-ups that should not go back through the LLM. */
   private approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
@@ -1103,17 +1122,21 @@ class ChatAgent extends BaseAgent {
     providerLocality: 'local' | 'external';
     usedFallback: boolean;
     notice?: string;
+    durationMs: number;
   }> {
     const primaryProviderName = ctx.llm?.name ?? 'unknown';
     const primaryProviderLocality = getProviderLocalityFromName(primaryProviderName);
 
     if (!this.fallbackChain) {
       try {
+        const startedAt = Date.now();
+        const response = await ctx.llm!.chat(messages, options);
         return {
-          response: await ctx.llm!.chat(messages, options),
+          response,
           providerName: primaryProviderName,
           providerLocality: primaryProviderLocality,
           usedFallback: false,
+          durationMs: Math.max(0, Date.now() - startedAt),
         };
       } catch (primaryError) {
         if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
@@ -1127,11 +1150,14 @@ class ChatAgent extends BaseAgent {
     }
 
     try {
+      const startedAt = Date.now();
+      const response = await ctx.llm!.chat(messages, options);
       return {
-        response: await ctx.llm!.chat(messages, options),
+        response,
         providerName: primaryProviderName,
         providerLocality: primaryProviderLocality,
         usedFallback: false,
+        durationMs: Math.max(0, Date.now() - startedAt),
       };
     } catch (primaryError) {
       log.warn(
@@ -1144,6 +1170,7 @@ class ChatAgent extends BaseAgent {
           throw primaryError;
         }
         try {
+          const startedAt = Date.now();
           const result = await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
           return {
             response: result.response,
@@ -1151,6 +1178,7 @@ class ChatAgent extends BaseAgent {
             providerLocality: getProviderLocalityFromName(result.providerName),
             usedFallback: true,
             notice: 'Retried with an alternate model after the local model failed to format a tool call.',
+            durationMs: Math.max(0, Date.now() - startedAt),
           };
         } catch (fallbackError) {
           log.warn(
@@ -1161,12 +1189,14 @@ class ChatAgent extends BaseAgent {
         }
       }
 
+      const startedAt = Date.now();
       const result = await this.fallbackChain.chatWithFallback(messages, options);
       return {
         response: result.response,
         providerName: result.providerName,
         providerLocality: getProviderLocalityFromName(result.providerName),
         usedFallback: result.usedFallback || result.providerName !== primaryProviderName,
+        durationMs: Math.max(0, Date.now() - startedAt),
       };
     }
   }
@@ -1227,8 +1257,13 @@ class ChatAgent extends BaseAgent {
       userId: conversationUserId,
       channel: conversationChannel,
     }) ?? [];
-    const userKey = `${conversationUserId}:${conversationChannel}`;
     const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
+    const suspendedScope = normalizeApprovalContinuationScope({
+      userId: pendingActionUserId,
+      channel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+    });
+    const suspendedSessionKey = buildApprovalContinuationScopeKey(suspendedScope);
     let continuityThread = this.touchContinuityThread(
       pendingActionUserId,
       pendingActionChannel,
@@ -1282,7 +1317,10 @@ class ChatAgent extends BaseAgent {
     // be handled before the worker path (which would scope the userId to the code-session
     // and return incomplete results). The gateway result is reused later to avoid a
     // redundant LLM call in the non-worker direct-intent routing path.
-    let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = readPreRoutedIntentGatewayMetadata(groundedScopedMessage.metadata);
+    const preRoutedGateway = readPreRoutedIntentGatewayMetadata(groundedScopedMessage.metadata);
+    let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = shouldReusePreRoutedIntentGateway(preRoutedGateway)
+      ? preRoutedGateway
+      : null;
     const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
     const resolvedPendingActionContinuation = this.resolvePendingActionContinuationContent(
       groundedScopedMessage.content,
@@ -1347,6 +1385,7 @@ class ChatAgent extends BaseAgent {
       }
       const resolvedGatewayContent = this.resolveIntentGatewayContent({
         gateway: earlyGateway,
+        currentContent: groundedScopedMessage.content,
         pendingAction,
         priorHistory,
       });
@@ -1465,7 +1504,7 @@ class ChatAgent extends BaseAgent {
 
     const isContinuation = message.content.includes('[User approved the pending tool action(s)') || 
                            message.content.includes('Tool actions have been decided');
-    const suspended = this.suspendedSessions.get(userKey);
+    const suspended = this.suspendedSessions.get(suspendedSessionKey);
     const requestIntentContent = (isContinuation && suspended)
       ? suspended.originalMessage.content
       : routedScopedMessage.content;
@@ -1485,6 +1524,61 @@ class ChatAgent extends BaseAgent {
       resolvedCodeSession,
     });
     let contextAssemblyMeta: PromptAssemblyDiagnostics | undefined;
+    let latestContextCompaction: ContextCompactionResult | undefined;
+    const applyContextCompactionMetadata = (
+      diagnostics: PromptAssemblyDiagnostics | undefined,
+      compaction: ContextCompactionResult | undefined,
+    ): PromptAssemblyDiagnostics | undefined => {
+      if (!diagnostics || !compaction?.applied) return diagnostics;
+      const stages = compaction.stages.filter((value) => typeof value === 'string' && value.trim().length > 0);
+      const compactedSummaryPreview = (() => {
+        const normalized = compaction.summary?.replace(/\s+/g, ' ').trim() || '';
+        if (!normalized) return undefined;
+        return normalized.length <= 160
+          ? normalized
+          : `${normalized.slice(0, 157).trimEnd()}...`;
+      })();
+      return {
+        ...diagnostics,
+        contextCompactionApplied: true,
+        contextCharsBeforeCompaction: compaction.beforeChars,
+        contextCharsAfterCompaction: compaction.afterChars,
+        ...(stages.length > 0 ? { contextCompactionStages: stages } : {}),
+        ...(compactedSummaryPreview ? { compactedSummaryPreview } : {}),
+      };
+    };
+    const buildResponseSourceMetadata = (input: {
+      locality: 'local' | 'external';
+      providerName: string;
+      response: import('./llm/types.js').ChatResponse;
+      usedFallback: boolean;
+      notice?: string;
+      durationMs?: number;
+    }): ResponseSourceMetadata => ({
+      locality: input.locality,
+      providerName: input.providerName,
+      ...(input.response.model?.trim() ? { model: input.response.model.trim() } : {}),
+      usedFallback: input.usedFallback,
+      ...(input.notice ? { notice: input.notice } : {}),
+      ...(typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
+        ? { durationMs: Math.max(0, input.durationMs) }
+        : {}),
+      ...(input.response.usage
+        ? {
+            usage: {
+              promptTokens: input.response.usage.promptTokens,
+              completionTokens: input.response.usage.completionTokens,
+              totalTokens: input.response.usage.totalTokens,
+              ...(typeof input.response.usage.cacheCreationTokens === 'number'
+                ? { cacheCreationTokens: input.response.usage.cacheCreationTokens }
+                : {}),
+              ...(typeof input.response.usage.cacheReadTokens === 'number'
+                ? { cacheReadTokens: input.response.usage.cacheReadTokens }
+                : {}),
+            },
+          }
+        : {}),
+    });
 
     let llmMessages: import('./llm/types.js').ChatMessage[];
     let skipDirectTools = false;
@@ -1507,16 +1601,18 @@ class ChatAgent extends BaseAgent {
           content: JSON.stringify(resultObj),
         });
       }
-      this.suspendedSessions.delete(userKey);
+      this.suspendedSessions.delete(suspendedSessionKey);
       skipDirectTools = true;
     } else {
       activeSkills = preResolvedSkills;
-      const scopedKnowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession, knowledgeBaseQuery);
+      const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
       contextAssemblyMeta = this.buildContextAssemblyMetadata({
-        memoryScope: resolvedCodeSession ? 'coding_session' : 'global',
-        knowledgeBase: scopedKnowledgeBase.content,
-        memorySelection: scopedKnowledgeBase.selection,
-        knowledgeBaseQuery: scopedKnowledgeBase.selection?.queryPreview,
+        memoryScope: 'global',
+        knowledgeBase: promptKnowledge.globalContent,
+        codingMemory: promptKnowledge.codingMemoryContent,
+        globalMemorySelection: promptKnowledge.globalSelection,
+        codingMemorySelection: promptKnowledge.codingMemorySelection,
+        knowledgeBaseQuery: promptKnowledge.queryPreview,
         activeSkillCount: activeSkills.length,
         pendingAction,
         continuityThread,
@@ -1527,8 +1623,7 @@ class ChatAgent extends BaseAgent {
       }
       enrichedSystemPrompt = this.buildAssembledSystemPrompt({
         baseSystemPrompt: enrichedSystemPrompt,
-        knowledgeBase: scopedKnowledgeBase.content,
-        resolvedCodeSession,
+        knowledgeBases: promptKnowledge.knowledgeBases,
         activeSkills,
         toolContext: this.tools?.getToolContext({
           userId: conversationUserId,
@@ -1575,6 +1670,8 @@ class ChatAgent extends BaseAgent {
           'coding_session_control',
           'coding_backend',
           'filesystem',
+          'memory_write',
+          'memory_read',
           'scheduled_email_automation',
           'automation',
           'automation_control',
@@ -1666,6 +1763,45 @@ class ChatAgent extends BaseAgent {
             return this.buildDirectIntentResponse({
               candidate,
               result: directSearch,
+              message,
+              routingMessage: routedScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'memory_write': {
+            const directMemorySave = await this.tryDirectMemorySave(
+              routedScopedMessage,
+              ctx,
+              pendingActionUserKey,
+              effectiveCodeContext,
+              message.content,
+            );
+            if (!directMemorySave) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directMemorySave,
+              message,
+              routingMessage: routedScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'memory_read': {
+            const directMemoryRead = await this.tryDirectMemoryRead(
+              routedScopedMessage,
+              ctx,
+              effectiveCodeContext,
+              message.content,
+            );
+            if (!directMemoryRead) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directMemoryRead,
               message,
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
@@ -1863,16 +1999,39 @@ class ChatAgent extends BaseAgent {
             break;
         }
       }
+
+      if (!directIntentRouting.gatewayDirected && shouldAllowBoundedDegradedMemorySaveFallback(directIntent)) {
+        const degradedMemorySave = await this.tryDirectMemorySave(
+          routedScopedMessage,
+          ctx,
+          pendingActionUserKey,
+          effectiveCodeContext,
+          message.content,
+        );
+        if (degradedMemorySave) {
+          return this.buildDegradedDirectIntentResponse({
+            candidate: 'memory_write',
+            result: degradedMemorySave,
+            message,
+            intentGateway: directIntent,
+            activeSkills,
+            conversationKey,
+            degradedReason: 'gateway_unavailable_or_unstructured',
+          });
+        }
+      }
     }
 
     if (workerManager) {
       try {
-        const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession, knowledgeBaseQuery);
+        const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
         const workerContextAssemblyMeta = this.buildContextAssemblyMetadata({
-          memoryScope: resolvedCodeSession ? 'coding_session' : 'global',
-          knowledgeBase: knowledgeBase.content,
-          memorySelection: knowledgeBase.selection,
-          knowledgeBaseQuery: knowledgeBase.selection?.queryPreview,
+          memoryScope: 'global',
+          knowledgeBase: promptKnowledge.globalContent,
+          codingMemory: promptKnowledge.codingMemoryContent,
+          globalMemorySelection: promptKnowledge.globalSelection,
+          codingMemorySelection: promptKnowledge.codingMemorySelection,
+          knowledgeBaseQuery: promptKnowledge.queryPreview,
           activeSkillCount: preResolvedSkills.length,
           pendingAction,
           continuityThread,
@@ -1893,8 +2052,7 @@ class ChatAgent extends BaseAgent {
           message: workerMessage,
           systemPrompt: workerSystemPrompt,
           history: priorHistory,
-          knowledgeBase: knowledgeBase.content,
-          knowledgeBaseScope: resolvedCodeSession ? 'coding_session' : 'global',
+          knowledgeBases: promptKnowledge.knowledgeBases,
           activeSkills: preResolvedSkills,
           toolContext: this.tools?.getToolContext({
             userId: conversationUserId,
@@ -1951,7 +2109,14 @@ class ChatAgent extends BaseAgent {
           workerMeta.pendingAction = workerPendingActionMeta;
         }
         if (workerContextAssemblyMeta) {
-          workerMeta.contextAssembly = workerContextAssemblyMeta;
+          workerMeta.contextAssembly = {
+            ...workerContextAssemblyMeta,
+            ...(
+              workerMeta.contextAssembly && typeof workerMeta.contextAssembly === 'object' && !Array.isArray(workerMeta.contextAssembly)
+                ? workerMeta.contextAssembly as Record<string, unknown>
+                : {}
+            ),
+          };
         }
         delete workerMeta.pendingApprovals;
         if (preResolvedSkills.length > 0) {
@@ -1966,7 +2131,16 @@ class ChatAgent extends BaseAgent {
           );
         }
         if (resolvedCodeSession) {
-          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills, [], {
+            contextAssembly: applyContextCompactionMetadata(
+              workerMeta.contextAssembly && typeof workerMeta.contextAssembly === 'object' && !Array.isArray(workerMeta.contextAssembly)
+                ? workerMeta.contextAssembly as PromptAssemblyDiagnostics
+                : workerContextAssemblyMeta,
+              latestContextCompaction,
+            ),
+            responseSource: readResponseSourceMetadata(workerMeta),
+            requestId: message.id,
+          });
         }
         return {
           content: result.content,
@@ -1993,31 +2167,40 @@ class ChatAgent extends BaseAgent {
     let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
       if (gwsProvider) {
         try {
-          responseSource = {
+          const startedAt = Date.now();
+          const response = await gwsProvider.chat(msgs, opts);
+          responseSource = buildResponseSourceMetadata({
             locality: 'external',
             providerName: gwsProvider.name,
-          };
-          return await gwsProvider.chat(msgs, opts);
+            response,
+            usedFallback: false,
+            durationMs: Date.now() - startedAt,
+          });
+          return response;
         } catch (err) {
           log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
             'GWS provider failed, falling back to default');
           const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
-          responseSource = {
+          responseSource = buildResponseSourceMetadata({
             locality: fallback.providerLocality,
             providerName: fallback.providerName,
+            response: fallback.response,
             usedFallback: fallback.usedFallback,
             notice: fallback.notice,
-          };
+            durationMs: fallback.durationMs,
+          });
           return fallback.response;
         }
       }
       const routed = await this.chatWithRoutingMetadata(ctx, msgs, opts);
-      responseSource = {
+      responseSource = buildResponseSourceMetadata({
         locality: routed.providerLocality,
         providerName: routed.providerName,
+        response: routed.response,
         usedFallback: routed.usedFallback,
         notice: routed.notice,
-      };
+        durationMs: routed.durationMs,
+      });
       return routed.response;
     };
     let toolResultProviderKind = gwsProvider
@@ -2033,15 +2216,18 @@ class ChatAgent extends BaseAgent {
       if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
+          const fbStartedAt = Date.now();
           const fb = await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
           if (fb.response.content?.trim()) {
             finalContent = fb.response.content;
-            responseSource = {
+            responseSource = buildResponseSourceMetadata({
               locality: getProviderLocalityFromName(fb.providerName),
               providerName: fb.providerName,
+              response: fb.response,
               usedFallback: true,
               notice: 'Retried with an alternate model after a weak local response.',
-            };
+              durationMs: Date.now() - fbStartedAt,
+            });
           }
         } catch { /* fallback also failed, keep original */ }
       }
@@ -2088,7 +2274,10 @@ class ChatAgent extends BaseAgent {
       while (rounds < this.maxToolRounds) {
         if (finalContent) break;
         // Context window awareness: if approaching budget, summarize oldest tool results
-        compactMessagesIfOverBudget(llmMessages, contextBudget);
+        const compactionResult = compactMessagesIfOverBudget(llmMessages, contextBudget);
+        if (compactionResult.applied) {
+          latestContextCompaction = compactionResult;
+        }
 
         const plannerMessages = withTaintedContentSystemPrompt(
           llmMessages,
@@ -2108,6 +2297,21 @@ class ChatAgent extends BaseAgent {
               ...plannerMessages,
               { role: 'assistant', content: response.content ?? '' },
               { role: 'user', content: this.buildPolicyUpdateCorrectionPrompt() },
+            ],
+            { tools: llmToolDefs },
+          );
+          finalContent = response.content;
+        }
+        if (
+          rounds === 0
+          && (!response.toolCalls || response.toolCalls.length === 0)
+          && isDirectMemorySaveRequest(stripLeadingContextPrefix(requestIntentContent))
+        ) {
+          response = await chatFn(
+            [
+              ...plannerMessages,
+              { role: 'assistant', content: response.content ?? '' },
+              { role: 'user', content: this.buildExplicitMemorySaveCorrectionPrompt(requestIntentContent) },
             ],
             { tools: llmToolDefs },
           );
@@ -2319,11 +2523,15 @@ class ChatAgent extends BaseAgent {
                  };
               });
               
-            this.suspendedSessions.set(userKey, {
-              userKey,
+            this.suspendedSessions.set(suspendedSessionKey, {
+              scope: suspendedScope,
               llmMessages: [...llmMessages],
               pendingTools,
-              originalMessage: suspended?.originalMessage ?? routedScopedMessage,
+              originalMessage: selectSuspendedOriginalMessage({
+                isContinuation,
+                existing: suspended?.originalMessage,
+                current: routedScopedMessage,
+              }),
               ctx,
             });
             break;
@@ -2342,21 +2550,28 @@ class ChatAgent extends BaseAgent {
             const { provider: routedProvider, locality: routedLocality } = routed;
             chatFn = async (msgs, opts) => {
               try {
-                responseSource = {
+                const startedAt = Date.now();
+                const response = await routedProvider.chat(msgs, opts);
+                responseSource = buildResponseSourceMetadata({
                   locality: routedLocality,
                   providerName: routedProvider.name,
-                };
-                return await routedProvider.chat(msgs, opts);
+                  response,
+                  usedFallback: false,
+                  durationMs: Date.now() - startedAt,
+                });
+                return response;
               } catch (err) {
                 log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
                   'Routed provider failed, falling back to default');
                 const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
-                responseSource = {
+                responseSource = buildResponseSourceMetadata({
                   locality: fallback.providerLocality,
                   providerName: fallback.providerName,
+                  response: fallback.response,
                   usedFallback: true,
                   notice: fallback.notice,
-                };
+                  durationMs: fallback.durationMs,
+                });
                 return fallback.response;
               }
             };
@@ -2397,14 +2612,17 @@ class ChatAgent extends BaseAgent {
         try {
           let externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
           const fbMessages = [...llmMessages];
+          const fallbackStartedAt = Date.now();
           const fallbackResult = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
           const fbProvider = fallbackResult.providerName;
-          responseSource = {
+          responseSource = buildResponseSourceMetadata({
             locality: getProviderLocalityFromName(fbProvider),
             providerName: fbProvider,
+            response: fallbackResult.response,
             usedFallback: true,
             notice: 'Retried with an alternate model after a weak local response.',
-          };
+            durationMs: Date.now() - fallbackStartedAt,
+          });
 
           // If the fallback LLM returned tool calls, execute them (single round)
           if (fallbackResult.response.toolCalls?.length && this.tools) {
@@ -2513,48 +2731,60 @@ class ChatAgent extends BaseAgent {
                     jobId: String(s.value.result.jobId),
                     name: s.value.toolCall.name,
                   }));
-                this.suspendedSessions.set(userKey, {
-                  userKey,
+                this.suspendedSessions.set(suspendedSessionKey, {
+                  scope: suspendedScope,
                   llmMessages: [...fbMessages],
                   pendingTools,
-                  originalMessage: suspended?.originalMessage ?? routedScopedMessage,
+                  originalMessage: selectSuspendedOriginalMessage({
+                    isContinuation,
+                    existing: suspended?.originalMessage,
+                    current: routedScopedMessage,
+                  }),
                   ctx,
                 });
               } else {
+                const finalFbStartedAt = Date.now();
                 const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
                 if (finalFb.response.content?.trim()) {
                   finalContent = finalFb.response.content;
-                  responseSource = {
+                  responseSource = buildResponseSourceMetadata({
                     locality: getProviderLocalityFromName(finalFb.providerName),
                     providerName: finalFb.providerName,
+                    response: finalFb.response,
                     usedFallback: true,
                     notice: 'Retried with an alternate model after local execution degraded.',
-                  };
+                    durationMs: Date.now() - finalFbStartedAt,
+                  });
                   log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
                 }
               }
             } else {
               // One more chat call to get the final text response from fallback
+              const finalFbStartedAt = Date.now();
               const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
               if (finalFb.response.content?.trim()) {
                 finalContent = finalFb.response.content;
-                responseSource = {
+                responseSource = buildResponseSourceMetadata({
                   locality: getProviderLocalityFromName(finalFb.providerName),
                   providerName: finalFb.providerName,
+                  response: finalFb.response,
                   usedFallback: true,
                   notice: 'Retried with an alternate model after local execution degraded.',
-                };
+                  durationMs: Date.now() - finalFbStartedAt,
+                });
                 log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
               }
             }
           } else if (fallbackResult.response.content?.trim()) {
             finalContent = fallbackResult.response.content;
-            responseSource = {
+            responseSource = buildResponseSourceMetadata({
               locality: getProviderLocalityFromName(fbProvider),
               providerName: fbProvider,
+              response: fallbackResult.response,
               usedFallback: true,
               notice: 'Retried with an alternate model after a weak local response.',
-            };
+              durationMs: Date.now() - fallbackStartedAt,
+            });
             log.info({ agent: this.id, provider: fbProvider },
               'Fallback provider produced successful response');
           }
@@ -2620,6 +2850,8 @@ class ChatAgent extends BaseAgent {
       }
     }
 
+    contextAssemblyMeta = applyContextCompactionMetadata(contextAssemblyMeta, latestContextCompaction);
+
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
     if (pendingActionMeta) metadata.pendingAction = pendingActionMeta;
@@ -2648,6 +2880,11 @@ class ChatAgent extends BaseAgent {
         conversationChannel,
         activeSkills,
         lastToolRoundResults,
+        {
+          contextAssembly: contextAssemblyMeta,
+          responseSource,
+          requestId: message.id,
+        },
       );
     }
 
@@ -2850,21 +3087,83 @@ class ChatAgent extends BaseAgent {
     ].filter((section) => section && section.trim()).join('\n\n');
   }
 
-  private loadScopedKnowledgeBase(
-    resolvedCodeSession?: ResolvedCodeSessionContext | null,
-    query?: MemoryContextQuery,
-  ): { content: string; selection?: MemoryContextLoadResult } {
-    if (resolvedCodeSession) {
-      const selection = this.codeSessionMemoryStore?.loadForContextWithSelection(resolvedCodeSession.session.id, { query });
+  private getPromptMemoryBudgets(includeCodingMemory: boolean): {
+    globalMaxChars?: number;
+    codingMaxChars?: number;
+  } {
+    const globalMaxChars = this.memoryStore?.getMaxContextChars();
+    const codingMaxChars = this.codeSessionMemoryStore?.getMaxContextChars();
+    const totalBudget = Math.max(globalMaxChars ?? 0, codingMaxChars ?? 0, 4000);
+    if (!includeCodingMemory) {
       return {
-        content: selection?.content ?? '',
-        ...(selection ? { selection } : {}),
+        globalMaxChars: globalMaxChars ?? totalBudget,
       };
     }
-    const selection = this.memoryStore?.loadForContextWithSelection(this.stateAgentId, { query });
+
+    const boundedCodingBudget = Math.min(1200, Math.max(400, Math.floor(totalBudget * 0.3)));
     return {
-      content: selection?.content ?? '',
-      ...(selection ? { selection } : {}),
+      globalMaxChars: Math.max(600, totalBudget - boundedCodingBudget),
+      codingMaxChars: boundedCodingBudget,
+    };
+  }
+
+  private loadPromptKnowledgeBases(
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+    query?: MemoryContextQuery,
+  ): {
+    knowledgeBases: PromptAssemblyKnowledgeBase[];
+    globalContent: string;
+    globalSelection?: MemoryContextLoadResult;
+    codingMemoryContent: string;
+    codingMemorySelection?: MemoryContextLoadResult;
+    queryPreview?: string;
+  } {
+    const budgets = this.getPromptMemoryBudgets(!!resolvedCodeSession);
+    let globalSelection = this.memoryStore?.loadForContextWithSelection(this.stateAgentId, {
+      query,
+      maxChars: budgets.globalMaxChars,
+    });
+    let codingMemorySelection = resolvedCodeSession
+      ? this.codeSessionMemoryStore?.loadForContextWithSelection(resolvedCodeSession.session.id, {
+          query,
+          maxChars: budgets.codingMaxChars,
+        })
+      : undefined;
+
+    const globalHasContent = !!globalSelection?.content.trim();
+    const codingHasContent = !!codingMemorySelection?.content.trim();
+    const fullGlobalBudget = this.memoryStore?.getMaxContextChars();
+    const fullCodingBudget = this.codeSessionMemoryStore?.getMaxContextChars();
+
+    if (resolvedCodeSession && !codingHasContent && fullGlobalBudget && budgets.globalMaxChars && fullGlobalBudget > budgets.globalMaxChars) {
+      globalSelection = this.memoryStore?.loadForContextWithSelection(this.stateAgentId, {
+        query,
+        maxChars: fullGlobalBudget,
+      });
+    }
+    if (resolvedCodeSession && !globalHasContent && fullCodingBudget && budgets.codingMaxChars && fullCodingBudget > budgets.codingMaxChars) {
+      codingMemorySelection = this.codeSessionMemoryStore?.loadForContextWithSelection(resolvedCodeSession.session.id, {
+        query,
+        maxChars: fullCodingBudget,
+      });
+    }
+
+    const knowledgeBases: PromptAssemblyKnowledgeBase[] = [
+      ...(globalSelection?.content.trim()
+        ? [{ scope: 'global' as const, content: globalSelection.content }]
+        : []),
+      ...(codingMemorySelection?.content.trim()
+        ? [{ scope: 'coding_session' as const, content: codingMemorySelection.content }]
+        : []),
+    ];
+
+    return {
+      knowledgeBases,
+      globalContent: globalSelection?.content ?? '',
+      ...(globalSelection ? { globalSelection } : {}),
+      codingMemoryContent: codingMemorySelection?.content ?? '',
+      ...(codingMemorySelection ? { codingMemorySelection } : {}),
+      queryPreview: globalSelection?.queryPreview ?? codingMemorySelection?.queryPreview,
     };
   }
 
@@ -2927,31 +3226,50 @@ class ChatAgent extends BaseAgent {
   private buildContextAssemblyMetadata(input: {
     memoryScope: 'global' | 'coding_session';
     knowledgeBase: string;
-    memorySelection?: MemoryContextLoadResult;
+    codingMemory?: string;
+    globalMemorySelection?: MemoryContextLoadResult;
+    codingMemorySelection?: MemoryContextLoadResult;
     knowledgeBaseQuery?: string;
     activeSkillCount: number;
     pendingAction?: PendingActionRecord | null;
     continuityThread?: ContinuityThreadRecord | null;
     codeSessionId?: string;
   }): PromptAssemblyDiagnostics {
+    const selectedMemoryEntries = [
+      ...((input.globalMemorySelection?.selectedEntries ?? []).map((entry) => ({
+        scope: 'global' as const,
+        category: entry.category,
+        createdAt: entry.createdAt,
+        preview: entry.preview,
+        renderMode: entry.renderMode,
+        queryScore: entry.queryScore,
+        isContextFlush: entry.isContextFlush,
+        ...(entry.matchReasons?.length ? { matchReasons: entry.matchReasons.slice(0, 3) } : {}),
+      }))),
+      ...((input.codingMemorySelection?.selectedEntries ?? []).map((entry) => ({
+        scope: 'coding_session' as const,
+        category: entry.category,
+        createdAt: entry.createdAt,
+        preview: entry.preview,
+        renderMode: entry.renderMode,
+        queryScore: entry.queryScore,
+        isContextFlush: entry.isContextFlush,
+        ...(entry.matchReasons?.length ? { matchReasons: entry.matchReasons.slice(0, 3) } : {}),
+      }))),
+    ];
+    const candidateEntryCount = (input.globalMemorySelection?.candidateEntries ?? 0) + (input.codingMemorySelection?.candidateEntries ?? 0);
+    const omittedEntryCount = (input.globalMemorySelection?.omittedEntries ?? 0) + (input.codingMemorySelection?.omittedEntries ?? 0);
     return buildPromptAssemblyDiagnostics({
       memoryScope: input.memoryScope,
       knowledgeBaseContent: input.knowledgeBase,
+      codingMemoryContent: input.codingMemory,
       knowledgeBaseQuery: input.knowledgeBaseQuery,
-      ...(input.memorySelection
+      ...(candidateEntryCount > 0 || selectedMemoryEntries.length > 0 || omittedEntryCount > 0
         ? {
             memorySelection: {
-              candidateEntryCount: input.memorySelection.candidateEntries,
-              omittedEntryCount: input.memorySelection.omittedEntries,
-              entries: input.memorySelection.selectedEntries.map((entry) => ({
-                category: entry.category,
-                createdAt: entry.createdAt,
-                preview: entry.preview,
-                renderMode: entry.renderMode,
-                queryScore: entry.queryScore,
-                isContextFlush: entry.isContextFlush,
-                ...(entry.matchReasons?.length ? { matchReasons: entry.matchReasons.slice(0, 3) } : {}),
-              })),
+              candidateEntryCount,
+              omittedEntryCount,
+              entries: selectedMemoryEntries,
             },
           }
         : {}),
@@ -2999,8 +3317,7 @@ class ChatAgent extends BaseAgent {
 
   private buildAssembledSystemPrompt(input: {
     baseSystemPrompt: string;
-    knowledgeBase: string;
-    resolvedCodeSession?: ResolvedCodeSessionContext | null;
+    knowledgeBases: PromptAssemblyKnowledgeBase[];
     activeSkills: readonly ResolvedSkill[];
     toolContext?: string;
     runtimeNotices?: Array<{ level: 'info' | 'warn'; message: string }>;
@@ -3011,14 +3328,7 @@ class ChatAgent extends BaseAgent {
   }): string {
     return buildSystemPromptWithContext({
       baseSystemPrompt: input.baseSystemPrompt,
-      ...(input.knowledgeBase.trim()
-        ? {
-            knowledgeBase: {
-              scope: input.resolvedCodeSession ? 'coding_session' : 'global',
-              content: input.knowledgeBase,
-            },
-          }
-        : {}),
+      knowledgeBases: input.knowledgeBases,
       activeSkills: input.activeSkills.map((skill) => ({
         id: skill.id,
         name: skill.name,
@@ -3118,6 +3428,11 @@ class ChatAgent extends BaseAgent {
     conversationChannel: string,
     activeSkills: ResolvedSkill[],
     lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [],
+    runtimeState?: {
+      contextAssembly?: PromptAssemblyDiagnostics;
+      responseSource?: ResponseSourceMetadata;
+      requestId?: string;
+    },
   ): void {
     if (!this.codeSessionStore) return;
     const sessionPendingApprovals = this.tools?.listPendingApprovalsForCodeSession(session.id, 20) ?? [];
@@ -3162,6 +3477,14 @@ class ChatAgent extends BaseAgent {
         requestId: job.requestId,
       }));
     const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
+    const compactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
+      || (
+        runtimeState?.contextAssembly?.contextCompactionApplied
+          && typeof runtimeState.contextAssembly.contextCharsBeforeCompaction === 'number'
+          && typeof runtimeState.contextAssembly.contextCharsAfterCompaction === 'number'
+          ? `Older context was compacted from ${runtimeState.contextAssembly.contextCharsBeforeCompaction} to ${runtimeState.contextAssembly.contextCharsAfterCompaction} chars.${Array.isArray(runtimeState.contextAssembly.contextCompactionStages) && runtimeState.contextAssembly.contextCompactionStages.length > 0 ? ` Stages: ${runtimeState.contextAssembly.contextCompactionStages.join(', ')}.` : ''}`
+          : session.workState.compactedSummary
+      );
     const status = pendingApprovals.length > 0
       ? 'awaiting_approval'
       : recentJobs.some((job) => job.status === 'failed' || job.status === 'denied')
@@ -3179,6 +3502,7 @@ class ChatAgent extends BaseAgent {
         focusSummary: session.workState.focusSummary,
         workspaceProfile: session.workState.workspaceProfile,
         planSummary,
+        compactedSummary,
         activeSkills: activeSkills.map((skill) => skill.id),
         pendingApprovals,
         recentJobs,
@@ -3410,11 +3734,19 @@ class ChatAgent extends BaseAgent {
 
   private resolveIntentGatewayContent(input: {
     gateway: IntentGatewayRecord | null;
+    currentContent: string;
     pendingAction: PendingActionRecord | null;
     priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
   }): string | null {
     const decision = input.gateway?.decision;
     if (!decision) return null;
+    const memoryContinuation = resolveAffirmativeMemoryContinuationFromHistory(
+      stripLeadingContextPrefix(input.currentContent),
+      input.priorHistory,
+    );
+    if (memoryContinuation) {
+      return memoryContinuation;
+    }
     if (decision.resolvedContent?.trim()) {
       return decision.resolvedContent.trim();
     }
@@ -3621,6 +3953,62 @@ class ChatAgent extends BaseAgent {
       },
       contentPreview: normalized.content,
     });
+    const metadata = {
+      ...(this.buildImmediateResponseMetadata(
+        input.activeSkills,
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      ) ?? {}),
+      ...(normalizedMetadata ?? {}),
+      ...(gatewayMeta ? { intentGateway: gatewayMeta } : {}),
+    };
+    return {
+      content: normalized.content,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    };
+  }
+
+  private buildDegradedDirectIntentResponse(input: {
+    candidate: DirectIntentShadowCandidate;
+    result: string | { content: string; metadata?: Record<string, unknown> };
+    message: UserMessage;
+    intentGateway?: IntentGatewayRecord | null;
+    activeSkills: ResolvedSkill[];
+    conversationKey: ConversationKey;
+    degradedReason: string;
+  }): AgentResponse {
+    const normalized = typeof input.result === 'string'
+      ? { content: input.result }
+      : input.result;
+    if (this.conversationService) {
+      this.conversationService.recordTurn(
+        input.conversationKey,
+        input.message.content,
+        normalized.content,
+        { assistantResponseSource: readResponseSourceMetadata(normalized.metadata) },
+      );
+    }
+    const normalizedMetadata = this.withCurrentPendingActionMetadata(
+      normalized.metadata,
+      input.message.userId,
+      input.message.channel,
+      input.message.surfaceId,
+    );
+    this.recordIntentRoutingTrace('direct_intent_response', {
+      message: input.message,
+      details: {
+        candidate: input.candidate,
+        route: input.intentGateway?.decision.route,
+        gatewayAvailable: input.intentGateway?.available ?? false,
+        handled: true,
+        degradedFallback: true,
+        degradedReason: input.degradedReason,
+        metadataKeys: normalizedMetadata ? Object.keys(normalizedMetadata) : [],
+      },
+      contentPreview: normalized.content,
+    });
+    const gatewayMeta = toIntentGatewayClientMetadata(input.intentGateway);
     const metadata = {
       ...(this.buildImmediateResponseMetadata(
         input.activeSkills,
@@ -4372,6 +4760,15 @@ class ChatAgent extends BaseAgent {
       'If the block is a hostname/domain, call update_tool_policy with action "add_domain" using the normalized hostname only.',
       'If the block is a command prefix, call update_tool_policy with action "add_command".',
       'Use the tool now if policy is the blocker.',
+    ].join(' ');
+  }
+
+  private buildExplicitMemorySaveCorrectionPrompt(requestContent: string): string {
+    return [
+      'System correction: the user already made an explicit remember/save request.',
+      'Do not ask for confirmation or ask the user to restate it.',
+      'Call memory_save now using the requested scope if one was specified.',
+      `Original request: ${requestContent.trim()}`,
     ].join(' ');
   }
 
@@ -5297,15 +5694,11 @@ class ChatAgent extends BaseAgent {
       : (copy.denied ?? null);
   }
 
-  hasSuspendedApproval(approvalId: string): boolean {
-    const normalizedId = approvalId.trim();
-    if (!normalizedId) return false;
-    for (const session of this.suspendedSessions.values()) {
-      if (session.pendingTools.some((tool) => tool.approvalId === normalizedId)) {
-        return true;
-      }
-    }
-    return false;
+  hasSuspendedApproval(
+    approvalId: string,
+    scope?: ApprovalContinuationScope,
+  ): boolean {
+    return !!findSuspendedApprovalState(this.suspendedSessions.values(), approvalId, scope);
   }
 
   hasAutomationApprovalContinuation(approvalId: string): boolean {
@@ -5498,6 +5891,288 @@ class ChatAgent extends BaseAgent {
       if (snippet) lines.push(`   ${snippet}`);
     }
     return lines.join('\n');
+  }
+
+  private async tryDirectMemorySave(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    codeContext?: { workspaceRoot?: string; sessionId?: string },
+    originalUserContent?: string,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectMemorySaveRequest(stripLeadingContextPrefix(message.content))
+      ?? parseDirectMemorySaveRequest(stripLeadingContextPrefix(originalUserContent ?? ''));
+    if (!intent) return null;
+
+    const toolResult = await this.tools.executeModelTool(
+      'memory_save',
+      {
+        content: intent.content,
+        scope: intent.scope,
+        ...(intent.scope === 'code_session' && codeContext?.sessionId ? { sessionId: codeContext.sessionId } : {}),
+      },
+      {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: message.userId,
+        surfaceId: message.surfaceId,
+        principalId: message.principalId ?? message.userId,
+        principalRole: message.principalRole ?? 'owner',
+        channel: message.channel,
+        requestId: message.id,
+        allowModelMemoryMutation: true,
+        bypassApprovals: true,
+        agentContext: { checkAction: ctx.checkAction },
+        ...(codeContext?.workspaceRoot ? {
+          codeContext: {
+            workspaceRoot: codeContext.workspaceRoot,
+            ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}),
+          },
+        } : {}),
+      },
+    );
+
+    if (!toBoolean(toolResult.success)) {
+      const status = toString(toolResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(toolResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
+        if (approvalId) {
+          const scopeLabel = intent.scope === 'code_session' ? 'code-session memory' : 'global memory';
+          this.setApprovalFollowUp(approvalId, {
+            approved: `I saved that to ${scopeLabel}.`,
+            denied: `I did not save that to ${scopeLabel}.`,
+          });
+        }
+        const summaries = pendingIds.length > 0 ? this.tools.getApprovalSummaries(pendingIds) : undefined;
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        const pendingActionResult = this.setPendingApprovalActionForRequest(
+          userKey,
+          message.surfaceId,
+          {
+            prompt,
+            approvalIds: pendingIds,
+            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+            originalUserContent: message.content,
+            route: 'memory_task',
+            operation: 'save',
+            summary: intent.scope === 'code_session'
+              ? 'Saves a fact to code-session memory.'
+              : 'Saves a fact to global memory.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            ...(codeContext?.sessionId ? { codeSessionId: codeContext.sessionId } : {}),
+          },
+        );
+        return this.buildPendingApprovalBlockedResponse(
+          pendingActionResult,
+          [
+            `I prepared a memory save for ${intent.scope === 'code_session' ? 'code-session memory' : 'global memory'}, but it needs approval first.`,
+            prompt,
+          ].filter(Boolean).join('\n\n'),
+        );
+      }
+      const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory save failed.';
+      return intent.scope === 'code_session'
+        ? `I couldn't save that to code-session memory: ${errorMessage}`
+        : `I couldn't save that to global memory: ${errorMessage}`;
+    }
+
+    const output = isRecord(toolResult.output) ? toolResult.output : {};
+    const savedScope = toString(output.scope) === 'code_session' ? 'code-session memory' : 'global memory';
+    return `I saved that to ${savedScope}.`;
+  }
+
+  private async tryDirectMemoryRead(
+    message: UserMessage,
+    ctx: AgentContext,
+    codeContext?: { workspaceRoot?: string; sessionId?: string },
+    originalUserContent?: string,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectMemoryReadRequest(stripLeadingContextPrefix(message.content))
+      ?? parseDirectMemoryReadRequest(stripLeadingContextPrefix(originalUserContent ?? ''));
+    if (!intent) return null;
+
+    const scope = intent.scope ?? (codeContext?.sessionId ? 'both' : 'global');
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      surfaceId: message.surfaceId,
+      principalId: message.principalId ?? message.userId,
+      principalRole: message.principalRole ?? 'owner',
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+      ...(codeContext?.workspaceRoot ? {
+        codeContext: {
+          workspaceRoot: codeContext.workspaceRoot,
+          ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}),
+        },
+      } : {}),
+    };
+
+    if (intent.mode === 'search' && intent.query) {
+      const toolResult = await this.tools.executeModelTool(
+        'memory_search',
+        {
+          query: intent.query,
+          scope: 'persistent',
+          persistentScope: scope,
+          ...((scope === 'code_session' || scope === 'both') && codeContext?.sessionId
+            ? { sessionId: codeContext.sessionId }
+            : {}),
+        },
+        toolRequest,
+      );
+      if (!toBoolean(toolResult.success)) {
+        const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory search failed.';
+        return `I couldn't search persistent memory: ${errorMessage}`;
+      }
+      return this.formatDirectMemorySearchResponse(toolResult.output, {
+        query: intent.query,
+        scope,
+        separateScopes: intent.separateScopes,
+        labelSources: intent.labelSources,
+      });
+    }
+
+    const toolResult = await this.tools.executeModelTool(
+      'memory_recall',
+      {
+        scope,
+        ...((scope === 'code_session' || scope === 'both') && codeContext?.sessionId
+          ? { sessionId: codeContext.sessionId }
+          : {}),
+      },
+      toolRequest,
+    );
+    if (!toBoolean(toolResult.success)) {
+      const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory recall failed.';
+      return `I couldn't recall persistent memory: ${errorMessage}`;
+    }
+    return this.formatDirectMemoryRecallResponse(toolResult.output, scope);
+  }
+
+  private formatDirectMemorySearchResponse(
+    output: unknown,
+    options: {
+      query: string;
+      scope: 'global' | 'code_session' | 'both';
+      separateScopes: boolean;
+      labelSources: boolean;
+    },
+  ): string {
+    const record = isRecord(output) ? output : {};
+    const results = Array.isArray(record.results)
+      ? record.results.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+      : [];
+    const searchedScopes: Array<'global' | 'code_session'> = Array.isArray(record.persistentScopesSearched)
+      ? record.persistentScopesSearched
+        .map((value) => toString(value))
+        .filter((value): value is 'global' | 'code_session' => value === 'global' || value === 'code_session')
+      : [];
+    const effectiveScopes: Array<'global' | 'code_session'> = searchedScopes.length > 0
+      ? searchedScopes
+      : (options.scope === 'both' ? ['global', 'code_session'] : [options.scope]);
+    const grouped = new Map<'global' | 'code_session', Record<string, unknown>[]>(
+      effectiveScopes.map((scope) => [scope, []]),
+    );
+    for (const row of results) {
+      const source = toString(row.source);
+      if (source === 'global' || source === 'code_session') {
+        const existing = grouped.get(source) ?? [];
+        existing.push(row);
+        grouped.set(source, existing);
+      }
+    }
+
+    if (results.length === 0) {
+      if (effectiveScopes.length === 2 || options.separateScopes || options.labelSources) {
+        return `I didn't find any matching persistent memory in global or code-session memory for "${options.query}".`;
+      }
+      return `I didn't find any matching ${effectiveScopes[0] === 'code_session' ? 'code-session memory' : 'global memory'} for "${options.query}".`;
+    }
+
+    const formatRow = (row: Record<string, unknown>): string => {
+      const summary = toString(row.summary).trim();
+      const content = toString(row.content).trim();
+      const category = toString(row.category).trim();
+      const combined = summary && content && !content.toLowerCase().includes(summary.toLowerCase())
+        ? `${summary} — ${content}`
+        : (content || summary || '(empty memory entry)');
+      return category ? `${category}: ${combined}` : combined;
+    };
+    const sourceLabel = (scope: 'global' | 'code_session') => scope === 'code_session' ? 'Code-session memory' : 'Global memory';
+
+    if (effectiveScopes.length === 2 || options.separateScopes || options.labelSources) {
+      const lines = [`I found ${results.length} matching persistent memory ${results.length === 1 ? 'entry' : 'entries'} for "${options.query}".`];
+      for (const scope of effectiveScopes) {
+        lines.push(`${sourceLabel(scope)}:`);
+        const rows = grouped.get(scope) ?? [];
+        if (rows.length === 0) {
+          lines.push('- no matching entries');
+          continue;
+        }
+        rows.forEach((row) => lines.push(`- ${formatRow(row)}`));
+      }
+      return lines.join('\n');
+    }
+
+    if (results.length === 1) {
+      const scope = effectiveScopes[0] ?? 'global';
+      return `I found this in ${sourceLabel(scope).toLowerCase()}: ${formatRow(results[0])}`;
+    }
+    return [
+      `I found ${results.length} matching persistent memory entries for "${options.query}":`,
+      ...results.map((row) => `- ${formatRow(row)}`),
+    ].join('\n');
+  }
+
+  private formatDirectMemoryRecallResponse(
+    output: unknown,
+    scope: 'global' | 'code_session' | 'both',
+  ): string {
+    const sourceLabel = (value: 'global' | 'code_session') => value === 'code_session' ? 'Code-session memory' : 'Global memory';
+    const formatEntries = (entries: unknown): string[] => (
+      Array.isArray(entries)
+        ? entries
+          .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+          .map((entry) => {
+            const summary = toString(entry.summary).trim();
+            const content = toString(entry.content).trim();
+            const category = toString(entry.category).trim();
+            const combined = summary && content && !content.toLowerCase().includes(summary.toLowerCase())
+              ? `${summary} — ${content}`
+              : (content || summary || '(empty memory entry)');
+            return category ? `${category}: ${combined}` : combined;
+          })
+        : []
+    );
+    if (scope === 'both' && isRecord(output)) {
+      const globalEntries = formatEntries(isRecord(output.global) ? output.global.entries : []);
+      const codeEntries = formatEntries(isRecord(output.codeSession) ? output.codeSession.entries : []);
+      const lines = ['Here is the current persistent memory state:'];
+      lines.push(`${sourceLabel('global')}:`);
+      lines.push(...(globalEntries.length > 0 ? globalEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
+      lines.push(`${sourceLabel('code_session')}:`);
+      lines.push(...(codeEntries.length > 0 ? codeEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
+      return lines.join('\n');
+    }
+    const entries = formatEntries(isRecord(output) ? output.entries : []);
+    const label = sourceLabel(scope === 'both' ? 'global' : scope);
+    if (entries.length === 0) {
+      return `${label} is currently empty.`;
+    }
+    return [
+      `Here is the current ${label.toLowerCase()} state:`,
+      ...entries.map((entry) => `- ${entry}`),
+    ].join('\n');
   }
 
   private async tryDirectGoogleWorkspaceWrite(
@@ -5868,7 +6543,7 @@ class ChatAgent extends BaseAgent {
     },
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
-    if (preRouted) {
+    if (shouldReusePreRoutedIntentGateway(preRouted)) {
       this.recordIntentRoutingTrace('gateway_classified', {
         message,
         details: {
@@ -5887,7 +6562,7 @@ class ChatAgent extends BaseAgent {
       });
       return preRouted;
     }
-    if (!ctx.llm) return null;
+    if (!ctx.llm) return preRouted ?? null;
     const classified = await this.intentGateway.classify(
       {
         content: message.content,
@@ -5962,6 +6637,9 @@ class ChatAgent extends BaseAgent {
         return new Set(['coding_session_control', 'coding_task', 'general_assistant']);
       case 'filesystem':
         return new Set(['filesystem_task', 'search_task']);
+      case 'memory_write':
+      case 'memory_read':
+        return new Set(['memory_task']);
       case 'scheduled_email_automation':
         return new Set(['automation_authoring']);
       case 'automation':
@@ -7114,8 +7792,8 @@ function resolveToolProviderRouting(
 }
 
 /** If total context exceeds 80% of budget, summarize oldest tool results. */
-function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): void {
-  _compactMessagesIfOverBudget(messages, budget);
+function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): ContextCompactionResult {
+  return _compactMessagesIfOverBudget(messages, budget);
 }
 
 function formatToolResultForLLM(toolName: string, toolResult: unknown, threats: string[] = []): string {
@@ -9008,18 +9686,62 @@ function buildDashboardCallbacks(
       delete mergedMetadata.pendingApprovals;
       return Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
     };
+    const readResponseSourceTraceDetails = (metadata: Record<string, unknown> | undefined): {
+      title: string;
+      detail?: string;
+      durationMs?: number;
+    } | null => {
+      const source = readResponseSourceMetadata(metadata);
+      if (!source) return null;
+      const usageParts = source.usage
+        ? [
+            `${source.usage.totalTokens} tokens`,
+            `${source.usage.promptTokens} prompt`,
+            `${source.usage.completionTokens} completion`,
+            ...(typeof source.usage.cacheReadTokens === 'number' ? [`${source.usage.cacheReadTokens} cache read`] : []),
+            ...(typeof source.usage.cacheCreationTokens === 'number' ? [`${source.usage.cacheCreationTokens} cache write`] : []),
+          ]
+        : [];
+      const detailParts = [
+        source.providerName ? `provider=${source.providerName}` : undefined,
+        source.model ? `model=${source.model}` : undefined,
+        source.locality ? `locality=${source.locality}` : undefined,
+        typeof source.durationMs === 'number' ? `duration=${source.durationMs}ms` : undefined,
+        source.usedFallback ? 'fallback=true' : undefined,
+        ...(usageParts.length > 0 ? [usageParts.join(' | ')] : []),
+        source.notice?.trim() ? source.notice.trim() : undefined,
+      ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      const titleParts = [
+        source.providerName?.trim() || 'model',
+        source.model?.trim() || '',
+        source.usedFallback ? 'fallback' : '',
+      ].filter(Boolean);
+      return {
+        title: titleParts.length > 0 ? `Model response: ${titleParts.join(' • ')}` : 'Model response',
+        ...(detailParts.length > 0 ? { detail: detailParts.join('; ') } : {}),
+        ...(typeof source.durationMs === 'number' ? { durationMs: source.durationMs } : {}),
+      };
+    };
     const readContextAssemblyTraceDetails = (metadata: Record<string, unknown> | undefined): {
       summary?: string;
       detail?: string;
       memoryScope?: string;
       knowledgeBaseLoaded?: boolean;
+      codingMemoryLoaded?: boolean;
+      codingMemoryChars?: number;
       knowledgeBaseQueryPreview?: string;
       continuityKey?: string;
       activeExecutionRefs?: string[];
       linkedSurfaceCount?: number;
       selectedMemoryEntryCount?: number;
       omittedMemoryEntryCount?: number;
+      contextCompactionApplied?: boolean;
+      contextCharsBeforeCompaction?: number;
+      contextCharsAfterCompaction?: number;
+      contextCompactionStages?: string[];
+      compactedSummaryPreview?: string;
       selectedMemoryEntries?: Array<{
+        scope?: 'global' | 'coding_session';
         category: string;
         createdAt: string;
         preview: string;
@@ -9039,6 +9761,8 @@ function buildDashboardCallbacks(
         ...(typeof record.detail === 'string' ? { detail: record.detail } : {}),
         ...(typeof record.memoryScope === 'string' ? { memoryScope: record.memoryScope } : {}),
         ...(typeof record.knowledgeBaseLoaded === 'boolean' ? { knowledgeBaseLoaded: record.knowledgeBaseLoaded } : {}),
+        ...(typeof record.codingMemoryLoaded === 'boolean' ? { codingMemoryLoaded: record.codingMemoryLoaded } : {}),
+        ...(typeof record.codingMemoryChars === 'number' ? { codingMemoryChars: record.codingMemoryChars } : {}),
         ...(typeof record.knowledgeBaseQueryPreview === 'string' ? { knowledgeBaseQueryPreview: record.knowledgeBaseQueryPreview } : {}),
         ...(typeof record.continuityKey === 'string' ? { continuityKey: record.continuityKey } : {}),
         ...(Array.isArray(record.activeExecutionRefs)
@@ -9051,10 +9775,28 @@ function buildDashboardCallbacks(
         ...(typeof record.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: record.linkedSurfaceCount } : {}),
         ...(typeof record.selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount: record.selectedMemoryEntryCount } : {}),
         ...(typeof record.omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount: record.omittedMemoryEntryCount } : {}),
+        ...(record.contextCompactionApplied === true ? { contextCompactionApplied: true } : {}),
+        ...(typeof record.contextCharsBeforeCompaction === 'number'
+          ? { contextCharsBeforeCompaction: record.contextCharsBeforeCompaction }
+          : {}),
+        ...(typeof record.contextCharsAfterCompaction === 'number'
+          ? { contextCharsAfterCompaction: record.contextCharsAfterCompaction }
+          : {}),
+        ...(Array.isArray(record.contextCompactionStages)
+          ? {
+              contextCompactionStages: record.contextCompactionStages
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 4),
+            }
+          : {}),
+        ...(typeof record.compactedSummaryPreview === 'string'
+          ? { compactedSummaryPreview: record.compactedSummaryPreview }
+          : {}),
         ...(Array.isArray(record.selectedMemoryEntries)
           ? {
               selectedMemoryEntries: record.selectedMemoryEntries
                 .filter((entry): entry is {
+                  scope?: 'global' | 'coding_session';
                   category: string;
                   createdAt: string;
                   preview: string;
@@ -9072,7 +9814,13 @@ function buildDashboardCallbacks(
                     && typeof (entry as Record<string, unknown>).queryScore === 'number';
                 })
                 .map((entry) => ({
-                  ...entry,
+                  ...(entry.scope === 'global' || entry.scope === 'coding_session' ? { scope: entry.scope } : {}),
+                  category: entry.category,
+                  createdAt: entry.createdAt,
+                  preview: entry.preview,
+                  renderMode: entry.renderMode,
+                  queryScore: entry.queryScore,
+                  isContextFlush: entry.isContextFlush,
                   ...(Array.isArray(entry.matchReasons)
                     ? {
                         matchReasons: entry.matchReasons
@@ -9103,6 +9851,25 @@ function buildDashboardCallbacks(
         metadata: {
           ...details,
           detail: details.detail ?? details.summary,
+        },
+      });
+    };
+    const addResponseSourceTraceNode = (
+      dispatchCtx: import('./runtime/orchestrator.js').AssistantDispatchContext,
+      metadata: Record<string, unknown> | undefined,
+      completedAt: number,
+    ): void => {
+      const details = readResponseSourceTraceDetails(metadata);
+      if (!details) return;
+      const durationMs = typeof details.durationMs === 'number' ? details.durationMs : 0;
+      dispatchCtx.addNode({
+        kind: 'provider_call',
+        name: details.title,
+        startedAt: Math.max(0, completedAt - durationMs),
+        completedAt,
+        status: 'succeeded',
+        metadata: {
+          ...(details.detail ? { detail: details.detail } : {}),
         },
       });
     };
@@ -9195,8 +9962,10 @@ function buildDashboardCallbacks(
           });
           const mergedMetadata = mergeResponseSourceMetadata(response.metadata);
           const responseSource = readResponseSourceMetadata(mergedMetadata);
-          addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
-          addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+          const traceCompletedAt = Date.now();
+          addResponseSourceTraceNode(dispatchCtx, mergedMetadata, traceCompletedAt);
+          addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, traceCompletedAt);
+          addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, traceCompletedAt);
           const contextAssembly = readContextAssemblyTraceDetails(mergedMetadata);
           const delegatedHandoff = readDelegatedHandoffTraceDetails(mergedMetadata);
           intentRoutingTrace.record({
@@ -9219,6 +9988,12 @@ function buildDashboardCallbacks(
               ...(typeof contextAssembly?.knowledgeBaseLoaded === 'boolean'
                 ? { knowledgeBaseLoaded: contextAssembly.knowledgeBaseLoaded }
                 : {}),
+              ...(typeof contextAssembly?.codingMemoryLoaded === 'boolean'
+                ? { codingMemoryLoaded: contextAssembly.codingMemoryLoaded }
+                : {}),
+              ...(typeof contextAssembly?.codingMemoryChars === 'number'
+                ? { codingMemoryChars: contextAssembly.codingMemoryChars }
+                : {}),
               ...(contextAssembly?.continuityKey ? { continuityKey: contextAssembly.continuityKey } : {}),
               ...(contextAssembly?.activeExecutionRefs?.length ? { activeExecutionRefs: contextAssembly.activeExecutionRefs } : {}),
               ...(typeof contextAssembly?.linkedSurfaceCount === 'number'
@@ -9229,6 +10004,16 @@ function buildDashboardCallbacks(
                 : {}),
               ...(typeof contextAssembly?.omittedMemoryEntryCount === 'number'
                 ? { omittedMemoryEntryCount: contextAssembly.omittedMemoryEntryCount }
+                : {}),
+              ...(contextAssembly?.contextCompactionApplied ? { contextCompactionApplied: true } : {}),
+              ...(typeof contextAssembly?.contextCharsBeforeCompaction === 'number'
+                ? { contextCharsBeforeCompaction: contextAssembly.contextCharsBeforeCompaction }
+                : {}),
+              ...(typeof contextAssembly?.contextCharsAfterCompaction === 'number'
+                ? { contextCharsAfterCompaction: contextAssembly.contextCharsAfterCompaction }
+                : {}),
+              ...(contextAssembly?.contextCompactionStages?.length
+                ? { contextCompactionStages: contextAssembly.contextCompactionStages }
                 : {}),
               pendingApprovals: Array.isArray((mergedMetadata?.pendingAction as { blocker?: { approvalSummaries?: unknown[] } } | undefined)?.blocker?.approvalSummaries)
                 ? (mergedMetadata?.pendingAction as { blocker: { approvalSummaries: unknown[] } }).blocker.approvalSummaries.length
@@ -9285,8 +10070,10 @@ function buildDashboardCallbacks(
                 },
               });
               const responseSource = readResponseSourceMetadata(mergedMetadata);
-              addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
-              addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+              const traceCompletedAt = Date.now();
+              addResponseSourceTraceNode(dispatchCtx, mergedMetadata, traceCompletedAt);
+              addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, traceCompletedAt);
+              addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, traceCompletedAt);
               const contextAssembly = readContextAssemblyTraceDetails(mergedMetadata);
               const delegatedHandoff = readDelegatedHandoffTraceDetails(mergedMetadata);
               intentRoutingTrace.record({
@@ -9320,6 +10107,16 @@ function buildDashboardCallbacks(
                     : {}),
                   ...(typeof contextAssembly?.omittedMemoryEntryCount === 'number'
                     ? { omittedMemoryEntryCount: contextAssembly.omittedMemoryEntryCount }
+                    : {}),
+                  ...(contextAssembly?.contextCompactionApplied ? { contextCompactionApplied: true } : {}),
+                  ...(typeof contextAssembly?.contextCharsBeforeCompaction === 'number'
+                    ? { contextCharsBeforeCompaction: contextAssembly.contextCharsBeforeCompaction }
+                    : {}),
+                  ...(typeof contextAssembly?.contextCharsAfterCompaction === 'number'
+                    ? { contextCharsAfterCompaction: contextAssembly.contextCharsAfterCompaction }
+                    : {}),
+                  ...(contextAssembly?.contextCompactionStages?.length
+                    ? { contextCompactionStages: contextAssembly.contextCompactionStages }
                     : {}),
                   ...(delegatedHandoff?.reportingMode ? { delegatedReportingMode: delegatedHandoff.reportingMode } : {}),
                   ...(delegatedHandoff?.unresolvedBlockerKind ? { delegatedBlockerKind: delegatedHandoff.unresolvedBlockerKind } : {}),
@@ -9373,6 +10170,9 @@ function buildDashboardCallbacks(
     decision: 'approved' | 'denied';
     actor: string;
     actorRole?: import('./tools/types.js').PrincipalRole;
+    userId?: string;
+    channel?: string;
+    surfaceId?: string;
     reason?: string;
   }) => {
     const result = await toolExecutor.decideApproval(
@@ -9391,7 +10191,15 @@ function buildDashboardCallbacks(
         message: result.message,
       }, 'Dashboard approval decision failed');
     }
-    const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId))
+    const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId, (
+      input.userId?.trim() && input.channel?.trim()
+        ? {
+            userId: input.userId,
+            channel: input.channel,
+            surfaceId: input.surfaceId,
+          }
+        : undefined
+    )))
       || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
     const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
       || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
@@ -10831,6 +11639,9 @@ function buildDashboardCallbacks(
         decision,
         actor: principalId ?? resolved.canonicalUserId,
         actorRole: principalRole ?? 'owner',
+        userId: resolved.canonicalUserId,
+        channel: resolved.resolvedChannel,
+        surfaceId: resolved.resolvedSurfaceId,
         reason,
       });
     },

@@ -6135,7 +6135,9 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
     const continuationMessage = [
       '[Code Approval Continuation]',
       `[User approved the pending tool action(s). Result: ${summary}]`,
-      'Please continue the original coding task and adjust if any approved action failed.',
+      allSucceeded
+        ? 'Please continue the current coding task only. Do not resume older unrelated pending tasks.'
+        : 'Some actions failed — adjust your approach accordingly. Focus only on the current coding task.',
     ].join('\n');
     try {
       const outboundSession = await ensureBackendSession(currentSession || session);
