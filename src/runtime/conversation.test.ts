@@ -84,9 +84,17 @@ describe('ConversationService', () => {
       assistantResponseSource: {
         locality: 'external',
         providerName: 'anthropic',
+        model: 'claude-sonnet',
         tier: 'external',
         usedFallback: true,
         notice: 'Retried on external.',
+        durationMs: 823,
+        usage: {
+          promptTokens: 1100,
+          completionTokens: 240,
+          totalTokens: 1340,
+          cacheReadTokens: 900,
+        },
       },
     });
 
@@ -97,9 +105,17 @@ describe('ConversationService', () => {
     expect(history[1].responseSource).toEqual({
       locality: 'external',
       providerName: 'anthropic',
+      model: 'claude-sonnet',
       tier: 'external',
       usedFallback: true,
       notice: 'Retried on external.',
+      durationMs: 823,
+      usage: {
+        promptTokens: 1100,
+        completionTokens: 240,
+        totalTokens: 1340,
+        cacheReadTokens: 900,
+      },
     });
     service.close();
   });

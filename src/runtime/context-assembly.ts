@@ -43,7 +43,7 @@ export interface PromptAssemblyContinuity {
 
 export interface PromptAssemblyInput {
   baseSystemPrompt: string;
-  knowledgeBase?: PromptAssemblyKnowledgeBase;
+  knowledgeBases?: PromptAssemblyKnowledgeBase[];
   activeSkills?: PromptAssemblySkill[];
   toolContext?: string;
   runtimeNotices?: PromptAssemblyRuntimeNotice[];
@@ -59,6 +59,8 @@ export interface PromptAssemblyDiagnostics {
   memoryScope: 'global' | 'coding_session' | 'none';
   knowledgeBaseLoaded: boolean;
   knowledgeBaseChars?: number;
+  codingMemoryLoaded?: boolean;
+  codingMemoryChars?: number;
   knowledgeBaseQueryPreview?: string;
   continuityKey?: string;
   activeExecutionRefs?: string[];
@@ -70,9 +72,15 @@ export interface PromptAssemblyDiagnostics {
   selectedMemoryEntryCount?: number;
   omittedMemoryEntryCount?: number;
   selectedMemoryEntries?: PromptAssemblyMemorySelectionEntry[];
+  contextCompactionApplied?: boolean;
+  contextCharsBeforeCompaction?: number;
+  contextCharsAfterCompaction?: number;
+  contextCompactionStages?: string[];
+  compactedSummaryPreview?: string;
 }
 
 export interface PromptAssemblyMemorySelectionEntry {
+  scope?: 'global' | 'coding_session';
   category: string;
   createdAt: string;
   preview: string;
@@ -91,12 +99,20 @@ export interface PromptAssemblyMemorySelection {
 export interface PromptAssemblyDiagnosticsInput {
   memoryScope: 'global' | 'coding_session' | 'none';
   knowledgeBaseContent?: string;
+  codingMemoryContent?: string;
   knowledgeBaseQuery?: string;
   memorySelection?: PromptAssemblyMemorySelection;
   pendingAction?: PromptAssemblyPendingAction | null;
   continuity?: PromptAssemblyContinuity | null;
   codeSessionId?: string;
   activeSkillCount?: number;
+  contextCompaction?: {
+    applied: boolean;
+    beforeChars: number;
+    afterChars: number;
+    stages: string[];
+    summary?: string;
+  };
 }
 
 function wrapTaggedSection(tag: string, content: string): string {
@@ -112,8 +128,8 @@ function truncateInline(value: string | undefined, maxChars: number): string | u
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-function formatKnowledgeBaseSection(knowledgeBase: PromptAssemblyKnowledgeBase | undefined): string {
-  if (!knowledgeBase?.content.trim()) return '';
+function formatKnowledgeBaseSection(knowledgeBase: PromptAssemblyKnowledgeBase): string {
+  if (!knowledgeBase.content.trim()) return '';
   if (knowledgeBase.scope === 'coding_session') {
     return wrapTaggedSection(
       'coding-memory',
@@ -124,6 +140,13 @@ function formatKnowledgeBaseSection(knowledgeBase: PromptAssemblyKnowledgeBase |
     'knowledge-base',
     `The following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${knowledgeBase.content}`,
   );
+}
+
+function formatKnowledgeBaseSections(knowledgeBases: PromptAssemblyKnowledgeBase[] | undefined): string[] {
+  if (!Array.isArray(knowledgeBases) || knowledgeBases.length === 0) return [];
+  return knowledgeBases
+    .map((knowledgeBase) => formatKnowledgeBaseSection(knowledgeBase))
+    .filter(Boolean);
 }
 
 function formatActiveSkillsSection(skills: PromptAssemblySkill[] | undefined): string {
@@ -194,7 +217,7 @@ function formatContinuitySection(
 export function buildSystemPromptWithContext(input: PromptAssemblyInput): string {
   const sections = [
     input.baseSystemPrompt.trim(),
-    formatKnowledgeBaseSection(input.knowledgeBase),
+    ...formatKnowledgeBaseSections(input.knowledgeBases),
     formatActiveSkillsSection(input.activeSkills),
     formatPendingActionSection(input.pendingAction),
     formatContinuitySection(input.continuity),
@@ -225,7 +248,9 @@ export function buildPromptAssemblyDiagnostics(
   input: PromptAssemblyDiagnosticsInput,
 ): PromptAssemblyDiagnostics {
   const knowledgeBaseContent = input.knowledgeBaseContent?.trim() ?? '';
+  const codingMemoryContent = input.codingMemoryContent?.trim() ?? '';
   const knowledgeBaseLoaded = knowledgeBaseContent.length > 0;
+  const codingMemoryLoaded = codingMemoryContent.length > 0;
   const queryPreview = truncateInline(input.knowledgeBaseQuery, 80);
   const memoryLabel = input.memoryScope === 'coding_session'
     ? 'coding memory'
@@ -236,19 +261,27 @@ export function buildPromptAssemblyDiagnostics(
     ? input.continuity.linkedSurfaceCount
     : undefined;
   const selectedMemoryEntries = Array.isArray(input.memorySelection?.entries)
-    ? input.memorySelection.entries.slice(0, 3)
+    ? input.memorySelection.entries.slice(0, 4)
     : [];
   const selectedMemoryPreview = selectedMemoryEntries.length > 0
     ? truncateInline(
         selectedMemoryEntries
-          .map((entry) => `${entry.category}: ${entry.preview}`)
+          .map((entry) => `${entry.scope === 'coding_session' ? 'coding' : 'global'} ${entry.category}: ${entry.preview}`)
           .join(' | '),
         84,
       )
     : undefined;
+  const compactionApplied = input.contextCompaction?.applied === true;
+  const compactionSummaryPreview = truncateInline(input.contextCompaction?.summary, 84);
+  const compactionStages = Array.isArray(input.contextCompaction?.stages)
+    ? input.contextCompaction.stages.filter((value) => typeof value === 'string' && value.trim().length > 0)
+    : [];
 
   const summaryParts = [
     `${memoryLabel} ${knowledgeBaseLoaded ? 'loaded' : 'empty'}`,
+    ...(input.codeSessionId || codingMemoryLoaded
+      ? [`coding memory ${codingMemoryLoaded ? 'loaded' : 'empty'}`]
+      : []),
     ...(queryPreview ? [`query "${queryPreview}"`] : []),
     ...(surfaceCount && surfaceCount > 0 ? [`continuity ${surfaceCount} surface${surfaceCount === 1 ? '' : 's'}`] : []),
     ...(input.pendingAction?.kind ? [`blocker ${input.pendingAction.kind}`] : []),
@@ -256,12 +289,19 @@ export function buildPromptAssemblyDiagnostics(
     ...(typeof input.activeSkillCount === 'number' && input.activeSkillCount > 0
       ? [`skills ${input.activeSkillCount}`]
       : []),
+    ...(compactionApplied
+      ? [`context compacted ${input.contextCompaction?.beforeChars ?? 0}->${input.contextCompaction?.afterChars ?? 0}`]
+      : []),
     ...(selectedMemoryEntries.length > 0 ? [`memory picks ${selectedMemoryEntries.length}`] : []),
     ...(selectedMemoryPreview ? [`top ${selectedMemoryPreview}`] : []),
+    ...(compactionSummaryPreview ? [`compacted ${compactionSummaryPreview}`] : []),
   ];
   const detailParts = [
     `memoryScope=${input.memoryScope}`,
     `knowledgeBase=${knowledgeBaseLoaded ? `${knowledgeBaseContent.length} chars` : 'empty'}`,
+    ...(input.codeSessionId || codingMemoryLoaded
+      ? [`codingMemory=${codingMemoryLoaded ? `${codingMemoryContent.length} chars` : 'empty'}`]
+      : []),
     ...(queryPreview ? [`query="${queryPreview}"`] : []),
     ...(input.continuity?.continuityKey ? [`continuityKey=${input.continuity.continuityKey}`] : []),
     ...(input.continuity?.activeExecutionRefs?.length
@@ -273,6 +313,13 @@ export function buildPromptAssemblyDiagnostics(
     ...(input.codeSessionId ? [`codeSessionId=${input.codeSessionId}`] : []),
     ...(typeof input.activeSkillCount === 'number' && input.activeSkillCount > 0
       ? [`activeSkills=${input.activeSkillCount}`]
+      : []),
+    ...(compactionApplied
+      ? [
+          `contextCompacted=${input.contextCompaction?.beforeChars ?? 0}->${input.contextCompaction?.afterChars ?? 0}`,
+          ...(compactionStages.length > 0 ? [`compactionStages=${compactionStages.join('|')}`] : []),
+          ...(compactionSummaryPreview ? [`compactedSummary="${compactionSummaryPreview}"`] : []),
+        ]
       : []),
     ...(selectedMemoryEntries.length > 0
       ? [`selectedMemory=${selectedMemoryEntries.map((entry) =>
@@ -289,6 +336,8 @@ export function buildPromptAssemblyDiagnostics(
     memoryScope: input.memoryScope,
     knowledgeBaseLoaded,
     ...(knowledgeBaseLoaded ? { knowledgeBaseChars: knowledgeBaseContent.length } : {}),
+    ...(input.codeSessionId || codingMemoryLoaded ? { codingMemoryLoaded } : {}),
+    ...(codingMemoryLoaded ? { codingMemoryChars: codingMemoryContent.length } : {}),
     ...(queryPreview ? { knowledgeBaseQueryPreview: queryPreview } : {}),
     ...(input.continuity?.continuityKey ? { continuityKey: input.continuity.continuityKey } : {}),
     ...(input.continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: [...input.continuity.activeExecutionRefs] } : {}),
@@ -297,6 +346,15 @@ export function buildPromptAssemblyDiagnostics(
     ...(input.pendingAction?.route ? { pendingActionRoute: input.pendingAction.route } : {}),
     ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
     ...(typeof input.activeSkillCount === 'number' ? { activeSkillCount: input.activeSkillCount } : {}),
+    ...(compactionApplied ? { contextCompactionApplied: true } : {}),
+    ...(compactionApplied && typeof input.contextCompaction?.beforeChars === 'number'
+      ? { contextCharsBeforeCompaction: input.contextCompaction.beforeChars }
+      : {}),
+    ...(compactionApplied && typeof input.contextCompaction?.afterChars === 'number'
+      ? { contextCharsAfterCompaction: input.contextCompaction.afterChars }
+      : {}),
+    ...(compactionStages.length > 0 ? { contextCompactionStages: compactionStages } : {}),
+    ...(compactionSummaryPreview ? { compactedSummaryPreview: compactionSummaryPreview } : {}),
     ...(selectedMemoryEntries.length > 0
       ? {
           selectedMemoryEntryCount: selectedMemoryEntries.length,

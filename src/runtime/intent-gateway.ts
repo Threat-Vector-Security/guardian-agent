@@ -9,6 +9,7 @@ export type IntentGatewayRoute =
   | 'workspace_task'
   | 'email_task'
   | 'search_task'
+  | 'memory_task'
   | 'filesystem_task'
   | 'coding_task'
   | 'coding_session_control'
@@ -29,6 +30,7 @@ export type IntentGatewayOperation =
   | 'navigate'
   | 'read'
   | 'search'
+  | 'save'
   | 'send'
   | 'draft'
   | 'schedule'
@@ -133,6 +135,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
           'workspace_task',
           'email_task',
           'search_task',
+          'memory_task',
           'filesystem_task',
           'coding_task',
           'coding_session_control',
@@ -146,7 +149,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       },
       operation: {
         type: 'string',
-        enum: ['create', 'update', 'delete', 'run', 'toggle', 'clone', 'inspect', 'navigate', 'read', 'search', 'send', 'draft', 'schedule', 'unknown'],
+        enum: ['create', 'update', 'delete', 'run', 'toggle', 'clone', 'inspect', 'navigate', 'read', 'search', 'save', 'send', 'draft', 'schedule', 'unknown'],
       },
       summary: {
         type: 'string',
@@ -246,6 +249,7 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   '- workspace_task: reading or mutating managed workspace tools such as Gmail, Calendar, Drive, Docs, Sheets, or Microsoft 365.',
   '- email_task: direct mailbox work such as checking inbox contents, reading mail, composing, drafting, sending, replying, or forwarding email.',
   '- search_task: generic web or document search and result retrieval.',
+  '- memory_task: durable memory operations such as remember/save, recall, or search memory.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
   '- coding_task: code execution, code generation, debugging, or programming work within a coding workspace. NOT session management.',
   '- coding_session_control: managing coding workspace sessions — listing, inspecting current session, switching/attaching, detaching, or creating sessions.',
@@ -261,6 +265,7 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer search_task over browser_task for generic web search.',
+  'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
   'Prefer automation_authoring for create/build/setup requests and automation_control for delete/toggle/run/clone/inspect requests.',
   'Questions about automation capabilities, examples, supported shapes, or how automations work are general_assistant unless the user is actually asking you to create or change a specific automation or workflow definition.',
   'Do not use automation_authoring just because the words "automation" and "create" both appear in a capability question such as "What automations can you create?"',
@@ -269,6 +274,8 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Examples: "Run Browser Read Smoke now" -> automationName = "Browser Read Smoke"; "Show me the automation Browser Read Smoke" -> automationName = "Browser Read Smoke".',
   'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
   'Example: "What sort of automations can you create?" -> route = "general_assistant", operation = "inspect".',
+  'memory_task operation mapping: save = remember/store durable memory; read = recall or list remembered information; search = search conversation or persistent memory.',
+  'Examples: "Remember globally that my test marker is cedar-47." -> route=memory_task, operation=save; "What do you remember about cedar-47?" -> route=memory_task, operation=read; "Search memory for cedar-47." -> route=memory_task, operation=search.',
   'Prefer coding_session_control over coding_task when the user asks about which session is active, lists sessions, switches workspaces, attaches, detaches, or creates a new coding session.',
   'coding_session_control operation mapping: navigate = list/show all sessions or workspaces; inspect = check which single session is currently active or attached; update = switch/attach to a different session; delete = detach/disconnect from current session; create = create a new session.',
   'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
@@ -436,6 +443,12 @@ export function readPreRoutedIntentGatewayMetadata(
 ): IntentGatewayRecord | null {
   if (!metadata) return null;
   return deserializeIntentGatewayRecord(metadata[PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY]);
+}
+
+export function shouldReusePreRoutedIntentGateway(
+  record: IntentGatewayRecord | null | undefined,
+): record is IntentGatewayRecord {
+  return !!record && record.available !== false;
 }
 
 function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
@@ -703,6 +716,7 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'workspace_task':
     case 'email_task':
     case 'search_task':
+    case 'memory_task':
     case 'filesystem_task':
     case 'coding_task':
     case 'coding_session_control':
@@ -737,6 +751,7 @@ function normalizeOperation(value: unknown): IntentGatewayOperation {
     case 'navigate':
     case 'read':
     case 'search':
+    case 'save':
     case 'send':
     case 'draft':
     case 'schedule':

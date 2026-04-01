@@ -87,6 +87,7 @@ Current route values:
 - `workspace_task`
 - `email_task`
 - `search_task`
+- `memory_task`
 - `filesystem_task`
 - `coding_task`
 - `coding_session_control`
@@ -221,6 +222,7 @@ Attached coding sessions:
 - questions about why Codex or another backend produced a given artifact, permission, diff, or output should not be treated as explicit backend delegation unless the user actually asks Guardian to use that backend for investigation
 
 Local-preferred routes:
+- `memory_task`
 - `filesystem_task`
 - `coding_task`
 - `coding_session_control`
@@ -284,6 +286,7 @@ The gateway does not directly execute tools.
 
 After routing:
 - deterministic session control handlers
+- deterministic memory prerouters
 - deterministic automation/browser/output prerouters
 - normal chat/tool loop
 
@@ -293,6 +296,7 @@ Direct-lane rule:
 - capability-specific deterministic handlers only run from an explicit structured gateway decision
 - gateway-unavailable and low-confidence `general_assistant` / `unknown` results do not trigger heuristic capability fallback
 - bounded degraded behavior may still exist, but it does not impersonate a successful capability-lane classification
+- current bounded degraded exception: explicit trusted `remember` / `save to memory` requests may fall back to the direct memory-save lane when the gateway is unavailable or returns an unstructured `unknown` result; the routing trace and response metadata must keep the original gateway outcome visible instead of pretending `memory_task` was classified successfully
 
 ## Observability
 

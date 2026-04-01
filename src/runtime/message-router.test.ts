@@ -503,6 +503,28 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBe('local');
     });
 
+    it('should route memory intent to the local tier from the gateway decision', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'memory_task',
+          confidence: 'high',
+          operation: 'save',
+          summary: 'Save an explicit memory item.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+        'Remember globally that my test marker is cedar-47.',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.reason).toContain('intent route=memory_task');
+      expect(result.fallbackAgentId).toBe('external');
+    });
+
     it('should degrade cleanly when the preferred intent tier is unavailable', () => {
       const singleRouter = new MessageRouter({ strategy: 'keyword' });
       singleRouter.registerAgent('external', ['network_access'], {}, 'external');

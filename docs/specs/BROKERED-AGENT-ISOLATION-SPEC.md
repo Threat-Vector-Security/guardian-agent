@@ -23,7 +23,7 @@ The worker process owns:
 - pending-approval continuation state
 - post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
 
-For Code-session turns, that supervisor-provided state now includes the resolved backend coding-session context, including workspace root, workspace profile, repo map, working set, and Code-session memory scope. The brokered worker should reason from that session-owned context rather than from Guardian host-app identity or global memory.
+For Code-session turns, that supervisor-provided state now includes the resolved backend coding-session context, including workspace root, workspace profile, repo map, working set, Guardian global memory, and bounded session-local Code-session memory context. The brokered worker should reason from that structured session-owned state rather than from stale host-app identity assumptions or unscoped prior chat context.
 
 The boundary is JSON-RPC over stdio. The worker has no direct reference to `Runtime`, `ToolExecutor`, or channel adapters.
 
@@ -96,7 +96,7 @@ Those are intentionally not claimed as part of the current implementation. Inste
 - trimmed conversation history
 - scoped persistent-memory excerpt
   - global agent memory for normal chat
-  - Code-session memory for Code turns
+  - global agent memory plus bounded Code-session memory augment context for Code turns
 - active skills
 - tool context
 - runtime notices

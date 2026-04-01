@@ -5,7 +5,7 @@ import { BrokeredWorkerSession } from './worker-session.js';
 const baseParams = {
   systemPrompt: 'system',
   history: [],
-  knowledgeBase: '',
+  knowledgeBases: [],
   activeSkills: [],
   toolContext: '',
   runtimeNotices: [],

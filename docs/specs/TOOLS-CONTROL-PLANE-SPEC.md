@@ -38,9 +38,9 @@ The control plane assumes top-level user-turn interpretation is already complete
 
 Memory scope note:
 
-- outside Code, `memory_recall` and `memory_save` target the current agent's global memory
-- inside a backend Code session, those same tools target Code-session memory keyed by `codeSessionId`
-- `memory_search` now supports `scope: conversation|persistent|both`; persistent search follows the same current-scope binding as `memory_recall`
+- `memory_recall` and `memory_save` default to the current agent's global memory, including during attached Code-session turns
+- `scope: "code_session"` is the explicit session-local path for `memory_recall` and `memory_save`; Code-session memory remains keyed by `codeSessionId`
+- `memory_search` supports `scope: conversation|persistent|both`; when persistent search runs inside Code it defaults to both global and attached Code-session memory unless `persistentScope` narrows it
 - `memory_bridge_search` is the explicit read-only cross-scope lookup path and does not switch the current context
 - if `assistant.memory.knowledgeBase.readOnly` is enabled, `memory_save` is rejected before approval/execution in both scopes
 - saved automation runs can also write memory references plus private full-output records when historical analysis persistence is enabled; that path is automation-only and does not include ad hoc tool calls

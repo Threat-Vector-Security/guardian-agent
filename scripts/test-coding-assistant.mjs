@@ -193,10 +193,36 @@ function extractSkillLocation(systemPrompt, skillName) {
   return match?.[1]?.trim() || '';
 }
 
+function printHelp() {
+  console.log([
+    'Coding workspace harness',
+    '',
+    'Usage:',
+    '  node scripts/test-coding-assistant.mjs [options]',
+    '',
+    'Options:',
+    '  --use-ollama   Use a real reachable Ollama endpoint instead of the fake provider.',
+    '  --keep-tmp     Preserve the temporary harness directory under the system temp folder.',
+    '  --help         Show this help text.',
+    '',
+    'Environment:',
+    '  HARNESS_USE_REAL_OLLAMA=1                    Enable the real-Ollama lane.',
+    '  HARNESS_KEEP_TMP=1                           Preserve the harness temp directory.',
+    '  HARNESS_OLLAMA_BASE_URL, HARNESS_OLLAMA_MODEL, HARNESS_WSL_HOST_IP',
+    '  HARNESS_OLLAMA_BIN, HARNESS_AUTOSTART_LOCAL_OLLAMA,',
+    '  HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD',
+  ].join('\n'));
+}
+
 function parseHarnessOptions() {
   const args = new Set(process.argv.slice(2));
+  if (args.has('--help')) {
+    printHelp();
+    process.exit(0);
+  }
   return {
     useRealOllama: args.has('--use-ollama') || process.env.HARNESS_USE_REAL_OLLAMA === '1',
+    keepTmp: args.has('--keep-tmp') || process.env.HARNESS_KEEP_TMP === '1',
     ollamaBaseUrl: process.env.HARNESS_OLLAMA_BASE_URL?.trim() || '',
     ollamaModel: process.env.HARNESS_OLLAMA_MODEL?.trim() || '',
     wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
@@ -340,6 +366,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
       const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
       const systemPrompt = String(messages.find((message) => message.role === 'system')?.content ?? '');
+      const latestGatewayRequest = latestUser.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? latestUser;
 
       scenarioLog.push({
         latestUser,
@@ -355,21 +382,21 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
           operation: 'unknown',
           summary: 'No direct route for this coding harness turn.',
         };
-        if (/what coding workspace is this chat currently attached to|what coding session am i on|which coding workspace is this chat currently attached to/i.test(latestUser)) {
+        if (/what coding workspace is this chat currently attached to|what coding session am i on|which coding workspace is this chat currently attached to/i.test(latestGatewayRequest)) {
           decision = {
             route: 'coding_session_control',
             confidence: 'high',
             operation: 'inspect',
             summary: 'Inspect the current coding workspace attachment.',
           };
-        } else if (/list the coding sessions|list my coding workspaces|show me the coding sessions/i.test(latestUser)) {
+        } else if (/list the coding sessions|list my coding workspaces|show me the coding sessions/i.test(latestGatewayRequest)) {
           decision = {
             route: 'coding_session_control',
             confidence: 'high',
             operation: 'navigate',
             summary: 'List available coding workspace sessions.',
           };
-        } else if (/switch this chat to the coding workspace for temp install test/i.test(latestUser)) {
+        } else if (/switch this chat to the coding workspace for temp install test/i.test(latestGatewayRequest)) {
           decision = {
             route: 'coding_session_control',
             confidence: 'high',
@@ -377,7 +404,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
             summary: 'Switch to a specific coding workspace session.',
             sessionTarget: 'Temp install test',
           };
-        } else if (/detach this chat from the current coding workspace/i.test(latestUser)) {
+        } else if (/detach this chat from the current coding workspace/i.test(latestGatewayRequest)) {
           decision = {
             route: 'coding_session_control',
             confidence: 'high',
@@ -657,7 +684,7 @@ function setupGitWorkspace(workspaceRoot) {
 
 async function runHarness() {
   const options = parseHarnessOptions();
-  const keepTmp = process.env.HARNESS_KEEP_TMP === '1';
+  const keepTmp = options.keepTmp;
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const harnessPort = await getFreePort();
   const harnessToken = `coding-harness-${Date.now()}`;

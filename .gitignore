@@ -13,3 +13,7 @@ coverage/
 # Build artifacts
 build/
 native/windows-helper/target/
+
+# Local competitive research and scraped third-party materials
+docs/research/claude-code-source-deep-dive/
+scripts/scrape-claude-code-course.sh

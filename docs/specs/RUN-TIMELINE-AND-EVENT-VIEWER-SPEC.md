@@ -21,6 +21,8 @@ Current as-built deltas:
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
 - Dashboard `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
 - delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
+- assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
+- context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
 
 ## Problem Statement
 
@@ -216,6 +218,7 @@ Rules:
 
 - `detail` must stay within the existing safe preview boundary. Use `messagePreview`, `argsPreview`, `resultPreview`, and short verification summaries.
 - `contextAssembly` is the typed operator-facing payload for bounded continuity, memory-scope, memory-selection, and knowledge-base diagnostics. Raw tool arguments or model prompts still do not belong here.
+- `provider_call` nodes are operator-facing provenance only. They may include provider/model names, duration, and token/cache counts, but they must not include raw prompt bodies or unbounded tool payloads.
 - `handoff_started` and `handoff_completed` items are also used for delegated-worker follow-up projection, not only deterministic workflow handoffs.
 - Use stable ids from underlying entities where possible:
   - workflow event id

@@ -1,5 +1,14 @@
 import type { ChatMessage } from '../llm/types.js';
 
+export interface ContextCompactionResult {
+  applied: boolean;
+  beforeChars: number;
+  afterChars: number;
+  capacityChars: number;
+  stages: Array<'truncate_tool_calls' | 'truncate_tool_results' | 'aggressive_trim'>;
+  summary?: string;
+}
+
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(0, maxChars - 16))}[...truncated]`;
@@ -14,7 +23,8 @@ function totalChars(messages: ChatMessage[]): number {
   }, 0);
 }
 
-function compactHistoricalToolMessages(messages: ChatMessage[], protectedStart: number, maxChars: number): void {
+function compactHistoricalToolMessages(messages: ChatMessage[], protectedStart: number, maxChars: number): number {
+  let compacted = 0;
   for (let i = 0; i < protectedStart; i++) {
     const msg = messages[i];
     if (msg.role !== 'tool' || !msg.content || msg.content.length <= maxChars) continue;
@@ -29,24 +39,37 @@ function compactHistoricalToolMessages(messages: ChatMessage[], protectedStart: 
     } catch {
       msg.content = truncateText(msg.content, maxChars);
     }
+    compacted += 1;
   }
+  return compacted;
 }
 
-function compactHistoricalAssistantToolCalls(messages: ChatMessage[], protectedStart: number, maxArgChars: number): void {
+function compactHistoricalAssistantToolCalls(messages: ChatMessage[], protectedStart: number, maxArgChars: number): number {
+  let compacted = 0;
   for (let i = 0; i < protectedStart; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant' || !Array.isArray(msg.toolCalls) || msg.toolCalls.length === 0) continue;
+    let touched = false;
     msg.toolCalls = msg.toolCalls.map((toolCall) => ({
       ...toolCall,
-      arguments: truncateText(toolCall.arguments ?? '', maxArgChars),
+      arguments: (() => {
+        const original = toolCall.arguments ?? '';
+        const next = truncateText(original, maxArgChars);
+        if (next !== original) touched = true;
+        return next;
+      })(),
     }));
     if (msg.content) {
-      msg.content = truncateText(msg.content, 400);
+      const nextContent = truncateText(msg.content, 400);
+      if (nextContent !== msg.content) touched = true;
+      msg.content = nextContent;
     }
+    if (touched) compacted += 1;
   }
+  return compacted;
 }
 
-function aggressivelyTrimHistoricalMessages(messages: ChatMessage[], keepCount: number): void {
+function aggressivelyTrimHistoricalMessages(messages: ChatMessage[], keepCount: number): string | undefined {
   const systemMessages = messages.filter((message) => message.role === 'system');
   const tail = messages.slice(-keepCount);
   const historical = messages.slice(0, Math.max(0, messages.length - keepCount));
@@ -76,31 +99,59 @@ function aggressivelyTrimHistoricalMessages(messages: ChatMessage[], keepCount: 
     const firstIndex = array.findIndex((candidate) => candidate === message);
     return firstIndex === index;
   }));
+  return summaryMessage?.content;
 }
 
 /**
  * Compact message history using a staged strategy as the conversation approaches
  * the token budget (approximated as budget * 4 chars per token).
  */
-export function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): void {
+export function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): ContextCompactionResult {
   const capacity = budget * 4;
   const currentTotal = totalChars(messages);
-  if (currentTotal <= capacity * 0.7) return;
+  const result: ContextCompactionResult = {
+    applied: false,
+    beforeChars: currentTotal,
+    afterChars: currentTotal,
+    capacityChars: capacity,
+    stages: [],
+  };
+  if (currentTotal <= capacity * 0.7) return result;
 
   const protectedCount = 6;
   const protectedStart = Math.max(0, messages.length - protectedCount);
 
   if (currentTotal > capacity * 0.8) {
-    compactHistoricalAssistantToolCalls(messages, protectedStart, 400);
-    compactHistoricalToolMessages(messages, protectedStart, 260);
+    const compactedToolCalls = compactHistoricalAssistantToolCalls(messages, protectedStart, 400);
+    const compactedToolMessages = compactHistoricalToolMessages(messages, protectedStart, 260);
+    if (compactedToolCalls > 0) result.stages.push('truncate_tool_calls');
+    if (compactedToolMessages > 0 && !result.stages.includes('truncate_tool_results')) {
+      result.stages.push('truncate_tool_results');
+    }
   }
 
   if (totalChars(messages) > capacity * 0.85) {
-    compactHistoricalToolMessages(messages, protectedStart, 180);
-    compactHistoricalAssistantToolCalls(messages, protectedStart, 180);
+    const compactedToolMessages = compactHistoricalToolMessages(messages, protectedStart, 180);
+    const compactedToolCalls = compactHistoricalAssistantToolCalls(messages, protectedStart, 180);
+    if (compactedToolMessages > 0 && !result.stages.includes('truncate_tool_results')) {
+      result.stages.push('truncate_tool_results');
+    }
+    if (compactedToolCalls > 0 && !result.stages.includes('truncate_tool_calls')) {
+      result.stages.push('truncate_tool_calls');
+    }
   }
 
   if (totalChars(messages) > capacity * 0.95) {
-    aggressivelyTrimHistoricalMessages(messages, 5);
+    const summary = aggressivelyTrimHistoricalMessages(messages, 5);
+    result.stages.push('aggressive_trim');
+    if (summary) result.summary = summary;
   }
+
+  result.afterChars = totalChars(messages);
+  result.applied = result.afterChars < result.beforeChars;
+  if (!result.applied) {
+    result.stages = [];
+    delete result.summary;
+  }
+  return result;
 }

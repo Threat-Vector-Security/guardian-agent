@@ -1386,6 +1386,9 @@ export class WebChannel implements ChannelAdapter {
           approvalId?: string;
           decision?: 'approved' | 'denied';
           actor?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
           reason?: string;
         };
         try {
@@ -1393,6 +1396,9 @@ export class WebChannel implements ChannelAdapter {
             approvalId?: string;
             decision?: 'approved' | 'denied';
             actor?: string;
+            userId?: string;
+            channel?: string;
+            surfaceId?: string;
             reason?: string;
           };
         } catch {
@@ -1404,11 +1410,17 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         const principal = this.resolveRequestPrincipal(req);
+        const userId = trimOptionalString(parsed.userId) ?? 'web-user';
+        const channel = trimOptionalString(parsed.channel) ?? 'web';
+        const surfaceId = trimOptionalString(parsed.surfaceId) ?? userId;
         const result = await this.dashboard.onToolsApprovalDecision({
           approvalId: parsed.approvalId,
           decision: parsed.decision,
           actor: principal.principalId,
           actorRole: principal.principalRole,
+          userId,
+          channel,
+          surfaceId,
           reason: parsed.reason,
         });
         sendJSON(res, 200, result);

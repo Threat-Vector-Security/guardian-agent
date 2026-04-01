@@ -2,34 +2,36 @@
 
 The system has two durable long-term memory scopes plus searchable conversation history:
 
-- global agent memory for the normal assistant
-- Code-session memory for the Coding Assistant
+- global Guardian memory outside attached coding sessions
+- Code-session memory for Guardian while it is attached to a coding session
 - SQLite-backed conversation history with FTS5 search
 - runtime-authored automation result references for saved automation runs that opt into historical analysis
 
 This guide covers architecture, configuration, and usage.
 
-For tier-routed chat, the built-in `local` and `external` agents still share one logical global memory/session identity. Switching between `auto`, `local-only`, and `external-only` changes the execution backend, not the assistant's conversation history or global memory.
+For tier-routed chat, the built-in `local` and `external` agents still share one logical Guardian memory/session identity. Switching between `auto`, `local-only`, and `external-only` changes the execution backend, not Guardian's conversation history or global memory.
 
 ## Memory Scopes
 
 ### Global agent memory
 
-Global agent memory is the normal long-term knowledge base for the assistant outside Code sessions.
+Global agent memory is Guardian's long-term knowledge base outside attached coding sessions.
 
 - keyed by assistant/agent identity
 - persisted as a readable markdown view plus a canonical signed sidecar index
-- loaded into normal chat prompt context
-- written by `memory_save` outside Code or by automatic memory flush from normal chat
+- remains Guardian's primary persistent memory scope, including during attached coding sessions
+- loaded into Guardian prompt context outside Code, and also loaded first for Code-session turns
+- written by `memory_save` by default unless the caller explicitly targets Code-session memory
+- receives automatic memory flush only from non-Code Guardian chat
 
 ### Code-session memory
 
-Code-session memory is a separate long-term store for the Coding Assistant.
+Code-session memory is a separate long-term store for Guardian while it is operating inside an attached coding session.
 
 - keyed by `codeSessionId`
 - isolated from global memory by default
-- loaded only for turns running inside that Code session
-- written by `memory_save` inside Code or by automatic memory flush from that Code session's transcript
+- loaded only for turns running inside that Code session, as a bounded session-local augment to global memory rather than a replacement for it
+- written by `memory_save` only when the caller explicitly targets `scope=code_session`, or by automatic memory flush from that Code session's transcript
 - not automatically preloaded into main chat, CLI, or Telegram unless they explicitly attach to that same backend Code session
 
 ### Conversation history
@@ -90,6 +92,8 @@ Layer 3: Conversation History (ConversationService)
   SQLite-backed session storage with sliding window context
   Automatic trimming to maxContextChars
   Session rotation, listing, and restore
+  Bounded response-source metadata is retained with assistant turns
+  Code-session prompt compaction can persist a session-local compacted summary plus trace-safe diagnostics without widening memory scope
 
 Layer 4: Memory Flush (automatic)
   Detects when messages are dropped from the context window
@@ -124,9 +128,11 @@ Code-session turn
   User message
     -> dedicated Code-session prompt
     -> workspace profile + indexed repo map + current working set injected as repo-local evidence
-    -> Code-session memory excerpt loaded for that codeSessionId only, with entry-aware, signal-aware packing
+    -> global memory excerpt loaded first as Guardian's primary durable memory
+    -> bounded Code-session memory excerpt loaded for that codeSessionId as session-local augment context
     -> recent Code-session conversation history trimmed to maxContextChars
-    -> LLM receives: code prompt + repo evidence + code-session memory + recent history + user message
+    -> if the prompt is compacted for budget, Guardian keeps a bounded session-local compacted summary and exposes compaction diagnostics in the run timeline
+    -> LLM receives: code prompt + repo evidence + global memory + bounded Code-session memory + recent history + user message
     -> newly dropped history (if any) flushed into Code-session memory as a structured context-flush record
     -> optional memory_bridge_search may return reference-only results from the other scope
 
@@ -192,16 +198,18 @@ Category: memory
 Parameters:
   query (required): Search query — words, phrases, FTS5 syntax
   scope (optional): "conversation", "persistent", or "both" (default)
+  persistentScope (optional): "global", "code_session", or "both"
+  sessionId (optional): Required when `persistentScope` includes `code_session` outside an attached coding session
   limit (optional): Max results (default 10, max 50)
 ```
 
 Important behavior:
 
 - `scope: "conversation"` searches conversation history only
-- `scope: "persistent"` searches the current persistent memory scope only
+- `scope: "persistent"` searches persistent memory only
 - `scope: "both"` merges both sources into one ranked list
-- outside Code, persistent search targets the current agent's global memory
-- inside Code, persistent search targets the current Code session's long-term memory
+- outside Code, persistent search targets global memory unless `persistentScope` requests Code-session memory
+- inside Code, persistent search defaults to both global memory and the attached Code-session memory unless `persistentScope` narrows it
 - conversation results use FTS5 BM25 ordering when available, with substring fallback otherwise
 - persistent results use deterministic field-aware ranking across content, summary, category, and tags
 - merged results are fused source-by-source rather than comparing raw BM25 and substring scores directly
@@ -210,7 +218,7 @@ Important behavior:
 
 ### memory_recall
 
-Retrieve persistent long-term memory for the current scope.
+ Retrieve persistent long-term memory, with global memory as the default scope.
 
 ```text
 Tool: memory_recall
@@ -218,18 +226,21 @@ Risk: read_only
 Category: memory
 Parameters:
   agentId (optional): Agent ID to retrieve global memory for outside Code
+  scope (optional): "global", "code_session", or "both" (default: global)
+  sessionId (optional): Required when `scope` includes `code_session` outside an attached coding session
 ```
 
 Scope rules:
 
-- outside Code: reads the current agent's global memory
-- inside Code: reads the current Code session's long-term memory
+- default behavior: reads the current agent's global memory
+- inside Code, `scope: "code_session"` reads the attached Code-session memory
+- inside Code, `scope: "both"` returns both the global memory view and the attached Code-session memory view
 - when an index file fails integrity verification, the scope is treated as empty instead of falling back to the markdown cache
 - output includes per-entry metadata, including stored `summary` when available, alongside rendered markdown content
 
 ### memory_save
 
-Save a fact, preference, decision, or summary to persistent long-term memory for the current scope.
+Save a fact, preference, decision, or summary to persistent long-term memory.
 
 ```text
 Tool: memory_save
@@ -239,12 +250,14 @@ Parameters:
   content (required): The fact, preference, or summary to remember
   summary (optional): Short gist used for prompt-time memory packing
   category (optional): Heading for organization (for example "Preferences", "Decisions", "Facts", "Project Notes")
+  scope (optional): "global" or "code_session" (default: global)
+  sessionId (optional): Required when `scope=code_session` outside an attached coding session
 ```
 
 Scope rules:
 
-- outside Code: writes to global agent memory
-- inside Code: writes to the current Code session's long-term memory
+- default behavior: writes to global agent memory, including inside Code
+- `scope: "code_session"` writes to the attached Code session's long-term memory
 - if `knowledgeBase.readOnly` is enabled, `memory_save` fails before approval/execution instead of creating a pending write
 - trusted direct `memory_save` requests auto-run without approval; assistant-origin writes still require explicit remember intent
 - long entries get a deterministic derived summary when no summary is supplied
@@ -252,7 +265,7 @@ Scope rules:
 Example usage by the agent:
 
 - User says "remember that I prefer dark mode" -> `memory_save({ content: "User prefers dark mode", category: "Preferences" })`
-- User says "remember that this repo uses PostgreSQL" inside Code -> writes to that Code session's memory, not to global memory
+- User says "remember that this repo uses PostgreSQL" inside Code -> `memory_save({ content: "This repo uses PostgreSQL", category: "Project Notes", scope: "code_session" })`
 
 ### memory_bridge_search
 
@@ -334,7 +347,7 @@ Important rules:
 - trusted direct/operator memory writes can proceed without a separate approval prompt
 - verification distinguishes active writes from quarantined/unreviewed writes
 - inactive/quarantined material is only surfaced through explicit search paths
-- `knowledgeBase.readOnly` freezes normal assistant/runtime durable writes, including `memory_save` and automatic flush writes
+- `knowledgeBase.readOnly` freezes normal Guardian/runtime durable writes in both global and Code-session memory, including `memory_save` and automatic flush writes
 - suspicious memory content is stripped from prompt/context loads even when the stored entry is otherwise active
 
 ## Persistent Memory File Format
@@ -402,7 +415,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 ### Flush behavior
 
-- normal chat flushes to global agent memory
+- non-Code Guardian chat flushes to global agent memory
 - Code-session chat flushes to that session's long-term memory
 - only fires when substantive content is being dropped
 - flush writes are incremental; already-flushed dropped prefixes are not re-written on every prompt build
@@ -423,7 +436,7 @@ Code and global memory are intentionally separated.
 - broader tool access does not change the active memory scope
 - repo-awareness state such as `workspaceProfile`, `workspaceMap`, and `workingSet` is separate from both long-term memory scopes
 
-This keeps the Coding Assistant grounded in its session and repo without removing access to the wider tool inventory.
+This keeps Guardian grounded in its attached session and repo without removing access to the wider tool inventory.
 
 ## Future Enhancement Opportunities
 

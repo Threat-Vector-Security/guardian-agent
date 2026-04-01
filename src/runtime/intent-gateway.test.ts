@@ -4,6 +4,7 @@ import {
   IntentGateway,
   attachPreRoutedIntentGatewayMetadata,
   readPreRoutedIntentGatewayMetadata,
+  shouldReusePreRoutedIntentGateway,
   toIntentGatewayClientMetadata,
 } from './intent-gateway.js';
 
@@ -142,6 +143,34 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('search_task');
     expect(result.decision.operation).toBe('search');
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
+  });
+
+  it('supports memory_task classifications for explicit remember requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Remember globally that my test marker is cedar-47.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-memory-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'memory_task',
+            confidence: 'high',
+            operation: 'save',
+            summary: 'Saves an explicit user memory request.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('memory_task');
+    expect(result.decision.operation).toBe('save');
   });
 
   it('normalizes placeholder coding backend values away', async () => {
@@ -675,5 +704,31 @@ describe('IntentGateway', () => {
         },
       },
     });
+  });
+
+  it('does not reuse pre-routed gateway metadata when the preroute was unavailable', () => {
+    const metadata = attachPreRoutedIntentGatewayMetadata(
+      undefined,
+      {
+        mode: 'primary',
+        available: false,
+        model: 'unknown',
+        latencyMs: 3,
+        decision: {
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Routing provider unavailable.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+      },
+    );
+
+    const preRouted = readPreRoutedIntentGatewayMetadata(metadata);
+    expect(preRouted?.available).toBe(false);
+    expect(shouldReusePreRoutedIntentGateway(preRouted)).toBe(false);
   });
 });
