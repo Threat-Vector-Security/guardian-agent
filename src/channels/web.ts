@@ -19,6 +19,7 @@ import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
+import { handleWebChatRoutes } from './web-chat-routes.js';
 import { handleWebControlRoutes } from './web-control-routes.js';
 import { handleWebMonitoringRoutes } from './web-monitoring-routes.js';
 import { handleWebRuntimeRoutes } from './web-runtime-routes.js';
@@ -160,10 +161,6 @@ function trimOptionalString(value: unknown): string | undefined {
 
 function readSurfaceIdFromSearchParams(url: URL): string | undefined {
   return trimOptionalString(url.searchParams.get('surfaceId'));
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function normalizeWebAuthMode(value: unknown): WebAuthMode {
@@ -1000,331 +997,26 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/message/stream — Stream a response via SSE events
-      if (req.method === 'POST' && url.pathname === '/api/message/stream') {
-        if (!this.dashboard.onStreamDispatch) {
-          sendJSON(res, 404, { error: 'Streaming not available' });
-          return;
-        }
-
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          const status = message.includes('too large') ? 413 : 400;
-          sendJSON(res, status, { error: message });
-          return;
-        }
-
-        let parsed: {
-          content?: unknown;
-          userId?: string;
-          agentId?: unknown;
-          requestId?: unknown;
-          surfaceId?: unknown;
-          channel?: string;
-          metadata?: Record<string, unknown>;
-        };
-        try {
-          parsed = JSON.parse(body) as typeof parsed;
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-
-        const content = asNonEmptyString(parsed.content);
-        const agentId = trimOptionalString(parsed.agentId);
-        const requestId = trimOptionalString(parsed.requestId);
-        if (!content) {
-          sendJSON(res, 400, { error: 'content is required' });
-          return;
-        }
-
-        const emitSSE = (event: import('./web-types.js').SSEEvent) => {
+      if (await handleWebChatRoutes({
+        req,
+        res,
+        url,
+        maxBodyBytes: this.maxBodyBytes,
+        dashboard: this.dashboard,
+        onMessage: this.onMessage,
+        resolveRequestPrincipal: (request) => this.resolveRequestPrincipal(request),
+        getRequestErrorDetails,
+        logInternalError,
+        maybeEmitUIInvalidation: (result, topics, reason, path) => this.maybeEmitUIInvalidation(result, topics, reason, path),
+        emitSSE: (event) => {
           for (const client of this.sseClients) {
             if (!client.destroyed) {
               client.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
             }
           }
-        };
-
-        try {
-          const principal = this.resolveRequestPrincipal(req);
-          const result = await this.dashboard.onStreamDispatch(
-            agentId,
-            {
-              requestId,
-              content,
-              userId: parsed.userId,
-              surfaceId: trimOptionalString(parsed.surfaceId),
-              principalId: principal.principalId,
-              principalRole: principal.principalRole,
-              channel: parsed.channel ?? 'web',
-              metadata: asRecord(parsed.metadata),
-            },
-            emitSSE,
-          );
-          sendJSON(res, 200, result);
-        } catch (err) {
-          const requestError = getRequestErrorDetails(err);
-          if (requestError) {
-            sendJSON(res, requestError.statusCode, {
-              error: requestError.error,
-              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
-            });
-            return;
-          }
-          logInternalError('Stream dispatch failed', err);
-          sendJSON(res, 500, { error: 'Stream dispatch error' });
-        }
-        return;
-      }
-
-      // POST /api/message — Send a message to an agent
-      if (req.method === 'POST' && url.pathname === '/api/message') {
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          const status = message.includes('too large') ? 413 : 400;
-          sendJSON(res, status, { error: message });
-          return;
-        }
-
-        let parsed: {
-          content?: unknown;
-          userId?: string;
-          agentId?: unknown;
-          surfaceId?: unknown;
-          channel?: string;
-          metadata?: Record<string, unknown>;
-        };
-        try {
-          parsed = JSON.parse(body) as typeof parsed;
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-
-        const content = asNonEmptyString(parsed.content);
-        const agentId = trimOptionalString(parsed.agentId);
-        if (!content) {
-          sendJSON(res, 400, { error: 'content is required' });
-          return;
-        }
-
-        // Agent-targeted dispatch via dashboard callback
-        if (agentId && this.dashboard.onDispatch) {
-          try {
-            const principal = this.resolveRequestPrincipal(req);
-            const response = await this.dashboard.onDispatch(agentId, {
-              content,
-              userId: parsed.userId,
-              surfaceId: trimOptionalString(parsed.surfaceId),
-              principalId: principal.principalId,
-              principalRole: principal.principalRole,
-              channel: parsed.channel ?? 'web',
-              metadata: asRecord(parsed.metadata),
-            });
-            sendJSON(res, 200, response);
-          } catch (err) {
-            const requestError = getRequestErrorDetails(err);
-            if (requestError) {
-              sendJSON(res, requestError.statusCode, {
-                error: requestError.error,
-                ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
-              });
-              return;
-            }
-            logInternalError('Message dispatch failed', err);
-            const detail = err instanceof Error ? err.message : String(err);
-            sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
-          }
-          return;
-        }
-
-        // Fallback to default message handler
-        if (!this.onMessage) {
-          sendJSON(res, 503, { error: 'No message handler registered' });
-          return;
-        }
-
-        try {
-          const principal = this.resolveRequestPrincipal(req);
-          const response = await this.onMessage({
-            id: randomUUID(),
-            userId: parsed.userId ?? 'web-user',
-            surfaceId: trimOptionalString(parsed.surfaceId),
-            principalId: principal.principalId,
-            principalRole: principal.principalRole,
-            channel: parsed.channel ?? 'web',
-            content,
-            metadata: asRecord(parsed.metadata),
-            timestamp: Date.now(),
-          });
-          sendJSON(res, 200, response);
-        } catch (err) {
-          const requestError = getRequestErrorDetails(err);
-          if (requestError) {
-            sendJSON(res, requestError.statusCode, {
-              error: requestError.error,
-              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
-            });
-            return;
-          }
-          logInternalError('Message dispatch failed', err);
-          const detail = err instanceof Error ? err.message : String(err);
-          sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
-        }
-        return;
-      }
-
-      // POST /api/conversations/reset — Reset conversation memory
-      if (req.method === 'POST' && url.pathname === '/api/conversations/reset') {
-        if (!this.dashboard.onConversationReset) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          const status = message.includes('too large') ? 413 : 400;
-          sendJSON(res, status, { error: message });
-          return;
-        }
-
-        let parsed: { agentId?: string; userId?: string; channel?: string };
-        try {
-          parsed = JSON.parse(body) as { agentId?: string; userId?: string; channel?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-
-        if (!parsed.agentId) {
-          sendJSON(res, 400, { error: 'agentId is required' });
-          return;
-        }
-
-        try {
-          const result = await this.dashboard.onConversationReset({
-            agentId: parsed.agentId,
-            userId: parsed.userId ?? 'web-user',
-            channel: parsed.channel ?? 'web',
-          });
-          sendJSON(res, 200, result);
-          this.maybeEmitUIInvalidation(result, ['dashboard'], 'conversation.reset', url.pathname);
-        } catch (err) {
-          logInternalError('Conversation reset failed', err);
-          sendJSON(res, 500, { error: 'Reset failed' });
-        }
-        return;
-      }
-
-      // GET /api/conversations/sessions — list user sessions
-      if (req.method === 'GET' && url.pathname === '/api/conversations/sessions') {
-        if (!this.dashboard.onConversationSessions) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-
-        const userId = url.searchParams.get('userId') ?? 'web-user';
-        const channel = url.searchParams.get('channel') ?? 'web';
-        const agentId = url.searchParams.get('agentId') ?? undefined;
-
-        sendJSON(res, 200, this.dashboard.onConversationSessions({ userId, channel, agentId }));
-        return;
-      }
-
-      // POST /api/conversations/session — switch active session
-      if (req.method === 'POST' && url.pathname === '/api/conversations/session') {
-        if (!this.dashboard.onConversationUseSession) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          const status = message.includes('too large') ? 413 : 400;
-          sendJSON(res, status, { error: message });
-          return;
-        }
-
-        let parsed: { agentId?: string; userId?: string; channel?: string; sessionId?: string };
-        try {
-          parsed = JSON.parse(body) as { agentId?: string; userId?: string; channel?: string; sessionId?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-
-        if (!parsed.agentId || !parsed.sessionId) {
-          sendJSON(res, 400, { error: 'agentId and sessionId are required' });
-          return;
-        }
-
-        const result = this.dashboard.onConversationUseSession({
-          agentId: parsed.agentId,
-          userId: parsed.userId ?? 'web-user',
-          channel: parsed.channel ?? 'web',
-          sessionId: parsed.sessionId,
-        });
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['dashboard'], 'conversation.session.selected', url.pathname);
-        return;
-      }
-
-      // POST /api/quick-actions/run — execute structured assistant action
-      if (req.method === 'POST' && url.pathname === '/api/quick-actions/run') {
-        if (!this.dashboard.onQuickActionRun) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          const status = message.includes('too large') ? 413 : 400;
-          sendJSON(res, status, { error: message });
-          return;
-        }
-
-        let parsed: { actionId?: string; details?: string; agentId?: string; userId?: string; channel?: string };
-        try {
-          parsed = JSON.parse(body) as { actionId?: string; details?: string; agentId?: string; userId?: string; channel?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-
-        if (!parsed.actionId || !parsed.agentId) {
-          sendJSON(res, 400, { error: 'actionId and agentId are required' });
-          return;
-        }
-
-        try {
-          const result = await this.dashboard.onQuickActionRun({
-            actionId: parsed.actionId,
-            details: parsed.details ?? '',
-            agentId: parsed.agentId,
-            userId: parsed.userId ?? 'web-user',
-            channel: parsed.channel ?? 'web',
-          });
-          sendJSON(res, 200, result);
-        } catch (err) {
-          logInternalError('Quick action failed', err);
-          sendJSON(res, 500, { error: 'Quick action failed' });
-        }
+        },
+        generateMessageId: () => randomUUID(),
+      })) {
         return;
       }
 
