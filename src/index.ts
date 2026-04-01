@@ -58,6 +58,7 @@ import {
 } from './guardian/security-baseline.js';
 import { ControlPlaneIntegrity } from './guardian/control-plane-integrity.js';
 import { createLogger, setLogLevel } from './util/logging.js';
+import { buildPathBoundaryPattern } from './util/regex.js';
 import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import { mkdirSecureSync, tightenSecureTree, writeSecureFileSync } from './util/secure-fs.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
@@ -13479,9 +13480,9 @@ async function main(): Promise<void> {
   // correct even if the directory name or home path changes in the future.
   {
     const existing = configRef.current.guardian.deniedPaths ?? [];
-    const absPattern = guardianDataDir.replace(/\\/g, '/').replace(/[.*+?^${}()|[\]]/g, '\\$&');
-    if (!existing.some(p => p.includes(absPattern))) {
-      configRef.current.guardian.deniedPaths = [...existing, `(^|/)${absPattern}(/|$)`];
+    const absPattern = buildPathBoundaryPattern(guardianDataDir);
+    if (!existing.includes(absPattern)) {
+      configRef.current.guardian.deniedPaths = [...existing, absPattern];
     }
   }
 
