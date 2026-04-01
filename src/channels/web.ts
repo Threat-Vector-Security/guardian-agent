@@ -13,13 +13,17 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { join, normalize, extname, resolve, relative, isAbsolute, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
+import { join, normalize, extname, resolve, relative, isAbsolute } from 'node:path';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } from './web-types.js';
+import { readBody, sendJSON } from './web-json.js';
+import {
+  getDefaultShellForPlatform,
+  getPtyShellLaunch,
+  getShellOptionsForPlatform,
+} from './web-shell-launch.js';
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
 import { timingSafeEqualString } from '../util/crypto-guardrails.js';
@@ -134,12 +138,6 @@ interface TicketMintState {
 const SESSION_COOKIE_NAME = 'guardianagent_sid';
 const DEFAULT_SESSION_TTL_MINUTES = 480; // 8 hours
 const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-
-interface ShellOptionDescriptor {
-  id: string;
-  label: string;
-  detail: string;
-}
 
 interface TerminalSessionRecord {
   id: string;
@@ -5461,273 +5459,6 @@ export class WebChannel implements ChannelAdapter {
 
 function logInternalError(message: string, err: unknown): void {
   log.error({ err }, message);
-}
-
-function sendJSON(res: ServerResponse, status: number, data: unknown): void {
-  if (res.headersSent) return;
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
-
-function getShellOptionsForPlatform(platform: NodeJS.Platform): ShellOptionDescriptor[] {
-  switch (platform) {
-    case 'win32':
-      return [
-        { id: 'powershell', label: 'PowerShell (Windows)', detail: 'powershell.exe' },
-        { id: 'cmd', label: 'Command Prompt (cmd.exe)', detail: 'cmd.exe' },
-        { id: 'git-bash', label: 'Git Bash', detail: 'C:\\Program Files\\Git\\bin\\bash.exe' },
-        { id: 'wsl-login', label: 'WSL Ubuntu', detail: 'wsl.exe (default shell/profile)' },
-        { id: 'wsl', label: 'WSL Bash (Clean)', detail: 'wsl.exe -- bash --noprofile --norc' },
-      ];
-    case 'darwin':
-      return [
-        { id: 'zsh', label: 'Zsh', detail: 'zsh' },
-        { id: 'bash', label: 'Bash', detail: 'bash' },
-        { id: 'sh', label: 'POSIX sh', detail: 'sh' },
-      ];
-    default:
-      return [
-        { id: 'bash', label: 'Bash', detail: 'bash' },
-        { id: 'zsh', label: 'Zsh', detail: 'zsh' },
-        { id: 'sh', label: 'POSIX sh', detail: 'sh' },
-      ];
-  }
-}
-
-function getDefaultShellForPlatform(platform: NodeJS.Platform): string {
-  return getShellOptionsForPlatform(platform)[0]?.id || 'bash';
-}
-
-function tryResolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string | null {
-  for (const candidate of fallbackPaths) {
-    if (candidate && existsSync(candidate)) return candidate;
-  }
-
-  try {
-    const output = execFileSync('where', [command], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
-    const first = output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    if (first) return first;
-  } catch {
-    // Fall back to known paths or the raw command name.
-  }
-
-  return null;
-}
-
-function resolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string {
-  return tryResolveWindowsExecutable(command, fallbackPaths) || fallbackPaths[0] || command;
-}
-
-function listWindowsExecutableCandidates(command: string): string[] {
-  try {
-    const output = execFileSync('where', [command], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function inferWindowsGitRoot(executablePath: string): string {
-  const normalized = executablePath.replace(/\//g, '\\');
-  const lower = normalized.toLowerCase();
-  if (lower.endsWith('\\usr\\bin\\bash.exe')) {
-    return dirname(dirname(dirname(normalized)));
-  }
-  if (lower.endsWith('\\bin\\bash.exe')) {
-    return dirname(dirname(normalized));
-  }
-  if (lower.endsWith('\\git-bash.exe')) {
-    return dirname(normalized);
-  }
-  return dirname(dirname(normalized));
-}
-
-function buildWindowsGitBashEnv(executablePath: string): Record<string, string> {
-  const gitRoot = inferWindowsGitRoot(executablePath);
-  const existingPath = process.env.Path || process.env.PATH || '';
-  const pathEntries = [
-    join(gitRoot, 'cmd'),
-    join(gitRoot, 'usr', 'bin'),
-    join(gitRoot, 'bin'),
-    join(gitRoot, 'mingw64', 'bin'),
-  ].filter((entry) => entry && existsSync(entry));
-  const mergedPath = Array.from(new Set([
-    ...pathEntries,
-    ...existingPath.split(';').map((entry) => entry.trim()).filter(Boolean),
-  ])).join(';');
-  return {
-    TERM: 'xterm-256color',
-    NO_COLOR: '1',
-    FORCE_COLOR: '0',
-    PS1: '\\w$ ',
-    MSYSTEM: 'MINGW64',
-    CHERE_INVOKING: '1',
-    PATH: mergedPath,
-    Path: mergedPath,
-  };
-}
-
-function toWslPath(value: string): string {
-  const normalized = String(value || '').trim();
-  if (!normalized) return '/';
-  if (normalized.startsWith('/')) {
-    return normalized.replace(/\\/g, '/');
-  }
-  const driveMatch = normalized.replace(/\//g, '\\').match(/^([A-Za-z]):\\(.*)$/);
-  if (driveMatch) {
-    const [, drive, rest] = driveMatch;
-    return `/mnt/${drive.toLowerCase()}/${rest.replace(/\\/g, '/')}`;
-  }
-  return normalized.replace(/\\/g, '/');
-}
-
-function shellQuotePosix(value: string): string {
-  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function resolveWindowsGitBashExecutable(): string {
-  const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
-  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-  const preferred = [
-    join(programFiles, 'Git', 'bin', 'bash.exe'),
-    join(programFiles, 'Git', 'usr', 'bin', 'bash.exe'),
-    join(programFilesX86, 'Git', 'bin', 'bash.exe'),
-    join(programFilesX86, 'Git', 'usr', 'bin', 'bash.exe'),
-  ];
-  const gitBash = preferred.find((candidate) => candidate && existsSync(candidate))
-    || listWindowsExecutableCandidates('bash.exe')
-      .find((candidate) => candidate.toLowerCase().includes('\\git\\') && candidate.toLowerCase().endsWith('bash.exe'));
-  if (gitBash) return gitBash;
-  throw new Error('Git Bash was not found. Install Git for Windows or use PowerShell/WSL.');
-}
-
-function getPtyShellLaunch(shellType: string, platform: NodeJS.Platform, requestedCwd?: string): {
-  file: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd?: string | null;
-} {
-  switch (shellType) {
-    case 'powershell':
-      return {
-        file: platform === 'win32' ? resolveWindowsExecutable('powershell.exe', ['powershell.exe']) : 'pwsh',
-        args: ['-NoLogo', '-NoProfile'],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
-        cwd: requestedCwd,
-      };
-    case 'cmd':
-      return {
-        file: platform === 'win32' ? resolveWindowsExecutable('cmd.exe', ['cmd.exe']) : 'cmd.exe',
-        args: [],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
-        cwd: requestedCwd,
-      };
-    case 'wsl-login':
-    case 'wsl': {
-      const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
-      const wslExe = platform === 'win32'
-        ? tryResolveWindowsExecutable('wsl.exe', [join(systemRoot, 'System32', 'wsl.exe')])
-        : 'wsl';
-      if (platform === 'win32' && !wslExe) {
-        throw new Error('WSL was not found. Install Windows Subsystem for Linux or use PowerShell.');
-      }
-      if (shellType === 'wsl-login') {
-        return {
-          file: wslExe || 'wsl',
-          args: platform === 'win32'
-            ? (requestedCwd ? ['--cd', toWslPath(requestedCwd)] : [])
-            : [],
-          env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
-          cwd: platform === 'win32' ? null : requestedCwd,
-        };
-      }
-      const wslBootstrap = requestedCwd
-        ? `cd ${shellQuotePosix(toWslPath(requestedCwd))} && exec bash --noprofile --norc -i`
-        : 'exec bash --noprofile --norc -i';
-      return {
-        file: wslExe || 'wsl',
-        args: platform === 'win32' ? ['--', 'bash', '-lc', wslBootstrap] : [],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
-        cwd: platform === 'win32' ? null : requestedCwd,
-      };
-    }
-    case 'git-bash': {
-      const gitBash = platform === 'win32' ? resolveWindowsGitBashExecutable() : 'bash';
-      return {
-        file: gitBash,
-        args: ['--noprofile', '--norc', '-i'],
-        env: platform === 'win32'
-          ? buildWindowsGitBashEnv(gitBash)
-          : { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
-        cwd: requestedCwd,
-      };
-    }
-    case 'zsh':
-      return {
-        file: 'zsh',
-        args: ['-f', '-i'],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '%~ %# ' },
-        cwd: requestedCwd,
-      };
-    case 'sh':
-      return {
-        file: 'sh',
-        args: ['-i'],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '$ ' },
-        cwd: requestedCwd,
-      };
-    case 'bash':
-    default:
-      if (platform === 'win32') {
-        const gitBash = resolveWindowsGitBashExecutable();
-        return {
-          file: gitBash,
-          args: ['--noprofile', '--norc', '-i'],
-          env: buildWindowsGitBashEnv(gitBash),
-          cwd: requestedCwd,
-        };
-      }
-      return {
-        file: 'bash',
-        args: ['--noprofile', '--norc', '-i'],
-        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
-        cwd: requestedCwd,
-      };
-  }
-}
-
-function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let totalBytes = 0;
-    const chunks: Buffer[] = [];
-
-    req.on('data', (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        req.destroy();
-        reject(new Error(`Request body too large (limit: ${maxBytes} bytes)`));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    req.on('error', reject);
-  });
 }
 
 function previewToken(token: string): string {
