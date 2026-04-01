@@ -1,4 +1,6 @@
 import readline from 'node:readline';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let currentUrl = 'about:blank';
 
@@ -85,8 +87,40 @@ function sendError(id, code, message) {
   sendMessage({ jsonrpc: '2.0', id, error: { code, message } });
 }
 
-function pageProfile(url) {
-  if (url.includes('example.com')) {
+function parseProfileUrl(url) {
+  try {
+    const parsed = new URL(String(url));
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function matchesPageProfile(url, expected) {
+  const parsed = parseProfileUrl(url);
+  if (!parsed) {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!expected.hostnames.includes(hostname)) {
+    return false;
+  }
+
+  if (expected.pathname !== undefined && parsed.pathname !== expected.pathname) {
+    return false;
+  }
+
+  return true;
+}
+
+export function pageProfile(url) {
+  const safeUrl = typeof url === 'string' ? url : currentUrl;
+
+  if (matchesPageProfile(safeUrl, { hostnames: ['example.com', 'www.example.com'] })) {
     return {
       title: 'Example Domain',
       links: [{ text: 'More information...', href: 'https://www.iana.org/help/example-domains' }],
@@ -117,7 +151,7 @@ function pageProfile(url) {
     };
   }
 
-  if (url.includes('github.com')) {
+  if (matchesPageProfile(safeUrl, { hostnames: ['github.com', 'www.github.com'] })) {
     return {
       title: 'GitHub · Change is constant. GitHub keeps you ahead.',
       links: [
@@ -161,7 +195,7 @@ function pageProfile(url) {
     };
   }
 
-  if (url.includes('httpbin.org/forms/post')) {
+  if (matchesPageProfile(safeUrl, { hostnames: ['httpbin.org'], pathname: '/forms/post' })) {
     return {
       title: 'HTTPBin Forms',
       links: [],
@@ -198,16 +232,16 @@ function pageProfile(url) {
   }
 
   return {
-    title: currentUrl,
+    title: safeUrl,
     links: [],
     structuredData: {
       metadata: {
-        url: currentUrl,
-        title: currentUrl,
+        url: safeUrl,
+        title: safeUrl,
         description: null,
-        canonicalUrl: currentUrl,
+        canonicalUrl: safeUrl,
         openGraph: {
-          title: currentUrl,
+          title: safeUrl,
           description: null,
           type: null,
           image: null,
@@ -342,20 +376,26 @@ function handleRequest(message) {
   }
 }
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
-});
+function startServer() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
 
-rl.on('line', (line) => {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return;
-  }
+  rl.on('line', (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
 
-  try {
-    handleRequest(JSON.parse(trimmed));
-  } catch {
-    // Ignore malformed input so the harness can surface protocol issues cleanly.
-  }
-});
+    try {
+      handleRequest(JSON.parse(trimmed));
+    } catch {
+      // Ignore malformed input so the harness can surface protocol issues cleanly.
+    }
+  });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startServer();
+}
