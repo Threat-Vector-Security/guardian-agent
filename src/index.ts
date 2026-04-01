@@ -211,6 +211,7 @@ import {
 } from './runtime/search-intent.js';
 import { applyCredentialRefInput } from './runtime/credential-ref-input.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
+import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
 
 let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
@@ -13041,177 +13042,18 @@ function buildDashboardCallbacks(
       return result;
     },
 
-    // ── Google Workspace ────────────────────────────────────────
-    onGwsStatus: async () => {
-      const status = await probeGwsCli(configRef.current);
-      const gwsConfig = configRef.current.assistant.tools.mcp?.managedProviders?.gws;
-      const services = gwsConfig?.services ?? ['gmail', 'calendar', 'drive'];
-      return {
-        installed: status.installed,
-        version: status.version,
-        authenticated: status.authenticated,
-        authMethod: status.authMethod,
-        services: gwsConfig?.enabled ? services : [],
-        enabled: gwsConfig?.enabled ?? false,
-      };
-    },
-    onGoogleStatus: async () => {
-      const auth = googleAuthRef.current;
-      const svc = googleServiceRef.current;
-      if (!auth) return { authenticated: false, services: [], mode: 'native' as const };
-      const expiry = auth.getTokenExpiry();
-      return {
-        authenticated: auth.isAuthenticated(),
-        tokenExpiry: expiry,
-        tokenExpired: expiry ? expiry < Date.now() : false,
-        services: svc?.getEnabledServices() ?? [],
-        mode: 'native' as const,
-      };
-    },
-    onGoogleAuthStart: async (services: string[]) => {
-      const auth = googleAuthRef.current;
-      if (!auth) return { success: false, message: 'Google auth not initialized. Restart the application.' };
-      try {
-        // Auto-enable native Google in config when user clicks Connect.
-        const rawConfig = loadRawConfig();
-        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
-        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
-        rawTools.google = {
-          ...(rawTools.google as Record<string, unknown> ?? {}),
-          enabled: true,
-          mode: 'native',
-          services: services.length ? services : ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'],
-        };
-        rawAssistant.tools = rawTools;
-        rawConfig.assistant = rawAssistant;
-        persistAndApplyConfig(rawConfig, { reason: 'Enable native Google integration' });
-
-        enabledManagedProviders.add('gws');
-        const { authUrl, state } = await auth.startAuth();
-        return { success: true, authUrl, state };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-    onGoogleCredentials: async (credentials: string) => {
-      const googleCfg = configRef.current.assistant.tools.google;
-      const credPath = googleCfg?.credentialsPath?.replace(/^~/, homedir()) || `${homedir()}/.guardianagent/google-credentials.json`;
-      try {
-        const { mkdir: mkdirAsync, writeFile: writeFileAsync } = await import('node:fs/promises');
-        const { dirname } = await import('node:path');
-        await mkdirAsync(dirname(credPath), { recursive: true });
-        await writeFileAsync(credPath, credentials, { mode: 0o600 });
-        return { success: true, message: 'Credentials saved.' };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-    onGoogleDisconnect: async () => {
-      const auth = googleAuthRef.current;
-      if (!auth) return { success: false, message: 'Native Google integration is not enabled.' };
-      try {
-        await auth.disconnect();
-        return { success: true, message: 'Disconnected.' };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-    onMicrosoftStatus: async () => {
-      const auth = microsoftAuthRef.current;
-      const svc = microsoftServiceRef.current;
-      const msConfig = configRef.current.assistant.tools.microsoft;
-      if (!auth) return { authenticated: false, services: [], clientId: msConfig?.clientId, tenantId: msConfig?.tenantId };
-      const expiry = auth.getTokenExpiry();
-      return {
-        authenticated: auth.isAuthenticated(),
-        tokenExpiry: expiry,
-        tokenExpired: expiry ? expiry < Date.now() : false,
-        services: svc?.getEnabledServices() ?? [],
-        clientId: msConfig?.clientId,
-        tenantId: msConfig?.tenantId,
-      };
-    },
-    onMicrosoftAuthStart: async (services: string[]) => {
-      const auth = microsoftAuthRef.current;
-      if (!auth) return { success: false, message: 'Microsoft auth not initialized. Enter a Client ID and restart, or save config first.' };
-      try {
-        // Auto-enable native Microsoft in config when user clicks Connect.
-        const rawConfig = loadRawConfig();
-        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
-        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
-        const existingMs = (rawTools.microsoft as Record<string, unknown>) ?? {};
-        rawTools.microsoft = {
-          ...existingMs,
-          enabled: true,
-          services: services.length ? services : ['mail', 'calendar', 'onedrive', 'contacts'],
-        };
-        rawAssistant.tools = rawTools;
-        rawConfig.assistant = rawAssistant;
-        persistAndApplyConfig(rawConfig, { reason: 'Enable native Microsoft 365 integration' });
-
-        enabledManagedProviders.add('m365');
-        const { authUrl, state } = await auth.startAuth();
-        return { success: true, authUrl, state };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-    onMicrosoftConfig: async (config: { clientId: string; tenantId?: string }) => {
-      try {
-        const rawConfig = loadRawConfig();
-        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
-        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
-        const existingMs = (rawTools.microsoft as Record<string, unknown>) ?? {};
-        rawTools.microsoft = {
-          ...existingMs,
-          clientId: config.clientId,
-          tenantId: config.tenantId || 'common',
-        };
-        rawAssistant.tools = rawTools;
-        rawConfig.assistant = rawAssistant;
-        persistAndApplyConfig(rawConfig, { reason: 'Save Microsoft 365 client configuration' });
-
-        // Re-initialize auth with new client ID if not already set up.
-        if (!microsoftAuthRef.current || microsoftAuthRef.current === null) {
-          try {
-            const { MicrosoftAuth, MicrosoftService, MICROSOFT_SERVICE_SCOPES } = await import('./microsoft/index.js');
-            const msConfig = configRef.current.assistant.tools.microsoft;
-            const services = msConfig?.services?.length ? msConfig.services : ['mail', 'calendar', 'onedrive', 'contacts'];
-            const scopes = services
-              .flatMap((s: string) => MICROSOFT_SERVICE_SCOPES[s.toLowerCase()] ?? []);
-
-            const auth = new MicrosoftAuth({
-              clientId: config.clientId,
-              tenantId: config.tenantId || 'common',
-              callbackPort: msConfig?.oauthCallbackPort ?? 18433,
-              scopes,
-            });
-            await auth.loadStoredTokens();
-            const svc = new MicrosoftService(auth, { services, timeoutMs: msConfig?.timeoutMs });
-            microsoftAuthRef.current = auth;
-            microsoftServiceRef.current = svc;
-            // Wire the new service into the running ToolExecutor so tools work immediately.
-            toolExecutorRef.current?.setMicrosoftService(svc);
-          } catch (initErr) {
-            return { success: false, message: `Config saved but auth init failed: ${initErr instanceof Error ? initErr.message : String(initErr)}` };
-          }
-        }
-
-        return { success: true, message: 'Microsoft configuration saved.' };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-    onMicrosoftDisconnect: async () => {
-      const auth = microsoftAuthRef.current;
-      if (!auth) return { success: false, message: 'Native Microsoft integration is not enabled.' };
-      try {
-        await auth.disconnect();
-        return { success: true, message: 'Disconnected.' };
-      } catch (err) {
-        return { success: false, message: err instanceof Error ? err.message : String(err) };
-      }
-    },
+    ...createProviderIntegrationCallbacks({
+      configRef,
+      googleAuthRef,
+      googleServiceRef,
+      microsoftAuthRef,
+      microsoftServiceRef,
+      toolExecutorRef,
+      enabledManagedProviders,
+      loadRawConfig,
+      persistAndApplyConfig,
+      probeGwsCli,
+    }),
     onGuardianAgentStatus: () => {
       const cfg = guardianAgentService.getConfig();
       return {
