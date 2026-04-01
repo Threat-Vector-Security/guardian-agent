@@ -525,8 +525,10 @@ async function main() {
       assert(content.toLowerCase().includes('configured'), 'Expected final response to mention configuration status');
       assert(!/server address|share the host|what(?:'s| is) the server/i.test(content), 'Response asked for host details instead of using configured profile');
       assert(llmState.systemPrompts.length > 0, 'Expected mock LLM to capture at least one system prompt');
-      const prompt = llmState.systemPrompts[0];
-      assert(prompt.includes('- social: provider=whm'), 'Expected social WHM profile in system prompt tool context');
+      const prompt = llmState.systemPrompts.find((entry) => (
+        typeof entry === 'string' && entry.includes('- social: provider=whm')
+      ));
+      assert(typeof prompt === 'string', 'Expected planner system prompt to include social WHM profile in tool context');
       assert(prompt.includes('Use configured cloud profile ids exactly as listed below'), 'Expected explicit cloud profile instruction in system prompt');
     });
 
