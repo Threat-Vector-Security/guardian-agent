@@ -60,8 +60,9 @@ Rules:
 Current checkpoint:
 - `src/bootstrap/runtime-factory.ts` now owns the earliest startup phase: default-config bootstrap, secure config load, runtime credential resolution, denied-path injection, and initial `Runtime` construction.
 - `src/bootstrap/service-wiring.ts` now owns scheduled-task executor wiring, runtime notification service construction, runtime support startup, playbook schedule migration, and CLI post-start setup.
+- `src/bootstrap/channel-startup.ts` now owns CLI, Telegram, and Web channel construction, startup logging, channel registration, Telegram reload wiring, and coding-backend bootstrap for the web surface.
 - `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
-- The next bootstrap extraction should move channel startup and channel registration out of `src/index.ts` so `main()` becomes orchestration-only.
+- The remaining `src/index.ts` work is now mostly residual helper glue around dashboard dispatch, provider/config shaping, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 

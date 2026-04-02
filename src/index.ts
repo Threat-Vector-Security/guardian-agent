@@ -15,6 +15,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DEFAULT_CONFIG_PATH, loadConfig } from './config/loader.js';
 import { createBootstrapRuntimeContext } from './bootstrap/runtime-factory.js';
+import { startBootstrapChannels, type BootstrapWebChannel } from './bootstrap/channel-startup.js';
 import {
   createRuntimeNotificationService,
   runCliPostStart,
@@ -33,11 +34,9 @@ import { DEFAULT_CONFIG } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
-import { CLIChannel } from './channels/cli.js';
 import { findCliHelpTopic } from './channels/cli-command-guide.js';
 import { formatCliCommandGuideForPrompt } from './channels/cli-command-guide.js';
-import { TelegramChannel } from './channels/telegram.js';
-import { WebChannel, type WebAuthRuntimeConfig } from './channels/web.js';
+import { type WebAuthRuntimeConfig } from './channels/web.js';
 import type {
   ConfigUpdate,
   DashboardCallbacks,
@@ -13125,7 +13124,7 @@ async function main(): Promise<void> {
     },
   };
 
-  let activeWebChannel: WebChannel | null = null;
+  let activeWebChannel: BootstrapWebChannel | null = null;
   const applyWebAuthRuntime = (auth: WebAuthRuntimeConfig): void => {
     webAuthStateRef.current = { ...auth };
     if (activeWebChannel) {
@@ -14432,162 +14431,6 @@ async function main(): Promise<void> {
     log.info({ intervalMinutes: autoScanMinutes }, 'Threat-intel auto-scan enabled');
   }
 
-  let cliChannel: CLIChannel | null = null;
-  const canStartInteractiveCli = !!process.stdin.isTTY && !!process.stdout.isTTY;
-
-  if (config.channels.cli?.enabled && canStartInteractiveCli) {
-    const enabledChannels: string[] = ['cli'];
-    if (config.channels.web?.enabled) enabledChannels.push('web');
-    if (config.channels.telegram?.enabled) enabledChannels.push('telegram');
-
-    cliChannel = new CLIChannel({
-      defaultAgent: config.channels.cli.defaultAgent ?? defaultAgentId,
-      defaultUserId: 'cli',
-      dashboard: dashboardCallbacks,
-      version: '1.0.0',
-      configPath,
-      startupStatus: {
-        guardianEnabled: config.guardian.enabled,
-        providerName: config.defaultProvider,
-        channels: enabledChannels,
-        dashboardUrl: config.channels.web?.enabled
-          ? `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`
-          : undefined,
-        authToken: effectiveToken,
-        warnings: toolExecutor.getRuntimeNotices().map((notice) => notice.message),
-      },
-      onAgents: () => runtime.registry.getAll().map(inst => ({
-        id: inst.agent.id,
-        name: inst.agent.name,
-        state: inst.state,
-        capabilities: inst.definition.grantedCapabilities,
-        internal: router.findAgentByRole('local')?.id === inst.agent.id
-          || router.findAgentByRole('external')?.id === inst.agent.id
-          || inst.agent.id === SECURITY_TRIAGE_AGENT_ID
-          || inst.agent.id === SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
-      })),
-      onStatus: () => ({
-        running: runtime.isRunning(),
-        agentCount: runtime.registry.size,
-        guardianEnabled: configRef.current.guardian.enabled,
-        providers: [...runtime.providers.keys()],
-      }),
-    });
-    await cliChannel.start(async (msg) => {
-      const prepared = await prepareIncomingDispatch(configRef.current.channels.cli?.defaultAgent, msg);
-      if (dashboardCallbacks.onDispatch) {
-        return dashboardCallbacks.onDispatch(
-          prepared.decision.agentId,
-          prepared.routedMessage,
-          prepared.decision,
-          { requestId: prepared.requestId },
-          prepared.gateway,
-        );
-      }
-      return runtime.dispatchMessage(prepared.decision.agentId, {
-        ...msg,
-        metadata: prepared.routedMessage.metadata,
-      });
-    });
-    channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
-  } else if (config.channels.cli?.enabled) {
-    log.info({
-      stdinIsTTY: !!process.stdin.isTTY,
-      stdoutIsTTY: !!process.stdout.isTTY,
-    }, 'CLI channel skipped because stdio is not interactive');
-  }
-
-  let activeTelegram: TelegramChannel | null = null;
-
-  const startTelegram = async (): Promise<void> => {
-    const tgConfig = configRef.current.channels.telegram;
-    const botToken = resolveTelegramBotToken(configRef.current, secretStore);
-    if (!tgConfig?.enabled || !botToken) return;
-    const telegramDefaultAgent = tgConfig.defaultAgent ?? defaultAgentId;
-    const telegram = new TelegramChannel({
-      botToken,
-      allowedChatIds: tgConfig.allowedChatIds,
-      defaultAgent: telegramDefaultAgent,
-      guideText: formatGuideForTelegram(),
-      resolveCanonicalUserId: (channelUserId) => identity.resolveCanonicalUserId('telegram', channelUserId),
-      onQuickAction: async ({ actionId, details, userId, channel, agentId }) => {
-        if (!dashboardCallbacks.onQuickActionRun) {
-          return { content: 'Quick actions are not available.' };
-        }
-        return dashboardCallbacks.onQuickActionRun({ actionId, details, userId, channel, agentId });
-      },
-      onThreatIntelSummary: dashboardCallbacks.onThreatIntelSummary
-        ? () => dashboardCallbacks.onThreatIntelSummary!()
-        : undefined,
-      onThreatIntelScan: dashboardCallbacks.onThreatIntelScan
-        ? (input) => dashboardCallbacks.onThreatIntelScan!(input)
-        : undefined,
-      onThreatIntelFindings: dashboardCallbacks.onThreatIntelFindings
-        ? (args) => dashboardCallbacks.onThreatIntelFindings!(args)
-        : undefined,
-      onAnalyticsTrack: (event) => dashboardCallbacks.onAnalyticsTrack?.(event),
-      onToolsApprovalDecision: dashboardCallbacks.onToolsApprovalDecision
-        ? (input) => dashboardCallbacks.onToolsApprovalDecision!(input)
-        : undefined,
-      onDispatch: dashboardCallbacks.onDispatch
-        ? (agentId, msg) => dashboardCallbacks.onDispatch!(agentId, msg)
-        : undefined,
-      onResetConversation: async ({ userId, agentId }) => {
-        if (!dashboardCallbacks.onConversationReset) {
-          return { success: false, message: 'Conversation reset is not available.' };
-        }
-        return dashboardCallbacks.onConversationReset({
-          agentId: agentId ?? telegramDefaultAgent,
-          userId,
-          channel: 'telegram',
-        });
-      },
-    });
-    await telegram.start(async (msg) => {
-      const prepared = await prepareIncomingDispatch(configRef.current.channels.telegram?.defaultAgent, msg);
-      if (dashboardCallbacks.onDispatch) {
-        return dashboardCallbacks.onDispatch(
-          prepared.decision.agentId,
-          prepared.routedMessage,
-          prepared.decision,
-          { requestId: prepared.requestId },
-          prepared.gateway,
-        );
-      }
-      return runtime.dispatchMessage(prepared.decision.agentId, {
-        ...msg,
-        metadata: prepared.routedMessage.metadata,
-      });
-    });
-    activeTelegram = telegram;
-    // Update channels array for graceful shutdown
-    const idx = channels.findIndex(c => c.name === 'telegram');
-    if (idx >= 0) channels[idx] = { name: 'telegram', stop: () => telegram.stop() };
-    else channels.push({ name: 'telegram', stop: () => telegram.stop() });
-  };
-
-  dashboardCallbacks.onTelegramReload = async () => {
-    try {
-      if (activeTelegram) {
-        await activeTelegram.stop();
-        activeTelegram = null;
-        log.info('Telegram channel stopped for reload');
-      }
-      await startTelegram();
-      const tgConfig = configRef.current.channels.telegram;
-      if (tgConfig?.enabled && resolveTelegramBotToken(configRef.current, secretStore)) {
-        log.info('Telegram channel reloaded');
-        return { success: true, message: 'Telegram channel reloaded.' };
-      }
-      log.info('Telegram channel disabled');
-      return { success: true, message: 'Telegram channel disabled.' };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error({ err }, 'Telegram reload failed');
-      return { success: false, message: `Telegram reload failed: ${message}` };
-    }
-  };
-
   dashboardCallbacks.onCloudTest = async (providerKey: string, profileId: string) => {
     const runtimeCreds = resolveRuntimeCredentialView(configRef.current, secretStore);
     const cloud = runtimeCreds.resolvedCloud;
@@ -14651,107 +14494,51 @@ async function main(): Promise<void> {
       return { success: false, message: `Connection failed: ${message}` };
     }
   };
-
-  try {
-    await startTelegram();
-  } catch (err) {
-    log.error({ err }, 'Telegram channel failed to start — continuing without it');
-    console.log('  Telegram: FAILED (check bot token) — other channels unaffected');
-  }
-
-  if (config.channels.web?.enabled) {
-    if (webAuthStateRef.current.mode === 'bearer_required' && !webAuthStateRef.current.token) {
-      webAuthStateRef.current = {
-        ...webAuthStateRef.current,
-        token: generateSecureToken(),
-        tokenSource: 'ephemeral',
-      };
-    }
-    if (webAuthStateRef.current.mode === 'disabled') {
-      log.warn(
-        {
-          mode: webAuthStateRef.current.mode,
-          host: config.channels.web.host ?? 'localhost',
-          port: config.channels.web.port ?? 3000,
-        },
-        'Web dashboard bearer authentication is disabled. Only use this on trusted networks.',
-      );
-      if (process.stdout.isTTY && !process.env['LOG_FILE']) {
-        console.log('');
-        console.log('  Web Dashboard Auth');
-        console.log(`  URL:   http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`);
-        console.log('  Mode:  disabled');
-        console.log('  The web dashboard is open without a bearer token. Use only on trusted networks.');
-        console.log('');
-      }
-    } else if (webAuthStateRef.current.tokenSource === 'ephemeral') {
-      const ephemeralStartupReason = configuredToken && rotateOnStartup
-        ? 'Web auth rotate-on-startup is enabled. Generated a fresh ephemeral token for this run.'
-        : 'No web auth token configured. Generated an ephemeral token for this run.';
-      log.warn(
-        {
-          tokenPreview: webAuthStateRef.current.token ? previewTokenForLog(webAuthStateRef.current.token) : undefined,
-          mode: webAuthStateRef.current.mode,
-          host: config.channels.web.host ?? 'localhost',
-          port: config.channels.web.port ?? 3000,
-        },
-        ephemeralStartupReason,
-      );
-      if (process.stdout.isTTY && !process.env['LOG_FILE'] && webAuthStateRef.current.token) {
-        console.log('');
-        console.log('  Web Dashboard Auth');
-        console.log(`  URL:   http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`);
-        console.log(`  Token: ${webAuthStateRef.current.token}`);
-        console.log('  This token is runtime-ephemeral for this process. Exchange it for the session cookie on first login.');
-        console.log('');
-      }
-    }
-
-    const web = new WebChannel({
-      port: config.channels.web.port,
-      host: config.channels.web.host,
-      defaultAgent: config.channels.web.defaultAgent ?? defaultAgentId,
-      auth: webAuthStateRef.current,
-      authToken: webAuthStateRef.current.token,
-      allowedOrigins: config.channels.web.allowedOrigins,
-      maxBodyBytes: config.channels.web.maxBodyBytes,
-      staticDir: join(__dirname, '..', 'web', 'public'),
-      dashboard: dashboardCallbacks,
-    });
-    codingBackendServiceRef.current = new CodingBackendService({
-      config: configRef.current.assistant.tools.codingBackends ?? DEFAULT_CODING_BACKENDS_CONFIG,
-      terminalControl: web.getCodingBackendTerminalControl(),
-    });
-    toolExecutor.setCodingBackendService(codingBackendServiceRef.current);
-    activeWebChannel = web;
-    await web.start(async (msg) => {
-      const prepared = await prepareIncomingDispatch(configRef.current.channels.web?.defaultAgent, msg);
-      if (dashboardCallbacks.onDispatch) {
-        return dashboardCallbacks.onDispatch(
-          prepared.decision.agentId,
-          prepared.routedMessage,
-          prepared.decision,
-          { requestId: prepared.requestId },
-          prepared.gateway,
-        );
-      }
-      return runtime.dispatchMessage(prepared.decision.agentId, {
-        ...msg,
-        metadata: prepared.routedMessage.metadata,
-      });
-    });
-    channels.push({
-      name: 'web',
-      stop: async () => {
-        codingBackendServiceRef.current?.dispose();
-        await web.stop();
-      },
-    });
-
-    // Log the dashboard URL prominently
-    const webUrl = `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`;
-    log.info({ url: webUrl }, 'Dashboard available at');
-  }
+  const startedChannels = await startBootstrapChannels({
+    config,
+    configRef,
+    configPath,
+    defaultAgentId,
+    effectiveToken,
+    configuredToken,
+    rotateOnStartup,
+    webAuthStateRef,
+    dashboardCallbacks,
+    runtime,
+    channels,
+    prepareIncomingDispatch,
+    secretStore,
+    resolveCanonicalTelegramUserId: (channelUserId) => identity.resolveCanonicalUserId('telegram', channelUserId),
+    resolveTelegramBotToken,
+    formatGuideForTelegram,
+    generateSecureToken,
+    previewTokenForLog,
+    staticDir: join(__dirname, '..', 'web', 'public'),
+    codingBackendServiceRef,
+    codingBackendsDefaultConfig: DEFAULT_CODING_BACKENDS_CONFIG,
+    toolExecutor,
+    listAgents: () => runtime.registry.getAll().map(inst => ({
+      id: inst.agent.id,
+      name: inst.agent.name,
+      state: inst.state,
+      capabilities: inst.definition.grantedCapabilities,
+      internal: router.findAgentByRole('local')?.id === inst.agent.id
+        || router.findAgentByRole('external')?.id === inst.agent.id
+        || inst.agent.id === SECURITY_TRIAGE_AGENT_ID
+        || inst.agent.id === SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
+    })),
+    getRuntimeStatus: () => ({
+      running: runtime.isRunning(),
+      agentCount: runtime.registry.size,
+      guardianEnabled: configRef.current.guardian.enabled,
+      providers: [...runtime.providers.keys()],
+    }),
+    log,
+    stdinIsTTY: !!process.stdin.isTTY,
+    stdoutIsTTY: !!process.stdout.isTTY,
+  });
+  const cliChannel = startedChannels.cliChannel;
+  activeWebChannel = startedChannels.webChannel;
 
   wireScheduledAgentExecutor({
     scheduledTasks,
@@ -14760,7 +14547,7 @@ async function main(): Promise<void> {
     configRef,
     defaultAgentId,
     getCliChannel: () => cliChannel,
-    getTelegramChannel: () => activeTelegram,
+    getTelegramChannel: () => startedChannels.getTelegramChannel(),
     getWebChannel: () => activeWebChannel,
   });
 
@@ -14768,7 +14555,7 @@ async function main(): Promise<void> {
     configRef,
     runtime,
     getCliChannel: () => cliChannel,
-    getTelegramChannel: () => activeTelegram,
+    getTelegramChannel: () => startedChannels.getTelegramChannel(),
   });
 
   ({

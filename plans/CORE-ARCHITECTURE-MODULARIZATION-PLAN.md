@@ -1,7 +1,7 @@
 # Core Architecture Modularization Plan
 
 **Date:** 2026-04-02  
-**Status:** Active, checkpoint updated after bootstrap service-wiring and shutdown extraction  
+**Status:** Active, checkpoint updated after bootstrap channel-startup extraction  
 **Origin:** Large-file architecture review of the composition root, web channel, and tool runtime  
 **Key files:** `src/index.ts`, `src/tools/executor.ts`, `src/channels/web.ts`  
 **Related docs:** `docs/architecture/FORWARD-ARCHITECTURE.md`, `docs/architecture/OVERVIEW.md`, `docs/guides/INTEGRATION-TEST-HARNESS.md`
@@ -119,7 +119,7 @@ This track is complete for the original registrar-extraction goal.
 
 This track is materially advanced but not finished.
 
-- `src/index.ts` is down to **14843 lines** from roughly **17.7k**.
+- `src/index.ts` is down to **14630 lines** from roughly **17.7k**.
 - Extracted control-plane modules now live under `src/runtime/control-plane/`:
   - `auth-control-callbacks.ts`
   - `config-persistence-service.ts`
@@ -134,6 +134,7 @@ This track is materially advanced but not finished.
 - Bootstrap extraction is now active under `src/bootstrap/`:
   - `runtime-factory.ts` owns default-config bootstrap, secure config load, runtime credential resolution, denied-path injection, and initial `Runtime` construction.
   - `service-wiring.ts` owns scheduled-task executor wiring, runtime notification service construction, runtime support startup, playbook schedule migration, and CLI post-start setup.
+  - `channel-startup.ts` owns CLI, Telegram, and Web channel construction, startup logging, channel registration, Telegram reload wiring, and coding-backend bootstrap for the web surface.
   - `shutdown.ts` owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, store shutdown, and terminal exit settlement.
 
 ### What is still left
@@ -143,7 +144,7 @@ The main remaining architecture work is now concentrated in `src/index.ts`.
 #### Remaining `src/index.ts` work
 
 - Extract the bootstrap/startup path so `main()` becomes orchestration-only.
-- Continue the `src/bootstrap/` extraction by adding channel startup beside the landed `runtime-factory.ts`, `service-wiring.ts`, and `shutdown.ts` modules.
+- The remaining `src/bootstrap/` extraction work is limited; the main effort is now trimming residual helper glue out of `src/index.ts` around dashboard dispatch, provider/config shaping, and final orchestration.
 - Move remaining helper clusters out of `src/index.ts` when they have clear homes, especially:
   - dashboard dispatch/helpers
   - provider info/config shaping helpers
@@ -184,7 +185,7 @@ These are lower priority than the remaining `index.ts` work:
 - `f3e2de9` `refactor(index): extract provider integration callbacks`
 - `d7e04da` `refactor(index): extract dashboard control-plane modules`
 - `661c97c` `refactor(bootstrap): extract runtime factory`
-- current checkpoint adds `service-wiring.ts` and `shutdown.ts`; record the commit hash here on the next plan update if needed
+- current checkpoint adds `service-wiring.ts`, `channel-startup.ts`, and `shutdown.ts`; record milestone commit hashes here on the next plan update if needed
 
 #### Tool executor modularization
 
@@ -208,7 +209,7 @@ These are lower priority than the remaining `index.ts` work:
 
 `src/index.ts` still acts as the composition root, but several control-plane domains are now delegated to focused modules instead of living inline.
 
-The bootstrap path is now partially split under `src/bootstrap/`: runtime creation, service wiring, and shutdown sequencing are extracted; channel startup is still inline and remains the next major cut.
+The bootstrap path is now mostly split under `src/bootstrap/`: runtime creation, service wiring, channel startup, and shutdown sequencing are extracted. The remaining `index.ts` work is helper cleanup and final orchestration thinning.
 
 #### Web channel
 
@@ -241,11 +242,8 @@ Continue the `src/bootstrap/` rollout. The following are already extracted:
 
 - runtime construction
 - service construction and dependency assembly
-- shutdown hooks and process lifecycle handling
-
-The remaining major bootstrap cut is:
-
 - channel startup
+- shutdown hooks and process lifecycle handling
 
 Suggested modules:
 
@@ -349,8 +347,8 @@ If this plan is resumed in a later session, start with `src/index.ts`.
 
 Immediate next move:
 
-1. inspect the remaining channel-startup logic and adjacent helper clusters in `src/index.ts`
-2. extract channel startup and registration into `src/bootstrap/channel-startup.ts`
+1. inspect the remaining dashboard-dispatch and provider/config helper clusters in `src/index.ts`
+2. decide the next clean ownership move under `src/runtime/control-plane/` or `src/bootstrap/`
 3. add or tighten focused coverage for that slice if needed
 4. extract mechanically, then run the mapped harness set
 
