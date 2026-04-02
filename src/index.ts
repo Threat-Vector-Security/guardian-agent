@@ -15,6 +15,13 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DEFAULT_CONFIG_PATH, loadConfig } from './config/loader.js';
 import { createBootstrapRuntimeContext } from './bootstrap/runtime-factory.js';
+import {
+  createRuntimeNotificationService,
+  runCliPostStart,
+  startRuntimeSupportServices,
+  wireScheduledAgentExecutor,
+} from './bootstrap/service-wiring.js';
+import { createShutdownHandler, type BootstrapChannelStopEntry } from './bootstrap/shutdown.js';
 import type {
   AssistantConnectorPlaybookDefinition,
   BrowserConfig,
@@ -157,7 +164,7 @@ import {
 } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker, buildAssistantJobDisplay, mergeAssistantJobStates } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
-import { NotificationService, notificationDestinationEnabled } from './runtime/notifications.js';
+import { notificationDestinationEnabled } from './runtime/notifications.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
@@ -13546,7 +13553,7 @@ async function main(): Promise<void> {
   }
 
   // Start channels
-  const channels: { name: string; stop: () => Promise<void> }[] = [];
+  const channels: BootstrapChannelStopEntry[] = [];
 
   const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
   const routingIntentGateway = new IntentGateway();
@@ -14746,203 +14753,48 @@ async function main(): Promise<void> {
     log.info({ url: webUrl }, 'Dashboard available at');
   }
 
-  scheduledTasks.setAgentExecutor({
-    runAgentTask: async (input) => {
-      const requestedAgentId = input.agentId.trim();
-      const resolvedAgentId = requestedAgentId === 'default' ? defaultAgentId : requestedAgentId;
-      const channel = input.channel?.trim() || 'scheduled';
-      const userId = input.userId?.trim() || configRef.current.assistant.identity.primaryUserId;
-      const shouldDeliver = input.deliver ?? channel !== 'scheduled';
-
-      const response = await jobTracker.run(
-        {
-          type: 'scheduled-agent-task',
-          source: 'scheduled',
-          detail: input.taskName,
-          metadata: {
-            taskId: input.taskId,
-            agentId: resolvedAgentId,
-            channel,
-          },
-        },
-        async () => {
-          if (!dashboardCallbacks.onDispatch) {
-            throw new Error('Assistant dispatch is not available.');
-          }
-          return dashboardCallbacks.onDispatch(
-            resolvedAgentId,
-            {
-              content: input.prompt,
-              userId,
-              principalId: input.principalId ?? userId,
-              principalRole: input.principalRole ?? 'owner',
-              channel,
-            },
-            undefined,
-            { priority: 'normal', requestType: 'scheduled_task' },
-          );
-        },
-      );
-
-      const deliveryText = `Scheduled assistant report: ${input.taskName}\n\n${response.content}`.trim();
-      let deliveryMessage = 'Agent task completed.';
-      const deliveryMeta: Record<string, unknown> = {
-        attempted: false,
-        delivered: false,
-        channel,
-      };
-
-      if (shouldDeliver) {
-        deliveryMeta.attempted = true;
-        try {
-          if (channel === 'cli') {
-            if (!cliChannel) throw new Error('CLI channel is not available.');
-            await cliChannel.send(configRef.current.assistant.identity.primaryUserId, deliveryText);
-          } else if (channel === 'telegram') {
-            const chatIds = configRef.current.channels.telegram?.allowedChatIds ?? [];
-            if (!activeTelegram || chatIds.length === 0) {
-              throw new Error('Telegram delivery is not configured.');
-            }
-            for (const chatId of chatIds) {
-              await activeTelegram.send(String(chatId), deliveryText);
-            }
-          } else if (channel === 'web') {
-            if (!activeWebChannel) throw new Error('Web channel is not available.');
-            await activeWebChannel.send(configRef.current.assistant.identity.primaryUserId, deliveryText);
-          } else {
-            throw new Error(`Channel '${channel}' does not support scheduled delivery.`);
-          }
-          deliveryMeta.delivered = true;
-          deliveryMessage = `Agent task completed and delivered to ${channel}.`;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          deliveryMeta.error = message;
-          deliveryMessage = `Agent task completed, but delivery failed: ${message}`;
-        }
-      }
-
-      return {
-        success: true,
-        status: 'succeeded',
-        message: deliveryMessage,
-        output: {
-          content: response.content,
-          metadata: response.metadata,
-          delivery: deliveryMeta,
-        },
-      };
-    },
+  wireScheduledAgentExecutor({
+    scheduledTasks,
+    jobTracker,
+    dashboardCallbacks,
+    configRef,
+    defaultAgentId,
+    getCliChannel: () => cliChannel,
+    getTelegramChannel: () => activeTelegram,
+    getWebChannel: () => activeWebChannel,
   });
 
-  const notificationService = new NotificationService({
-    getConfig: () => configRef.current.assistant.notifications,
-    auditLog: runtime.auditLog,
-    eventBus: runtime.eventBus,
-    senders: {
-      sendCli: cliChannel
-        ? async (text: string) => {
-            await cliChannel!.send(configRef.current.assistant.identity.primaryUserId, text);
-          }
-        : undefined,
-      sendTelegram: async (text: string) => {
-        const chatIds = configRef.current.channels.telegram?.allowedChatIds ?? [];
-        if (!activeTelegram || chatIds.length === 0) return;
-        for (const chatId of chatIds) {
-          await activeTelegram.send(String(chatId), text);
-        }
-      },
-    },
+  const notificationService = createRuntimeNotificationService({
+    configRef,
+    runtime,
+    getCliChannel: () => cliChannel,
+    getTelegramChannel: () => activeTelegram,
   });
-  notificationService.start();
 
-  // Start runtime
-  await runtime.start();
+  ({
+    hostMonitorInterval,
+    gatewayMonitorInterval,
+  } = await startRuntimeSupportServices({
+    notificationService,
+    runtime,
+    config,
+    configRef,
+    runHostMonitoring,
+    runGatewayMonitoring,
+    connectors,
+    scheduledTasks,
+    log,
+  }));
 
-  if (config.assistant.hostMonitoring.enabled) {
-    await runHostMonitoring('startup').catch((err) => {
-      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Initial host monitoring check failed');
-    });
-    hostMonitorInterval = setInterval(() => {
-      runHostMonitoring('interval').catch((err) => {
-        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Host monitoring interval check failed');
-      });
-    }, Math.max(10, configRef.current.assistant.hostMonitoring.scanIntervalSec) * 1000);
-  }
+  await runCliPostStart({
+    cliChannel,
+    dashboardCallbacks,
+    config,
+    runtime,
+    defaultAgentId,
+  });
 
-  if (config.assistant.gatewayMonitoring.enabled) {
-    await runGatewayMonitoring('startup').catch((err) => {
-      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Initial gateway monitoring check failed');
-    });
-    gatewayMonitorInterval = setInterval(() => {
-      runGatewayMonitoring('interval').catch((err) => {
-        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Gateway monitoring interval check failed');
-      });
-    }, Math.max(10, configRef.current.assistant.gatewayMonitoring.scanIntervalSec) * 1000);
-  }
-
-  // Migrate hardcoded playbook schedules into ScheduledTaskService
-  {
-    const playbookDefs = connectors.getState().playbooks;
-    const migrated = scheduledTasks.migratePlaybookSchedules(playbookDefs);
-    if (migrated > 0) {
-      log.info({ migrated }, 'Migrated playbook schedules to ScheduledTaskService');
-    }
-  }
-
-  // Post-start: AI greeting or setup wizard
-  if (cliChannel) {
-    const providers = dashboardCallbacks.onProvidersStatus
-      ? await dashboardCallbacks.onProvidersStatus()
-      : [];
-    const providerReady = providers.some(
-      (p: DashboardProviderInfo) => p.name === config.defaultProvider && p.connected,
-    );
-
-    cliChannel.postStart({
-      providerReady,
-      onGreeting: async () => {
-        try {
-          const response = await runtime.dispatchMessage(
-            defaultAgentId,
-            {
-              id: randomUUID(),
-              userId: 'system',
-              channel: 'cli',
-              content: 'You have just started up. Greet the user briefly — one short sentence to let them know you are online and ready.',
-              timestamp: Date.now(),
-            },
-          );
-          return response.content;
-        } catch {
-          return 'Guardian Agent is online and ready.';
-        }
-      },
-      onSetupApply: dashboardCallbacks.onSetupApply!,
-    });
-  }
-
-  // Graceful shutdown
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return; // prevent double-shutdown on repeated Ctrl+C
-    shuttingDown = true;
-    log.info({ signal }, 'Shutting down...');
-
-    // Force exit after 5s if graceful cleanup stalls
-    const forceExitTimer = setTimeout(() => {
-      log.warn('Graceful shutdown timed out, forcing exit');
-      process.exit(1);
-    }, 5_000);
-    forceExitTimer.unref();
-
-    for (const channel of channels) {
-      try {
-        await channel.stop();
-      } catch (err) {
-        log.error({ channel: channel.name, err }, 'Error stopping channel');
-      }
-    }
-
+  const clearManagedIntervals = () => {
     if (threatIntelInterval) {
       clearInterval(threatIntelInterval);
       threatIntelInterval = null;
@@ -14955,30 +14807,21 @@ async function main(): Promise<void> {
       clearInterval(gatewayMonitorInterval);
       gatewayMonitorInterval = null;
     }
-
-    if (mcpManager) {
-      try {
-        await mcpManager.disconnectAll();
-      } catch (err) {
-        log.error({ err }, 'Error disconnecting MCP servers');
-      }
-    }
-
-    try {
-      await toolExecutor.dispose();
-    } catch (err) {
-      log.error({ err }, 'Error disposing tool executor');
-    }
-
-    notificationService.stop();
-    await runtime.stop();
-    conversations.close();
-    codeSessionStore.close();
-    analytics.close();
-
-    process.exitCode = 0;
-    await settleTerminalForExit();
   };
+
+  const shutdown = createShutdownHandler({
+    channels,
+    clearManagedIntervals,
+    mcpManager,
+    toolExecutor,
+    notificationService,
+    runtime,
+    conversations,
+    codeSessionStore,
+    analytics,
+    settleTerminalForExit,
+    log,
+  });
 
   // Killswitch: triggers graceful shutdown from CLI or web
   dashboardCallbacks.onKillswitch = () => {
