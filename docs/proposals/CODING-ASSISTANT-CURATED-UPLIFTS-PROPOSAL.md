@@ -99,6 +99,7 @@ Borrow:
 - durable task/session state
 - parent/child task visibility
 - small attention signals such as working, blocked, unread, waiting
+- keep runtime execution tasks distinct from planning/todo items
 
 ### Multi-agent guardrail
 
@@ -174,8 +175,10 @@ Keep the current live-feedback work structural and readable rather than making t
 ### Core changes
 
 - Continue using [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts) as the shared progress backbone.
+- Drive coding visibility from backend-owned session/task state rather than surface-local heuristics.
 - Keep general Guardian chat feedback thin and structural.
 - Keep Code feedback richer, but still concise and task-oriented.
+- Make approval-backed mutations artifact-aware: concise summaries in chat/CLI, richer diff/log review in Code.
 - Show when `Auto` selected external because the turn needed stronger reasoning.
 - Show when a second external provider answered after a retryable overload.
 - Preserve route-aware layout guardrails so wider chat surfaces do not crowd Automations, Config, or other dense pages.
@@ -204,11 +207,21 @@ The likely first candidates would be read-mostly helpers such as:
 - `researcher`
 - `reviewer`
 
+Only later, if the narrower helper shapes prove valuable:
+
+- `implementer`
+- `verifier`
+
 Not the first candidates:
 
 - a generic multi-agent runtime surface
 - deep task trees
 - manager-of-managers orchestration
+
+Isolation note:
+
+- do not adopt worktree-centered rituals as the default coding model
+- if isolated helper execution is ever justified later, keep it opt-in and limited to write-capable delegated coding jobs after backend-owned session/task state is in place
 
 ## Delivery Order
 
@@ -227,11 +240,13 @@ Not the first candidates:
 ### Phase 3: UX refinement
 
 - keep live progress clear in web chat, Code UI, and CLI
+- make approval and artifact rendering session-backed rather than ad hoc per surface
 - add minimal routing/fallback notices where useful
 - keep route-aware width/layout guardrails in place
 
 ### Phase 4: Reassess helper-task need
 
+- finish backend-owned session/task state before adding helper-task execution paths
 - only revisit bounded helper tasks if grounded planning, routing, and visibility still leave a meaningful gap
 
 ## Out Of Scope
