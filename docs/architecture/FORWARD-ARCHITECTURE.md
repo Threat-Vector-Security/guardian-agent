@@ -57,6 +57,20 @@ Rules:
 - Bootstrap code may wire dependencies together, but it should not contain long feature handlers, config transactions, route bodies, or tool implementations.
 - If a function in bootstrap starts owning domain decisions, extract it.
 
+Current checkpoint:
+- `src/bootstrap/runtime-factory.ts` now owns the earliest startup phase: default-config bootstrap, secure config load, runtime credential resolution, denied-path injection, and initial `Runtime` construction.
+- The next bootstrap extractions should move service wiring, channel startup, and shutdown orchestration out of `src/index.ts`.
+
+Suggested structure:
+
+```text
+src/bootstrap/
+  runtime-factory.ts
+  service-wiring.ts
+  channel-startup.ts
+  shutdown.ts
+```
+
 ### 2. Channel / Transport Layer
 
 Primary responsibility:
