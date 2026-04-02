@@ -13,7 +13,8 @@ import { homedir } from 'node:os';
 import { readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { loadConfig, DEFAULT_CONFIG_PATH } from './config/loader.js';
+import { DEFAULT_CONFIG_PATH, loadConfig } from './config/loader.js';
+import { createBootstrapRuntimeContext } from './bootstrap/runtime-factory.js';
 import type {
   AssistantConnectorPlaybookDefinition,
   BrowserConfig,
@@ -56,10 +57,9 @@ import {
   type SecurityBaselineViolation,
 } from './guardian/security-baseline.js';
 import { ControlPlaneIntegrity } from './guardian/control-plane-integrity.js';
-import { createLogger, setLogLevel } from './util/logging.js';
-import { buildPathBoundaryPattern } from './util/regex.js';
+import { createLogger } from './util/logging.js';
 import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
-import { mkdirSecureSync, tightenSecureTree, writeSecureFileSync } from './util/secure-fs.js';
+import { writeSecureFileSync } from './util/secure-fs.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { CodeSessionStore, type CodeSessionRecord, type ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
@@ -10821,172 +10821,15 @@ function resolveAssistantDbPath(configuredPath: string | undefined, fallbackFile
 
 async function main(): Promise<void> {
   const configPath = process.argv[2] ?? DEFAULT_CONFIG_PATH;
-  const guardianDataDir = join(homedir(), '.guardianagent');
-  const controlPlaneIntegrity = new ControlPlaneIntegrity({ baseDir: guardianDataDir });
-  const configIntegrityState = controlPlaneIntegrity.verifyFileSync(configPath);
-  if (!existsSync(configPath) && !configIntegrityState.ok) {
-    throw new Error(configIntegrityState.message);
-  }
-
-  // First-run: auto-create default config if none exists.
-  if (!existsSync(configPath)) {
-    const configDir = dirname(configPath);
-    mkdirSecureSync(configDir);
-    const defaultYaml = [
-      '# GuardianAgent Configuration',
-      '# Docs: https://github.com/alexkenley/guardian-agent',
-      '',
-      'llm:',
-      '  ollama:',
-      '    provider: ollama',
-      '    baseUrl: http://127.0.0.1:11434',
-      '    model: llama3.2',
-      '',
-      '  # Uncomment to use Anthropic:',
-      '  # claude:',
-      '  #   provider: anthropic',
-      '  #   apiKey: ${ANTHROPIC_API_KEY}',
-      '  #   model: claude-sonnet-4-20250514',
-      '',
-      '  # Uncomment to use OpenAI:',
-      '  # gpt:',
-      '  #   provider: openai',
-      '  #   apiKey: ${OPENAI_API_KEY}',
-      '  #   model: gpt-4o',
-      '',
-      'defaultProvider: ollama',
-      '',
-      '# Fallback providers tried when the default fails (rate limit, timeout, etc.)',
-      '# fallbacks:',
-      '#   - claude',
-      '',
-      'channels:',
-      '  cli:',
-      '    enabled: true',
-      '  telegram:',
-      '    enabled: false',
-      '  web:',
-      '    enabled: true',
-      '    port: 3000',
-      '',
-      'guardian:',
-      '  enabled: true',
-      '  logDenials: true',
-      '',
-      'runtime:',
-      '  maxStallDurationMs: 60000',
-      '  watchdogIntervalMs: 10000',
-      '  logLevel: warn',
-      '',
-      'assistant:',
-      '  soul:',
-      '    enabled: true',
-      '    path: SOUL.md',
-      '    primaryMode: full',
-      '    delegatedMode: summary',
-      '    maxChars: 10000',
-      '    summaryMaxChars: 1000',
-      '  connectors:',
-      '    enabled: false',
-      '    executionMode: plan_then_execute',
-      '    maxConnectorCallsPerRun: 12',
-    ].join('\n') + '\n';
-    writeSecureFileSync(configPath, defaultYaml);
-    controlPlaneIntegrity.signFileSync(configPath, 'config_bootstrap');
-    const isTTY = process.stdout.isTTY;
-    const dim = (t: string) => isTTY ? `\x1b[2m${t}\x1b[0m` : t;
-    const green = (t: string) => isTTY ? `\x1b[32m${t}\x1b[0m` : t;
-    console.log(green(`  Created default config at ${configPath}`));
-    console.log(dim('  Edit this file to configure LLM providers, channels, and security settings.'));
-    console.log(dim('  Quick start: ensure Ollama is running, or set ANTHROPIC_API_KEY / OPENAI_API_KEY.'));
-    console.log('');
-  }
-
-  await tightenSecureTree(guardianDataDir);
-
-  const configRef = {
-    current: loadConfig(configPath, {
-      integrity: controlPlaneIntegrity,
-      adoptUntrackedIntegrity: true,
-    }),
-  };
-
-  // Inject the resolved data directory as an absolute denied path so it stays
-  // correct even if the directory name or home path changes in the future.
-  {
-    const existing = configRef.current.guardian.deniedPaths ?? [];
-    const absPattern = buildPathBoundaryPattern(guardianDataDir);
-    if (!existing.includes(absPattern)) {
-      configRef.current.guardian.deniedPaths = [...existing, absPattern];
-    }
-  }
-
-  const threatIntelWebSearchConfigRef: { current: WebSearchConfig | undefined } = { current: undefined };
-  const secretStore = new LocalSecretStore({ baseDir: dirname(configPath) });
-
-  // Auto-detect Ollama model if configured model is not available.
-  // Prevents startup failures when the default model (e.g. llama3.2) isn't pulled.
-  for (const [name, llmCfg] of Object.entries(configRef.current.llm)) {
-    if (llmCfg.provider === 'ollama') {
-      const baseUrl = llmCfg.baseUrl || 'http://127.0.0.1:11434';
-      try {
-        const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          const data = (await res.json()) as { models?: Array<{ name: string }> };
-          const available = data.models?.map((m) => m.name) ?? [];
-          if (available.length > 0) {
-            const configuredModel = llmCfg.model;
-            const modelFound = available.some((m) =>
-              m === configuredModel || m.startsWith(`${configuredModel}:`)
-            );
-            if (!modelFound) {
-              const selected = available[0];
-              console.log(`  Ollama provider '${name}': model '${configuredModel}' not found. Auto-selecting '${selected}'.`);
-              (configRef.current.llm[name] as unknown as Record<string, unknown>).model = selected;
-            }
-          }
-        }
-      } catch {
-        // Ollama not reachable — skip auto-detection
-      }
-    }
-  }
-
-  const config = configRef.current;
-
-  // Respect config runtime log level unless caller explicitly overrides via LOG_LEVEL.
-  // When running in an interactive TTY (CLI), keep logs silent so JSON output
-  // doesn't pollute the readline prompt.  Use LOG_FILE for persistent logging.
-  if (!process.env['LOG_LEVEL']) {
-    if (process.stdout.isTTY && !process.env['LOG_FILE']) {
-      setLogLevel('silent');
-    } else {
-      setLogLevel(config.runtime.logLevel);
-    }
-  }
-
-  const resolvedRuntimeCredentials = resolveRuntimeCredentialView(config, secretStore);
-
-  // Startup repair: log which LLM providers started disconnected due to unresolvable credentials.
-  for (const [name, llmCfg] of Object.entries(resolvedRuntimeCredentials.resolvedLLM)) {
-    if (llmCfg.provider !== 'ollama' && !llmCfg.apiKey) {
-      console.log(`  ⚠ LLM provider '${name}' started disconnected — credential could not be resolved`);
-    }
-  }
-
-  threatIntelWebSearchConfigRef.current = resolvedRuntimeCredentials.resolvedWebSearch ?? {};
-  const runtime = new Runtime({
-    ...config,
-    llm: resolvedRuntimeCredentials.resolvedLLM,
-    assistant: {
-      ...config.assistant,
-      tools: {
-        ...config.assistant.tools,
-        cloud: resolvedRuntimeCredentials.resolvedCloud,
-        webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
-      },
-    },
-  });
+  const {
+    configRef,
+    config,
+    controlPlaneIntegrity,
+    resolvedRuntimeCredentials,
+    runtime,
+    secretStore,
+    threatIntelWebSearchConfigRef,
+  } = await createBootstrapRuntimeContext(configPath);
   if (isSecurityBaselineDisabled()) {
     log.warn({ envVar: 'GUARDIAN_DISABLE_BASELINE' }, 'Security baseline override enabled via environment');
     runtime.auditLog?.record?.({
