@@ -175,7 +175,7 @@ The initial implementation should stay on **documented, standard APIs**. The fol
 | `cpanel_backups` | List backups and trigger supported account backup creation | mutating | MODERATE |
 | `cpanel_ssl` | List certs, check expiry, install supported certs, inspect AutoSSL status | mutating | MODERATE |
 | `whm_status` | Server load, service status, disk usage, Apache/MySQL status | read_only | LOW |
-| `whm_accounts` | List/create/suspend/terminate/modify hosting accounts | mutating | LOW |
+| `whm_accounts` | List/create/suspend/terminate/modify hosting accounts. Quota changes should use `editquota`; other modify fields must follow WHM's case-sensitive `modifyacct` parameter names. | mutating | LOW |
 | `whm_packages` | List/create/edit hosting packages (quotas, features) | mutating | MODERATE |
 | `whm_dns` | Server-wide DNS cluster management, zone operations | mutating | MODERATE |
 | `whm_ssl` | Server SSL management, AutoSSL provider config | mutating | MODERATE |
@@ -267,7 +267,8 @@ The client must support:
 | `listaccts` | List all hosting accounts |
 | `createacct` | Create new hosting account |
 | `suspendacct` / `unsuspendacct` | Suspend/unsuspend account |
-| `modifyacct` | Modify account quotas and settings |
+| `editquota` | Update a cPanel account disk quota |
+| `modifyacct` | Modify account settings. This endpoint uses case-sensitive uppercase parameter names such as `QUOTA`, `MAXSQL`, and `HASSHELL`. |
 | `removeacct` | Terminate hosting account |
 | `listpkgs` / `addpkg` / `editpkg` | Hosting package management |
 | `gethostname` / `version` | Server identity |

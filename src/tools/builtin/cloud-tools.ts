@@ -3480,13 +3480,61 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
           plan: { type: 'string', description: 'WHM package name.' },
           owner: { type: 'string', description: 'Optional account owner/reseller.' },
           reason: { type: 'string', description: 'Suspend reason.' },
-          quota: { type: 'number', description: 'Disk quota for modify actions.' },
-          maxpark: { type: 'number', description: 'Alias domain limit for modify actions.' },
-          maxaddon: { type: 'number', description: 'Addon domain limit for modify actions.' },
-          maxsub: { type: 'number', description: 'Subdomain limit for modify actions.' },
-          maxftp: { type: 'number', description: 'FTP account limit for modify actions.' },
-          maxsql: { type: 'number', description: 'Database limit for modify actions.' },
-          hasshell: { type: 'boolean', description: 'Enable shell access during modify.' },
+          quota: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'Disk quota for modify actions. Use a number or "unlimited".',
+          },
+          maxpark: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'Alias domain limit for modify actions. Use a number or "unlimited".',
+          },
+          maxaddon: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'Addon domain limit for modify actions. Use a number or "unlimited".',
+          },
+          maxsub: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'Subdomain limit for modify actions. Use a number or "unlimited".',
+          },
+          maxftp: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'FTP account limit for modify actions. Use a number or "unlimited".',
+          },
+          maxsql: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'string', pattern: '^[0-9]+$' },
+              { type: 'string', enum: ['unlimited'] },
+            ],
+            description: 'Database limit for modify actions. Use a number or "unlimited".',
+          },
+          hasshell: {
+            anyOf: [
+              { type: 'boolean' },
+              { type: 'string', enum: ['true', 'false', '1', '0', 'yes', 'no'] },
+            ],
+            description: 'Enable shell access during modify.',
+          },
           keepDns: { type: 'boolean', description: 'When removing, keep DNS zone if supported.' },
         },
         required: ['profile', 'action'],
@@ -3618,16 +3666,38 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
         if (action === 'modify') {
           const username = requireString(args.username, 'username').trim();
-          const modified = await client.whm('modifyacct', {
+          const quota = toOptionalWhmLimitString(args.quota);
+          const maxpark = toOptionalWhmLimitString(args.maxpark);
+          const maxaddon = toOptionalWhmLimitString(args.maxaddon);
+          const maxsub = toOptionalWhmLimitString(args.maxsub);
+          const maxftp = toOptionalWhmLimitString(args.maxftp);
+          const maxsql = toOptionalWhmLimitString(args.maxsql);
+          const hasshell = toOptionalBooleanString(args.hasshell);
+          const modifyParams = stripUndefined({
             user: username,
-            quota: toOptionalNumberString(args.quota),
-            maxpark: toOptionalNumberString(args.maxpark),
-            maxaddon: toOptionalNumberString(args.maxaddon),
-            maxsub: toOptionalNumberString(args.maxsub),
-            maxftp: toOptionalNumberString(args.maxftp),
-            maxsql: toOptionalNumberString(args.maxsql),
-            hasshell: toOptionalBooleanString(args.hasshell),
-          }, { method: 'POST' });
+            MAXPARK: maxpark,
+            MAXADDON: maxaddon,
+            MAXSUB: maxsub,
+            MAXFTP: maxftp,
+            MAXSQL: maxsql,
+            HASSHELL: hasshell,
+          });
+          if (quota === undefined && Object.keys(modifyParams).length <= 1) {
+            return {
+              success: false,
+              error: 'Modify actions require at least one change: quota, maxpark, maxaddon, maxsub, maxftp, maxsql, or hasshell.',
+            };
+          }
+
+          const quotaUpdate = quota === undefined
+            ? null
+            : await client.whm('editquota', {
+              user: username,
+              quota,
+            }, { method: 'POST' });
+          const modified = Object.keys(modifyParams).length > 1
+            ? await client.whm('modifyacct', modifyParams, { method: 'POST' })
+            : null;
           return {
             success: true,
             output: {
@@ -3637,16 +3707,22 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
               action,
               username,
               changes: {
-                quota: args.quota ?? null,
-                maxpark: args.maxpark ?? null,
-                maxaddon: args.maxaddon ?? null,
-                maxsub: args.maxsub ?? null,
-                maxftp: args.maxftp ?? null,
-                maxsql: args.maxsql ?? null,
-                hasshell: args.hasshell ?? null,
+                quota: quota ?? null,
+                maxpark: maxpark ?? null,
+                maxaddon: maxaddon ?? null,
+                maxsub: maxsub ?? null,
+                maxftp: maxftp ?? null,
+                maxsql: maxsql ?? null,
+                hasshell: hasshell ?? null,
               },
-              data: modified.data,
-              warnings: modified.warnings,
+              data: {
+                quota: quotaUpdate?.data ?? null,
+                modify: modified?.data ?? null,
+              },
+              warnings: [
+                ...(quotaUpdate?.warnings ?? []),
+                ...(modified?.warnings ?? []),
+              ],
             },
           };
         }
@@ -4200,11 +4276,13 @@ function encodeScalarArray(value: unknown): string | undefined {
   );
 }
 
-function toOptionalNumberString(value: unknown): string | undefined {
+function toOptionalWhmLimitString(value: unknown): string | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed) return undefined;
+    const normalized = trimmed.toLowerCase();
+    if (normalized === 'unlimited') return 'unlimited';
     const parsed = Number(trimmed);
     if (Number.isFinite(parsed)) return String(parsed);
   }
@@ -4219,6 +4297,12 @@ function toOptionalBooleanString(value: unknown): string | undefined {
     if (normalized === 'false' || normalized === '0' || normalized === 'no') return '0';
   }
   return undefined;
+}
+
+function stripUndefined<T extends Record<string, string | number | boolean | undefined>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, child]) => child !== undefined),
+  ) as T;
 }
 
 function sanitizeSslData(value: unknown): unknown {
