@@ -5,8 +5,10 @@ import { WebChannel, type WebAuthRuntimeConfig } from '../channels/web.js';
 import type { DashboardCallbacks } from '../channels/web-types.js';
 import type { GuardianAgentConfig } from '../config/types.js';
 import { CodingBackendService } from '../runtime/coding-backend-service.js';
-import type { IntentGatewayRecord } from '../runtime/intent-gateway.js';
-import type { RouteDecision } from '../runtime/message-router.js';
+import type {
+  IncomingDispatchMessage,
+  PrepareIncomingDispatch,
+} from '../runtime/incoming-dispatch.js';
 import type { LocalSecretStore } from '../runtime/secret-store.js';
 import type { Runtime } from '../runtime/runtime.js';
 import type { BootstrapChannelStopEntry } from './shutdown.js';
@@ -24,29 +26,6 @@ interface LoggerLike {
   error(data: unknown, message?: string): void;
 }
 
-interface IncomingDispatchMessageLike {
-  content: string;
-  userId?: string;
-  surfaceId?: string;
-  principalId?: string;
-  principalRole?: import('../tools/types.js').PrincipalRole;
-  channel?: string;
-  metadata?: Record<string, unknown>;
-  requestId?: string;
-}
-
-interface PreparedIncomingDispatch {
-  requestId: string;
-  decision: RouteDecision;
-  gateway: IntentGatewayRecord | null;
-  routedMessage: IncomingDispatchMessageLike;
-}
-
-type PrepareIncomingDispatch = (
-  channelDefault: string | undefined,
-  msg: IncomingDispatchMessageLike,
-) => Promise<PreparedIncomingDispatch>;
-
 interface DispatchRuntimeLike {
   dispatchMessage: Runtime['dispatchMessage'];
 }
@@ -56,7 +35,7 @@ function createChannelDispatchHandler(args: {
   prepareIncomingDispatch: PrepareIncomingDispatch;
   dashboardCallbacks: DashboardCallbacks;
   runtime: DispatchRuntimeLike;
-}): (msg: IncomingDispatchMessageLike) => Promise<{ content: string; metadata?: Record<string, unknown> }> {
+}): (msg: IncomingDispatchMessage) => Promise<{ content: string; metadata?: Record<string, unknown> }> {
   return async (msg) => {
     const prepared = await args.prepareIncomingDispatch(args.channelDefault, msg);
     if (args.dashboardCallbacks.onDispatch) {

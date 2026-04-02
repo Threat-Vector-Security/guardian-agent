@@ -198,6 +198,10 @@ import {
   type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
 import {
+  createIncomingDispatchPreparer,
+  type IncomingDispatchMessage,
+} from './runtime/incoming-dispatch.js';
+import {
   parseDirectFileSearchIntent,
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
@@ -8728,17 +8732,6 @@ function resolveTelegramBotToken(config: GuardianAgentConfig, secretStore: Local
   return direct || undefined;
 }
 
-interface IncomingDispatchMessage {
-  content: string;
-  userId?: string;
-  surfaceId?: string;
-  principalId?: string;
-  principalRole?: import('./tools/types.js').PrincipalRole;
-  channel?: string;
-  metadata?: Record<string, unknown>;
-  requestId?: string;
-}
-
 /** Build dashboard callbacks wired to runtime internals. */
 function buildDashboardCallbacks(
   runtime: Runtime,
@@ -13583,310 +13576,28 @@ async function main(): Promise<void> {
 
   const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
   const routingIntentGateway = new IntentGateway();
-  const resolveRoutingStateAgentId = (preferredAgentId?: string): string => (
-    resolveSharedStateAgentId(preferredAgentId)
-    ?? ((router.findAgentByRole('local') || router.findAgentByRole('external'))
-      ? SHARED_TIER_AGENT_STATE_ID
-      : (preferredAgentId ?? defaultAgentId))
-  );
-  const classifyIntentForRouting = async (
-    msg: IncomingDispatchMessage,
-    stateAgentId: string,
-  ): Promise<IntentGatewayRecord | null> => {
-    const channel = msg.channel?.trim() || 'web';
-    const channelUserId = msg.userId?.trim() || `${channel}-user`;
-    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
-    const surfaceId = getCodeSessionSurfaceId({
-      surfaceId: msg.surfaceId,
-      userId: canonicalUserId,
-    });
-    const currentConfig = configRef.current;
-    const primaryProviderName = findProviderByLocality(currentConfig, 'local')
-      ?? currentConfig.defaultProvider
-      ?? findProviderByLocality(currentConfig, 'external')
-      ?? null;
-    const fallbackProviderName = findProviderByLocality(currentConfig, 'external');
-    const recentHistory = conversations.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: canonicalUserId,
-      channel,
-    });
-    const pendingAction = pendingActionStore.resolveActiveForSurface({
-      agentId: stateAgentId,
-      userId: canonicalUserId,
-      channel,
-      surfaceId,
-    });
-    const continuity = continuityThreadStore.get({
-      assistantId: stateAgentId,
-      userId: canonicalUserId,
-    });
-    const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
-      if (!providerName) return null;
-      const provider = runtime.getProvider(providerName);
-      if (!provider) return null;
-      return routingIntentGateway.classify(
-        {
-          content: msg.content,
-          channel,
-          recentHistory,
-          pendingAction: summarizePendingActionForGateway(pendingAction),
-          continuity: summarizeContinuityThreadForGateway(continuity),
-          enabledManagedProviders: enabledManagedProviders ? [...enabledManagedProviders] : [],
-          availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
-        },
-        (messages, options) => provider.chat(messages, options),
-      );
-    };
-
-    const primary = await classifyWithProvider(primaryProviderName);
-    if (primary?.available) {
-      return primary;
-    }
-    if (!fallbackProviderName || fallbackProviderName === primaryProviderName) {
-      return primary;
-    }
-    const fallback = await classifyWithProvider(fallbackProviderName);
-    return fallback?.available ? fallback : (primary ?? fallback);
-  };
-  const recordIntentRoutingTrace = (
-    stage: import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage,
-    input: {
-      msg: IncomingDispatchMessage;
-      requestId?: string;
-      agentId?: string;
-      details?: Record<string, unknown>;
-      contentPreview?: string;
-    },
-  ): void => {
-    const channel = input.msg.channel?.trim() || 'web';
-    const channelUserId = input.msg.userId?.trim() || `${channel}-user`;
-    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
-    const continuity = continuityThreadStore
-      ? summarizeContinuityThreadForGateway(
-          continuityThreadStore.get(
-            {
-              assistantId: resolveRoutingStateAgentId(input.agentId),
-              userId: canonicalUserId,
-            },
-            Date.now(),
-          ),
-        )
-      : null;
-    const details = {
-      ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
-      ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
-      ...(typeof continuity?.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: continuity.linkedSurfaceCount } : {}),
-      ...(input.details ?? {}),
-    };
-    intentRoutingTrace.record({
-      stage,
-      requestId: input.requestId,
-      userId: input.msg.userId,
-      channel: input.msg.channel,
-      agentId: input.agentId,
-      contentPreview: input.contentPreview ?? input.msg.content,
-      details: Object.keys(details).length > 0 ? details : undefined,
-    });
-  };
-  const resolveAgentForIncomingMessage = async (
-    channelDefault: string | undefined,
-    msg: IncomingDispatchMessage,
-    requestId?: string,
-  ): Promise<{ decision: RouteDecision; gateway: IntentGatewayRecord | null }> => {
-    const channel = msg.channel?.trim() || 'web';
-    const channelUserId = msg.userId?.trim() || `${channel}-user`;
-    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
-    const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
-    const resolvedSurfaceId = getCodeSessionSurfaceId({
-      surfaceId: msg.surfaceId ?? readMessageSurfaceId(msg.metadata),
-      userId: canonicalUserId,
-      principalId: msg.principalId,
-    });
-    const resolvedCodeSession = codeSessionStore.resolveForRequest({
-      requestedSessionId: requestedCodeContext?.sessionId,
-      userId: canonicalUserId,
-      principalId: msg.principalId,
-      channel,
-      surfaceId: resolvedSurfaceId,
-      touchAttachment: false,
-    });
-    const recordResolvedRoute = (decision: RouteDecision, gateway: IntentGatewayRecord | null): void => {
-      if (gateway) {
-        recordIntentRoutingTrace('gateway_classified', {
-          msg,
-          requestId,
-          details: {
-            source: 'routing',
-            mode: gateway.mode,
-            available: gateway.available,
-            route: gateway.decision.route,
-            confidence: gateway.decision.confidence,
-            operation: gateway.decision.operation,
-            turnRelation: gateway.decision.turnRelation,
-            resolution: gateway.decision.resolution,
-            missingFields: gateway.decision.missingFields,
-            emailProvider: gateway.decision.entities.emailProvider,
-            codingBackend: gateway.decision.entities.codingBackend,
-            latencyMs: gateway.latencyMs,
-            model: gateway.model,
-            rawResponsePreview: gateway.rawResponsePreview,
-          },
-        });
-      }
-      recordIntentRoutingTrace('tier_routing_decided', {
-        msg,
-        requestId,
-        agentId: decision.agentId,
-        details: {
-          confidence: decision.confidence,
-          reason: decision.reason,
-          fallbackAgentId: decision.fallbackAgentId,
-          complexityScore: decision.complexityScore,
-          tier: decision.tier,
-          route: gateway?.decision.route,
-        },
-      });
-    };
-    if (resolvedCodeSession) {
-      const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
-      const localTierAgentId = router.findAgentByRole('local')?.id;
-      const externalTierAgentId = router.findAgentByRole('external')?.id;
-      const pinnedTierAgent = pinnedAgentId
-        && (pinnedAgentId === localTierAgentId || pinnedAgentId === externalTierAgentId);
-      if (pinnedAgentId && !pinnedTierAgent) {
-        const decision = {
-          agentId: pinnedAgentId,
-          confidence: 'high' as const,
-          reason: requestedCodeContext?.sessionId
-            ? 'explicit coding session pinned to a specific agent'
-            : 'attached coding session pinned to a specific agent',
-        };
-        recordResolvedRoute(decision, null);
-        return {
-          decision,
-          gateway: null,
-        };
-      }
-      const stateAgentId = resolveRoutingStateAgentId(channelDefault);
-      const gateway = channelDefault
-        ? null
-        : await classifyIntentForRouting(msg, stateAgentId);
-      const routingCfg = configRef.current.routing;
-      const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
-      const threshold = routingCfg?.complexityThreshold ?? 0.5;
-      const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
-      const decision = channelDefault
-        ? { agentId: channelDefault, confidence: 'high' as const, reason: 'channel default override' }
-        : gateway?.available && hasRoles
-          ? router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
-          : hasRoles
-            ? router.routeWithTier(msg.content, tierMode, threshold)
-            : router.route(msg.content);
-      const resolvedDecision = {
-        ...decision,
-        reason: requestedCodeContext?.sessionId
-          ? 'explicit attached coding session with gateway-first auto routing'
-          : 'attached coding session with gateway-first auto routing',
-      };
-      recordResolvedRoute(resolvedDecision, gateway);
-      return {
-        decision: resolvedDecision,
-        gateway,
-      };
-    }
-    if (requestedCodeContext?.workspaceRoot) {
-      const decision = {
-        agentId: router.findAgentByRole('local')?.id || channelDefault || defaultAgentId,
-        confidence: 'high' as const,
-        reason: 'code workspace context',
-      };
-      recordResolvedRoute(decision, null);
-      return {
-        decision,
-        gateway: null,
-      };
-    }
-    if (channelDefault) {
-      const decision = {
-        agentId: channelDefault,
-        confidence: 'high' as const,
-        reason: 'channel default override',
-      };
-      recordResolvedRoute(decision, null);
-      return {
-        decision,
-        gateway: null,
-      };
-    }
-    const routingCfg = configRef.current.routing;
-    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
-    const threshold = routingCfg?.complexityThreshold ?? 0.5;
-    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
-    const stateAgentId = resolveRoutingStateAgentId(channelDefault);
-    const gateway = await classifyIntentForRouting(msg, stateAgentId);
-    const decision = gateway?.available && hasRoles
-      ? router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
-      : hasRoles
-        ? router.routeWithTier(msg.content, tierMode, threshold)
-        : router.route(msg.content);
-    recordResolvedRoute(decision, gateway);
-    return { decision, gateway };
-  };
-  const prepareIncomingDispatch = async (
-    channelDefault: string | undefined,
-    msg: IncomingDispatchMessage,
-  ): Promise<{
-    requestId: string;
-    decision: RouteDecision;
-    gateway: IntentGatewayRecord | null;
-    routedMessage: IncomingDispatchMessage;
-  }> => {
-    const requestId = msg.requestId?.trim() || randomUUID();
-    recordIntentRoutingTrace('incoming_dispatch', {
-      msg,
-      requestId,
-      details: {
-        hasMetadata: !!msg.metadata,
-        channelDefault,
-      },
-    });
-    const routed = await resolveAgentForIncomingMessage(channelDefault, msg, requestId);
-    const sanitizedMetadata = isRecord(msg.metadata)
-      ? Object.fromEntries(
-          Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
-        )
-      : msg.metadata;
-    const routedMetadata = routed.gateway
-      ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
-      : sanitizedMetadata;
-    if (routed.gateway) {
-      recordIntentRoutingTrace('pre_routed_metadata_attached', {
-        msg,
-        requestId,
-        agentId: routed.decision.agentId,
-        details: {
-          route: routed.gateway.decision.route,
-          selectedAgentId: routed.decision.agentId,
-        },
-      });
-    }
-    return {
-      requestId,
-      decision: routed.decision,
-      gateway: routed.gateway,
-      routedMessage: {
-        content: msg.content,
-        userId: msg.userId,
-        surfaceId: msg.surfaceId,
-        principalId: msg.principalId,
-        principalRole: msg.principalRole,
-        channel: msg.channel,
-        metadata: routedMetadata,
-        requestId,
-      },
-    };
-  };
+  const prepareIncomingDispatch = createIncomingDispatchPreparer({
+    defaultAgentId,
+    configRef,
+    router,
+    routingIntentGateway,
+    runtime,
+    identity,
+    conversations,
+    pendingActionStore,
+    continuityThreadStore,
+    codeSessionStore,
+    intentRoutingTrace,
+    enabledManagedProviders,
+    resolveSharedStateAgentId,
+    findProviderByLocality,
+    getCodeSessionSurfaceId,
+    readMessageSurfaceId,
+    readCodeRequestMetadata,
+    normalizeTierModeForRouter,
+    summarizePendingActionForGateway,
+    summarizeContinuityThreadForGateway,
+  });
   // ─── Policy-as-Code Engine Bootstrap ─────────────────────────────
   const policyConfig = config.guardian?.policy ?? { enabled: true, mode: 'shadow' as const, rulesPath: 'policies/', mismatchLogLimit: 1000 };
   const policyEngine = createPolicyEngine();
