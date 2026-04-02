@@ -157,6 +157,27 @@ interface CodeSessionWorkState {
 
 This is the canonical state the main assistant can inspect without replaying a full transcript.
 
+### 3A. Distinguish Runtime Tasks from Planning Todos
+
+The assessment pass against terminal-first coding runtimes reinforces a useful boundary:
+
+- `todos` are operator-facing planning/checklist items
+- runtime execution tasks are lifecycle records for real work such as delegated helpers, backend coding runs, verification jobs, and scheduled continuations
+
+Those should not be collapsed into one list.
+
+`recentTasks` should therefore align with a shared runtime task model rather than inventing a coding-only background-job abstraction. The important shared fields are:
+
+- durable `taskId`
+- run class
+- status
+- summary
+- output/artifact handle
+- approval or operator-follow-up state
+- cancel/kill semantics
+
+That keeps coding-session state compatible with the broader Guardian runtime instead of creating a second task system that overlaps with `assistant-jobs`, timeline events, and delegated worker state.
+
 ### 4. Add Channel Attachments Instead of Transcript Merging
 
 One of the user's practical concerns is valid: if people move between sessions and channels, naive history merging becomes confusing.
@@ -339,14 +360,15 @@ That means:
 
 - the same approval queue is visible from web Code, main chat, Telegram, and CLI
 - approval records include session id, workspace, action summary, and artifact refs
+- approval records should also carry mutation-preview handles such as changed paths, patch summaries, and log/diff artifact refs when those exist
 - approval decisions are durable events in the coding journal
 - approval backlog rules are enforced per `CodeSession`
 
 Channel-specific rendering stays different:
 
-- web shows rich approval cards and diffs
+- web shows rich approval cards and diff-first review when artifact data exists
 - Telegram shows concise summaries and buttons
-- main chat shows compact notices and can link the user to details
+- main chat shows compact notices and can link the user to the same artifact-backed details
 
 ## Security Model
 
@@ -431,6 +453,19 @@ For the first backend-owned session rollout:
 
 If remote terminal control is ever added, it should be treated as a separate high-risk capability with stronger approval and isolation, closer to a dedicated remote-control adapter than a casual extension of chat.
 
+## Optional Future: Worktree-Isolated Delegated Helpers
+
+This proposal does not require git worktrees for the main coding-session model.
+
+If Guardian later adds delegated coding helpers that need isolated write scopes, worktree use should be:
+
+- optional
+- off by default
+- attached to an existing `CodeSession`
+- limited to write-capable delegated coding jobs where isolation meaningfully helps
+
+That keeps backend-owned `CodeSession` state as the primary model and avoids turning worktree rituals into the default operator experience.
+
 ## Migration Plan
 
 ### Phase 1: Introduce Backend Session Store
@@ -438,6 +473,7 @@ If remote terminal control is ever added, it should be treated as a separate hig
 - add `CodeSessionStore`
 - add CRUD/read/list APIs
 - persist `CodeSession`, `CodeSessionWorkState`, approvals, checks, artifacts, and attachments
+- model runtime task refs separately from checklist/todo items
 - keep current web UI, but change it to load/save sessions from the backend
 
 ### Phase 2: Replace Browser-Owned Session Authority

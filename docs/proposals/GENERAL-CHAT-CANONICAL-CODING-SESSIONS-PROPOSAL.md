@@ -76,6 +76,17 @@ So the right model is:
 - many visible known sessions in a registry
 - explicit cross-session targeting when needed
 
+### Task and approval visibility should come from one backend state model
+
+The focused-session model only stays legible if chat, Code, CLI, and Telegram are all reading the same backend-owned coding state.
+
+That means:
+
+- approvals, failing checks, recent runtime work, and artifact refs should come from the shared `CodeSession` state
+- runtime execution tasks should stay distinct from planning/todo items
+- general chat should summarize that state concisely
+- the Code page should remain the richer surface for artifact inspection, diffs, logs, and approval review
+
 ## Recommended Shape
 
 ### 1. General Chat Becomes The Canonical Coding Chat
@@ -100,6 +111,7 @@ Keep the Code system, but narrow the page to what is uniquely valuable:
 - editor and diff
 - terminals
 - activity
+- artifact-backed approval review
 - trust/repo review
 - approvals
 - deterministic structure/impact investigation
@@ -114,7 +126,7 @@ The Code page should support actions like:
 
 - `Open attached session in Chat`
 - `Switch Chat focus to this session`
-- `Show activity / trust / files / terminal`
+- `Show activity / trust / files / terminal / approval artifacts`
 
 ### 3. Session Registry + Focus Model
 
@@ -146,10 +158,26 @@ Guardian’s role:
 - launch the backend in a scoped workspace/session
 - pass a bounded task brief
 - capture status, artifacts, and failures
+- publish backend runs into the same session/task state used by chat and Code
 - enforce approvals at Guardian’s layer where applicable
 - summarize and expose results in normal Guardian UX
 
 Do not make Guardian’s own chat pretend to be those tools.
+
+### 5. Optional helper roles later, not a generic agent tree
+
+If session-attached helper tasks are added later, they should start shallow and role-bounded.
+
+Recommended first candidates:
+
+- `researcher`
+- `reviewer`
+
+Guardrails:
+
+- keep helper runs visible through the same session/task model
+- do not make manager-of-managers orchestration the default coding architecture
+- if helper isolation is ever needed, prefer opt-in helper worktrees for write-capable delegated jobs only, not a worktree-first default for all coding work
 
 ## Options
 

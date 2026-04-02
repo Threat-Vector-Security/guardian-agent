@@ -1,7 +1,7 @@
 # Core Architecture Modularization Plan
 
 **Date:** 2026-04-02  
-**Status:** Active, checkpoint updated after config-state-helper extraction  
+**Status:** Active, checkpoint updated after provider and agent dashboard extraction  
 **Origin:** Large-file architecture review of the composition root, web channel, and tool runtime  
 **Key files:** `src/index.ts`, `src/tools/executor.ts`, `src/channels/web.ts`  
 **Related docs:** `docs/architecture/FORWARD-ARCHITECTURE.md`, `docs/architecture/OVERVIEW.md`, `docs/guides/INTEGRATION-TEST-HARNESS.md`
@@ -119,13 +119,16 @@ This track is complete for the original registrar-extraction goal.
 
 This track is materially advanced but not finished.
 
-- `src/index.ts` is down to **13580 lines** from roughly **17.7k**.
+- `src/index.ts` is down to **13434 lines** from roughly **17.7k**.
 - Extracted control-plane modules now live under `src/runtime/control-plane/`:
+  - `agent-dashboard-callbacks.ts`
   - `auth-control-callbacks.ts`
   - `config-persistence-service.ts`
   - `config-state-helpers.ts`
   - `direct-config-update.ts`
   - `operations-dashboard-callbacks.ts`
+  - `provider-config-helpers.ts`
+  - `provider-dashboard-callbacks.ts`
   - `provider-integration-callbacks.ts`
   - `security-dashboard-callbacks.ts`
   - `setup-config-dashboard-callbacks.ts`
@@ -143,6 +146,9 @@ This track is materially advanced but not finished.
   - `channel-startup.ts` now depends on the shared `PrepareIncomingDispatch` contract from `src/runtime/incoming-dispatch.ts` instead of shadowing that type and shape locally.
 - Control-plane helper extraction is also active:
   - `config-state-helpers.ts` owns credential-ref normalization, local-secret lifecycle helpers, and persistence helpers for tools, skills, and connectors.
+  - `provider-config-helpers.ts` owns provider snapshot/status shaping, provider credential resolution for ad hoc model discovery, and existing-profile lookup helpers reused by direct config updates.
+  - `provider-dashboard-callbacks.ts` owns the provider listing/type/model callbacks that used to sit inline in the callback factory.
+  - `agent-dashboard-callbacks.ts` owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
 
 ### What is still left
 
@@ -150,10 +156,10 @@ The main remaining architecture work is now concentrated in `src/index.ts`.
 
 #### Remaining `src/index.ts` work
 
-- Extract the remaining callback-factory helper clusters so `main()` and the entrypoint factory stop owning provider/config shaping and residual dashboard glue directly.
+- Extract the remaining callback-factory helper clusters so `main()` and the entrypoint factory stop owning residual dashboard glue directly.
 - The remaining `src/bootstrap/` extraction work is limited; the main effort is now trimming residual helper glue out of `src/index.ts` around provider/config shaping, callback-factory assembly, and final orchestration.
 - Move remaining helper clusters out of `src/index.ts` when they have clear homes, especially:
-  - provider info/config shaping helpers
+  - assistant state / SSE metrics shaping helpers
   - residual config-persist/apply glue still local to the entrypoint
   - callback-factory helpers that still do not belong in `src/index.ts`
 - Reassess whether `buildDashboardCallbacks()` should become a thinner factory wrapper over already-extracted modules, or whether parts of dispatch/runtime coordination belong under `src/runtime/` instead.
@@ -194,9 +200,10 @@ These are lower priority than the remaining `index.ts` work:
 - `f63a240` `refactor(bootstrap): extract service wiring and shutdown`
 - `d01cbbd` `refactor(bootstrap): extract channel startup`
 - `1c6caa2` `refactor(control-plane): extract cloud test callback`
-- latest checkpoint extracts shared incoming-dispatch preparation into `src/runtime/incoming-dispatch.ts`
-- current checkpoint extracts shared dashboard dispatch into `src/runtime/dashboard-dispatch.ts`
-- current checkpoint extracts config-state helpers into `src/runtime/control-plane/config-state-helpers.ts`
+- `d671755` `refactor(runtime): extract incoming dispatch preparation`
+- `370053f` `refactor(runtime): extract dashboard dispatch`
+- `d5755ba` `refactor(control-plane): extract config state helpers`
+- current checkpoint extracts provider and agent dashboard callback modules plus shared provider config helpers
 
 #### Tool executor modularization
 
