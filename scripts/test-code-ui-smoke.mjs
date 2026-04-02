@@ -867,8 +867,10 @@ guardian:
     await sendGuardianChatMessage('Make the answer 42 in the selected file.');
     await page.waitForFunction(() => {
       const messages = document.querySelectorAll('#chat-history .chat-message');
+      const hasEditPrompt = Array.from(messages).some((node) => (node.textContent || '').includes('Make the answer 42'));
+      const hasEditReply = Array.from(messages).some((node) => (node.textContent || '').includes('Updated the selected file so answerValue is now 42.'));
       const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
-      return messages.length >= 4 && !thinking;
+      return hasEditPrompt && hasEditReply && !thinking;
     }, null, { timeout: 30000 });
     const editedFileContent = fs.readFileSync(examplePath, 'utf-8');
     if (!/answerValue = 42/.test(editedFileContent)) {
