@@ -68,7 +68,8 @@ Current checkpoint:
 - `src/runtime/control-plane/provider-config-helpers.ts` now owns shared provider/config shaping helpers used by multiple control-plane flows: provider snapshot/status construction, provider credential resolution for ad hoc model discovery, and cloud profile lookup helpers used by direct config updates.
 - `src/runtime/control-plane/provider-dashboard-callbacks.ts` now owns provider discovery and model-enumeration callbacks for the dashboard surface.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
-- The remaining `src/index.ts` work is now mostly residual callback-factory glue, assistant-state shaping, and final orchestration trimming so `main()` becomes composition-only.
+- `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now owns assistant-state summaries, worker follow-up actions, run timeline listing/detail callbacks, and routing-trace decoration for the dashboard surface.
+- The remaining `src/index.ts` work is now mostly residual callback-factory glue, SSE/stream wiring, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -140,6 +141,7 @@ Suggested structure:
 ```text
 src/runtime/control-plane/
   agent-dashboard-callbacks.ts
+  assistant-dashboard-callbacks.ts
   config-persistence-service.ts
   config-state-helpers.ts
   provider-config-helpers.ts
@@ -178,7 +180,8 @@ Current checkpoint:
 - `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
 - `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now keeps agent dashboard shaping and internal-agent classification out of the callback factory.
-- The remaining `src/index.ts` work is now centered on callback-factory cleanup, assistant/control-plane shaping, and final orchestration trimming rather than the core message dispatch path.
+- `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now keeps assistant-state summaries, run-history routing, and routing-trace decoration out of the callback factory.
+- The remaining `src/index.ts` work is now centered on callback-factory cleanup, SSE/dispatch glue, and final orchestration trimming rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
 

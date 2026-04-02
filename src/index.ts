@@ -158,7 +158,7 @@ import {
   type MemoryContextLoadResult,
   type MemoryContextQuery,
 } from './runtime/agent-memory-store.js';
-import { AssistantJobTracker, buildAssistantJobDisplay, mergeAssistantJobStates } from './runtime/assistant-jobs.js';
+import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
 import { notificationDestinationEnabled } from './runtime/notifications.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
@@ -203,6 +203,7 @@ import {
 } from './runtime/search-intent.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
 import { createAgentDashboardCallbacks } from './runtime/control-plane/agent-dashboard-callbacks.js';
+import { createAssistantDashboardCallbacks } from './runtime/control-plane/assistant-dashboard-callbacks.js';
 import { createConfigStateHelpers } from './runtime/control-plane/config-state-helpers.js';
 import { createAuthControlCallbacks } from './runtime/control-plane/auth-control-callbacks.js';
 import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
@@ -263,7 +264,6 @@ import {
   isWorkspaceSwitchPendingActionSatisfied,
 } from './runtime/pending-action-resume.js';
 import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
-import { pickRoutingTraceFocusItem } from './runtime/routing-trace-focus.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
@@ -9174,6 +9174,15 @@ function buildDashboardCallbacks(
     getDefaultModelForProviderType,
     isLocalProviderEndpoint,
   });
+  const assistantDashboard = createAssistantDashboardCallbacks({
+    configRef,
+    runtime,
+    orchestrator,
+    intentRoutingTrace,
+    jobTracker,
+    runTimeline,
+    refreshRunTimelineSnapshots,
+  });
 
   const dispatchDashboardMessage = createDashboardMessageDispatcher({
     configRef,
@@ -9390,133 +9399,7 @@ function buildDashboardCallbacks(
       })) ?? []
     ),
 
-    onAssistantState: () => {
-      const policyTypes = new Set([
-        'action_denied',
-        'action_allowed',
-        'rate_limited',
-        'output_blocked',
-        'output_redacted',
-      ]);
-      const decisions = runtime.auditLog
-        .query({ limit: 50 })
-        .filter((event) => policyTypes.has(event.type))
-        .slice(-20)
-        .reverse()
-        .map((event) => ({
-          id: event.id,
-          timestamp: event.timestamp,
-          type: event.type,
-          severity: event.severity,
-          agentId: event.agentId,
-          controller: event.controller,
-          reason: typeof event.details.reason === 'string' ? event.details.reason : undefined,
-        }));
-
-      const mergedJobs = mergeAssistantJobStates([
-        jobTracker.getState(30),
-        runtime.workerManager?.getJobState(30) ?? { summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] },
-      ], 30);
-      const jobsWithDisplay = mergedJobs.jobs.map((job) => ({
-        ...job,
-        display: buildAssistantJobDisplay(job),
-      }));
-
-      return {
-        orchestrator: orchestrator.getState(),
-        intentRoutingTrace: intentRoutingTrace.getStatus(),
-        jobs: {
-          ...mergedJobs,
-          jobs: jobsWithDisplay,
-        },
-        lastPolicyDecisions: decisions,
-        defaultProvider: configRef.current.defaultProvider,
-        guardianEnabled: configRef.current.guardian.enabled,
-        providerCount: runtime.providers.size,
-        providers: [...runtime.providers.keys()],
-        scheduledJobs: runtime.scheduler.getJobs().map((j) => ({
-          agentId: j.agentId,
-          cron: j.cron,
-          nextRun: j.job.nextRun()?.getTime(),
-        })),
-      };
-    },
-
-    onAssistantJobFollowUpAction: ({ jobId, action }) => {
-      if (!runtime.workerManager) {
-        return {
-          success: false,
-          message: 'Delegated worker follow-up controls are not available.',
-          statusCode: 404,
-          errorCode: 'WORKER_MANAGER_UNAVAILABLE',
-        };
-      }
-      return runtime.workerManager.applyJobFollowUpAction(jobId, action);
-    },
-
-    onAssistantRuns: ({ limit, status, kind, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {
-      refreshRunTimelineSnapshots();
-      return {
-        runs: runTimeline.listRuns({
-          limit,
-          ...(status ? { status } : {}),
-          ...(kind ? { kind } : {}),
-          ...(channel ? { channel } : {}),
-          ...(agentId ? { agentId } : {}),
-          ...(codeSessionId ? { codeSessionId } : {}),
-          ...(continuityKey ? { continuityKey } : {}),
-          ...(activeExecutionRef ? { activeExecutionRef } : {}),
-        }),
-      };
-    },
-
-    onIntentRoutingTrace: async ({ limit, continuityKey, activeExecutionRef, stage, channel, agentId, userId, requestId }) => ({
-      entries: (await intentRoutingTrace.listRecent({
-        limit,
-        ...(continuityKey ? { continuityKey } : {}),
-        ...(activeExecutionRef ? { activeExecutionRef } : {}),
-        ...(stage ? { stage: stage as import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage } : {}),
-        ...(channel ? { channel } : {}),
-        ...(agentId ? { agentId } : {}),
-        ...(userId ? { userId } : {}),
-        ...(requestId ? { requestId } : {}),
-      })).map((entry) => {
-        const matchedRun = entry.requestId ? runTimeline.getRun(entry.requestId) : null;
-        const codeSessionId = matchedRun?.summary.codeSessionId?.trim();
-        const focusItem = matchedRun ? pickRoutingTraceFocusItem(entry, matchedRun) : null;
-        return {
-          ...entry,
-          ...(matchedRun
-            ? {
-                matchedRun: {
-                  runId: matchedRun.summary.runId,
-                  title: matchedRun.summary.title,
-                  status: matchedRun.summary.status,
-                  kind: matchedRun.summary.kind,
-                  href: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}`,
-                  ...(codeSessionId ? { codeSessionId } : {}),
-                  ...(codeSessionId
-                    ? {
-                        codeSessionHref: `#/code?sessionId=${encodeURIComponent(codeSessionId)}&assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}${focusItem ? `&assistantRunItemId=${encodeURIComponent(focusItem.itemId)}` : ''}`,
-                      }
-                    : {}),
-                  ...(focusItem ? { focusItemId: focusItem.itemId, focusItemTitle: focusItem.title } : {}),
-                  ...(focusItem
-                    ? {
-                        focusItemHref: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}&assistantRunItemId=${encodeURIComponent(focusItem.itemId)}`,
-                      }
-                    : {}),
-                },
-              }
-            : {}),
-        };
-      }),
-    }),
-
-    onAssistantRunDetail: (runId) => {
-      refreshRunTimelineSnapshots();
-      return runTimeline.getRun(runId);
-    },
+    ...assistantDashboard,
 
     ...createToolsDashboardCallbacks({
       configRef,
