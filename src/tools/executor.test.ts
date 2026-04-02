@@ -819,6 +819,171 @@ describe('ToolExecutor', () => {
     expect(requests[0]?.url).toContain('/json-api/createacct');
   });
 
+  it('routes WHM quota-only account updates through editquota', async () => {
+    const requests: Array<{ method: string; url: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ method: req.method ?? 'GET', url: req.url });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/editquota')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: {
+            status: 1,
+            statusmsg: 'quota updated',
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm-main',
+          name: 'WHM Main',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'whm_accounts',
+      args: {
+        profile: 'whm-main',
+        action: 'modify',
+        username: 'alice',
+        quota: '2000',
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      action: 'modify',
+      username: 'alice',
+      changes: {
+        quota: '2000',
+      },
+      data: {
+        quota: {
+          status: 1,
+          statusmsg: 'quota updated',
+        },
+        modify: null,
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'POST' });
+    expect(requests[0]?.url).toContain('/json-api/editquota');
+    expect(requests[0]?.url).toContain('quota=2000');
+  });
+
+  it('uses documented case-sensitive modifyacct fields for WHM account updates', async () => {
+    const requests: Array<{ method: string; url: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      requests.push({ method: req.method ?? 'GET', url: req.url });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/editquota')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: {
+            status: 1,
+            statusmsg: 'quota updated',
+          },
+        }));
+        return;
+      }
+      if (req.url?.includes('/json-api/modifyacct')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: {
+            status: 1,
+            statusmsg: 'modified',
+          },
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm-main',
+          name: 'WHM Main',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'whm_accounts',
+      args: {
+        profile: 'whm-main',
+        action: 'modify',
+        username: 'alice',
+        quota: '2000',
+        maxsql: 'unlimited',
+        hasshell: 'yes',
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      action: 'modify',
+      username: 'alice',
+      changes: {
+        quota: '2000',
+        maxsql: 'unlimited',
+        hasshell: '1',
+      },
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toContain('/json-api/editquota');
+    expect(requests[0]?.url).toContain('quota=2000');
+    expect(requests[1]?.url).toContain('/json-api/modifyacct');
+    expect(requests[1]?.url).toContain('MAXSQL=unlimited');
+    expect(requests[1]?.url).toContain('HASSHELL=1');
+    expect(requests[1]?.url).not.toContain('maxsql=');
+    expect(requests[1]?.url).not.toContain('hasshell=');
+  });
+
   it('lists cPanel domains without approval and gates mutations', async () => {
     const requests: Array<{ method: string; url: string | undefined }> = [];
     const server = createServer((req, res) => {
