@@ -59,7 +59,9 @@ Rules:
 
 Current checkpoint:
 - `src/bootstrap/runtime-factory.ts` now owns the earliest startup phase: default-config bootstrap, secure config load, runtime credential resolution, denied-path injection, and initial `Runtime` construction.
-- The next bootstrap extractions should move service wiring, channel startup, and shutdown orchestration out of `src/index.ts`.
+- `src/bootstrap/service-wiring.ts` now owns scheduled-task executor wiring, runtime notification service construction, runtime support startup, playbook schedule migration, and CLI post-start setup.
+- `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
+- The next bootstrap extraction should move channel startup and channel registration out of `src/index.ts` so `main()` becomes orchestration-only.
 
 Suggested structure:
 
