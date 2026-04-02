@@ -62,7 +62,8 @@ Current checkpoint:
 - `src/bootstrap/service-wiring.ts` now owns scheduled-task executor wiring, runtime notification service construction, runtime support startup, playbook schedule migration, and CLI post-start setup.
 - `src/bootstrap/channel-startup.ts` now owns CLI, Telegram, and Web channel construction, startup logging, channel registration, Telegram reload wiring, and coding-backend bootstrap for the web surface.
 - `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
-- The remaining `src/index.ts` work is now mostly residual helper glue around dashboard dispatch, provider/config shaping, and final orchestration trimming so `main()` becomes composition-only.
+- `src/runtime/incoming-dispatch.ts` now owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session attachment/pinning, gateway-first tier routing, pre-routed metadata attachment, and the early routing trace stages before the Runtime handles the turn.
+- The remaining `src/index.ts` work is now mostly residual helper glue around dashboard dispatch, provider/config shaping, credential mutation, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -160,6 +161,11 @@ Rules:
 - Intent classification must stay gateway-first.
 - Approval flow and blocked-work state must remain shared abstractions, not feature-specific forks.
 - Runtime services should depend on interfaces and helpers, not channel-specific details.
+
+Current checkpoint:
+- `src/runtime/incoming-dispatch.ts` is now the shared boundary between channel adapters/bootstrap startup and the Runtime dispatch pipeline.
+- `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
+- `src/index.ts` still owns the large dashboard dispatch helper cluster; that remains the next orchestration-heavy extraction target.
 
 ### 5. Tool Execution Core
 
@@ -262,12 +268,13 @@ Constraints:
 ### User Turn
 
 1. Channel adapter authenticates and normalizes the request.
-2. Runtime receives the message.
-3. Intent Gateway classifies the turn.
-4. Shared orchestration decides direct route vs normal assistant path.
-5. Pending-action and approval state are resolved through shared contracts.
-6. Tool execution, if needed, runs through ToolExecutor and Guardian enforcement.
-7. Response metadata is rendered by the channel without inventing channel-specific semantics.
+2. Shared incoming-dispatch preparation resolves request id, code-session attachment, pinned-agent behavior, and pre-routed intent metadata.
+3. Runtime receives the prepared message.
+4. Intent Gateway classifies the turn if it was not already pre-routed.
+5. Shared orchestration decides direct route vs normal assistant path.
+6. Pending-action and approval state are resolved through shared contracts.
+7. Tool execution, if needed, runs through ToolExecutor and Guardian enforcement.
+8. Response metadata is rendered by the channel without inventing channel-specific semantics.
 
 ### Config Update
 
@@ -315,9 +322,10 @@ These rules are mandatory for the modularization effort:
 
 ## Testing Strategy By Layer
 
-- Bootstrap changes: `npm run check`, targeted runtime tests, affected harnesses, then `npm test`.
+- Bootstrap changes: `npm run check`, targeted bootstrap/runtime tests, affected harnesses, then `npm test`.
 - Channel/web changes: focused Vitest for extracted helpers and route behavior, `node scripts/test-code-ui-smoke.mjs`, `node scripts/test-coding-assistant.mjs`, `node scripts/test-contextual-security-uplifts.mjs`.
 - Control-plane changes: focused runtime/control-plane tests, `node scripts/test-coding-assistant.mjs`, `node scripts/test-contextual-security-uplifts.mjs`.
+- Incoming-dispatch and routing-preparation changes: focused `src/runtime/incoming-dispatch.test.ts`, bootstrap/channel-startup tests that exercise the preparer boundary, `npm run check`, `node scripts/test-code-ui-smoke.mjs`, and the routing/security harnesses affected by the touched path.
 - Tool execution changes: focused executor tests, relevant capability harnesses such as `node scripts/test-automation-authoring-compiler.mjs`, then full suite.
 - Security or routing changes: always include the relevant security/routing harnesses and inspect the routing trace when applicable.
 

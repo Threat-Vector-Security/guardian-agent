@@ -1,0 +1,162 @@
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
+import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
+import type { MessageRouter } from './message-router.js';
+
+function createConfig(): GuardianAgentConfig {
+  return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+}
+
+function createGatewayRecord(partial: Partial<IntentGatewayRecord['decision']> = {}): IntentGatewayRecord {
+  return {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 12,
+    decision: {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect coding task.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+      ...partial,
+    },
+  };
+}
+
+function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispatchPreparer>[0]> = {}): Parameters<typeof createIncomingDispatchPreparer>[0] {
+  const configRef = { current: createConfig() };
+  return {
+    defaultAgentId: 'default-agent',
+    configRef,
+    router: {
+      findAgentByRole: vi.fn((role: string) => {
+        if (role === 'local') return { id: 'local-agent' };
+        if (role === 'external') return { id: 'external-agent' };
+        return undefined;
+      }),
+      route: vi.fn(() => ({ agentId: 'fallback-agent', confidence: 'low', reason: 'fallback' })),
+      routeWithTier: vi.fn(() => ({ agentId: 'local-agent', confidence: 'medium', reason: 'tier route', tier: 'local' })),
+      routeWithTierFromIntent: vi.fn(() => ({ agentId: 'local-agent', confidence: 'high', reason: 'intent tier route', tier: 'local' })),
+    } as unknown as MessageRouter,
+    routingIntentGateway: {
+      classify: vi.fn(async () => createGatewayRecord()),
+    },
+    runtime: {
+      getProvider: vi.fn(() => ({
+        chat: vi.fn(async () => ({ content: 'ok' })),
+      })),
+    },
+    identity: {
+      resolveCanonicalUserId: (channel: string, channelUserId: string) => `${channel}:${channelUserId}`,
+    },
+    conversations: {
+      getHistoryForContext: vi.fn(() => []),
+    },
+    pendingActionStore: {
+      resolveActiveForSurface: vi.fn(() => null),
+    },
+    continuityThreadStore: {
+      get: vi.fn(() => null),
+    },
+    codeSessionStore: {
+      resolveForRequest: vi.fn(() => null),
+    },
+    intentRoutingTrace: {
+      record: vi.fn(),
+    },
+    enabledManagedProviders: new Set(['gws']),
+    availableCodingBackends: ['codex', 'claude-code'],
+    resolveSharedStateAgentId: vi.fn(() => undefined),
+    findProviderByLocality: vi.fn((config: GuardianAgentConfig, locality: 'local' | 'external') => {
+      if (locality === 'local') return config.defaultProvider;
+      return 'external-provider';
+    }),
+    getCodeSessionSurfaceId: ({ surfaceId, userId }: { surfaceId?: string; userId?: string }) => (
+      surfaceId?.trim() || userId?.trim() || 'default-surface'
+    ),
+    readMessageSurfaceId: vi.fn(() => undefined),
+    readCodeRequestMetadata: vi.fn(() => undefined),
+    normalizeTierModeForRouter: vi.fn((_router, mode) => mode ?? 'auto'),
+    summarizePendingActionForGateway: vi.fn(() => null),
+    summarizeContinuityThreadForGateway: vi.fn(() => null),
+    now: () => 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+describe('createIncomingDispatchPreparer', () => {
+  it('keeps explicitly pinned code sessions on their pinned agent without classifying through the gateway', async () => {
+    const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
+    const codeSessionStore = {
+      resolveForRequest: vi.fn(() => ({
+        session: { agentId: 'pinned-worker' },
+      })),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord()),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      readCodeRequestMetadata,
+      codeSessionStore,
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'continue the coding task',
+      userId: 'alex',
+      channel: 'web',
+      metadata: { codeContext: { sessionId: 'session-1' } },
+    });
+
+    expect(result.decision).toEqual({
+      agentId: 'pinned-worker',
+      confidence: 'high',
+      reason: 'explicit coding session pinned to a specific agent',
+    });
+    expect(result.gateway).toBeNull();
+    expect(routingIntentGateway.classify).not.toHaveBeenCalled();
+  });
+
+  it('attaches pre-routed gateway metadata and records routing trace entries when classification is available', async () => {
+    const gatewayRecord = createGatewayRecord({
+      route: 'browser_task',
+      operation: 'inspect',
+      entities: { codingBackend: 'codex' },
+    });
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      routingIntentGateway: {
+        classify: vi.fn(async () => gatewayRecord),
+      },
+      intentRoutingTrace,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'check the browser session',
+      userId: 'alex',
+      channel: 'web',
+      metadata: { existing: 'value' },
+    });
+
+    expect(result.gateway).toEqual(gatewayRecord);
+    expect(result.decision.agentId).toBe('local-agent');
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)).toMatchObject({
+      decision: {
+        route: 'browser_task',
+        operation: 'inspect',
+      },
+    });
+    expect(intentRoutingTrace.record).toHaveBeenCalledTimes(4);
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ stage: 'incoming_dispatch' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(2, expect.objectContaining({ stage: 'gateway_classified' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(3, expect.objectContaining({ stage: 'tier_routing_decided' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(4, expect.objectContaining({ stage: 'pre_routed_metadata_attached' }));
+  });
+});
