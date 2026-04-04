@@ -494,6 +494,34 @@ export interface AssistantKnowledgeBaseConfig {
   autoFlush: boolean;
 }
 
+/** Automated durable-state maintenance job settings. */
+export interface AssistantMaintenanceMemoryHygieneConfig {
+  /** Enable idle-time memory hygiene sweeps. */
+  enabled: boolean;
+  /** Include the primary global memory scope in sweeps. */
+  includeGlobalScope: boolean;
+  /** Include idle code-session memory scopes in sweeps. */
+  includeCodeSessions: boolean;
+  /** Maximum number of scopes reviewed in one sweep. */
+  maxScopesPerSweep: number;
+  /** Minimum delay before the same scope is swept again. */
+  minIntervalMs: number;
+}
+
+/** Runtime-owned automated maintenance settings. */
+export interface AssistantMaintenanceConfig {
+  /** Enable server-owned automated maintenance. */
+  enabled: boolean;
+  /** How often the maintenance sweeper wakes up. */
+  sweepIntervalMs: number;
+  /** Minimum runtime quiet window before maintenance can run. */
+  idleAfterMs: number;
+  /** Initial maintenance job controls. */
+  jobs: {
+    memoryHygiene: AssistantMaintenanceMemoryHygieneConfig;
+  };
+}
+
 /** Analytics storage and retention settings. */
 export interface AssistantAnalyticsConfig {
   /** Enable analytics collection. */
@@ -1341,6 +1369,7 @@ export interface AssistantConfig {
   soul: AssistantSoulConfig;
   skills: AssistantSkillsConfig;
   memory: AssistantMemoryConfig;
+  maintenance: AssistantMaintenanceConfig;
   analytics: AssistantAnalyticsConfig;
   notifications: AssistantNotificationsConfig;
   quickActions: AssistantQuickActionsConfig;
@@ -1534,6 +1563,20 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         maxEntriesPerScope: 500,
         maxEmbeddingCacheBytes: 50_000_000,
         autoFlush: true,
+      },
+    },
+    maintenance: {
+      enabled: true,
+      sweepIntervalMs: 300_000,
+      idleAfterMs: 600_000,
+      jobs: {
+        memoryHygiene: {
+          enabled: true,
+          includeGlobalScope: true,
+          includeCodeSessions: true,
+          maxScopesPerSweep: 4,
+          minIntervalMs: 21_600_000,
+        },
       },
     },
     analytics: {

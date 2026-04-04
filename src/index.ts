@@ -147,6 +147,7 @@ import {
   inferMemoryFlushScope,
 } from './runtime/memory-flush.js';
 import { MemoryMutationService } from './runtime/memory-mutation-service.js';
+import { AutomatedMaintenanceService } from './runtime/automated-maintenance-service.js';
 import {
   IntentGateway,
   type IntentGatewayRecord,
@@ -2739,6 +2740,13 @@ async function main(): Promise<void> {
     if (event.type === 'created' || event.type === 'updated') {
       runTimeline.ingestCodeSession(event.session);
     }
+    if (event.type === 'focus_changed' && event.channel !== 'web') {
+      activeWebChannel?.emitDashboardInvalidation(
+        ['code-sessions'],
+        'code-sessions.focus-changed',
+        '/api/code/sessions',
+      );
+    }
   });
   analytics = new AnalyticsService({
     enabled: config.assistant.analytics.enabled,
@@ -4740,6 +4748,34 @@ async function main(): Promise<void> {
     auditLog: runtime.auditLog,
     jobTracker,
   });
+  const getRuntimePrincipalMemoryScopeId = (): string => (
+    configRef.current.channels.web?.defaultAgent
+      ?? configRef.current.channels.cli?.defaultAgent
+      ?? configRef.current.agents[0]?.id
+      ?? 'default'
+  );
+  const automatedMaintenanceService = new AutomatedMaintenanceService({
+    getConfig: () => configRef.current.assistant.maintenance,
+    getRuntimeActivity: () => {
+      const state = orchestrator.getState();
+      const lastActivityAt = state.sessions.reduce((latest, session) => Math.max(
+        latest,
+        session.lastQueuedAt ?? 0,
+        session.lastStartedAt ?? 0,
+        session.lastCompletedAt ?? 0,
+      ), 0) || undefined;
+      return {
+        queuedCount: state.summary.queuedCount,
+        runningCount: state.summary.runningCount,
+        lastActivityAt,
+      };
+    },
+    getPrincipalMemoryScopeId: getRuntimePrincipalMemoryScopeId,
+    globalMemoryStore: agentMemoryStore,
+    codeSessionMemoryStore,
+    codeSessionStore,
+    memoryMutationService: memoryMutationServiceRef.current,
+  });
 
   // ─── Model fallback chain ─────────────────────────────────
   // Build a fallback chain from config.fallbacks: [defaultProvider, ...fallbacks]
@@ -5848,6 +5884,7 @@ async function main(): Promise<void> {
     scheduledTasks,
     log,
   }));
+  automatedMaintenanceService.start();
 
   await runCliPostStart({
     cliChannel,
@@ -5862,6 +5899,7 @@ async function main(): Promise<void> {
       clearInterval(threatIntelInterval);
       threatIntelInterval = null;
     }
+    automatedMaintenanceService.stop();
     if (hostMonitorInterval) {
       clearInterval(hostMonitorInterval);
       hostMonitorInterval = null;

@@ -166,6 +166,7 @@ describe('startBootstrapChannels', () => {
       stop: vi.fn(async () => {}),
       send: vi.fn(async () => {}),
       setAuthConfig: vi.fn(),
+      emitDashboardInvalidation: vi.fn(),
       getCodingBackendTerminalControl: vi.fn(() => ({}) as never),
     };
     const createWebChannel = vi.fn(() => webChannel);

@@ -9,6 +9,8 @@ Produce a plan that a zero-context engineer could execute without guessing.
 
 Use this skill when the user asked for a plan, or when the work is large, risky, or multi-stage enough that implementation should be decomposed first. Do not force a plan for every trivial change.
 
+When the user already named concrete files, subsystems, or design docs, inspect those directly before drafting the plan and ground the plan in what you actually read. Do not ask for "the patch" or "more context" first when the relevant repo files are already named and available from the attached workspace.
+
 ## Planning Standard
 
 The plan should include:

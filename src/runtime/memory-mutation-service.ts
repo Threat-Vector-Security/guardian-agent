@@ -60,6 +60,13 @@ export interface MemoryMutationServiceOptions {
   now?: () => number;
 }
 
+export interface RunMemoryScopeMaintenanceInput {
+  target: MemoryMutationTarget;
+  maintenanceType?: 'consolidation' | 'idle_sweep';
+  triggerEntryId?: string;
+  detail?: string;
+}
+
 const PROFILE_CATEGORY_RE = /^(preferences?|decisions?|facts?|instructions?|project notes?|runbooks?)$/i;
 const SIMILARITY_STOPWORDS = new Set([
   'a',
@@ -521,54 +528,65 @@ export class MemoryMutationService {
     return this.runScopeHygiene(input.target, entry);
   }
 
-  private runScopeHygiene(
-    target: MemoryMutationTarget,
-    triggerEntry: StoredMemoryEntry,
-  ): MemoryScopeHygieneResult {
+  runMaintenanceForScope(input: RunMemoryScopeMaintenanceInput): MemoryScopeHygieneResult {
+    const maintenanceType = input.maintenanceType ?? 'idle_sweep';
+    const detail = input.detail?.trim();
     const started = this.jobTracker?.start({
-      type: 'memory_hygiene.consolidation',
+      type: `memory_hygiene.${maintenanceType}`,
       source: 'system',
-      detail: `Memory hygiene scan for ${target.scope === 'global' ? 'global memory' : `code session ${target.scopeId}`}`,
+      detail: detail || `Memory hygiene scan for ${input.target.scope === 'global' ? 'global memory' : `code session ${input.target.scopeId}`}`,
       metadata: {
         maintenance: {
           kind: 'memory_hygiene',
-          maintenanceType: 'consolidation',
+          maintenanceType,
           artifact: 'memory_entry',
           bounded: true,
-          scope: target.scope,
-          scopeId: target.scopeId,
-          triggerEntryId: triggerEntry.id,
+          scope: input.target.scope,
+          scopeId: input.target.scopeId,
+          ...(input.triggerEntryId ? { triggerEntryId: input.triggerEntryId } : {}),
         },
       },
     });
 
     try {
-      const result = this.performScopeHygiene(target);
-      const detail = this.describeHygieneResult(target, result);
-      this.jobTracker?.succeed(started?.id ?? '', { detail });
+      const result = this.performScopeHygiene(input.target);
+      const summary = this.describeHygieneResult(input.target, result);
+      this.jobTracker?.succeed(started?.id ?? '', { detail: detail || summary });
       this.auditLog?.record({
-        type: 'memory_hygiene.consolidation',
-        severity: result.changed ? 'info' : 'info',
-        agentId: target.auditAgentId,
+        type: `memory_hygiene.${maintenanceType}`,
+        severity: 'info',
+        agentId: input.target.auditAgentId,
         controller: 'MemoryMutationService',
         details: {
-          scope: target.scope,
-          scopeId: target.scopeId,
-          entryId: triggerEntry.id,
+          scope: input.target.scope,
+          scopeId: input.target.scopeId,
+          ...(input.triggerEntryId ? { entryId: input.triggerEntryId } : {}),
           reviewedEntries: result.reviewedEntries,
           archivedExactDuplicates: result.archivedExactDuplicates,
           archivedNearDuplicates: result.archivedNearDuplicates,
           archivedStaleSystemEntries: result.archivedStaleSystemEntries,
-          summary: detail,
+          summary,
+          ...(detail ? { detail } : {}),
         },
       });
       return result;
     } catch (err) {
       this.jobTracker?.fail(started?.id ?? '', err, {
-        detail: `Memory hygiene failed for ${target.scope === 'global' ? 'global memory' : `code session ${target.scopeId}`}.`,
+        detail: detail || `Memory hygiene failed for ${input.target.scope === 'global' ? 'global memory' : `code session ${input.target.scopeId}`}.`,
       });
       throw err;
     }
+  }
+
+  private runScopeHygiene(
+    target: MemoryMutationTarget,
+    triggerEntry: StoredMemoryEntry,
+  ): MemoryScopeHygieneResult {
+    return this.runMaintenanceForScope({
+      target,
+      maintenanceType: 'consolidation',
+      triggerEntryId: triggerEntry.id,
+    });
   }
 
   private performScopeHygiene(target: MemoryMutationTarget): MemoryScopeHygieneResult {

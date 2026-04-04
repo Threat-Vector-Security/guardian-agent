@@ -192,15 +192,28 @@ assistant:
       maxEntriesPerScope: 500
       maxEmbeddingCacheBytes: 50000000
       autoFlush: true
+  maintenance:
+    enabled: true
+    sweepIntervalMs: 300000
+    idleAfterMs: 600000
+    jobs:
+      memoryHygiene:
+        enabled: true
+        includeGlobalScope: true
+        includeCodeSessions: true
+        maxScopesPerSweep: 4
+        minIntervalMs: 21600000
 ```
 
 Notes:
 
 - `assistant.memory.knowledgeBase` config governs both persistent memory stores.
+- `assistant.maintenance` governs runtime-owned idle hygiene, not prompt-authored assistant behavior.
 - Global memory defaults to `~/.guardianagent/memory`.
 - Code-session memory defaults to `~/.guardianagent/code-session-memory`.
 - If `knowledgeBase.basePath` is set, Code-session memory is stored under `<basePath>/code-sessions`.
 - If `knowledgeBase.readOnly` is `true`, normal durable writes are frozen for both global and Code-session memory.
+- Idle maintenance never rewrites operator-curated wiki pages; it only runs bounded system-owned hygiene against durable memory scopes that are writable.
 - Code sessions do not preload global memory by default.
 
 Tier-routing note:
@@ -500,10 +513,16 @@ Target behavior:
 
 Memory hygiene should move toward explicit system-owned maintenance jobs instead of trying to do every expensive operation inline with the user turn.
 
+Current behavior:
+- runtime-owned idle maintenance can sweep global memory and idle Code-session memory with explicit budgets and per-scope cooldowns
+- the shared hygiene path archives exact duplicates, near-duplicate system-managed collection entries, and stale derived/context-flush material
+- runs only when the assistant runtime is quiet enough and the target store is writable
+- records jobs and audit events instead of silently mutating durable memory
+
 Target behavior:
 - thresholded extraction of durable facts from richer recent context
 - coalescing of overlapping short-term summaries
-- periodic consolidation of stale or redundant entries
+- broader periodic consolidation of stale or redundant entries
 - locking and idempotency so maintenance work does not race transcript writes
 
 ### 5. Compaction invariant preservation
@@ -548,6 +567,7 @@ Operator note:
 |------|---------|
 | `src/runtime/conversation.ts` | ConversationService with FTS5 search and memory flush |
 | `src/runtime/agent-memory-store.ts` | Persistent markdown + sidecar store used for both global and Code-session memory |
+| `src/runtime/automated-maintenance-service.ts` | Idle-aware runtime sweeper for bounded memory hygiene |
 | `src/runtime/code-sessions.ts` | Backend Code-session records and session resolution |
 | `src/tools/executor.ts` | `memory_search`, `memory_recall`, `memory_save`, `memory_bridge_search` tool registration and scope binding |
 | `src/tools/types.ts` | `memory` tool category definitions |

@@ -171,7 +171,8 @@ That means:
 - the transcript is separate from the regular Guardian chat transcript on that surface
 - web Code, main chat, CLI, and Telegram can all attach to the same coding session and continue that same coding transcript
 - sharing the same backend coding transcript does not make those clients equivalent; the web Code page remains the dedicated coding-session client, while main chat, CLI, and Telegram remain their own chat surfaces
-- the attachment model is surface-local: each surface can focus one coding session at a time without creating a second Guardian identity
+- the default coding-session focus is shared across first-party chat surfaces for the same user/principal, so switching the current workspace from web, CLI, or Telegram updates what the other surfaces see as current by default
+- explicit session targeting still overrides the shared focus for one request without permanently changing it
 
 The Code page is still a separate coding conversation surface in UX terms, but it is no longer a browser-only conversation.
 
@@ -192,6 +193,9 @@ Current behavior:
 - the canonical chat surface sends turns through the normal message path while attached to a code session
 - main chat, CLI, and Telegram can use `code_session_attach`
 - once attached, later messages on that surface resolve to the same coding session
+- the default attachment policy is `same_principal`, which mirrors the current coding-session focus across the same user’s web, CLI, and Telegram surfaces
+- attaching a different coding session promotes that session to the shared current workspace for the same principal, so later coding turns on other surfaces inherit it without a second attach step
+- detaching clears that shared current workspace focus for the same principal unless another session is explicitly attached afterward
 - cross-surface reuse shares the backend session and transcript, not the full Code-page explorer/tasks/approvals/checks/terminal UI
 
 ## Routing Behavior

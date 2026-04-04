@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../llm/types.js';
+import type { SkillPromptSelectionMetadata } from '../skills/types.js';
 
 export interface PromptAssemblyHistoryEntry {
   role: 'user' | 'assistant';
@@ -22,6 +23,13 @@ export interface PromptAssemblySkill {
 export interface PromptAssemblyRuntimeNotice {
   level: 'info' | 'warn';
   message: string;
+}
+
+export interface PromptAssemblyAdditionalSection {
+  section: string;
+  content: string;
+  mode?: string;
+  itemCount?: number;
 }
 
 export interface PromptAssemblyPendingAction {
@@ -53,7 +61,7 @@ export interface PromptAssemblyInput {
   pendingAction?: PromptAssemblyPendingAction | null;
   pendingApprovalNotice?: string;
   continuity?: PromptAssemblyContinuity | null;
-  additionalSections?: string[];
+  additionalSections?: Array<string | PromptAssemblyAdditionalSection>;
 }
 
 export interface PromptAssemblySectionFootprint {
@@ -87,6 +95,13 @@ export interface PromptAssemblyDiagnostics {
   pendingActionRoute?: string;
   codeSessionId?: string;
   activeSkillCount?: number;
+  skillInstructionSkillIds?: string[];
+  skillResourceSkillIds?: string[];
+  skillResourcePaths?: string[];
+  skillPromptCacheHitCount?: number;
+  skillPromptCacheHits?: string[];
+  skillPromptLoadReasons?: string[];
+  skillArtifactReferences?: SkillPromptSelectionMetadata['artifactReferences'];
   selectedMemoryEntryCount?: number;
   omittedMemoryEntryCount?: number;
   selectedMemoryEntries?: PromptAssemblyMemorySelectionEntry[];
@@ -126,6 +141,7 @@ export interface PromptAssemblyDiagnosticsInput {
   continuity?: PromptAssemblyContinuity | null;
   codeSessionId?: string;
   activeSkillCount?: number;
+  skillPromptSelection?: SkillPromptSelectionMetadata;
   sectionFootprints?: PromptAssemblySectionFootprint[];
   preservedExecutionState?: PromptAssemblyPreservedExecutionState;
   contextCompaction?: {
@@ -162,6 +178,36 @@ function truncateInline(value: string | undefined, maxChars: number): string | u
   if (!trimmed) return undefined;
   if (trimmed.length <= maxChars) return trimmed;
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function normalizeAdditionalSections(
+  sections: Array<string | PromptAssemblyAdditionalSection> | undefined,
+): PromptAssemblyAdditionalSection[] {
+  if (!Array.isArray(sections) || sections.length === 0) return [];
+  return sections
+    .map((section, index): PromptAssemblyAdditionalSection | null => {
+      if (typeof section === 'string') {
+        const content = section.trim();
+        if (!content) return null;
+        return {
+          section: `additional_section_${index + 1}`,
+          content,
+          mode: 'targeted',
+          itemCount: 1,
+        };
+      }
+      if (!section || typeof section !== 'object') return null;
+      const name = section.section?.trim();
+      const content = section.content?.trim();
+      if (!name || !content) return null;
+      return {
+        section: name,
+        content,
+        ...(section.mode?.trim() ? { mode: section.mode.trim() } : {}),
+        ...(typeof section.itemCount === 'number' ? { itemCount: section.itemCount } : {}),
+      };
+    })
+    .filter((section): section is PromptAssemblyAdditionalSection => !!section);
 }
 
 function formatKnowledgeBaseSection(knowledgeBase: PromptAssemblyKnowledgeBase): string {
@@ -218,15 +264,48 @@ function formatActiveSkillBehaviorContracts(skills: PromptAssemblySkill[] | unde
   return sections;
 }
 
+function canonicalizePromptAssemblySkills(skills: PromptAssemblySkill[] | undefined): PromptAssemblySkill[] {
+  if (!skills || skills.length === 0) return [];
+  const deduped = new Map<string, PromptAssemblySkill>();
+  for (const skill of skills) {
+    const id = skill.id.trim();
+    if (!id || deduped.has(id)) continue;
+    deduped.set(id, {
+      ...skill,
+      id,
+      name: skill.name.trim(),
+      summary: skill.summary.trim(),
+      ...(skill.description?.trim() ? { description: skill.description.trim() } : {}),
+      ...(skill.role?.trim() ? { role: skill.role.trim() } : {}),
+      ...(skill.sourcePath?.trim() ? { sourcePath: skill.sourcePath.trim() } : {}),
+    });
+  }
+  return [...deduped.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function buildCanonicalPromptAssemblySkills(skills: PromptAssemblySkill[] | undefined): PromptAssemblySkill[] {
+  return canonicalizePromptAssemblySkills(skills);
+}
+
+export function formatCanonicalActiveSkillIds(skills: PromptAssemblySkill[] | undefined): string[] {
+  return canonicalizePromptAssemblySkills(skills).map((skill) => skill.id);
+}
+
+export function formatCodeSessionActiveSkillsPrompt(skills: PromptAssemblySkill[] | undefined): string {
+  const canonicalSkillIds = formatCanonicalActiveSkillIds(skills);
+  return canonicalSkillIds.length > 0 ? canonicalSkillIds.join(', ') : '(none)';
+}
+
 function formatActiveSkillsSection(skills: PromptAssemblySkill[] | undefined): string {
-  if (!skills || skills.length === 0) return '';
-  const behaviorContracts = formatActiveSkillBehaviorContracts(skills);
+  const canonicalSkills = canonicalizePromptAssemblySkills(skills);
+  if (canonicalSkills.length === 0) return '';
+  const behaviorContracts = formatActiveSkillBehaviorContracts(canonicalSkills);
   const lines = [
     'Before any reply, clarifying question, or tool call: scan the listed skills.',
     '- If a listed skill is clearly relevant, read its SKILL.md at <location> before acting.',
     '- If multiple skills could apply, choose the most specific one first.',
     '- Read at most two SKILL.md files up front unless the task clearly needs more.',
-    ...skills.flatMap((skill) => ([
+    ...canonicalSkills.flatMap((skill) => ([
       '<skill>',
       `  <name>${escapeXml(skill.name)}</name>`,
       `  <id>${escapeXml(skill.id)}</id>`,
@@ -297,29 +376,32 @@ function formatContinuitySection(
 }
 
 export function buildSystemPromptWithContext(input: PromptAssemblyInput): string {
+  const canonicalSkills = canonicalizePromptAssemblySkills(input.activeSkills);
+  const additionalSections = normalizeAdditionalSections(input.additionalSections);
   const sections = [
     input.baseSystemPrompt.trim(),
     ...formatKnowledgeBaseSections(input.knowledgeBases),
-    formatActiveSkillsSection(input.activeSkills),
+    formatActiveSkillsSection(canonicalSkills),
     formatPendingActionSection(input.pendingAction),
     formatContinuitySection(input.continuity),
     formatToolContextSection(input.toolContext),
     formatRuntimeNoticesSection(input.runtimeNotices),
     input.pendingApprovalNotice?.trim() ?? '',
-    ...(input.additionalSections ?? []).map((section) => section.trim()).filter(Boolean),
+    ...additionalSections.map((section) => section.content),
   ].filter(Boolean);
   return sections.join('\n\n');
 }
 
 export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput): PromptAssemblySectionFootprint[] {
+  const canonicalSkills = canonicalizePromptAssemblySkills(input.activeSkills);
   const knowledgeBaseSections = formatKnowledgeBaseSections(input.knowledgeBases);
-  const activeSkillsSection = formatActiveSkillsSection(input.activeSkills);
+  const activeSkillsSection = formatActiveSkillsSection(canonicalSkills);
   const pendingActionSection = formatPendingActionSection(input.pendingAction);
   const continuitySection = formatContinuitySection(input.continuity);
   const toolContextSection = formatToolContextSection(input.toolContext);
   const runtimeNoticesSection = formatRuntimeNoticesSection(input.runtimeNotices);
   const pendingApprovalSection = input.pendingApprovalNotice?.trim() ?? '';
-  const additionalSections = (input.additionalSections ?? []).map((section) => section.trim());
+  const additionalSections = normalizeAdditionalSections(input.additionalSections);
 
   return [
     measureSection('base_system_prompt', input.baseSystemPrompt, { mode: 'explicit' }),
@@ -331,7 +413,7 @@ export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput)
     measureSection(
       'active_skills',
       activeSkillsSection,
-      { mode: 'inventory', itemCount: input.activeSkills?.length ?? 0 },
+      { mode: 'inventory', itemCount: canonicalSkills.length },
     ),
     measureSection('pending_action', pendingActionSection, { mode: 'explicit' }),
     measureSection('continuity', continuitySection, { mode: 'explicit' }),
@@ -342,11 +424,10 @@ export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput)
       { mode: 'explicit', itemCount: input.runtimeNotices?.length ?? 0 },
     ),
     measureSection('pending_approval_notice', pendingApprovalSection, { mode: 'explicit' }),
-    measureSection(
-      'additional_sections',
-      additionalSections.join('\n\n'),
-      { mode: 'targeted', itemCount: additionalSections.filter(Boolean).length },
-    ),
+    ...additionalSections.map((section) => measureSection(section.section, section.content, {
+      mode: section.mode ?? 'targeted',
+      itemCount: section.itemCount,
+    })),
   ];
 }
 
@@ -460,6 +541,37 @@ export function buildPromptAssemblyDiagnostics(
         .slice(0, 12)
     : [];
   const preservedExecutionState = input.preservedExecutionState;
+  const skillPromptSelection = input.skillPromptSelection;
+  const skillInstructionSkillIds = Array.isArray(skillPromptSelection?.instructionSkillIds)
+    ? skillPromptSelection.instructionSkillIds
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 4)
+    : [];
+  const skillResourceSkillIds = Array.isArray(skillPromptSelection?.resourceSkillIds)
+    ? skillPromptSelection.resourceSkillIds
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 4)
+    : [];
+  const skillResourcePaths = Array.isArray(skillPromptSelection?.loadedResourcePaths)
+    ? skillPromptSelection.loadedResourcePaths
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 4)
+    : [];
+  const skillCacheHits = Array.isArray(skillPromptSelection?.cacheHits)
+    ? skillPromptSelection.cacheHits
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 6)
+    : [];
+  const skillLoadReasons = Array.isArray(skillPromptSelection?.loadReasons)
+    ? skillPromptSelection.loadReasons
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 3)
+    : [];
+  const skillArtifactReferences = Array.isArray(skillPromptSelection?.artifactReferences)
+    ? skillPromptSelection.artifactReferences
+        .filter((value) => !!value && typeof value.slug === 'string' && typeof value.skillId === 'string')
+        .slice(0, 3)
+    : [];
   const sectionPreview = sectionFootprints.length > 0
     ? truncateInline(
         sectionFootprints
@@ -492,6 +604,10 @@ export function buildPromptAssemblyDiagnostics(
     ...(typeof input.activeSkillCount === 'number' && input.activeSkillCount > 0
       ? [`skills ${input.activeSkillCount}`]
       : []),
+    ...(skillInstructionSkillIds.length > 0 ? [`skill L2 ${skillInstructionSkillIds.length}`] : []),
+    ...(skillResourcePaths.length > 0 ? [`skill L3 ${skillResourcePaths.length}`] : []),
+    ...(skillArtifactReferences.length > 0 ? [`skill artifacts ${skillArtifactReferences.length}`] : []),
+    ...(skillCacheHits.length > 0 ? [`skill cache ${skillCacheHits.length}`] : []),
     ...(compactionApplied
       ? [`context compacted ${input.contextCompaction?.beforeChars ?? 0}->${input.contextCompaction?.afterChars ?? 0}`]
       : []),
@@ -519,6 +635,14 @@ export function buildPromptAssemblyDiagnostics(
     ...(typeof input.activeSkillCount === 'number' && input.activeSkillCount > 0
       ? [`activeSkills=${input.activeSkillCount}`]
       : []),
+    ...(skillInstructionSkillIds.length > 0 ? [`skillInstructions=${skillInstructionSkillIds.join('|')}`] : []),
+    ...(skillResourceSkillIds.length > 0 ? [`skillResources=${skillResourceSkillIds.join('|')}`] : []),
+    ...(skillResourcePaths.length > 0 ? [`skillResourcePaths=${skillResourcePaths.join('|')}`] : []),
+    ...(skillCacheHits.length > 0 ? [`skillCacheHits=${skillCacheHits.join('|')}`] : []),
+    ...(skillArtifactReferences.length > 0
+      ? [`skillArtifacts=${skillArtifactReferences.map((entry) => `${entry.skillId}:${entry.scope}:${entry.slug}`).join('|')}`]
+      : []),
+    ...(skillLoadReasons.length > 0 ? [`skillLoadReasons="${skillLoadReasons.join(' | ')}"`] : []),
     ...(sectionFootprints.length > 0
       ? [`sections=${sectionFootprints.map((entry) => `${entry.section}:${entry.included ? entry.chars : 0}`).join('|')}`]
       : []),
@@ -557,6 +681,12 @@ export function buildPromptAssemblyDiagnostics(
     ...(input.pendingAction?.route ? { pendingActionRoute: input.pendingAction.route } : {}),
     ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
     ...(typeof input.activeSkillCount === 'number' ? { activeSkillCount: input.activeSkillCount } : {}),
+    ...(skillInstructionSkillIds.length > 0 ? { skillInstructionSkillIds } : {}),
+    ...(skillResourceSkillIds.length > 0 ? { skillResourceSkillIds } : {}),
+    ...(skillResourcePaths.length > 0 ? { skillResourcePaths } : {}),
+    ...(skillCacheHits.length > 0 ? { skillPromptCacheHitCount: skillCacheHits.length, skillPromptCacheHits: skillCacheHits } : {}),
+    ...(skillLoadReasons.length > 0 ? { skillPromptLoadReasons: skillLoadReasons } : {}),
+    ...(skillArtifactReferences.length > 0 ? { skillArtifactReferences } : {}),
     ...(compactionApplied ? { contextCompactionApplied: true } : {}),
     ...(compactionApplied && typeof input.contextCompaction?.beforeChars === 'number'
       ? { contextCharsBeforeCompaction: input.contextCompaction.beforeChars }

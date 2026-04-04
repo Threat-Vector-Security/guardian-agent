@@ -208,6 +208,39 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
   });
 
+  it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
+    const gateway = new IntentGateway();
+    let inspectedSystemPrompt = '';
+
+    await gateway.classify(
+      {
+        content: 'Inspect src/skills/prompt.ts and review the uplift for regressions.',
+        channel: 'cli',
+      },
+      async (messages) => {
+        inspectedSystemPrompt = String(messages[0]?.content || '');
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-coding-review-1',
+            name: 'route_intent',
+            arguments: JSON.stringify({
+              route: 'coding_task',
+              confidence: 'high',
+              operation: 'inspect',
+              summary: 'Reviews a repo-grounded coding change.',
+            }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(inspectedSystemPrompt).toContain('Requests to inspect, explain, review, or plan changes against specific repo files');
+    expect(inspectedSystemPrompt).toContain('Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests.');
+  });
+
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

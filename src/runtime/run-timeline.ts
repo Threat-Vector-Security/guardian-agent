@@ -83,6 +83,14 @@ export interface DashboardRunTimelinePreservedExecutionState {
   maintainedSummarySource?: string;
 }
 
+export interface DashboardRunTimelineSkillArtifactReference {
+  skillId: string;
+  scope: 'global' | 'coding_session';
+  slug: string;
+  title: string;
+  sourceClass: string;
+}
+
 export interface DashboardRunTimelineContextAssembly {
   summary?: string;
   detail?: string;
@@ -94,6 +102,13 @@ export interface DashboardRunTimelineContextAssembly {
   continuityKey?: string;
   activeExecutionRefs?: string[];
   linkedSurfaceCount?: number;
+  skillInstructionSkillIds?: string[];
+  skillResourceSkillIds?: string[];
+  skillResourcePaths?: string[];
+  skillPromptCacheHitCount?: number;
+  skillPromptCacheHits?: string[];
+  skillPromptLoadReasons?: string[];
+  skillArtifactReferences?: DashboardRunTimelineSkillArtifactReference[];
   selectedMemoryEntryCount?: number;
   omittedMemoryEntryCount?: number;
   selectedMemoryEntries?: DashboardRunTimelineContextMemoryEntry[];
@@ -1128,6 +1143,50 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
           : {}),
       }
     : undefined;
+  const skillInstructionSkillIds = Array.isArray(metadata.skillInstructionSkillIds)
+    ? metadata.skillInstructionSkillIds
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  const skillResourceSkillIds = Array.isArray(metadata.skillResourceSkillIds)
+    ? metadata.skillResourceSkillIds
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  const skillResourcePaths = Array.isArray(metadata.skillResourcePaths)
+    ? metadata.skillResourcePaths
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  const skillPromptCacheHits = Array.isArray(metadata.skillPromptCacheHits)
+    ? metadata.skillPromptCacheHits
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  const skillPromptLoadReasons = Array.isArray(metadata.skillPromptLoadReasons)
+    ? metadata.skillPromptLoadReasons
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  const skillArtifactReferences = Array.isArray(metadata.skillArtifactReferences)
+    ? metadata.skillArtifactReferences
+        .filter((entry): entry is DashboardRunTimelineSkillArtifactReference => {
+          return !!entry
+            && typeof entry === 'object'
+            && typeof (entry as Record<string, unknown>).skillId === 'string'
+            && typeof (entry as Record<string, unknown>).slug === 'string'
+            && typeof (entry as Record<string, unknown>).title === 'string'
+            && (((entry as Record<string, unknown>).scope === 'global') || ((entry as Record<string, unknown>).scope === 'coding_session'))
+            && typeof (entry as Record<string, unknown>).sourceClass === 'string';
+        })
+        .map((entry) => ({
+          skillId: entry.skillId.trim(),
+          scope: entry.scope,
+          slug: entry.slug.trim(),
+          title: entry.title.trim(),
+          sourceClass: entry.sourceClass.trim(),
+        }))
+    : [];
   const contextAssembly: DashboardRunTimelineContextAssembly = {
     ...(nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) ? { summary: nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) } : {}),
     ...(nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
@@ -1153,6 +1212,15 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     ...(typeof metadata.linkedSurfaceCount === 'number' && Number.isFinite(metadata.linkedSurfaceCount)
       ? { linkedSurfaceCount: metadata.linkedSurfaceCount }
       : {}),
+    ...(skillInstructionSkillIds.length > 0 ? { skillInstructionSkillIds } : {}),
+    ...(skillResourceSkillIds.length > 0 ? { skillResourceSkillIds } : {}),
+    ...(skillResourcePaths.length > 0 ? { skillResourcePaths } : {}),
+    ...(typeof metadata.skillPromptCacheHitCount === 'number' && Number.isFinite(metadata.skillPromptCacheHitCount)
+      ? { skillPromptCacheHitCount: metadata.skillPromptCacheHitCount }
+      : {}),
+    ...(skillPromptCacheHits.length > 0 ? { skillPromptCacheHits } : {}),
+    ...(skillPromptLoadReasons.length > 0 ? { skillPromptLoadReasons } : {}),
+    ...(skillArtifactReferences.length > 0 ? { skillArtifactReferences } : {}),
     ...(typeof selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount } : {}),
     ...(typeof omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount } : {}),
     ...(selectedMemoryEntries.length > 0 ? { selectedMemoryEntries } : {}),

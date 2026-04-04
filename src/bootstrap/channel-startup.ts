@@ -17,7 +17,7 @@ export type BootstrapCliChannel = Pick<CLIChannel, 'start' | 'stop' | 'send' | '
 export type BootstrapTelegramChannel = Pick<TelegramChannel, 'start' | 'stop' | 'send'>;
 export type BootstrapWebChannel = Pick<
   WebChannel,
-  'start' | 'stop' | 'send' | 'setAuthConfig' | 'getCodingBackendTerminalControl'
+  'start' | 'stop' | 'send' | 'setAuthConfig' | 'getCodingBackendTerminalControl' | 'emitDashboardInvalidation'
 >;
 
 interface LoggerLike {

@@ -122,6 +122,23 @@ describe('validateConfig', () => {
     expect(DEFAULT_CONFIG.assistant.memory.knowledgeBase?.readOnly).toBe(false);
   });
 
+  it('should default automated maintenance to enabled with bounded memory hygiene', () => {
+    expect(DEFAULT_CONFIG.assistant.maintenance).toEqual({
+      enabled: true,
+      sweepIntervalMs: 300000,
+      idleAfterMs: 600000,
+      jobs: {
+        memoryHygiene: {
+          enabled: true,
+          includeGlobalScope: true,
+          includeCodeSessions: true,
+          maxScopesPerSweep: 4,
+          minIntervalMs: 21600000,
+        },
+      },
+    });
+  });
+
   it('should reject invalid assistant security defaults', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
@@ -168,6 +185,35 @@ describe('validateConfig', () => {
     expect(errors).toContain('assistant.security.autoContainment.minSeverity must be one of: high, critical');
     expect(errors).toContain('assistant.security.autoContainment.minConfidence must be between 0 and 1');
     expect(errors).toContain("assistant.security.autoContainment.categories contains unknown category 'unknown-category'");
+  });
+
+  it('should reject invalid automated maintenance settings', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        maintenance: {
+          enabled: true,
+          sweepIntervalMs: 5000,
+          idleAfterMs: 9000,
+          jobs: {
+            memoryHygiene: {
+              enabled: true,
+              includeGlobalScope: true,
+              includeCodeSessions: true,
+              maxScopesPerSweep: 0,
+              minIntervalMs: 1000,
+            },
+          },
+        },
+      },
+    };
+
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.maintenance.sweepIntervalMs must be >= 10000');
+    expect(errors).toContain('assistant.maintenance.idleAfterMs must be >= 10000');
+    expect(errors).toContain('assistant.maintenance.jobs.memoryHygiene.maxScopesPerSweep must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.memoryHygiene.minIntervalMs must be >= 60000');
   });
 
   it('should reject invalid playbook evidence grounding settings', () => {

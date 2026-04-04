@@ -145,7 +145,15 @@ export interface ResolvedCodeSessionContext {
 export type CodeSessionStoreEvent =
   | { type: 'created'; session: CodeSessionRecord }
   | { type: 'updated'; session: CodeSessionRecord }
-  | { type: 'deleted'; sessionId: string; ownerUserId: string };
+  | { type: 'deleted'; sessionId: string; ownerUserId: string }
+  | {
+      type: 'focus_changed';
+      userId: string;
+      principalId?: string;
+      sessionId: string | null;
+      channel: string;
+      surfaceId: string;
+    };
 
 export type CodeSessionStoreListener = (event: CodeSessionStoreEvent) => void;
 
@@ -171,6 +179,7 @@ export interface UpdateCodeSessionInput {
   title?: string;
   workspaceRoot?: string;
   agentId?: string | null;
+  attachmentPolicy?: CodeSessionAttachmentPolicy;
   status?: CodeSessionStatus;
   uiState?: Partial<CodeSessionUiState>;
   workState?: Partial<CodeSessionWorkState>;
@@ -210,6 +219,11 @@ interface StoredAttachmentRow {
 interface MemoryStore {
   sessions: Map<string, CodeSessionRecord>;
   attachments: Map<string, CodeSessionAttachmentRecord>;
+}
+
+function normalizePrincipalId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function defaultUiState(): CodeSessionUiState {
@@ -578,7 +592,7 @@ export class CodeSessionStore {
       resolvedRoot,
       agentId: input.agentId?.trim() || null,
       status: 'idle',
-      attachmentPolicy: input.attachmentPolicy ?? 'explicit_only',
+      attachmentPolicy: input.attachmentPolicy ?? 'same_principal',
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
@@ -659,6 +673,7 @@ export class CodeSessionStore {
       title: input.title !== undefined ? (input.title.trim() || existing.title) : existing.title,
       workspaceRoot: input.workspaceRoot !== undefined ? (input.workspaceRoot.trim() || existing.workspaceRoot) : existing.workspaceRoot,
       agentId: input.agentId !== undefined ? (input.agentId?.trim() || null) : existing.agentId,
+      attachmentPolicy: input.attachmentPolicy ?? existing.attachmentPolicy,
       status: input.status ?? existing.status,
       resolvedRoot: nextResolvedRoot,
       updatedAt: now,
@@ -749,15 +764,26 @@ export class CodeSessionStore {
     surfaceId: string;
     mode?: CodeSessionAttachmentMode;
   }): CodeSessionAttachmentRecord | null {
-    const session = this.getSession(args.sessionId, args.userId);
+    let session = this.getSession(args.sessionId, args.userId);
     if (!session) return null;
+
+    if (session.attachmentPolicy !== 'same_principal') {
+      const promoted = this.updateSession({
+        sessionId: session.id,
+        ownerUserId: session.ownerUserId,
+        attachmentPolicy: 'same_principal',
+      });
+      if (promoted) {
+        session = promoted;
+      }
+    }
 
     const now = this.now();
     const record: CodeSessionAttachmentRecord = {
       id: randomUUID(),
       codeSessionId: session.id,
       userId: args.userId,
-      principalId: args.principalId?.trim() || undefined,
+      principalId: normalizePrincipalId(args.principalId),
       channel: args.channel,
       surfaceId: args.surfaceId,
       mode: args.mode ?? 'controller',
@@ -766,8 +792,13 @@ export class CodeSessionStore {
       active: true,
     };
 
-    if (this.mode === 'sqlite' && this.db && this.insertAttachmentStmt && this.deactivateAttachmentStmt) {
-      this.deactivateAttachmentStmt.run(now, args.userId, args.channel, args.surfaceId);
+    if (session.attachmentPolicy === 'same_principal') {
+      this.deactivateActiveAttachmentsForUser(args.userId, record.principalId, now);
+    } else {
+      this.deactivateSurfaceAttachment(args.userId, args.channel, args.surfaceId, now);
+    }
+
+    if (this.mode === 'sqlite' && this.db && this.insertAttachmentStmt) {
       this.insertAttachmentStmt.run(
         record.id,
         record.codeSessionId,
@@ -789,21 +820,79 @@ export class CodeSessionStore {
     }
 
     this.touchSession(session.id, session.ownerUserId, 'active');
+    this.emit({
+      type: 'focus_changed',
+      userId: args.userId,
+      principalId: record.principalId,
+      sessionId: session.id,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+    });
     return clone(record);
   }
 
   detachSession(args: {
     userId: string;
+    principalId?: string;
     channel: string;
     surfaceId: string;
   }): boolean {
-    if (this.mode === 'sqlite' && this.db && this.deactivateAttachmentStmt) {
-      const result = this.deactivateAttachmentStmt.run(this.now(), args.userId, args.channel, args.surfaceId) as { changes?: number } | undefined;
-      this.securityMonitor?.maybeCheck();
-      return Number(result?.changes ?? 0) > 0;
+    const now = this.now();
+    const localAttachment = this.getActiveSurfaceAttachment(args.userId, args.channel, args.surfaceId);
+    if (localAttachment) {
+      const localSession = this.getSession(localAttachment.codeSessionId, args.userId);
+      if (localSession?.attachmentPolicy === 'same_principal') {
+        const detached = this.deactivateAttachmentsForSession(
+          args.userId,
+          normalizePrincipalId(args.principalId),
+          localAttachment.codeSessionId,
+          now,
+        );
+        if (detached) {
+          this.emit({
+            type: 'focus_changed',
+            userId: args.userId,
+            principalId: normalizePrincipalId(args.principalId),
+            sessionId: null,
+            channel: args.channel,
+            surfaceId: args.surfaceId,
+          });
+        }
+        return detached;
+      }
+      const detached = this.deactivateSurfaceAttachment(args.userId, args.channel, args.surfaceId, now);
+      if (detached) {
+        this.emit({
+          type: 'focus_changed',
+          userId: args.userId,
+          principalId: normalizePrincipalId(args.principalId),
+          sessionId: this.getSharedAttachment(args.userId, normalizePrincipalId(args.principalId))?.codeSessionId ?? null,
+          channel: args.channel,
+          surfaceId: args.surfaceId,
+        });
+      }
+      return detached;
     }
 
-    return this.memory.attachments.delete(toAttachmentKey(args.userId, args.channel, args.surfaceId));
+    const sharedAttachment = this.getSharedAttachment(args.userId, normalizePrincipalId(args.principalId));
+    if (!sharedAttachment) return false;
+    const detached = this.deactivateAttachmentsForSession(
+      args.userId,
+      normalizePrincipalId(args.principalId),
+      sharedAttachment.codeSessionId,
+      now,
+    );
+    if (detached) {
+      this.emit({
+        type: 'focus_changed',
+        userId: args.userId,
+        principalId: normalizePrincipalId(args.principalId),
+        sessionId: null,
+        channel: args.channel,
+        surfaceId: args.surfaceId,
+      });
+    }
+    return detached;
   }
 
   resolveForRequest(args: {
@@ -821,7 +910,8 @@ export class CodeSessionStore {
       return { session };
     }
 
-    const attachment = this.getActiveAttachment(args.userId, args.channel, args.surfaceId);
+    const attachment = this.getActiveSurfaceAttachment(args.userId, args.channel, args.surfaceId)
+      ?? this.getSharedAttachment(args.userId, normalizePrincipalId(args.principalId));
     if (!attachment) return null;
 
     if (args.touchAttachment && attachment.active) {
@@ -836,7 +926,7 @@ export class CodeSessionStore {
     };
   }
 
-  private getActiveAttachment(userId: string, channel: string, surfaceId: string): CodeSessionAttachmentRecord | null {
+  private getActiveSurfaceAttachment(userId: string, channel: string, surfaceId: string): CodeSessionAttachmentRecord | null {
     if (this.mode === 'sqlite' && this.db) {
       const row = this.db.prepare(`
         SELECT *
@@ -851,6 +941,138 @@ export class CodeSessionStore {
 
     const attachment = this.memory.attachments.get(toAttachmentKey(userId, channel, surfaceId));
     return attachment ? clone(attachment) : null;
+  }
+
+  private getSharedAttachment(userId: string, principalId?: string): CodeSessionAttachmentRecord | null {
+    const normalizedPrincipalId = normalizePrincipalId(principalId);
+
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT *
+        FROM code_session_attachments
+        WHERE user_id = ? AND active = 1
+        ORDER BY last_seen_at DESC, attached_at DESC
+      `).all(userId) as unknown as StoredAttachmentRow[];
+      for (const row of rows) {
+        const attachment = this.fromStoredAttachmentRow(row);
+        if (!this.isPrincipalVisibleToRequest(attachment.principalId, normalizedPrincipalId)) continue;
+        const session = this.getSession(attachment.codeSessionId, userId);
+        if (!session || session.attachmentPolicy !== 'same_principal') continue;
+        return attachment;
+      }
+      return null;
+    }
+
+    const attachment = [...this.memory.attachments.values()]
+      .filter((attachment) => attachment.userId === userId && attachment.active)
+      .sort((left, right) => right.lastSeenAt - left.lastSeenAt || right.attachedAt - left.attachedAt)
+      .find((attachment) => {
+        if (!this.isPrincipalVisibleToRequest(attachment.principalId, normalizedPrincipalId)) return false;
+        const session = this.memory.sessions.get(attachment.codeSessionId);
+        return session?.attachmentPolicy === 'same_principal';
+      }) ?? null;
+    return attachment ? clone(attachment) : null;
+  }
+
+  private isPrincipalVisibleToRequest(
+    _attachmentPrincipalId: string | undefined,
+    _requestedPrincipalId: string | undefined,
+  ): boolean {
+    return true;
+  }
+
+  private deactivateSurfaceAttachment(
+    userId: string,
+    channel: string,
+    surfaceId: string,
+    now: number,
+  ): boolean {
+    if (this.mode === 'sqlite' && this.db && this.deactivateAttachmentStmt) {
+      const result = this.deactivateAttachmentStmt.run(now, userId, channel, surfaceId) as { changes?: number } | undefined;
+      this.securityMonitor?.maybeCheck();
+      return Number(result?.changes ?? 0) > 0;
+    }
+
+    return this.memory.attachments.delete(toAttachmentKey(userId, channel, surfaceId));
+  }
+
+  private deactivateActiveAttachmentsForUser(
+    userId: string,
+    principalId: string | undefined,
+    now: number,
+  ): boolean {
+    const normalizedPrincipalId = normalizePrincipalId(principalId);
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT id, principal_id
+        FROM code_session_attachments
+        WHERE user_id = ? AND active = 1
+      `).all(userId) as Array<{ id: string; principal_id: string | null }>;
+      const matchingIds = rows
+        .filter((row) => this.isPrincipalVisibleToRequest(row.principal_id ?? undefined, normalizedPrincipalId))
+        .map((row) => row.id);
+      if (matchingIds.length === 0) return false;
+      const stmt = this.db.prepare(`
+        UPDATE code_session_attachments
+        SET active = 0,
+            last_seen_at = ?
+        WHERE id = ?
+      `);
+      for (const id of matchingIds) {
+        stmt.run(now, id);
+      }
+      this.securityMonitor?.maybeCheck();
+      return true;
+    }
+
+    let changed = false;
+    for (const [key, attachment] of this.memory.attachments.entries()) {
+      if (attachment.userId !== userId || !attachment.active) continue;
+      if (!this.isPrincipalVisibleToRequest(attachment.principalId, normalizedPrincipalId)) continue;
+      this.memory.attachments.delete(key);
+      changed = true;
+    }
+    return changed;
+  }
+
+  private deactivateAttachmentsForSession(
+    userId: string,
+    principalId: string | undefined,
+    sessionId: string,
+    now: number,
+  ): boolean {
+    const normalizedPrincipalId = normalizePrincipalId(principalId);
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT id, principal_id
+        FROM code_session_attachments
+        WHERE user_id = ? AND code_session_id = ? AND active = 1
+      `).all(userId, sessionId) as Array<{ id: string; principal_id: string | null }>;
+      const matchingIds = rows
+        .filter((row) => this.isPrincipalVisibleToRequest(row.principal_id ?? undefined, normalizedPrincipalId))
+        .map((row) => row.id);
+      if (matchingIds.length === 0) return false;
+      const stmt = this.db.prepare(`
+        UPDATE code_session_attachments
+        SET active = 0,
+            last_seen_at = ?
+        WHERE id = ?
+      `);
+      for (const id of matchingIds) {
+        stmt.run(now, id);
+      }
+      this.securityMonitor?.maybeCheck();
+      return true;
+    }
+
+    let changed = false;
+    for (const [key, attachment] of this.memory.attachments.entries()) {
+      if (attachment.userId !== userId || attachment.codeSessionId !== sessionId || !attachment.active) continue;
+      if (!this.isPrincipalVisibleToRequest(attachment.principalId, normalizedPrincipalId)) continue;
+      this.memory.attachments.delete(key);
+      changed = true;
+    }
+    return changed;
   }
 
   private touchAttachmentSeen(attachmentId: string, userId: string, channel: string, surfaceId: string): void {

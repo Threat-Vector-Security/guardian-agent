@@ -235,6 +235,260 @@ describe('CodeSessionStore', () => {
     expect(updated?.workState.compactedSummaryUpdatedAt).toBe(123456);
   });
 
+  it('shares the current coding session across channels by default', () => {
+    const workspaceRoot = createWorkspace('shared-focus', {
+      'package.json': JSON.stringify({ name: 'shared-focus-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Shared Focus',
+      workspaceRoot,
+    });
+
+    store.attachSession({
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      mode: 'controller',
+    });
+
+    const resolvedFromCli = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'cli',
+      surfaceId: 'cli-user',
+      touchAttachment: false,
+    });
+    const resolvedFromTelegram = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'telegram',
+      surfaceId: 'telegram-user',
+      touchAttachment: false,
+    });
+
+    expect(resolvedFromCli?.session.id).toBe(session.id);
+    expect(resolvedFromTelegram?.session.id).toBe(session.id);
+  });
+
+  it('switches the shared current coding session when another channel attaches a different repo', () => {
+    const firstRoot = createWorkspace('shared-switch-first', {
+      'package.json': JSON.stringify({ name: 'first-shared-app' }),
+    });
+    const secondRoot = createWorkspace('shared-switch-second', {
+      'package.json': JSON.stringify({ name: 'second-shared-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'First Shared Focus',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Second Shared Focus',
+      workspaceRoot: secondRoot,
+    });
+
+    store.attachSession({
+      sessionId: firstSession.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      mode: 'controller',
+    });
+    store.attachSession({
+      sessionId: secondSession.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'cli',
+      surfaceId: 'cli-user',
+      mode: 'controller',
+    });
+
+    const resolvedFromWeb = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      touchAttachment: false,
+    });
+
+    expect(resolvedFromWeb?.session.id).toBe(secondSession.id);
+  });
+
+  it('detaching from one channel clears the shared current coding session for the same principal', () => {
+    const workspaceRoot = createWorkspace('shared-detach', {
+      'package.json': JSON.stringify({ name: 'shared-detach-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Shared Detach',
+      workspaceRoot,
+    });
+
+    store.attachSession({
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      mode: 'controller',
+    });
+
+    const detached = store.detachSession({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'cli',
+      surfaceId: 'cli-user',
+    });
+
+    const resolvedFromWeb = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      touchAttachment: false,
+    });
+    const resolvedFromTelegram = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'telegram',
+      surfaceId: 'telegram-user',
+      touchAttachment: false,
+    });
+
+    expect(detached).toBe(true);
+    expect(resolvedFromWeb).toBeNull();
+    expect(resolvedFromTelegram).toBeNull();
+  });
+
+  it('emits a focus-changed event when another surface attaches a shared coding session', () => {
+    const workspaceRoot = createWorkspace('focus-event-attach', {
+      'package.json': JSON.stringify({ name: 'focus-event-attach-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const events: Array<{
+      type: string;
+      sessionId: string | null;
+      userId: string;
+      principalId?: string;
+      channel: string;
+      surfaceId: string;
+    }> = [];
+    store.subscribe((event) => {
+      if (event.type === 'focus_changed') {
+        events.push(event);
+      }
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Focus Attach',
+      workspaceRoot,
+    });
+
+    store.attachSession({
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'telegram',
+      surfaceId: 'telegram-user',
+      mode: 'controller',
+    });
+
+    expect(events).toEqual([{
+      type: 'focus_changed',
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'telegram',
+      surfaceId: 'telegram-user',
+    }]);
+  });
+
+  it('emits a focus-changed event when shared focus is detached from another surface', () => {
+    const workspaceRoot = createWorkspace('focus-event-detach', {
+      'package.json': JSON.stringify({ name: 'focus-event-detach-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const events: Array<{
+      type: string;
+      sessionId: string | null;
+      userId: string;
+      principalId?: string;
+      channel: string;
+      surfaceId: string;
+    }> = [];
+    store.subscribe((event) => {
+      if (event.type === 'focus_changed') {
+        events.push(event);
+      }
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Focus Detach',
+      workspaceRoot,
+    });
+
+    store.attachSession({
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-user',
+      mode: 'controller',
+    });
+    events.length = 0;
+
+    const detached = store.detachSession({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'cli',
+      surfaceId: 'cli-user',
+    });
+
+    expect(detached).toBe(true);
+    expect(events).toEqual([{
+      type: 'focus_changed',
+      sessionId: null,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'cli',
+      surfaceId: 'cli-user',
+    }]);
+  });
+
   it('normalizes Windows and WSL-style workspace roots to the current host format', () => {
     const seedRoot = createWorkspace('normalize-host-path', {
       'package.json': JSON.stringify({ name: 'normalize-host-path' }),

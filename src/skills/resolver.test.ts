@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SkillRegistry } from './registry.js';
 import { SkillResolver } from './resolver.js';
+import type { SkillResolutionInput } from './types.js';
 
 const testDirs: string[] = [];
 
@@ -20,6 +21,16 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function makeInput(overrides: Partial<SkillResolutionInput> = {}): SkillResolutionInput {
+  return {
+    agentId: 'default',
+    channel: 'cli',
+    requestType: 'chat',
+    content: '',
+    ...overrides,
+  };
+}
 
 describe('SkillResolver', () => {
   it('loads local skills and resolves keyword matches', async () => {
@@ -648,5 +659,96 @@ This should not load.
 
     expect(resolved).toHaveLength(2);
     expect(resolved[0]?.id).toBe('weather');
+  });
+
+  it('boosts skills from structured gateway routes', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Can you look into this alert and tell me what happened?',
+      intentRoute: 'security_task',
+    }));
+
+    expect(resolved[0]?.id).toBe('security-triage');
+  });
+
+  it('uses gateway entities to favor the matching managed-provider skill', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Check my email and summarize the newest unread message.',
+      intentRoute: 'email_task',
+      intentEntities: { emailProvider: 'm365' },
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved[0]?.id).toBe('microsoft-365');
+  });
+
+  it('keeps prior active skills sticky across clarification answers', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Use Outlook.',
+      intentRoute: 'email_task',
+      intentTurnRelation: 'clarification_answer',
+      intentResolution: 'ready',
+      intentEntities: { emailProvider: 'm365' },
+      pendingActionKind: 'clarification',
+      priorActiveSkillIds: ['microsoft-365'],
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved[0]?.id).toBe('microsoft-365');
+  });
+
+  it('suppresses unrelated skill churn on needs-clarification turns without prior active skills', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Check my email.',
+      intentRoute: 'email_task',
+      intentResolution: 'needs_clarification',
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved).toHaveLength(0);
+  });
+
+  it('keeps file-grounded review prompts anchored to code-review plus coding-workspace', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Inspect src/skills/prompt.ts, src/chat-agent.ts, and src/runtime/context-assembly.ts. Review the skills progressive disclosure uplift for regressions and missing tests. Do not ask me for a diff first.',
+    }));
+    const resolvedIds = resolved.map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('code-review');
+    expect(resolvedIds).toContain('coding-workspace');
+  });
+
+  it('keeps file-grounded planning prompts anchored to writing-plans plus coding-workspace', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Inspect docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md, src/skills/prompt.ts, src/skills/registry.ts, src/chat-agent.ts, and src/runtime/context-assembly.ts. Write an implementation plan for extending this uplift with another bounded skill resource type.',
+      hasTaggedFileContext: true,
+    }));
+    const resolvedIds = resolved.map((skill) => skill.id);
+
+    expect(resolved[0]?.id).toBe('writing-plans');
+    expect(resolvedIds).toContain('coding-workspace');
   });
 });

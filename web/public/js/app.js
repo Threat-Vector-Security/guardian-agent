@@ -299,7 +299,7 @@ const routes = {
     render: renderCode,
     update: updateCode,
     name: 'code',
-    invalidateTags: [],
+    invalidateTags: ['code-sessions'],
   },
   '/config': {
     render: renderConfig,

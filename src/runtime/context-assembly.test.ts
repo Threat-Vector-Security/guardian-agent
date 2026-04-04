@@ -5,6 +5,8 @@ import {
   buildPromptAssemblyPreservedExecutionState,
   buildPromptAssemblySectionFootprints,
   buildSystemPromptWithContext,
+  formatCanonicalActiveSkillIds,
+  formatCodeSessionActiveSkillsPrompt,
 } from './context-assembly.js';
 
 describe('context assembly', () => {
@@ -81,6 +83,21 @@ describe('context assembly', () => {
     ]);
   });
 
+  it('canonicalizes active skill ids for prompt and code-session views', () => {
+    const skills = [
+      { id: 'verification-before-completion', name: 'Verification', summary: 'Verify work.' },
+      { id: 'writing-plans', name: 'Writing Plans', summary: 'Plan work.' },
+      { id: 'writing-plans', name: 'Writing Plans', summary: 'Plan work.' },
+    ];
+
+    expect(formatCanonicalActiveSkillIds(skills)).toEqual([
+      'verification-before-completion',
+      'writing-plans',
+    ]);
+    expect(formatCodeSessionActiveSkillsPrompt(skills)).toBe('verification-before-completion, writing-plans');
+    expect(formatCodeSessionActiveSkillsPrompt([])).toBe('(none)');
+  });
+
   it('builds bounded prompt assembly diagnostics for trace surfaces', () => {
     const diagnostics = buildPromptAssemblyDiagnostics({
       memoryScope: 'global',
@@ -126,7 +143,25 @@ describe('context assembly', () => {
       sectionFootprints: [
         { section: 'base_system_prompt', chars: 1200, included: true, mode: 'explicit' },
         { section: 'tool_context', chars: 420, included: true, mode: 'inventory' },
+        { section: 'skill_instructions', chars: 640, included: true, mode: 'skill_l2', itemCount: 2 },
       ],
+      skillPromptSelection: {
+        skillIds: ['writing-plans', 'verification-before-completion'],
+        instructionSkillIds: ['writing-plans', 'verification-before-completion'],
+        resourceSkillIds: ['verification-before-completion'],
+        loadedResourcePaths: ['verification-before-completion:templates/verification-report.md'],
+        cacheHits: ['writing-plans:instruction'],
+        loadReasons: ['Loaded one process skill and one domain skill first to preserve role diversity under the L2 cap.'],
+        artifactReferences: [
+          {
+            skillId: 'writing-plans',
+            scope: 'global',
+            slug: 'implementation-plan-style',
+            title: 'Implementation Plan Style',
+            sourceClass: 'operator_curated',
+          },
+        ],
+      },
       preservedExecutionState: {
         objective: 'Fix the importer',
         blockerSummary: 'approval | coding_task | Approve the write operation.',
@@ -164,6 +199,18 @@ describe('context assembly', () => {
     expect(diagnostics.contextCompactionStages).toEqual(['truncate_tool_calls', 'truncate_tool_results']);
     expect(diagnostics.compactedSummaryPreview).toContain('Compacted prior work summary');
     expect(diagnostics.activeExecutionRefs).toEqual(['code_session:Repo Fix', 'pending_action:approval-1']);
+    expect(diagnostics.skillInstructionSkillIds).toEqual(['writing-plans', 'verification-before-completion']);
+    expect(diagnostics.skillResourcePaths).toEqual(['verification-before-completion:templates/verification-report.md']);
+    expect(diagnostics.skillPromptCacheHitCount).toBe(1);
+    expect(diagnostics.skillArtifactReferences).toEqual([
+      {
+        skillId: 'writing-plans',
+        scope: 'global',
+        slug: 'implementation-plan-style',
+        title: 'Implementation Plan Style',
+        sourceClass: 'operator_curated',
+      },
+    ]);
     expect(diagnostics.selectedMemoryEntries?.[0]?.scope).toBe('global');
     expect(buildPromptAssemblyPreservedExecutionState({
       pendingAction: { kind: 'approval', prompt: 'Approve the write operation.', route: 'coding_task' },
@@ -184,8 +231,12 @@ describe('context assembly', () => {
       pendingAction: { kind: 'clarification', prompt: 'Which provider should I use?' },
       continuity: { continuityKey: 'continuity-1' },
       pendingApprovalNotice: 'One unrelated approval is still pending.',
-      additionalSections: ['<extra>hello</extra>'],
+      additionalSections: [{ section: 'skill_instructions', content: '<extra>hello</extra>', mode: 'skill_l2', itemCount: 1 }],
     }).some((entry) => entry.section === 'tool_context' && entry.included && entry.mode === 'inventory')).toBe(true);
+    expect(buildPromptAssemblySectionFootprints({
+      baseSystemPrompt: 'Base prompt.',
+      additionalSections: [{ section: 'skill_instructions', content: '<skill-instructions>hello</skill-instructions>', mode: 'skill_l2', itemCount: 1 }],
+    }).some((entry) => entry.section === 'skill_instructions' && entry.mode === 'skill_l2' && entry.itemCount === 1)).toBe(true);
     expect(diagnostics.sectionFootprints?.length).toBeGreaterThanOrEqual(1);
     expect(diagnostics.preservedExecutionState).toEqual({
       objective: 'Fix the importer',

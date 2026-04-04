@@ -75,6 +75,7 @@ import { CodeWorkspaceTrustService } from './runtime/code-workspace-trust-servic
 import { AnalyticsService } from './runtime/analytics.js';
 import {
   AgentMemoryStore,
+  classifyMemoryEntrySource,
   type MemoryContextLoadResult,
   type MemoryContextQuery,
 } from './runtime/agent-memory-store.js';
@@ -136,6 +137,7 @@ import {
   buildPromptAssemblyPreservedExecutionState,
   buildPromptAssemblySectionFootprints,
   buildSystemPromptWithContext,
+  formatCodeSessionActiveSkillsPrompt,
   type PromptAssemblyDiagnostics,
   type PromptAssemblyKnowledgeBase,
 } from './runtime/context-assembly.js';
@@ -147,8 +149,9 @@ import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
 import { SkillRegistry } from './skills/registry.js';
+import { buildSkillPromptMaterial, createSkillPromptMaterialCache } from './skills/prompt.js';
 import { SkillResolver } from './skills/resolver.js';
-import type { ResolvedSkill } from './skills/types.js';
+import type { ResolvedSkill, SkillPromptArtifactContext, SkillPromptMaterialResult } from './skills/types.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
   buildPendingApprovalMetadata,
@@ -648,6 +651,110 @@ type DirectIntentShadowCandidate =
     }
   }
 
+  private trackSkillPromptMaterial(
+    message: UserMessage,
+    route: string | undefined,
+    material: SkillPromptMaterialResult | undefined,
+  ): void {
+    if (!this.analytics || !material) return;
+    const instructionCount = material.metadata.instructionSkillIds.length;
+    const resourceCount = material.metadata.loadedResourcePaths.length;
+    const artifactCount = material.metadata.artifactReferences.length;
+    const cacheHitCount = material.metadata.cacheHits.length;
+    if (instructionCount === 0 && resourceCount === 0 && artifactCount === 0 && cacheHitCount === 0) return;
+    this.analytics.track({
+      type: 'skill_prompt_material_loaded',
+      channel: message.channel,
+      canonicalUserId: message.userId,
+      channelUserId: message.userId,
+      agentId: this.id,
+      metadata: {
+        ...(route?.trim() ? { route: route.trim() } : {}),
+        skillIds: material.metadata.skillIds,
+        instructionSkillIds: material.metadata.instructionSkillIds,
+        resourceSkillIds: material.metadata.resourceSkillIds,
+        loadedResourcePaths: material.metadata.loadedResourcePaths,
+        cacheHits: material.metadata.cacheHits,
+        loadReasons: material.metadata.loadReasons,
+        artifactReferences: material.metadata.artifactReferences,
+      },
+    });
+  }
+
+  private isSkillArtifactEntryStale(entry: {
+    artifact?: {
+      nextReviewAt?: string;
+      updatedAt?: string;
+      staleAfterDays?: number;
+    };
+    createdAt: string;
+  }): boolean {
+    const nextReviewAt = Date.parse(entry.artifact?.nextReviewAt ?? '');
+    if (Number.isFinite(nextReviewAt)) {
+      return nextReviewAt <= Date.now();
+    }
+    const staleAfterDays = typeof entry.artifact?.staleAfterDays === 'number'
+      && Number.isFinite(entry.artifact.staleAfterDays)
+      ? Math.max(1, Math.round(entry.artifact.staleAfterDays))
+      : null;
+    if (!staleAfterDays) return false;
+    const referenceMs = Date.parse(entry.artifact?.updatedAt || entry.createdAt);
+    if (!Number.isFinite(referenceMs)) return false;
+    return (referenceMs + staleAfterDays * 24 * 60 * 60 * 1000) <= Date.now();
+  }
+
+  private resolveSkillArtifactReferences(
+    skills: readonly ResolvedSkill[],
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+  ): SkillPromptArtifactContext[] {
+    if (!this.skillRegistry || skills.length === 0 || !this.memoryStore) return [];
+    const contexts: SkillPromptArtifactContext[] = [];
+
+    for (const skill of skills) {
+      const loadedSkill = this.skillRegistry.get(skill.id);
+      const references = loadedSkill?.manifest.artifactReferences;
+      if (!Array.isArray(references) || references.length === 0) continue;
+
+      for (const reference of references) {
+        const scope = reference.scope === 'coding_session' ? 'coding_session' : 'global';
+        const store = scope === 'coding_session'
+          ? (resolvedCodeSession ? this.codeSessionMemoryStore : undefined)
+          : this.memoryStore;
+        const agentId = scope === 'coding_session'
+          ? resolvedCodeSession?.session.id
+          : this.stateAgentId;
+        if (!store || !agentId) continue;
+
+        const match = store.getEntries(agentId)
+          .find((entry) => {
+            if ((entry.artifact?.kind ?? '') !== 'wiki_page') return false;
+            if ((entry.artifact?.slug ?? '').trim() !== reference.slug) return false;
+            const sourceClass = classifyMemoryEntrySource(entry);
+            if (sourceClass !== 'operator_curated' && sourceClass !== 'canonical') return false;
+            if (this.isSkillArtifactEntryStale(entry)) return false;
+            return true;
+          });
+        if (!match) continue;
+
+        const sourceClass = classifyMemoryEntrySource(match);
+        const title = match.artifact?.title?.trim() || reference.title?.trim() || reference.slug;
+        const content = match.summary?.trim() || match.content.trim();
+        if (!content) continue;
+        contexts.push({
+          skillId: skill.id,
+          scope,
+          slug: reference.slug,
+          title,
+          sourceClass,
+          content,
+          truncated: false,
+        });
+      }
+    }
+
+    return contexts;
+  }
+
   private shouldPreferAnswerFirstForSkills(skills: readonly ResolvedSkill[]): boolean {
     return skills.some((skill) => (
       skill.id === 'writing-plans'
@@ -871,15 +978,57 @@ type DirectIntentShadowCandidate =
       effectiveCodeContext?.sessionId,
     );
     const groundedScopedMessage = scopedMessage;
-    const preResolvedSkills = this.skillResolver?.resolve({
+    let preResolvedSkills: ResolvedSkill[] = [];
+    const resolveSkillsForCurrentContext = (options?: {
+      gateway?: IntentGatewayRecord | null;
+      pendingAction?: PendingActionRecord | null;
+      continuityThread?: ContinuityThreadRecord | null;
+      priorActiveSkills?: readonly ResolvedSkill[];
+    }): ResolvedSkill[] => this.skillResolver?.resolve({
       agentId: this.id,
       channel: message.channel,
       requestType: 'chat',
       content: groundedScopedMessage.content,
+      codeSessionAttached: !!resolvedCodeSession,
+      hasTaggedFileContext: (requestedCodeContext?.fileReferences?.length ?? 0) > 0,
       enabledManagedProviders: this.enabledManagedProviders,
       availableCapabilities: new Set(ctx.capabilities),
+      intentRoute: options?.gateway?.decision.route,
+      intentTurnRelation: options?.gateway?.decision.turnRelation,
+      intentResolution: options?.gateway?.decision.resolution,
+      intentEntities: {
+        ...(options?.gateway?.decision.entities.emailProvider
+          ? { emailProvider: options.gateway.decision.entities.emailProvider }
+          : {}),
+        ...(options?.gateway?.decision.entities.codingBackend
+          ? { codingBackend: options.gateway.decision.entities.codingBackend }
+          : {}),
+        ...(options?.gateway?.decision.entities.toolName
+          ? { toolName: options.gateway.decision.entities.toolName }
+          : {}),
+        ...(options?.gateway?.decision.entities.profileId
+          ? { profileId: options.gateway.decision.entities.profileId }
+          : {}),
+        ...(options?.gateway?.decision.entities.uiSurface
+          ? { uiSurface: options.gateway.decision.entities.uiSurface }
+          : {}),
+      },
+      pendingActionKind: options?.pendingAction?.blocker.kind,
+      continuityFocusSummary: options?.continuityThread?.focusSummary,
+      continuityLastActionableRequest: options?.continuityThread?.lastActionableRequest,
+      priorActiveSkillIds: options?.priorActiveSkills?.map((skill) => skill.id) ?? [],
     }) ?? [];
-    this.trackResolvedSkills(message, 'chat', preResolvedSkills, 'resolved');
+    const trackResolvedSkillsIfChanged = (nextSkills: readonly ResolvedSkill[]): void => {
+      const currentIds = preResolvedSkills.map((skill) => skill.id);
+      const nextIds = nextSkills.map((skill) => skill.id);
+      if (currentIds.length === nextIds.length && currentIds.every((id, index) => id === nextIds[index])) {
+        preResolvedSkills = [...nextSkills];
+        return;
+      }
+      preResolvedSkills = [...nextSkills];
+      this.trackResolvedSkills(message, 'chat', preResolvedSkills, 'resolved');
+    };
+    trackResolvedSkillsIfChanged(resolveSkillsForCurrentContext());
     this.syncPendingApprovalsFromExecutor(
       conversationUserId,
       conversationChannel,
@@ -939,6 +1088,12 @@ type DirectIntentShadowCandidate =
         pendingAction,
         continuityThread,
       });
+      trackResolvedSkillsIfChanged(resolveSkillsForCurrentContext({
+        gateway: earlyGateway,
+        pendingAction,
+        continuityThread,
+        priorActiveSkills: preResolvedSkills,
+      }));
       const pendingActionSwitchDecision = await this.tryHandlePendingActionSwitchDecision({
         message,
         pendingAction,
@@ -1147,6 +1302,7 @@ type DirectIntentShadowCandidate =
       codingMemorySelection?: MemoryContextLoadResult;
       queryPreview?: string;
     };
+    type PromptSkillMaterialBundle = SkillPromptMaterialResult | undefined;
     const maintainedSummarySource = resolvedCodeSession?.session.workState.compactedSummary?.trim()
       ? 'code_session_compacted_summary'
       : resolvedCodeSession?.session.workState.planSummary?.trim()
@@ -1158,6 +1314,7 @@ type DirectIntentShadowCandidate =
       baseSystemPrompt: string,
       promptKnowledge: PromptKnowledgeBundle | undefined,
       runtimeSkills: ResolvedSkill[],
+      skillPromptMaterial: PromptSkillMaterialBundle,
       toolContext: string,
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>,
     ) => buildPromptAssemblySectionFootprints({
@@ -1176,10 +1333,12 @@ type DirectIntentShadowCandidate =
       pendingAction: this.buildPendingActionPromptContext(pendingAction),
       pendingApprovalNotice,
       continuity: summarizeContinuityThreadForGateway(continuityThread),
+      additionalSections: skillPromptMaterial?.additionalSections,
     });
     const buildContextDiagnostics = (input: {
       promptKnowledge: PromptKnowledgeBundle | undefined;
       runtimeSkills: ResolvedSkill[];
+      skillPromptMaterial: PromptSkillMaterialBundle;
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
       baseSystemPrompt: string;
@@ -1193,6 +1352,7 @@ type DirectIntentShadowCandidate =
       codingMemorySelection: input.promptKnowledge?.codingMemorySelection,
       knowledgeBaseQuery: input.promptKnowledge?.queryPreview,
       activeSkillCount: input.runtimeSkills.length,
+      ...(input.skillPromptMaterial ? { skillPromptSelection: input.skillPromptMaterial.metadata } : {}),
       pendingAction,
       continuityThread,
       codeSessionId: input.codeSessionId,
@@ -1200,6 +1360,7 @@ type DirectIntentShadowCandidate =
         input.baseSystemPrompt,
         input.promptKnowledge,
         input.runtimeSkills,
+        input.skillPromptMaterial,
         input.toolContext,
         input.runtimeNotices,
       ),
@@ -1253,6 +1414,7 @@ type DirectIntentShadowCandidate =
     let skipDirectTools = false;
     let enrichedSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
     let activeSkills: ResolvedSkill[] = [];
+    let skillPromptMaterial: SkillPromptMaterialResult | undefined;
 
     if (isContinuation && suspended) {
       llmMessages = [...suspended.llmMessages];
@@ -1277,6 +1439,17 @@ type DirectIntentShadowCandidate =
       const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
       if (activeSkills.length > 0) {
         this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
+        skillPromptMaterial = buildSkillPromptMaterial(
+          this.skillRegistry!,
+          {
+            skills: activeSkills,
+            requestText: routedScopedMessage.content,
+            ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
+            artifactReferences: this.resolveSkillArtifactReferences(activeSkills, resolvedCodeSession),
+          },
+          createSkillPromptMaterialCache(),
+        );
+        this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, skillPromptMaterial);
       }
       const toolContext = this.tools?.getToolContext({
         userId: conversationUserId,
@@ -1296,10 +1469,12 @@ type DirectIntentShadowCandidate =
         pendingAction,
         pendingApprovalNotice,
         continuityThread,
+        additionalSections: skillPromptMaterial?.additionalSections,
       });
       contextAssemblyMeta = buildContextDiagnostics({
         promptKnowledge,
         runtimeSkills: activeSkills,
+        skillPromptMaterial,
         toolContext,
         runtimeNotices,
         baseSystemPrompt,
@@ -1691,6 +1866,24 @@ type DirectIntentShadowCandidate =
       try {
         const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+        const workerSkillPromptMaterial = skillPromptMaterial
+          ?? (
+            preResolvedSkills.length > 0 && this.skillRegistry
+              ? buildSkillPromptMaterial(
+                this.skillRegistry,
+                {
+                  skills: preResolvedSkills,
+                  requestText: routedScopedMessage.content,
+                  ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
+                  artifactReferences: this.resolveSkillArtifactReferences(preResolvedSkills, resolvedCodeSession),
+                },
+                createSkillPromptMaterialCache(),
+              )
+              : undefined
+          );
+        if (!skillPromptMaterial && workerSkillPromptMaterial) {
+          this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, workerSkillPromptMaterial);
+        }
         const workerToolContext = this.tools?.getToolContext({
           userId: conversationUserId,
           principalId: message.principalId ?? conversationUserId,
@@ -1702,6 +1895,7 @@ type DirectIntentShadowCandidate =
         const workerContextAssemblyMeta = buildContextDiagnostics({
           promptKnowledge,
           runtimeSkills: preResolvedSkills,
+          skillPromptMaterial: workerSkillPromptMaterial,
           toolContext: workerToolContext,
           runtimeNotices: workerRuntimeNotices,
           baseSystemPrompt: workerSystemPrompt,
@@ -1724,6 +1918,7 @@ type DirectIntentShadowCandidate =
           history: priorHistory,
           knowledgeBases: promptKnowledge.knowledgeBases,
           activeSkills: preResolvedSkills,
+          additionalSections: workerSkillPromptMaterial?.additionalSections,
           toolContext: workerToolContext,
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
           continuity: continuitySummary,
@@ -3003,7 +3198,12 @@ type DirectIntentShadowCandidate =
     pendingAction?: PendingActionRecord | null;
     pendingApprovalNotice?: string;
     continuityThread?: ContinuityThreadRecord | null;
-    additionalSections?: string[];
+    additionalSections?: Array<{
+      section: string;
+      content: string;
+      mode?: string;
+      itemCount?: number;
+    }>;
   }): string {
     return buildSystemPromptWithContext({
       baseSystemPrompt: input.baseSystemPrompt,
@@ -3041,9 +3241,11 @@ type DirectIntentShadowCandidate =
     const workspaceTrustReview = session.workState.workspaceTrustReview;
     const effectiveTrustState = getEffectiveCodeWorkspaceTrustState(workspaceTrust, workspaceTrustReview);
     const allowRepoDerivedPromptContent = effectiveTrustState === 'trusted' || !workspaceTrust;
-    const activeSkills = Array.isArray(session.workState.activeSkills) && session.workState.activeSkills.length > 0
-      ? session.workState.activeSkills.join(', ')
-      : '(none)';
+    const activeSkills = formatCodeSessionActiveSkillsPrompt(
+      Array.isArray(session.workState.activeSkills)
+        ? session.workState.activeSkills.map((id) => ({ id, name: id, summary: id }))
+        : [],
+    );
     return [
       '<code-session>',
       'This chat is attached to a backend-owned coding session.',

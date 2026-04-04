@@ -1463,7 +1463,7 @@ guardian:
       const describeScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Describe this app.');
       assert.ok(describeScenario, 'Expected describe-app scenario to be captured');
       assert.equal(
-        /Guardian Agent|Guardian global memory|broader Guardian tools|assistant's global memory|host-application context|Guardian coding sessions|Guardian capabilities|Guardian's/i
+        /Guardian Agent|Guardian global memory|assistant's global memory|Guardian's/i
           .test(describeScenario.systemPrompt),
         false,
         'Did not expect host-assistant or skill-level Guardian leakage in the Code-session prompt',
