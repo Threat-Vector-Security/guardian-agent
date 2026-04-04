@@ -28,6 +28,7 @@ import {
 import {
   buildChatMessagesFromHistory,
   buildSystemPromptWithContext,
+  type PromptAssemblyAdditionalSection,
   type PromptAssemblyContinuity,
   type PromptAssemblyKnowledgeBase,
   type PromptAssemblyPendingAction,
@@ -83,6 +84,7 @@ export interface WorkerMessageHandleParams {
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   knowledgeBases: PromptAssemblyKnowledgeBase[];
   activeSkills: Array<{ id: string; name: string; summary: string; description?: string; role?: string; sourcePath?: string }>;
+  additionalSections?: PromptAssemblyAdditionalSection[];
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
   continuity?: PromptAssemblyContinuity | null;
@@ -740,6 +742,7 @@ function buildWorkerSystemPrompt(params: WorkerMessageHandleParams): string {
     baseSystemPrompt: params.systemPrompt,
     knowledgeBases: params.knowledgeBases,
     activeSkills: params.activeSkills,
+    additionalSections: params.additionalSections,
     toolContext: params.toolContext,
     runtimeNotices: params.runtimeNotices,
     pendingAction: params.pendingAction,

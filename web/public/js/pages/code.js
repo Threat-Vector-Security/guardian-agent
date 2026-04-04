@@ -176,17 +176,28 @@ function notifyGuardianChatFocus(sessionId, detail = {}) {
 
 async function syncGuardianChatSessionFocus(sessionId, detail = {}) {
   const normalizedSessionId = normalizeCodeSessionId(sessionId);
+  let confirmedSessionId = normalizedSessionId;
   if (normalizedSessionId) {
-    await api.codeSessionAttach(normalizedSessionId, guardianChatSurfacePayload({ mode: 'controller' }));
+    const result = await api.codeSessionAttach(normalizedSessionId, guardianChatSurfacePayload({ mode: 'controller' }));
+    const attachedSessionId = normalizeCodeSessionId(result?.snapshot?.session?.id);
+    if (!result?.success || !attachedSessionId) {
+      throw new Error('Failed to switch the shared coding workspace.');
+    }
+    confirmedSessionId = attachedSessionId;
   } else {
-    await api.codeSessionDetach(guardianChatSurfacePayload());
+    const result = await api.codeSessionDetach(guardianChatSurfacePayload());
+    if (!result?.success) {
+      throw new Error('Failed to detach the shared coding workspace.');
+    }
+    confirmedSessionId = null;
   }
-  notifyGuardianChatFocus(normalizedSessionId, detail);
+  notifyGuardianChatFocus(confirmedSessionId, detail);
   notifyCodeSessionsChanged({
     ...detail,
-    sessionId: normalizedSessionId,
+    sessionId: confirmedSessionId,
     surfaceId: GUARDIAN_CHAT_SURFACE_ID,
   });
+  return confirmedSessionId;
 }
 
 function resetActiveSessionViewState() {
@@ -1671,9 +1682,7 @@ function bindCodeSessionListeners() {
     if (detail?.surfaceId && detail.surfaceId !== GUARDIAN_CHAT_SURFACE_ID) return;
     if (detail?.origin === CODE_WORKBENCH_SURFACE_ID && sessionSwitchPromise) return;
     void (async () => {
-      await refreshSessionsIndex({
-        preferredCurrentSessionId: pendingSessionSwitchId,
-      }).catch(() => {});
+      await refreshSessionsIndex().catch(() => {});
       const session = getActiveSession();
       if (session) {
         await refreshSessionData(session).catch(() => {});
@@ -2999,10 +3008,10 @@ function mergeSessionsFromServer(payload, options = {}) {
   codeState.attachedSessionId = serverCurrentSessionId;
   const preferredActiveId = preferredCurrentSessionId && sessions.some((session) => session.id === preferredCurrentSessionId)
     ? preferredCurrentSessionId
-    : previouslyViewedSessionId
-      ? previouslyViewedSessionId
     : serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
       ? serverCurrentSessionId
+    : previouslyViewedSessionId
+      ? previouslyViewedSessionId
     : (codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
       ? codeState.activeSessionId
       : sessions[0]?.id || null);
@@ -3073,12 +3082,15 @@ async function switchCodeSession(sessionId, { rerender = true } = {}) {
   let switchPromise = null;
   switchPromise = (async () => {
     try {
-      await syncGuardianChatSessionFocus(nextSessionId, {
+      const confirmedSessionId = await syncGuardianChatSessionFocus(nextSessionId, {
         origin: CODE_WORKBENCH_SURFACE_ID,
       });
-      await refreshSessionsIndex({ preferredCurrentSessionId: nextSessionId });
+      await refreshSessionsIndex();
+      if (confirmedSessionId !== normalizeCodeSessionId(codeState.activeSessionId)) {
+        setActiveSessionLocally(confirmedSessionId, { rerender: false });
+      }
       const activeSession = getActiveSession();
-      if (activeSession?.id === nextSessionId) {
+      if (activeSession?.id === confirmedSessionId) {
         await refreshSessionData(activeSession);
       } else {
         rerenderFromState();
@@ -3197,7 +3209,7 @@ export async function renderCode(container) {
       saveState(codeState);
     }
     const requestedSessionId = normalizeCodeSessionId(getRequestedCodeSessionId());
-    const sessionsIndex = await refreshSessionsIndex({
+    await refreshSessionsIndex({
       ...(requestedSessionId ? { preferredCurrentSessionId: requestedSessionId } : {}),
     }).catch(() => {
       saveState(codeState);
@@ -3209,11 +3221,6 @@ export async function renderCode(container) {
     let activeSession = getActiveSession();
     if (activeSession) {
       activeSession = await refreshSessionSnapshot(activeSession.id).catch(() => activeSession);
-      // Restore the selected web coding session only if the backend currently has
-      // no focused session for Guardian chat, such as after a backend restart.
-      if (activeSession?.id && !sessionsIndex?.currentSessionId) {
-        await syncGuardianChatSessionFocus(activeSession.id).catch(() => {});
-      }
     }
     if (!isActiveCodeView(container, lifecycleId)) return;
     if (activeSession) {
@@ -3295,12 +3302,29 @@ function focusRequestedCodeContext(container) {
 
 export function updateCode() {
   if (!currentContainer) return;
-  const activeSession = getActiveSession();
-  if (activeSession) {
-    void refreshSessionData(activeSession);
-  } else {
-    void refreshSessionsIndex().then(() => rerenderFromState()).catch(() => {});
-  }
+  const container = currentContainer;
+  const previousActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
+  const previousAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+  const previousSessionSignature = (codeState.sessions || []).map((session) => session.id).join('|');
+  void (async () => {
+    await refreshSessionsIndex().catch(() => null);
+    if (currentContainer !== container) return;
+    const nextActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
+    const nextAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+    const nextSessionSignature = (codeState.sessions || []).map((session) => session.id).join('|');
+    if (previousActiveSessionId !== nextActiveSessionId
+      || previousAttachedSessionId !== nextAttachedSessionId
+      || previousSessionSignature !== nextSessionSignature) {
+      await renderCode(container);
+      return;
+    }
+    const activeSession = getActiveSession();
+    if (activeSession) {
+      await refreshSessionData(activeSession);
+    } else {
+      rerenderFromState();
+    }
+  })().catch(() => {});
 }
 
 export function teardownCode() {

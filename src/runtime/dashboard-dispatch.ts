@@ -226,6 +226,19 @@ export function createDashboardMessageDispatcher(args: {
       continuityKey?: string;
       activeExecutionRefs?: string[];
       linkedSurfaceCount?: number;
+      skillInstructionSkillIds?: string[];
+      skillResourceSkillIds?: string[];
+      skillResourcePaths?: string[];
+      skillPromptCacheHitCount?: number;
+      skillPromptCacheHits?: string[];
+      skillPromptLoadReasons?: string[];
+      skillArtifactReferences?: Array<{
+        skillId: string;
+        scope: 'global' | 'coding_session';
+        slug: string;
+        title: string;
+        sourceClass: string;
+      }>;
       selectedMemoryEntryCount?: number;
       omittedMemoryEntryCount?: number;
       contextCompactionApplied?: boolean;
@@ -266,6 +279,72 @@ export function createDashboardMessageDispatcher(args: {
             }
           : {}),
         ...(typeof record.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: record.linkedSurfaceCount } : {}),
+        ...(Array.isArray(record.skillInstructionSkillIds)
+          ? {
+              skillInstructionSkillIds: record.skillInstructionSkillIds
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 4),
+            }
+          : {}),
+        ...(Array.isArray(record.skillResourceSkillIds)
+          ? {
+              skillResourceSkillIds: record.skillResourceSkillIds
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 4),
+            }
+          : {}),
+        ...(Array.isArray(record.skillResourcePaths)
+          ? {
+              skillResourcePaths: record.skillResourcePaths
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 4),
+            }
+          : {}),
+        ...(typeof record.skillPromptCacheHitCount === 'number'
+          ? { skillPromptCacheHitCount: record.skillPromptCacheHitCount }
+          : {}),
+        ...(Array.isArray(record.skillPromptCacheHits)
+          ? {
+              skillPromptCacheHits: record.skillPromptCacheHits
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 6),
+            }
+          : {}),
+        ...(Array.isArray(record.skillPromptLoadReasons)
+          ? {
+              skillPromptLoadReasons: record.skillPromptLoadReasons
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 3),
+            }
+          : {}),
+        ...(Array.isArray(record.skillArtifactReferences)
+          ? {
+              skillArtifactReferences: record.skillArtifactReferences
+                .filter((entry): entry is {
+                  skillId: string;
+                  scope: 'global' | 'coding_session';
+                  slug: string;
+                  title: string;
+                  sourceClass: string;
+                } => {
+                  return !!entry
+                    && typeof entry === 'object'
+                    && typeof (entry as Record<string, unknown>).skillId === 'string'
+                    && (((entry as Record<string, unknown>).scope === 'global') || ((entry as Record<string, unknown>).scope === 'coding_session'))
+                    && typeof (entry as Record<string, unknown>).slug === 'string'
+                    && typeof (entry as Record<string, unknown>).title === 'string'
+                    && typeof (entry as Record<string, unknown>).sourceClass === 'string';
+                })
+                .map((entry) => ({
+                  skillId: entry.skillId,
+                  scope: entry.scope,
+                  slug: entry.slug,
+                  title: entry.title,
+                  sourceClass: entry.sourceClass,
+                }))
+                .slice(0, 3),
+            }
+          : {}),
         ...(typeof record.selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount: record.selectedMemoryEntryCount } : {}),
         ...(typeof record.omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount: record.omittedMemoryEntryCount } : {}),
         ...(record.contextCompactionApplied === true ? { contextCompactionApplied: true } : {}),

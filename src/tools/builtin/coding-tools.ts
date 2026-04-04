@@ -601,8 +601,8 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   context.registry.register(
     {
       name: 'code_session_current',
-      description: 'Show the coding session currently attached to this chat surface, if any.',
-      shortDescription: 'Show the current attached coding session for this surface.',
+      description: 'Show the current coding session for this user. Surfaces use the shared same-principal focus by default, so web, CLI, and Telegram stay aligned unless a request explicitly targets another session.',
+      shortDescription: 'Show the current coding session for this user across chat surfaces.',
       risk: 'read_only',
       category: 'coding',
       parameters: {
@@ -761,6 +761,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       }
       const detached = context.codeSessionStore.detachSession({
         userId: ownerUserId,
+        principalId: request.principalId,
         channel,
         surfaceId: context.getCodeSessionSurfaceId(request),
       });

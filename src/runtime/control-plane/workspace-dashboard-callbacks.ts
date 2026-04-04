@@ -242,6 +242,7 @@ export function createWorkspaceDashboardCallbacks(
       const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
       const success = options.codeSessionStore.detachSession({
         userId: canonicalUserId,
+        principalId,
         channel: resolvedChannel,
         surfaceId: surfaceId?.trim() || options.getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
       });

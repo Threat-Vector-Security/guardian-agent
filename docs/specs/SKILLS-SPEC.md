@@ -1,6 +1,6 @@
 # Native Skills Specification
 
-**Status:** Implemented foundation with trigger-aware routing and skill telemetry
+**Status:** Implemented progressive disclosure with trigger-aware routing, runtime-owned drilldown, and prompt diagnostics
 **Current Files:** `src/skills/registry.ts`, `src/skills/resolver.ts`, `src/skills/prompt.ts`, `src/skills/types.ts`
 **Depends on:** ToolExecutor, MCP Client, Guardian prompt composition, channel config surfaces
 
@@ -106,6 +106,9 @@ Bundle contents are treated as reviewed static artifacts. Persistent runtime dat
     "intents": ["security_triage"]
   },
   "tools": ["intel_summary", "intel_findings"],
+  "artifactReferences": [
+    { "slug": "incident-runbook-style", "scope": "global" }
+  ],
   "requiredCapabilities": ["network_access"],
   "risk": "informational"
 }
@@ -117,6 +120,7 @@ Bundle contents are treated as reviewed static artifacts. Persistent runtime dat
 - `appliesTo` controls where the skill may be considered.
 - `triggers` controls automatic selection.
 - `tools` declares tool dependencies for planning and validation.
+- `artifactReferences` declares reviewed memory/wiki pages that may be surfaced as provenance-aware supporting context for that skill.
 - `requiredCapabilities` documents minimum permission expectations.
 - `risk` is `informational` or `operational`.
 
@@ -128,15 +132,18 @@ Bundle contents are treated as reviewed static artifacts. Persistent runtime dat
 
 - `SkillRegistry` - loads manifests and bundle metadata from configured roots
 - `SkillResolver` - selects relevant skills for a request
-- prompt composition in `src/index.ts` - injects an active-skill catalog into the system prompt
+- `src/skills/prompt.ts` - builds compact catalogs plus bounded runtime-owned L2/L3 drilldown material
+- prompt composition in `src/chat-agent.ts` / `src/worker/worker-session.ts` - injects the compact catalog plus bounded drilldown sections into the assembled system prompt
 
 ### Dispatch Flow
 
 1. Runtime receives a user message or a scheduled task (tool, playbook, or assistant turn).
-2. `SkillResolver` ranks candidate skills using explicit enablement, trigger matches, trigger-oriented descriptions, explicit skill mentions, agent, channel, and request type.
-3. Selected skills are exposed to the model as a compact catalog: skill name, description, role, and `SKILL.md` path.
-4. The prompt builder instructs the model to read relevant `SKILL.md` files with `fs_read` before acting.
-5. If the model decides to act, it still must call built-in tools or MCP tools through `ToolExecutor`.
+2. `SkillResolver` ranks candidate skills using explicit enablement, trigger matches, trigger-oriented descriptions, explicit skill mentions, agent, channel, request type, and structured runtime signals from the Intent Gateway, pending-action state, and continuity summaries.
+3. Selected skills are exposed to the model as one compact canonical catalog: skill name, description, role, and `SKILL.md` path.
+4. The runtime may then inject bounded L2 `SKILL.md` excerpts for at most a small number of winning skills, preferring one `process` skill and one `domain` skill when both are relevant.
+5. The runtime may inject bounded L3 bundle resources only when the request or route justifies them. Request-local cache reuse keeps repeated reads stable inside the same request.
+6. If the skill declares reviewed `artifactReferences`, the runtime may inject bounded operator-curated or canonical wiki content for those pages, while preserving provenance and excluding inactive/stale pages.
+7. If the model decides to act, it still must call built-in tools or MCP tools through `ToolExecutor`.
 
 ### Prompt Discipline
 
@@ -145,11 +152,12 @@ Shared prompt/context contract:
 
 - Default to metadata catalog injection, not full `SKILL.md` body injection.
 - Descriptions should be written for triggerability, not marketing copy; the resolver and prompt both rely on them.
-- The model should read relevant skills before replying, asking clarifying questions, or calling tools.
-- The model should read at most two `SKILL.md` files up front: one `process` skill and one `domain` skill.
-- If both a process skill and a domain skill are relevant, the process skill should be read first.
+- The runtime owns ordinary progressive disclosure for active skills. The model still sees the compact catalog, but ordinary L2/L3 loading no longer depends primarily on raw bundle-path `fs_read`.
+- Default bounded caps are small: up to two L2 instruction loads, up to two L3 resource loads, and char caps per loaded artifact.
+- If both a process skill and a domain skill are relevant, the process skill should normally be loaded first.
 - Prefer first-party skills over reviewed imports when both cover the same area, unless the user explicitly names the imported product or skill.
-- Referenced files should be loaded only when needed.
+- Referenced files should be loaded only when needed and should stay bounded to registered bundle contents.
+- Reviewed `artifactReferences` are optional supporting context only. They do not turn memory/wiki pages into executable skill bodies.
 - Record active skill IDs in response metadata for debuggability.
 
 ### Authoring Guidance
@@ -186,6 +194,7 @@ Current implementation records active skill IDs in chat response metadata when s
 
 - skill resolution
 - prompt injection of resolved skills
+- runtime-owned skill prompt material loading
 - direct reads of skill bundle files via `fs_read`
 - tool execution while one or more skills are active
 
@@ -215,11 +224,16 @@ assistant:
 - Manifest-disabled reviewed imports still load into the registry for inspection and explicit enablement later.
 - Chat requests can auto-activate matching skills using keywords, explicit skill mentions, and trigger-oriented description terms.
 - Resolver ranking prefers more specific matches and uses normalized phrase boundaries to avoid obvious substring false positives.
+- Resolver ranking also consumes structured runtime signals from the Intent Gateway, pending-action state, and continuity summaries.
 - Reviewed imports are available but intentionally harder to trigger than first-party skills unless the user explicitly names them or the request has multiple strong matching signals.
 - Active skills are injected as a catalog with descriptions, optional roles, and `SKILL.md` locations.
+- The runtime also injects bounded L2 skill instructions and bounded L3 bundle resources for the most relevant active skills instead of relying primarily on raw bundle-path reads.
+- Request-local skill prompt cache reuse avoids redundant skill bundle rereads during one request.
+- Reviewed `artifactReferences` can surface operator-curated or canonical wiki pages as provenance-aware supporting context when explicitly declared by the skill and still current.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.
 - First-party skill bundles can include reusable `references/`, `templates/`, `scripts/`, and `assets/`.
-- Analytics events are emitted for skill resolution, prompt injection, direct bundle reads, and tool execution while skills are active.
+- Prompt assembly diagnostics and the run timeline expose which skill instructions, resources, cache hits, and artifact-backed references influenced a request.
+- Analytics events are emitted for skill resolution, prompt injection, runtime-owned prompt material loading, direct bundle reads, and tool execution while skills are active.
 - Skills can be inspected and toggled through CLI and web API surfaces.
 
 ### Bundled Skills

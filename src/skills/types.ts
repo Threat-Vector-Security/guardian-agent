@@ -31,8 +31,20 @@ export interface SkillManifest {
   tools?: string[];
   requiredCapabilities?: string[];
   requiredManagedProvider?: string;
+  artifactReferences?: SkillArtifactReference[];
   risk?: SkillRisk;
   _upstream?: SkillUpstreamMetadata;
+}
+
+export interface SkillArtifactReference {
+  slug: string;
+  scope?: 'global' | 'coding_session';
+  title?: string;
+}
+
+export interface SkillResourceEntry {
+  path: string;
+  kind: 'reference' | 'template' | 'example' | 'asset' | 'script';
 }
 
 export interface LoadedSkill {
@@ -41,6 +53,86 @@ export interface LoadedSkill {
   instructionPath: string;
   instruction: string;
   summary: string;
+  resources: SkillResourceEntry[];
+}
+
+export interface SkillMaterialLoad {
+  skillId: string;
+  instruction?: {
+    path: string;
+    content: string;
+    truncated: boolean;
+  };
+  resources: Array<{
+    path: string;
+    kind: SkillResourceEntry['kind'];
+    content: string;
+    truncated: boolean;
+  }>;
+  cacheHits: string[];
+}
+
+export interface SkillMaterialLoadOptions {
+  maxInstructionChars?: number;
+  maxResourceChars?: number;
+  maxResources?: number;
+  maxInstructionLoads?: number;
+  maxResourceLoads?: number;
+  maxArtifactLoads?: number;
+  maxArtifactChars?: number;
+}
+
+export type SkillPromptArtifactSourceClass = 'canonical' | 'operator_curated' | 'derived' | 'linked_output';
+
+export interface SkillPromptArtifactContext {
+  skillId: string;
+  scope: 'global' | 'coding_session';
+  slug: string;
+  title: string;
+  sourceClass: SkillPromptArtifactSourceClass;
+  content: string;
+  truncated: boolean;
+}
+
+export interface SkillPromptMaterialSection {
+  section: 'skill_instructions' | 'skill_resources' | 'skill_artifacts';
+  content: string;
+  mode: 'skill_l2' | 'skill_l3' | 'artifact';
+  itemCount: number;
+}
+
+export interface SkillPromptSelectionMetadata {
+  skillIds: string[];
+  instructionSkillIds: string[];
+  resourceSkillIds: string[];
+  loadedResourcePaths: string[];
+  cacheHits: string[];
+  loadReasons: string[];
+  artifactReferences: Array<{
+    skillId: string;
+    scope: 'global' | 'coding_session';
+    slug: string;
+    title: string;
+    sourceClass: SkillPromptArtifactSourceClass;
+  }>;
+}
+
+export interface SkillPromptMaterialResult {
+  additionalSections: SkillPromptMaterialSection[];
+  metadata: SkillPromptSelectionMetadata;
+}
+
+export interface SkillPromptMaterialInput {
+  skills: readonly ResolvedSkill[];
+  requestText: string;
+  route?: string;
+  loadOptions?: SkillMaterialLoadOptions;
+  artifactReferences?: readonly SkillPromptArtifactContext[];
+}
+
+export interface SkillPromptMaterialCache {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
 }
 
 export interface SkillStatus {
@@ -64,8 +156,24 @@ export interface SkillResolutionInput {
   channel: string;
   requestType: string;
   content: string;
+  codeSessionAttached?: boolean;
+  hasTaggedFileContext?: boolean;
   enabledManagedProviders?: ReadonlySet<string>;
   availableCapabilities?: ReadonlySet<string>;
+  intentRoute?: string;
+  intentTurnRelation?: string;
+  intentResolution?: string;
+  intentEntities?: {
+    emailProvider?: string;
+    codingBackend?: string;
+    toolName?: string;
+    profileId?: string;
+    uiSurface?: string;
+  };
+  pendingActionKind?: string;
+  continuityFocusSummary?: string;
+  continuityLastActionableRequest?: string;
+  priorActiveSkillIds?: readonly string[];
 }
 
 export interface ResolvedSkill {

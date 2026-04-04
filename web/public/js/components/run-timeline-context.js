@@ -40,6 +40,37 @@ export function normalizeRunTimelineContextAssembly(value) {
     knowledgeBaseQueryPreview: typeof value.knowledgeBaseQueryPreview === 'string' ? value.knowledgeBaseQueryPreview.trim() : '',
     continuityKey: typeof value.continuityKey === 'string' ? value.continuityKey.trim() : '',
     linkedSurfaceCount: Number.isFinite(value.linkedSurfaceCount) ? Number(value.linkedSurfaceCount) : 0,
+    skillInstructionSkillIds: Array.isArray(value.skillInstructionSkillIds)
+      ? value.skillInstructionSkillIds.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 4)
+      : [],
+    skillResourceSkillIds: Array.isArray(value.skillResourceSkillIds)
+      ? value.skillResourceSkillIds.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 4)
+      : [],
+    skillResourcePaths: Array.isArray(value.skillResourcePaths)
+      ? value.skillResourcePaths.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 4)
+      : [],
+    skillPromptCacheHitCount: Number.isFinite(value.skillPromptCacheHitCount) ? Number(value.skillPromptCacheHitCount) : 0,
+    skillPromptCacheHits: Array.isArray(value.skillPromptCacheHits)
+      ? value.skillPromptCacheHits.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 6)
+      : [],
+    skillPromptLoadReasons: Array.isArray(value.skillPromptLoadReasons)
+      ? value.skillPromptLoadReasons.filter((entry) => typeof entry === 'string' && entry.trim()).slice(0, 3)
+      : [],
+    skillArtifactReferences: Array.isArray(value.skillArtifactReferences)
+      ? value.skillArtifactReferences
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null;
+          const skillId = typeof entry.skillId === 'string' ? entry.skillId.trim() : '';
+          const scope = entry.scope === 'global' || entry.scope === 'coding_session' ? entry.scope : '';
+          const slug = typeof entry.slug === 'string' ? entry.slug.trim() : '';
+          const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+          const sourceClass = typeof entry.sourceClass === 'string' ? entry.sourceClass.trim() : '';
+          if (!skillId || !scope || !slug || !title || !sourceClass) return null;
+          return { skillId, scope, slug, title, sourceClass };
+        })
+        .filter(Boolean)
+        .slice(0, 3)
+      : [],
     contextCompactionApplied: value.contextCompactionApplied === true,
     contextCharsBeforeCompaction: Number.isFinite(value.contextCharsBeforeCompaction)
       ? Number(value.contextCharsBeforeCompaction)
@@ -62,6 +93,9 @@ export function normalizeRunTimelineContextAssembly(value) {
     || contextAssembly.memoryScope
     || contextAssembly.knowledgeBaseQueryPreview
     || contextAssembly.continuityKey
+    || contextAssembly.skillInstructionSkillIds.length > 0
+    || contextAssembly.skillResourcePaths.length > 0
+    || contextAssembly.skillArtifactReferences.length > 0
     || contextAssembly.contextCompactionApplied
     || contextAssembly.linkedSurfaceCount > 0
     || contextAssembly.selectedMemoryEntries.length > 0
@@ -88,6 +122,10 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
   if (context.codingMemoryLoaded === true) pills.push('coding memory loaded');
   if (context.codingMemoryLoaded === false) pills.push('coding memory empty');
   if (context.codingMemoryLoaded === true && context.codingMemoryChars > 0) pills.push(`${context.codingMemoryChars} coding chars`);
+  if (context.skillInstructionSkillIds.length > 0) pills.push(`${context.skillInstructionSkillIds.length} skill L2`);
+  if (context.skillResourcePaths.length > 0) pills.push(`${context.skillResourcePaths.length} skill L3`);
+  if (context.skillArtifactReferences.length > 0) pills.push(`${context.skillArtifactReferences.length} skill artifact${context.skillArtifactReferences.length === 1 ? '' : 's'}`);
+  if (context.skillPromptCacheHitCount > 0) pills.push(`${context.skillPromptCacheHitCount} skill cache hit${context.skillPromptCacheHitCount === 1 ? '' : 's'}`);
   if (context.contextCompactionApplied) pills.push('context compacted');
   if (context.contextCompactionApplied && context.contextCharsBeforeCompaction > 0 && context.contextCharsAfterCompaction > 0) {
     pills.push(`${context.contextCharsBeforeCompaction} -> ${context.contextCharsAfterCompaction} chars`);
@@ -105,6 +143,15 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
         : ''}
       ${context.knowledgeBaseQueryPreview
         ? `<div style="color:var(--text-secondary);margin-top:0.2rem"><strong>Query:</strong> ${esc(context.knowledgeBaseQueryPreview)}</div>`
+        : ''}
+      ${context.skillInstructionSkillIds.length > 0
+        ? `<div style="color:var(--text-secondary);margin-top:0.2rem"><strong>Skill instructions:</strong> ${esc(context.skillInstructionSkillIds.join(' | '))}</div>`
+        : ''}
+      ${context.skillResourcePaths.length > 0
+        ? `<div style="color:var(--text-secondary);margin-top:0.2rem"><strong>Skill resources:</strong> ${esc(context.skillResourcePaths.join(' | '))}</div>`
+        : ''}
+      ${context.skillPromptLoadReasons.length > 0
+        ? `<div style="color:var(--text-secondary);margin-top:0.2rem"><strong>Skill loading:</strong> ${esc(context.skillPromptLoadReasons.join(' | '))}</div>`
         : ''}
       ${context.compactedSummaryPreview
         ? `<div style="color:var(--text-secondary);margin-top:0.2rem"><strong>Compaction:</strong> ${esc(context.compactedSummaryPreview)}</div>`
@@ -124,6 +171,19 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
                 ${Array.isArray(entry.matchReasons) && entry.matchReasons.length > 0
                   ? `<div class="ops-task-sub" style="margin-top:0.2rem">Matched: ${esc(entry.matchReasons.join(' | '))}</div>`
                   : ''}
+              </div>
+            `).join('')}
+          </div>`
+        : ''}
+      ${Array.isArray(context.skillArtifactReferences) && context.skillArtifactReferences.length > 0
+        ? `<div style="margin-top:0.45rem;display:flex;flex-direction:column;gap:0.32rem">
+            ${context.skillArtifactReferences.map((entry) => `
+              <div style="padding:0.35rem 0.45rem;border:1px solid var(--border);border-radius:var(--radius-sm, 8px);background:var(--bg-secondary)">
+                <div style="display:flex;gap:0.4rem;justify-content:space-between;align-items:center;flex-wrap:wrap">
+                  <strong>${esc(entry.title)}</strong>
+                  <span class="ops-task-sub">${esc(`${entry.skillId} | ${entry.scope === 'coding_session' ? 'coding' : 'global'} | ${entry.sourceClass}`)}</span>
+                </div>
+                <div class="ops-task-sub" style="margin-top:0.2rem">${esc(entry.slug)}</div>
               </div>
             `).join('')}
           </div>`

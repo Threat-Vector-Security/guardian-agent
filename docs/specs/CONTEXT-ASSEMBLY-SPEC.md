@@ -174,13 +174,13 @@ Execution-context prompt assembly currently follows this order:
 1. base system prompt
 2. persistent knowledge base
 3. coding-session memory
-4. active skills summary
+4. active skills summary (L1 compact catalog)
 5. pending action context
 6. continuity context
 7. tool context
 8. runtime notices
 9. pending approval notice
-10. additional targeted sections
+10. additional targeted sections such as bounded skill drilldown, artifact-backed references, or other request-specific extensions
 
 This order is intentional:
 - identity and safety instructions first
@@ -207,7 +207,7 @@ The main chat prompt now exposes a compact deferred-tool inventory. Full schemas
 
 ### Skill Loading
 
-Selected skills are injected as compact metadata. The model is expected to read `SKILL.md` only for clearly relevant skills.
+Selected skills are injected as a compact L1 catalog first. The runtime may then add bounded L2 `SKILL.md` excerpts and bounded L3 bundle resources for the winning skills when the request justifies them. Those sections must remain explicitly bounded, cache-aware, and visible in prompt assembly diagnostics rather than behaving like hidden prompt magic.
 
 ### Memory Selection
 

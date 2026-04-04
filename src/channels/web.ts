@@ -487,6 +487,10 @@ export class WebChannel implements ChannelAdapter {
     this.emitUIInvalidation(topics, reason, path);
   }
 
+  emitDashboardInvalidation(topics: string[], reason: string, path: string): void {
+    this.emitUIInvalidation(topics, reason, path);
+  }
+
   /** Check if a request origin is in the allowed list. */
   private isOriginAllowed(origin: string): boolean {
     if (this.allowedOrigins.length === 0) return false;

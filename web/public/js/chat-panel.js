@@ -30,6 +30,11 @@ let currentChatContext = 'dashboard';
 let refreshCurrentCodeSessions = null;
 let refreshCodeSessionsPromise = null;
 
+function isCodeSessionInvalidation(payload) {
+  const topics = Array.isArray(payload?.topics) ? payload.topics : [];
+  return topics.includes('code-sessions');
+}
+
 export async function initChatPanel(container) {
   container.innerHTML = '<div class="loading">Loading Chat...</div>';
 
@@ -198,6 +203,11 @@ export async function initChatPanel(container) {
   window.addEventListener(CODE_SESSION_FOCUS_CHANGED_EVENT, (event) => {
     const sessionId = event instanceof CustomEvent ? event.detail?.sessionId : null;
     currentCodeSessionId = normalizeCodeSessionId(sessionId);
+    void refreshCodeSessions();
+  });
+
+  onSSE('ui.invalidate', (payload) => {
+    if (!isCodeSessionInvalidation(payload)) return;
     void refreshCodeSessions();
   });
 

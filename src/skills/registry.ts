@@ -1,8 +1,18 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { createLogger } from '../util/logging.js';
-import type { LoadedSkill, SkillManifest, SkillStatus } from './types.js';
+import type {
+  SkillArtifactReference,
+  LoadedSkill,
+  SkillManifest,
+  SkillMaterialLoad,
+  SkillMaterialLoadOptions,
+  SkillPromptMaterialCache,
+  SkillResourceEntry,
+  SkillStatus,
+} from './types.js';
 
 const log = createLogger('skills:registry');
 
@@ -54,6 +64,62 @@ export class SkillRegistry {
     return true;
   }
 
+  loadPromptMaterial(
+    skillIds: readonly string[],
+    options: SkillMaterialLoadOptions = {},
+    cache?: SkillPromptMaterialCache,
+  ): SkillMaterialLoad[] {
+    const maxInstructionChars = Math.max(400, options.maxInstructionChars ?? 2400);
+    const maxResourceChars = Math.max(200, options.maxResourceChars ?? 1600);
+    const maxResources = Math.max(0, options.maxResources ?? 2);
+    const seen = new Set<string>();
+    const loads: SkillMaterialLoad[] = [];
+
+    for (const skillId of skillIds) {
+      const normalizedId = skillId.trim();
+      if (!normalizedId || seen.has(normalizedId) || !this.isEnabled(normalizedId)) continue;
+      seen.add(normalizedId);
+      const skill = this.skills.get(normalizedId);
+      if (!skill) continue;
+
+      const cacheHits: string[] = [];
+      const instructionCacheKey = `${normalizedId}:instruction`;
+      const cachedInstruction = cache?.get(instructionCacheKey);
+      const instructionSource = cachedInstruction ?? skill.instruction;
+      if (cachedInstruction) cacheHits.push(instructionCacheKey);
+      else cache?.set(instructionCacheKey, skill.instruction);
+
+      const resources = skill.resources.slice(0, maxResources).map((resource) => {
+        const resourceCacheKey = `${normalizedId}:resource:${resource.path}`;
+        const cachedResource = cache?.get(resourceCacheKey);
+        const content = cachedResource ?? readSkillResourceSync(skill.rootDir, resource.path);
+        if (cachedResource) cacheHits.push(resourceCacheKey);
+        else cache?.set(resourceCacheKey, content);
+        const truncated = truncateContent(content, maxResourceChars);
+        return {
+          path: resource.path,
+          kind: resource.kind,
+          content: truncated.content,
+          truncated: truncated.truncated,
+        };
+      });
+
+      const truncatedInstruction = truncateContent(instructionSource, maxInstructionChars);
+      loads.push({
+        skillId: normalizedId,
+        instruction: {
+          path: relative(skill.rootDir, skill.instructionPath) || 'SKILL.md',
+          content: truncatedInstruction.content,
+          truncated: truncatedInstruction.truncated,
+        },
+        resources,
+        cacheHits,
+      });
+    }
+
+    return loads;
+  }
+
   async loadFromRoots(roots: readonly string[], disabledSkillIds: readonly string[] = []): Promise<void> {
     this.skills.clear();
     this.runtimeDisabled.clear();
@@ -89,6 +155,47 @@ export class SkillRegistry {
   }
 }
 
+function truncateContent(content: string, maxChars: number): { content: string; truncated: boolean } {
+  const normalized = content.trim();
+  if (normalized.length <= maxChars) return { content: normalized, truncated: false };
+  return {
+    content: `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`,
+    truncated: true,
+  };
+}
+
+function readSkillResourceSync(rootDir: string, resourcePath: string): string {
+  const absolutePath = join(rootDir, resourcePath);
+  return readFileSync(absolutePath, 'utf-8').trim();
+}
+
+function collectSkillResources(skillDir: string): SkillResourceEntry[] {
+  const resourceDirs: Array<{ dir: string; kind: SkillResourceEntry['kind'] }> = [
+    { dir: 'references', kind: 'reference' },
+    { dir: 'templates', kind: 'template' },
+    { dir: 'examples', kind: 'example' },
+    { dir: 'assets', kind: 'asset' },
+    { dir: 'scripts', kind: 'script' },
+  ];
+  const entries: SkillResourceEntry[] = [];
+  for (const { dir, kind } of resourceDirs) {
+    const absoluteDir = join(skillDir, dir);
+    if (!existsSync(absoluteDir)) continue;
+    const names = readdirSync(absoluteDir, { withFileTypes: true });
+    for (const entry of names) {
+      if (!entry.isFile()) continue;
+      entries.push({ path: `${dir}/${entry.name}`, kind });
+    }
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function chooseDefaultSkillResources(instruction: string, resources: SkillResourceEntry[]): SkillResourceEntry[] {
+  const normalizedInstruction = instruction.toLowerCase();
+  const referenced = resources.filter((resource) => normalizedInstruction.includes(resource.path.toLowerCase()));
+  return referenced.length > 0 ? referenced : resources;
+}
+
 async function loadSkill(skillDir: string): Promise<LoadedSkill | null> {
   const manifestPath = join(skillDir, 'skill.json');
   const instructionPath = join(skillDir, 'SKILL.md');
@@ -116,12 +223,14 @@ async function loadSkill(skillDir: string): Promise<LoadedSkill | null> {
       log.warn({ skillDir, id: manifest.id }, 'Skipping skill with empty SKILL.md');
       return null;
     }
+    const resources = chooseDefaultSkillResources(normalizedInstruction, collectSkillResources(skillDir));
     return {
       manifest,
       rootDir: skillDir,
       instructionPath,
       instruction: normalizedInstruction,
       summary: summarizeSkill(normalizedInstruction, 700),
+      resources,
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
@@ -147,7 +256,7 @@ function summarizeSkill(text: string, maxChars: number): string {
 }
 
 function loadNativeSkill(manifestRaw: string, instructionRaw: string): { manifest: SkillManifest; instruction: string } | null {
-  const manifest = JSON.parse(manifestRaw) as SkillManifest;
+  const manifest = normalizeManifest(JSON.parse(manifestRaw) as SkillManifest);
   const instruction = stripFrontmatter(instructionRaw).trim();
   return { manifest, instruction };
 }
@@ -161,7 +270,7 @@ function loadFrontmatterSkill(instructionRaw: string): { manifest: SkillManifest
   const instruction = parsed.body.trim();
   const heading = extractFirstHeading(instruction);
   return {
-    manifest: {
+    manifest: normalizeManifest({
       id,
       name: heading || humanizeIdentifier(id),
       version: '0.0.0-compat',
@@ -171,9 +280,39 @@ function loadFrontmatterSkill(instructionRaw: string): { manifest: SkillManifest
       appliesTo: {
         requestTypes: ['chat'],
       },
-    },
+    }),
     instruction,
   };
+}
+
+function normalizeManifest(manifest: SkillManifest): SkillManifest {
+  const artifactReferences = normalizeArtifactReferences((manifest as { artifactReferences?: unknown }).artifactReferences);
+  return {
+    ...manifest,
+    ...(artifactReferences.length > 0 ? { artifactReferences } : {}),
+  };
+}
+
+function normalizeArtifactReferences(value: unknown): SkillArtifactReference[] {
+  if (!Array.isArray(value)) return [];
+  const refs: SkillArtifactReference[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const slug = entry.trim();
+      if (!slug) continue;
+      refs.push({ slug, scope: 'global' });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const slug = typeof entry.slug === 'string' ? entry.slug.trim() : '';
+    if (!slug) continue;
+    refs.push({
+      slug,
+      ...(entry.scope === 'coding_session' ? { scope: 'coding_session' } : { scope: 'global' }),
+      ...(typeof entry.title === 'string' && entry.title.trim() ? { title: entry.title.trim() } : {}),
+    });
+  }
+  return refs;
 }
 
 function parseFrontmatter(instructionRaw: string): { data: Record<string, unknown>; body: string } | null {

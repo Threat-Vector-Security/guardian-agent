@@ -44,6 +44,320 @@ export class SkillResolver {
   }
 }
 
+const ROUTE_SKILL_BONUSES: Partial<Record<string, { process?: number; domain?: number }>> = {
+  automation_authoring: { process: 5, domain: 1 },
+  automation_control: { process: 4, domain: 1 },
+  automation_output_task: { process: 1, domain: 2 },
+  browser_task: { domain: 3 },
+  workspace_task: { domain: 3 },
+  email_task: { domain: 4 },
+  search_task: { domain: 4 },
+  memory_task: { domain: 3 },
+  filesystem_task: { domain: 2 },
+  coding_task: { process: 4, domain: 3 },
+  coding_session_control: { domain: 2 },
+  security_task: { process: 2, domain: 5 },
+};
+
+const ROUTE_TRIGGER_KEYWORDS: Partial<Record<string, string[]>> = {
+  automation_authoring: ['automation', 'workflow', 'schedule', 'cron'],
+  automation_control: ['automation', 'workflow', 'schedule', 'cron'],
+  automation_output_task: ['automation output', 'run output', 'previous run'],
+  browser_task: ['browser', 'web page', 'website'],
+  workspace_task: ['calendar', 'drive', 'docs', 'sheets', 'contacts', 'workspace'],
+  email_task: ['email', 'gmail', 'outlook', 'mail'],
+  search_task: ['search', 'research', 'documentation', 'docs', 'wiki'],
+  memory_task: ['memory', 'remember', 'recall'],
+  filesystem_task: ['file', 'filesystem', 'path', 'directory'],
+  coding_task: ['code', 'repo', 'bug', 'debug', 'patch', 'refactor', 'test'],
+  coding_session_control: ['coding session', 'workspace'],
+  security_task: ['security', 'incident', 'alert', 'threat', 'firewall'],
+};
+
+const CLARIFICATION_TURN_RELATIONS = new Set(['clarification_answer', 'correction']);
+
+const STICKY_PENDING_ACTION_KINDS = new Set(['approval', 'clarification', 'workspace_switch']);
+
+const PROVIDER_ENTITY_HINTS: Record<string, string[]> = {
+  gws: ['gmail', 'google workspace', 'calendar', 'drive', 'docs', 'sheets', 'contacts'],
+  m365: ['outlook', 'microsoft 365', 'm365', 'onedrive', 'calendar', 'contacts'],
+};
+
+const CODING_BACKEND_HINTS: Record<string, string[]> = {
+  codex: ['codex'],
+  'claude-code': ['claude code'],
+  'gemini-cli': ['gemini', 'gemini cli'],
+  aider: ['aider'],
+};
+
+const UI_SURFACE_HINTS: Record<string, string[]> = {
+  automations: ['automation', 'workflow', 'schedule'],
+  dashboard: ['dashboard'],
+  config: ['config', 'configuration', 'settings'],
+  chat: ['chat'],
+};
+
+const TOOL_NAME_HINTS: Record<string, string[]> = {
+  web_search: ['search', 'research', 'current information'],
+  web_fetch: ['article', 'url', 'page', 'documentation'],
+  doc_search: ['docs', 'documentation', 'wiki', 'knowledge base'],
+  gws: ['gmail', 'google workspace', 'calendar', 'drive', 'docs', 'sheets'],
+  m365: ['outlook', 'microsoft 365', 'm365', 'onedrive'],
+  outlook_draft: ['outlook', 'draft'],
+  outlook_send: ['outlook', 'send'],
+  automation_save: ['automation', 'workflow', 'schedule'],
+  workflow_upsert: ['automation', 'workflow'],
+  task_create: ['automation', 'schedule'],
+  code_plan: ['code', 'plan', 'implementation'],
+  code_git_diff: ['diff', 'patch', 'pr'],
+  code_test: ['test', 'failing test'],
+  code_lint: ['lint'],
+};
+
+const PROFILE_HINTS: Record<string, string[]> = {
+  social: ['social'],
+};
+
+const MEMORY_KEYWORD_SKILL_IDS = new Set(['knowledge-search', 'preferences-memory']);
+
+const TOOL_CATEGORY_HINTS: Record<string, string[]> = {
+  automation: ['automation', 'workflow', 'schedule'],
+  browser: ['browser', 'website', 'web page'],
+  email: ['email', 'gmail', 'outlook', 'mail'],
+  search: ['search', 'research', 'documentation', 'wiki'],
+  security: ['security', 'incident', 'alert', 'threat'],
+  coding: ['code', 'repo', 'patch', 'bug', 'test'],
+};
+
+const REPO_PATH_HINT_PATTERN = /\b(?:src|web|docs|scripts|skills|policies|native|test|tests|dist|package\.json|tsconfig(?:\.[a-z0-9_-]+)?\.json)(?:[\\/][^\s:;,)\]}]+)?/i;
+const CODE_FILE_HINT_PATTERN = /\b[^\s:;,)\]}]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yaml|yml|rs|py|sh|html|css|scss)\b/i;
+const FILE_GROUNDED_CODING_ACTION_PATTERN = /\b(review|regressions?|missing tests?|implementation plan|inspect|explain|patch|diff|pull request|pr|refactor|bugfix)\b/i;
+
+function bonusForRole(route: string | undefined, role: LoadedSkill['manifest']['role']): number {
+  if (!route) return 0;
+  const routeBonus = ROUTE_SKILL_BONUSES[route];
+  if (!routeBonus) return 0;
+  return role === 'process' ? (routeBonus.process ?? 0) : (routeBonus.domain ?? 0);
+}
+
+function hasAnyMatch(normalizedContent: string, candidates: readonly string[]): boolean {
+  return candidates.some((candidate) => containsNormalizedPhrase(normalizedContent, candidate));
+}
+
+function scoreIntentEntityMatches(
+  manifest: LoadedSkill['manifest'],
+  input: SkillResolutionInput,
+  normalizedContent: string,
+): { score: number; specificity: number } {
+  const entities = input.intentEntities;
+  if (!entities) return { score: 0, specificity: 0 };
+
+  let score = 0;
+  let specificity = 0;
+
+  const emailProvider = entities.emailProvider?.trim().toLowerCase();
+  if (emailProvider && hasAnyMatch(normalizedContent, PROVIDER_ENTITY_HINTS[emailProvider] ?? [])) {
+    score += 2;
+    specificity += 4;
+  }
+
+  const codingBackend = entities.codingBackend?.trim().toLowerCase();
+  if (codingBackend && hasAnyMatch(normalizedContent, CODING_BACKEND_HINTS[codingBackend] ?? [])) {
+    score += 2;
+    specificity += 4;
+  }
+
+  const uiSurface = entities.uiSurface?.trim().toLowerCase();
+  if (uiSurface && hasAnyMatch(normalizedContent, UI_SURFACE_HINTS[uiSurface] ?? [])) {
+    score += 1;
+    specificity += 2;
+  }
+
+  const toolName = entities.toolName?.trim();
+  if (toolName && hasAnyMatch(normalizedContent, TOOL_NAME_HINTS[toolName] ?? [])) {
+    score += 1;
+    specificity += 2;
+  }
+
+  const profileId = entities.profileId?.trim().toLowerCase();
+  if (profileId && hasAnyMatch(normalizedContent, PROFILE_HINTS[profileId] ?? [])) {
+    score += 1;
+    specificity += 1;
+  }
+
+  for (const keyword of manifest.triggers?.keywords ?? []) {
+    if (!containsNormalizedPhrase(normalizedContent, keyword)) continue;
+    if (emailProvider && hasAnyMatch(normalizeTriggerText(keyword), PROVIDER_ENTITY_HINTS[emailProvider] ?? [])) {
+      score += 2;
+      specificity += phraseSpecificity(keyword);
+    }
+    if (codingBackend && hasAnyMatch(normalizeTriggerText(keyword), CODING_BACKEND_HINTS[codingBackend] ?? [])) {
+      score += 2;
+      specificity += phraseSpecificity(keyword);
+    }
+    if (toolName && hasAnyMatch(normalizeTriggerText(keyword), TOOL_NAME_HINTS[toolName] ?? [])) {
+      score += 1;
+      specificity += phraseSpecificity(keyword);
+    }
+  }
+
+  return { score, specificity };
+}
+
+function scoreRouteMatches(
+  skill: LoadedSkill,
+  input: SkillResolutionInput,
+  normalizedContent: string,
+): { score: number; specificity: number } {
+  const route = input.intentRoute;
+  if (!route) return { score: 0, specificity: 0 };
+
+  let score = bonusForRole(route, skill.manifest.role);
+  let specificity = score > 0 ? score * 2 : 0;
+
+  if (hasAnyMatch(normalizedContent, ROUTE_TRIGGER_KEYWORDS[route] ?? [])) {
+    score += 1;
+    specificity += 3;
+  }
+
+  if (route === 'memory_task' && MEMORY_KEYWORD_SKILL_IDS.has(skill.manifest.id)) {
+    score += 2;
+    specificity += 4;
+  }
+
+  if (route === 'coding_task' && skill.manifest.tools?.some((tool) => tool.startsWith('code_'))) {
+    score += 1;
+    specificity += 2;
+  }
+
+  if ((route === 'email_task' || route === 'workspace_task') && skill.manifest.requiredManagedProvider) {
+    score += 1;
+    specificity += 2;
+  }
+
+  if (route === 'search_task' && skill.manifest.tools?.some((tool) => tool === 'web_search' || tool === 'doc_search')) {
+    score += 1;
+    specificity += 2;
+  }
+
+  return { score, specificity };
+}
+
+function scoreContinuityAndPendingAction(
+  skill: LoadedSkill,
+  input: SkillResolutionInput,
+): { score: number; specificity: number } {
+  let score = 0;
+  let specificity = 0;
+
+  const priorActiveSkills = new Set((input.priorActiveSkillIds ?? []).map((value) => value.trim()).filter(Boolean));
+  if (priorActiveSkills.has(skill.manifest.id)) {
+    if (CLARIFICATION_TURN_RELATIONS.has(input.intentTurnRelation ?? '')) {
+      score += 3;
+      specificity += 6;
+    }
+    if (input.pendingActionKind && STICKY_PENDING_ACTION_KINDS.has(input.pendingActionKind)) {
+      score += 2;
+      specificity += 4;
+    }
+  }
+
+  return { score, specificity };
+}
+
+function scoreToolSignals(
+  skill: LoadedSkill,
+  input: SkillResolutionInput,
+): { score: number; specificity: number } {
+  const route = input.intentRoute;
+  if (!route) return { score: 0, specificity: 0 };
+  const toolHints = ROUTE_TRIGGER_KEYWORDS[route] ?? [];
+  if (toolHints.length === 0) return { score: 0, specificity: 0 };
+
+  let score = 0;
+  let specificity = 0;
+  for (const tool of skill.manifest.tools ?? []) {
+    const hints = TOOL_NAME_HINTS[tool] ?? TOOL_CATEGORY_HINTS[tool] ?? [];
+    if (hints.length === 0) continue;
+    for (const hint of hints) {
+      if (!hasAnyMatch(normalizeTriggerText(hint), toolHints)) continue;
+      score += 1;
+      specificity += phraseSpecificity(hint);
+      break;
+    }
+  }
+  return { score, specificity };
+}
+
+function scoreContextHints(
+  manifest: LoadedSkill['manifest'],
+  input: SkillResolutionInput,
+): { score: number; specificity: number } {
+  let score = 0;
+  let specificity = 0;
+
+  const focusContent = [input.continuityFocusSummary, input.continuityLastActionableRequest]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+  if (!focusContent) return { score: 0, specificity: 0 };
+  const normalizedFocus = normalizeTriggerText(focusContent);
+
+  for (const tag of manifest.tags ?? []) {
+    if (containsNormalizedPhrase(normalizedFocus, tag)) {
+      score += 1;
+      specificity += phraseSpecificity(tag);
+    }
+  }
+
+  for (const keyword of manifest.triggers?.keywords ?? []) {
+    if (containsNormalizedPhrase(normalizedFocus, keyword)) {
+      score += 1;
+      specificity += phraseSpecificity(keyword);
+    }
+  }
+
+  return { score, specificity };
+}
+
+function scoreRepoGroundingHints(
+  skill: LoadedSkill,
+  input: SkillResolutionInput,
+): { score: number; specificity: number } {
+  if (skill.manifest.id !== 'coding-workspace') {
+    return { score: 0, specificity: 0 };
+  }
+
+  let score = 0;
+  let specificity = 0;
+  const hasRepoPathHint = REPO_PATH_HINT_PATTERN.test(input.content) || CODE_FILE_HINT_PATTERN.test(input.content);
+  if (input.codeSessionAttached) {
+    score += 2;
+    specificity += 4;
+  }
+  if (input.hasTaggedFileContext) {
+    score += 1;
+    specificity += 3;
+  }
+  if (hasRepoPathHint) {
+    score += 1;
+    specificity += 3;
+  }
+  if (hasRepoPathHint && FILE_GROUNDED_CODING_ACTION_PATTERN.test(input.content)) {
+    score += 1;
+    specificity += 3;
+  }
+  return { score, specificity };
+}
+
+function shouldSuppressForClarification(input: SkillResolutionInput): boolean {
+  return input.intentResolution === 'needs_clarification' && !CLARIFICATION_TURN_RELATIONS.has(input.intentTurnRelation ?? '');
+}
+
+function shouldKeepSkillForAmbiguousClarification(skill: LoadedSkill, input: SkillResolutionInput): boolean {
+  const priorActiveSkills = new Set((input.priorActiveSkillIds ?? []).map((value) => value.trim()).filter(Boolean));
+  return priorActiveSkills.has(skill.manifest.id);
+}
+
 function skillRolePriority(role: LoadedSkill['manifest']['role']): number {
   return role === 'process' ? 1 : 0;
 }
@@ -72,6 +386,10 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
     }
   }
 
+  if (shouldSuppressForClarification(input) && !shouldKeepSkillForAmbiguousClarification(skill, input)) {
+    return { score: 0, specificity: 0 };
+  }
+
   const normalizedContent = normalizeTriggerText(input.content);
   let score = 0;
   let specificity = 0;
@@ -98,12 +416,37 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
   score += descriptionMatches.score;
   specificity += descriptionMatches.specificity;
 
+  const routeMatches = scoreRouteMatches(skill, input, normalizedContent);
+  score += routeMatches.score;
+  specificity += routeMatches.specificity;
+
+  const intentEntityMatches = scoreIntentEntityMatches(manifest, input, normalizedContent);
+  score += intentEntityMatches.score;
+  specificity += intentEntityMatches.specificity;
+
+  const continuityAndPendingAction = scoreContinuityAndPendingAction(skill, input);
+  score += continuityAndPendingAction.score;
+  specificity += continuityAndPendingAction.specificity;
+
+  const contextHints = scoreContextHints(manifest, input);
+  score += contextHints.score;
+  specificity += contextHints.specificity;
+
+  const repoGroundingHints = scoreRepoGroundingHints(skill, input);
+  score += repoGroundingHints.score;
+  specificity += repoGroundingHints.specificity;
+
+  const toolSignals = scoreToolSignals(skill, input);
+  score += toolSignals.score;
+  specificity += toolSignals.specificity;
+
   if (isReviewedImportManifest(manifest) && explicitMention.score === 0) {
     const strongKeywordSignal = keywordMatches.matchCount >= 2 || keywordMatches.hasMultiWordMatch;
     const combinedSignal = keywordMatches.matchCount >= 1 && descriptionMatches.matchCount >= 2;
     const providerSignal = !!manifest.requiredManagedProvider
       && (keywordMatches.matchCount >= 1 || descriptionMatches.matchCount >= 1);
-    if (!(strongKeywordSignal || combinedSignal || providerSignal)) {
+    const structuredSignal = routeMatches.score > 0 || intentEntityMatches.score > 0;
+    if (!(strongKeywordSignal || combinedSignal || providerSignal || structuredSignal)) {
       return { score: 0, specificity: 0 };
     }
     score = Math.max(1, score - 1);

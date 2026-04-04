@@ -24,6 +24,7 @@ import {
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import type {
+  PromptAssemblyAdditionalSection,
   PromptAssemblyContinuity,
   PromptAssemblyKnowledgeBase,
   PromptAssemblyPendingAction,
@@ -51,6 +52,7 @@ export interface WorkerMessageRequest {
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   knowledgeBases?: PromptAssemblyKnowledgeBase[];
   activeSkills?: ResolvedSkill[];
+  additionalSections?: PromptAssemblyAdditionalSection[];
   toolContext?: string;
   runtimeNotices?: Array<{ level: 'info' | 'warn'; message: string }>;
   continuity?: PromptAssemblyContinuity | null;
@@ -206,6 +208,7 @@ export class WorkerManager {
         history: input.history,
         knowledgeBases: input.knowledgeBases ?? [],
         activeSkills: input.activeSkills ?? [],
+        additionalSections: input.additionalSections ?? [],
         toolContext: input.toolContext ?? '',
         runtimeNotices: input.runtimeNotices ?? [],
         continuity: input.continuity,
@@ -881,6 +884,7 @@ export class WorkerManager {
       history: Array<{ role: 'user' | 'assistant'; content: string }>;
       knowledgeBases: PromptAssemblyKnowledgeBase[];
       activeSkills: ResolvedSkill[];
+      additionalSections: PromptAssemblyAdditionalSection[];
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
       continuity?: PromptAssemblyContinuity | null;
@@ -1108,6 +1112,7 @@ export class WorkerManager {
       history: [],
       knowledgeBases: [],
       activeSkills: [],
+      additionalSections: [],
       toolContext: '',
       runtimeNotices: [],
       hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),

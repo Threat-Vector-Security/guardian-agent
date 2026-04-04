@@ -383,6 +383,19 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (knowledgeBase.maxEntryChars > knowledgeBase.maxFileChars) {
     errors.push('assistant.memory.knowledgeBase.maxEntryChars must be <= assistant.memory.knowledgeBase.maxFileChars');
   }
+  if (assistant.maintenance.sweepIntervalMs < 10_000) {
+    errors.push('assistant.maintenance.sweepIntervalMs must be >= 10000');
+  }
+  if (assistant.maintenance.idleAfterMs < 10_000) {
+    errors.push('assistant.maintenance.idleAfterMs must be >= 10000');
+  }
+  const memoryHygiene = assistant.maintenance.jobs.memoryHygiene;
+  if (memoryHygiene.maxScopesPerSweep < 1) {
+    errors.push('assistant.maintenance.jobs.memoryHygiene.maxScopesPerSweep must be >= 1');
+  }
+  if (memoryHygiene.minIntervalMs < 60_000) {
+    errors.push('assistant.maintenance.jobs.memoryHygiene.minIntervalMs must be >= 60000');
+  }
   if (assistant.analytics.retentionDays < 1) {
     errors.push('assistant.analytics.retentionDays must be >= 1');
   }

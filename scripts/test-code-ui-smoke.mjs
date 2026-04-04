@@ -445,6 +445,50 @@ guardian:
       }, expectedWorkspaceRoot);
     }
 
+    async function waitForCodePageFocusByWorkspace(expectedWorkspaceRoot) {
+      await page.waitForFunction((expectedRoot) => {
+        const cards = Array.from(document.querySelectorAll('.code-session'));
+        const currentCard = cards.find((node) => (node.textContent || '').includes('CURRENT'));
+        const activeCard = document.querySelector('.code-session.is-active');
+        return (currentCard?.textContent || '').includes(expectedRoot)
+          && (activeCard?.textContent || '').includes(expectedRoot);
+      }, expectedWorkspaceRoot);
+    }
+
+    async function attachWorkspaceFromExternalSurface(expectedWorkspaceRoot, {
+      channel = 'telegram',
+      surfaceId = 'telegram-user',
+    } = {}) {
+      const result = await page.evaluate(async ({ expectedRoot, requestedChannel, requestedSurfaceId }) => {
+        const sessionsResponse = await fetch('/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+          credentials: 'same-origin',
+        });
+        const sessionsPayload = await sessionsResponse.json();
+        const sessions = Array.isArray(sessionsPayload?.sessions) ? sessionsPayload.sessions : [];
+        const target = sessions.find((session) => String(session?.workspaceRoot || '').includes(expectedRoot));
+        if (!target?.id) {
+          return { success: false, error: `No coding session matched ${expectedRoot}` };
+        }
+        const attachResponse = await fetch(`/api/code/sessions/${encodeURIComponent(target.id)}/attach`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: 'web-user',
+            channel: requestedChannel,
+            surfaceId: requestedSurfaceId,
+            mode: 'controller',
+          }),
+        });
+        return attachResponse.json();
+      }, {
+        expectedRoot: expectedWorkspaceRoot,
+        requestedChannel: channel,
+        requestedSurfaceId: surfaceId,
+      });
+      assert.equal(result?.success, true, `Expected external attach for ${expectedWorkspaceRoot} to succeed: ${JSON.stringify(result)}`);
+    }
+
     await page.click('[data-code-new-session]');
     await page.fill('[data-code-session-form] input[name="title"]', 'Workspace A');
     await page.fill('[data-code-session-form] input[name="workspaceRoot"]', workspaceRoot);
@@ -565,6 +609,14 @@ guardian:
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
     });
+
+    await openCodePanel('sessions');
+    await attachWorkspaceFromExternalSurface(reviewedWorkspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
+    await waitForCodePageFocusByWorkspace(reviewedWorkspaceRoot);
+    await attachWorkspaceFromExternalSurface(workspaceRoot, { channel: 'cli', surfaceId: 'cli-guardian-chat' });
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await waitForCodePageFocusByWorkspace(workspaceRoot);
 
     for (const expectedWorkspaceRoot of [workspaceRoot, reviewedWorkspaceRoot, workspaceRoot]) {
       await openCodePanel('sessions');
