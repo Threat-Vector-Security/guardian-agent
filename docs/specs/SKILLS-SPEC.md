@@ -160,10 +160,19 @@ Shared prompt/context contract:
 - Reviewed `artifactReferences` are optional supporting context only. They do not turn memory/wiki pages into executable skill bodies.
 - Record active skill IDs in response metadata for debuggability.
 
+### Mandatory SKILL.md Anatomy
+
+Every process or domain `SKILL.md` file must adhere to this rigorous structure to enforce production-grade discipline and prevent LLM corner-cutting:
+
+1. **Overview / When to Use**: Standard descriptive frontmatter.
+2. **Process**: Step-by-step workflow the agent must follow.
+3. **Common Rationalizations**: A markdown table mapping common LLM excuses (e.g., "I'll add the tests later") to reality ("Bugs compound. Test each slice.").
+4. **Red Flags**: A bulleted list of anti-patterns (e.g., "Wrote 100+ lines without running tests").
+5. **Verification**: A mandatory checklist of concrete evidence required before the skill is considered complete (e.g., tests passing, build succeeding). "Seems right" is never sufficient.
+
 ### Authoring Guidance
 
 - Write the manifest description as a trigger sentence that says when to use the skill.
-- Keep a `Gotchas` section in `SKILL.md` for repeated failure modes and update it over time.
 - Use progressive disclosure: put dense references, templates, scripts, and assets in subfolders instead of overloading the top-level instructions.
 - Add templates when the output shape matters, and scripts when deterministic verification or setup is better expressed as code.
 

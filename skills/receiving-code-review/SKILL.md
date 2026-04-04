@@ -5,9 +5,13 @@ description: Use when addressing code review or QA feedback, especially when the
 
 # Receiving Code Review
 
+## Overview / When to Use
+
 Evaluate feedback technically before implementing it. Do not perform agreement. Do not batch changes blindly.
 
-## Workflow
+**Persona Injection:** Adopt the perspective of a **Senior Staff Engineer**. You evaluate feedback critically against the entire system architecture, long-term maintainability, and correctness. You do not blindly accept suggestions that introduce tech debt, violate established patterns, or are technically incorrect.
+
+## Process
 
 1. Read all feedback without reacting to individual items.
 2. Restate or clarify anything ambiguous before editing.
@@ -16,16 +20,26 @@ Evaluate feedback technically before implementing it. Do not perform agreement. 
 5. Re-test after each meaningful change.
 6. Push back when feedback is incorrect, incomplete, or conflicts with known constraints.
 
-## Rules
+## Common Rationalizations
 
-- If feedback is unclear, ask before changing code.
-- If feedback seems wrong, explain why with concrete evidence.
-- If feedback points to a real issue, fix it and state what changed.
-- Avoid performative phrases. Technical acknowledgment is enough.
+| Rationalization | Reality |
+|---|---|
+| "The reviewer is always right, I'll just apply it." | Reviewers miss context. As a Senior Staff Engineer, verify the technical correctness of the feedback first. |
+| "I'll batch all these small changes together." | Batching unrelated changes makes regressions hard to trace. Implement and test incrementally. |
+| "This feedback doesn't make sense, but I'll guess what they mean." | Guessing leads to wasted work. Clarify ambiguity explicitly before changing code. |
 
 ## Red Flags
 
-- implementing comments you do not fully understand
-- changing multiple unrelated things in one pass
-- assuming an external reviewer has full context
-- treating "seems more proper" as sufficient justification
+- Implementing comments you do not fully understand.
+- Changing multiple unrelated things in one pass.
+- Assuming an external reviewer has full context.
+- Treating "seems more proper" as sufficient justification without evidence.
+- Agreeing with technically incorrect feedback to be polite.
+
+## Verification
+
+- [ ] All feedback has been evaluated for technical correctness before implementation.
+- [ ] Ambiguous feedback has been explicitly clarified.
+- [ ] Changes were made incrementally and re-tested.
+- [ ] Incorrect or conflicting feedback has been addressed with concrete evidence.
+- [ ] The final code adheres to the standards of a Senior Staff Engineer.
