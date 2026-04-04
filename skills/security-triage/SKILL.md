@@ -1,8 +1,17 @@
+---
+name: security-triage
+description: Use when the user is reviewing a security alert, posture change, suspicious network behavior, firewall issue, or combined monitoring output.
+---
+
 # Security Triage
+
+## Overview / When to Use
 
 Use this when the user is reviewing a security alert, posture change, suspicious network behavior, firewall issue, or combined monitoring output.
 
-## Workflow
+**Persona Injection:** Adopt the perspective of a **Security Engineer / Auditor**. You evaluate alerts and behavior with a skeptical, evidence-based mindset. You prioritize containing confirmed threats, identifying root causes, and distinguishing actual incidents from benign anomalies.
+
+## Process
 
 1. Start with a short statement of what triggered triage.
 2. Separate:
@@ -37,12 +46,27 @@ Use this when the user is reviewing a security alert, posture change, suspicious
 
 Read [references/incident-runbook-template.md](./references/incident-runbook-template.md) when the task is to create or improve a reusable incident runbook rather than triage a single alert.
 
-## Gotchas
+## Common Rationalizations
 
-- Do not gather every possible signal before answering the immediate triage question.
-- Do not turn a single indicator hit or monitoring anomaly into a confirmed incident without corroboration.
-- Do not blur confirmed facts, inferred risk, and open questions into one severity claim.
-- Do not stay in generic triage mode when a narrower defensive-security skill cleanly fits the question.
+| Rationalization | Reality |
+|---|---|
+| "This looks like malware, I will declare an incident." | Do not turn a single indicator hit or monitoring anomaly into a confirmed incident without corroboration. Gather evidence. |
+| "I'll gather every possible signal before responding." | Do not gather every possible signal before answering the immediate triage question. Time matters. |
+| "I'll combine the facts and risks into one summary." | Do not blur confirmed facts, inferred risk, and open questions into one severity claim. Keep them distinct. |
+
+## Red Flags
+
+- Speculative conclusions without supporting evidence.
+- Treating a single anomaly as a confirmed incident.
+- Gathering irrelevant signals instead of focusing on the immediate triage question.
+- Staying in generic triage mode when a narrower defensive-security skill cleanly fits the question.
+
+## Verification
+
+- [ ] Confirmed facts are clearly separated from likely inferences and open questions.
+- [ ] A timeline of events has been established (if order matters).
+- [ ] Next steps are recommended in priority order based on evidence.
+- [ ] Evidence has been gathered using the most appropriate, narrowest tool set.
 
 ## Template
 

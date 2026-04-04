@@ -5,15 +5,11 @@ description: Use when encountering a bug, failing test, broken integration, or u
 
 # Systematic Debugging
 
-Do not guess. Find the root cause before changing code, config, or prompts.
+## Overview / When to Use
 
-## Core Rule
+Do not guess. Find the root cause before changing code, config, or prompts. No fixes without investigation first. If you have not reproduced the issue, read the errors, and traced where the bad state comes from, you are not ready to fix it.
 
-No fixes without investigation first.
-
-If you have not reproduced the issue, read the errors, and traced where the bad state comes from, you are not ready to fix it.
-
-## Workflow
+## Process
 
 1. Capture the exact failure.
    - Record the command, request, or user action that fails.
@@ -33,7 +29,15 @@ If you have not reproduced the issue, read the errors, and traced where the bad 
 6. Add a regression test or equivalent reproducible check before the permanent fix.
 7. Verify the fix with the original reproduction and the regression test.
 
-## Stop Signs
+## Common Rationalizations
+
+| Rationalization | Reality |
+|---|---|
+| "I know what this is, I'll just fix it." | Guessing leads to incomplete fixes or new bugs. Reproduce and trace it first. |
+| "I'll try fixing three things at once to save time." | Multiple changes obscure which one actually fixed the issue or introduced regressions. Change one thing at a time. |
+| "I'll skip the regression test since I manually verified it." | If it broke once, it will break again. Add a reproducible check before calling it done. |
+
+## Red Flags
 
 Stop and return to investigation if you catch yourself:
 
@@ -41,9 +45,14 @@ Stop and return to investigation if you catch yourself:
 - saying "it is probably X"
 - patching symptoms without tracing source state
 - skipping a failing test because manual verification seems faster
-- trying a fourth fix after three failed attempts
+- trying a fourth fix after three failed attempts (this means the architecture or assumption is wrong)
 
-Three failed fix attempts usually means the architecture or assumption is wrong, not that you need more guessing.
+## Verification
+
+- [ ] The exact failure has been captured and reproduced consistently.
+- [ ] The root cause has been traced backward to the source of the bad state.
+- [ ] A regression test (or equivalent reproducible check) has been added.
+- [ ] The fix passes both the original reproduction and the regression test.
 
 ## Supporting References
 

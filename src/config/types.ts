@@ -1631,6 +1631,11 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         task: 'Turn this into a clear prioritized task list with owner/time suggestions:\n{details}',
         calendar: 'Create a calendar-ready event plan from these details:\n{details}\n\nInclude: title, agenda, time estimate, and follow-ups.',
         security: 'Run an Assistant Security review using the built-in `assistant_security_scan` tool. Use the `quick` profile unless these details clearly call for `runtime-hardening` or `workspace-boundaries`. If the user names a specific workspace target, include that target when you scan.\n\nAfter running the scan, summarize the highest-risk findings, whether anything was promoted into Security Log, and the next actions.\n\nDetails:\n{details}',
+        spec: 'Write a PRD using the spec-driven-development skill covering objectives, commands, structure, code style, testing, and boundaries before any code based on these details:\n{details}',
+        plan: 'Decompose the following spec into small, verifiable tasks with acceptance criteria and dependency ordering using the planning-and-task-breakdown skill:\n{details}',
+        build: 'Implement the following task in thin vertical slices (Implement, Test, Verify, Commit) using the incremental-implementation and test-driven-development skills:\n{details}',
+        review: 'Adopt the Senior Staff Engineer persona to conduct a five-axis review of the following code. Focus on maintainability, architecture, and correctness using the receiving-code-review skill:\n{details}',
+        'code-simplify': 'Reduce complexity while preserving exact behavior in the following code using the code-simplification skill:\n{details}',
       },
     },
     security: {

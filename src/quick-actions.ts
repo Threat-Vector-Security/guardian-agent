@@ -41,6 +41,36 @@ const BUILTIN_ACTIONS: QuickActionDefinition[] = [
     description: 'Run Assistant Security posture review and summarize the highest-risk findings.',
     detailsHint: 'Scope, workspace, profile preference, special concerns',
   },
+  {
+    id: 'spec',
+    label: 'Write Spec',
+    description: 'Write a PRD covering objectives, commands, structure, and boundaries before coding.',
+    detailsHint: 'Feature idea, core requirements, constraints',
+  },
+  {
+    id: 'plan',
+    label: 'Break Down Tasks',
+    description: 'Decompose a spec into small, verifiable tasks with acceptance criteria.',
+    detailsHint: 'Spec or feature details to break down',
+  },
+  {
+    id: 'build',
+    label: 'Build Incrementally',
+    description: 'Implement the next task in thin vertical slices (Implement -> Test -> Verify).',
+    detailsHint: 'The specific task or slice to build',
+  },
+  {
+    id: 'review',
+    label: 'Review Code',
+    description: 'Evaluate code critically against architecture, maintainability, and correctness.',
+    detailsHint: 'Code, PR, or diff to review',
+  },
+  {
+    id: 'code-simplify',
+    label: 'Simplify Code',
+    description: 'Reduce complexity while preserving exact behavior.',
+    detailsHint: 'Code snippet or file to simplify',
+  },
 ];
 
 export function getQuickActions(config: AssistantQuickActionsConfig): QuickActionDefinition[] {
