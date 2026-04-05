@@ -130,7 +130,7 @@ function requireAutomationMutationSuccess(result, fallbackMessage) {
 
 export async function renderAutomations(container) {
   currentContainer = container;
-  container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     const [connState, toolsState, automationCatalog, automationHistory, agentsState, assistantRuns] = await Promise.all([
@@ -172,7 +172,6 @@ export async function renderAutomations(container) {
       : normalizeAutomationTab(automationUiState.activeTab);
 
     container.innerHTML = `
-      <h2 class="page-title">Automations</h2>
       ${renderGuidancePanel({
         kicker: 'Automation Guide',
         title: 'Automations, output, history, and execution visibility',
@@ -265,7 +264,7 @@ export async function renderAutomations(container) {
     enhanceSectionHelp(container, AUTOMATION_HELP, createGenericHelpFactory('Automations'));
     activateContextHelp(container);
   } catch (err) {
-    container.innerHTML = `<h2 class="page-title">Automations</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    container.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
 }
 

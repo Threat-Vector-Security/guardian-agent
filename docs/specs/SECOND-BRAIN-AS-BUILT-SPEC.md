@@ -53,13 +53,13 @@ This spec does not claim that every item from the proposal or implementation pla
 ### Current tab behavior
 
 - `Today` is a dashboard-style daily home with agenda, quick capture, focus tasks, brief actions, relationship follow-up, recent notes, routine status, and a cloud-AI budget card.
-- `Calendar` exposes a month grid, selected-day agenda, and a local event editor with title, timing, location, and description fields. Provider-backed events are visible in the grid and remain read-only in this surface.
-- `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor.
-- `Notes` exposes search, pinned and archived note states, and a full editor with tag support.
-- `People` exposes relationship filters, last-contact tracking, and a dedicated person editor.
-- `Library` now exposes saved link and reference CRUD in the web UI.
+- `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Provider-backed events are visible in the calendar and remain read-only in this surface.
+- `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing on the left and board content on the right.
+- `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing on the left and list content on the right.
+- `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor.
+- `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right.
 - `Briefs` now exposes saved brief review plus visible brief generation actions in the web UI.
-- `Routines` exposes routine grouping plus editable enablement, routing bias, budget profile, and delivery defaults.
+- `Routines` exposes routine grouping plus editable enablement, routing bias, budget profile, and delivery defaults, with editing on the left and grouped routine cards on the right.
 
 ### Briefs in the current UI
 
@@ -170,10 +170,8 @@ It also seeds the built-in routine catalog at startup.
 
 Current seeded routines are:
 - `morning-brief`
-- `next-24-hours-radar`
 - `weekly-review`
-- `pre-meeting-brief`
-- `follow-up-watch`
+- `one-off-sync`
 
 Current behavior note:
 - `weekly-review` is seeded as a routine record but does not yet have a dedicated synthesis path in the current horizon scanner.
@@ -263,8 +261,10 @@ Each scan:
 Current trigger behavior:
 - `morning-brief`: once per local day after 5:00
 - `next-24-hours-radar`: marks a run when open tasks or near-horizon events exist
+- `weekly-review`: generated weekly to summarize your state
 - `pre-meeting-brief`: generates missing pre-meeting briefs for events within the configured lookahead window
 - `follow-up-watch`: generates missing follow-up drafts for recently ended events
+- `one-off-sync`: executed manually to sync context from external providers
 
 ## Tool Surface
 

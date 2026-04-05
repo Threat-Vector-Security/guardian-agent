@@ -10,13 +10,20 @@ const boundContainers = new WeakSet();
 const state = {
   activeTab: 'today',
   data: null,
-  calendarCursor: startOfMonthDate(Date.now()),
+  calendarCursor: startOfDay(Date.now()),
+  calendarView: 'month',
   selectedCalendarDate: dayKey(new Date()),
   selectedCalendarEventId: null,
+  creatingCalendarEvent: false,
   selectedTaskId: null,
+  creatingTask: false,
   selectedNoteId: null,
+  creatingNote: false,
+  noteQuery: '',
   selectedPersonId: null,
+  creatingPerson: false,
   selectedLinkId: null,
+  creatingLink: false,
   selectedBriefId: null,
   selectedRoutineId: null,
   todayCaptureKind: 'note',
@@ -34,11 +41,11 @@ export async function renderSecondBrain(container, options = {}) {
 
   const shouldRefresh = options?.refresh !== false || !state.data;
   if (shouldRefresh) {
-    container.innerHTML = '<h2 class="page-title">Second Brain</h2><div class="loading">Loading your day...</div>';
+    container.innerHTML = '<div class="loading">Loading your day...</div>';
     try {
       state.data = await loadSecondBrainData();
     } catch (error) {
-      container.innerHTML = `<h2 class="page-title">Second Brain</h2><div class="loading">Error: ${esc(error instanceof Error ? error.message : String(error))}</div>`;
+      container.innerHTML = `<div class="loading">Error: ${esc(error instanceof Error ? error.message : String(error))}</div>`;
       return;
     }
   }
@@ -55,41 +62,17 @@ export function updateSecondBrain() {
 
 function paint(container) {
   if (!state.data) {
-    container.innerHTML = '<h2 class="page-title">Second Brain</h2><div class="loading">Loading your day...</div>';
+    container.innerHTML = '<div class="loading">Loading your day...</div>';
     return;
   }
 
-  const { overview, focusEvents, tasks, notes, people, links, briefs, routines, now } = state.data;
-  const todayEvents = getEventsForDay(focusEvents, parseDayKey(dayKey(new Date(now))));
-  const openTasks = tasks.filter((task) => task.status !== 'done');
-  const pendingBriefs = briefs.filter((brief) => brief.kind !== 'morning');
-  const stalePeople = people.filter((person) => isPersonStale(person, now));
-
-  container.innerHTML = `
-    <section class="sb-shell">
-      <div class="sb-hero">
-        <div class="sb-hero__copy">
-          <div class="sb-kicker">Today</div>
-          <h2 class="page-title sb-title">Second Brain</h2>
-          <p class="sb-subtitle">Your calendar, tasks, notes, contacts, saved links, and meeting prep in one place.</p>
-          <div class="sb-hero__meta">
-            <span>${esc(formatLongDate(now))}</span>
-            <span>${esc(overview.nextEvent ? `Next up: ${overview.nextEvent.title}` : 'No upcoming event queued')}</span>
-          </div>
-        </div>
-        <div class="sb-hero__rail">
-          ${renderUsageCard(overview.usage)}
-        </div>
-      </div>
-      ${state.flash ? renderFlash(state.flash) : ''}
-      <div class="sb-metric-row">
-        ${renderMetricCard('Today', `${todayEvents.length} events`, todayEvents[0] ? formatTimeRange(todayEvents[0]) : 'No agenda yet')}
-        ${renderMetricCard('Tasks', `${openTasks.length} open`, openTasks[0] ? openTasks[0].title : 'Inbox clear')}
-        ${renderMetricCard('Briefs', `${briefs.length} saved`, pendingBriefs[0] ? pendingBriefs[0].title : 'No queued follow-up')}
-        ${renderMetricCard('People', `${people.length} contacts`, stalePeople[0] ? `${stalePeople.length} need follow-up` : 'Relationships current')}
-      </div>
-    </section>
-  `;
+  container.innerHTML = state.flash
+    ? `
+      <section class="sb-shell sb-shell--compact">
+        ${renderFlash(state.flash)}
+      </section>
+    `
+    : '';
 
   const tabsContainer = document.createElement('div');
   tabsContainer.className = 'sb-tabs';
@@ -100,7 +83,7 @@ function paint(container) {
     { id: 'calendar', label: 'Calendar', render: (panel) => renderCalendar(panel, state.data) },
     { id: 'tasks', label: 'Tasks', render: (panel) => renderTasks(panel, state.data) },
     { id: 'notes', label: 'Notes', render: (panel) => renderNotes(panel, state.data) },
-    { id: 'people', label: 'People', render: (panel) => renderPeople(panel, state.data) },
+    { id: 'people', label: 'Contacts', render: (panel) => renderPeople(panel, state.data) },
     { id: 'library', label: 'Library', render: (panel) => renderLibrary(panel, state.data) },
     { id: 'briefs', label: 'Briefs', render: (panel) => renderBriefs(panel, state.data) },
     { id: 'routines', label: 'Routines', render: (panel) => renderRoutines(panel, state.data) },
@@ -120,9 +103,7 @@ async function loadSecondBrainData() {
   const now = Date.now();
   const focusWindowStart = startOfDay(new Date(now - (7 * DAY_MS)));
   const focusWindowEnd = endOfDay(new Date(now + (7 * DAY_MS)));
-  const monthStart = startOfMonthDate(state.calendarCursor.getTime());
-  const monthGridStart = startOfWeek(monthStart);
-  const monthGridEnd = endOfWeek(endOfMonth(monthStart));
+  const calendarRange = getCalendarViewRange(state.calendarCursor, state.calendarView);
 
   const [overview, focusEvents, calendarEvents, tasks, notes, people, links, routines, briefs] = await Promise.all([
     api.secondBrainOverview(),
@@ -132,9 +113,9 @@ async function loadSecondBrainData() {
       limit: 200,
     }),
     api.secondBrainCalendar({
-      fromTime: monthGridStart.getTime(),
-      toTime: monthGridEnd.getTime(),
-      limit: 300,
+      fromTime: calendarRange.start.getTime(),
+      toTime: calendarRange.end.getTime(),
+      limit: calendarRange.limit,
     }),
     api.secondBrainTasks({ limit: 200 }),
     api.secondBrainNotes({ limit: 200, includeArchived: true }),
@@ -155,27 +136,37 @@ async function loadSecondBrainData() {
     links,
     routines,
     briefs,
-    monthGridStart,
-    monthGridEnd,
+    calendarRange,
   };
 }
 
 function synchronizeStateWithData() {
   if (!state.data) return;
 
-  const visibleMonth = state.calendarCursor;
-  if (!isSameMonth(parseDayKey(state.selectedCalendarDate), visibleMonth)) {
-    state.selectedCalendarDate = dayKey(startOfMonthDate(visibleMonth.getTime()));
+  const visibleRange = getCalendarViewRange(state.calendarCursor, state.calendarView);
+  const selectedDate = parseDayKey(state.selectedCalendarDate);
+  if (selectedDate < visibleRange.start || selectedDate > visibleRange.end) {
+    state.selectedCalendarDate = dayKey(state.calendarCursor);
   }
 
-  state.selectedCalendarEventId = preserveSelection(
-    state.selectedCalendarEventId,
-    [...state.data.calendarEvents, ...state.data.focusEvents],
-  );
-  state.selectedTaskId = preserveSelection(state.selectedTaskId, state.data.tasks);
-  state.selectedNoteId = preserveSelection(state.selectedNoteId, state.data.notes);
-  state.selectedPersonId = preserveSelection(state.selectedPersonId, state.data.people);
-  state.selectedLinkId = preserveSelection(state.selectedLinkId, state.data.links);
+  if (!state.creatingCalendarEvent) {
+    state.selectedCalendarEventId = preserveSelection(
+      state.selectedCalendarEventId,
+      [...state.data.calendarEvents, ...state.data.focusEvents],
+    );
+  }
+  if (!state.creatingTask) {
+    state.selectedTaskId = preserveSelection(state.selectedTaskId, state.data.tasks);
+  }
+  if (!state.creatingNote) {
+    state.selectedNoteId = preserveSelection(state.selectedNoteId, state.data.notes);
+  }
+  if (!state.creatingPerson) {
+    state.selectedPersonId = preserveSelection(state.selectedPersonId, state.data.people);
+  }
+  if (!state.creatingLink) {
+    state.selectedLinkId = preserveSelection(state.selectedLinkId, state.data.links);
+  }
   state.selectedBriefId = preserveSelection(state.selectedBriefId, filteredBriefs(state.data));
   state.selectedRoutineId = preserveSelection(state.selectedRoutineId, state.data.routines);
 }
@@ -211,11 +202,10 @@ function renderToday(panel, data) {
         <p>${esc(data.overview.nextEvent
           ? `${data.overview.nextEvent.title} is the next committed event. ${data.overview.topTasks[0] ? `Your highest-priority task is ${data.overview.topTasks[0].title}.` : 'Your queue is clear enough to schedule deliberately.'}`
           : 'Your calendar is open. Use the day intentionally before drift fills it in.')}</p>
-        <div class="sb-inline-stats">
-          ${renderInlineStat('Open tasks', String(data.tasks.filter((task) => task.status !== 'done').length))}
-          ${renderInlineStat('Recent notes', String(recentNotes.length))}
-          ${renderInlineStat('Enabled routines', String(data.overview.enabledRoutineCount))}
-          ${renderInlineStat('Follow-up drafts', String(data.overview.followUpCount))}
+        <div class="sb-readout-grid">
+          ${renderReadoutCard('Date', formatLongDate(nowDate.getTime()))}
+          ${renderReadoutCard('Next event', data.overview.nextEvent ? `${data.overview.nextEvent.title} at ${formatTime(data.overview.nextEvent.startsAt)}` : 'No upcoming event queued')}
+          ${renderReadoutCard('Cloud AI budget', formatUsageSummary(data.overview.usage))}
         </div>
       </article>
 
@@ -312,14 +302,21 @@ function renderTodayCaptureForm(nowDate) {
   if (state.todayCaptureKind === 'task') {
     return `
       <form class="sb-form" data-today-capture-form="task">
-        <input name="title" type="text" placeholder="Task title" required>
+        <label class="sb-form__label" for="today-task-title">Task title</label>
+        <input id="today-task-title" name="title" type="text" placeholder="Task title" required>
         <div class="sb-form__row">
-          <select name="priority">
-            <option value="medium">Medium priority</option>
-            <option value="high">High priority</option>
-            <option value="low">Low priority</option>
-          </select>
-          <input name="dueAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultTaskDueAt(nowDate).getTime()))}">
+          <div class="sb-form__group">
+            <label class="sb-form__label" for="today-task-priority">Priority</label>
+            <select id="today-task-priority" name="priority">
+              <option value="medium">Medium priority</option>
+              <option value="high">High priority</option>
+              <option value="low">Low priority</option>
+            </select>
+          </div>
+          <div class="sb-form__group">
+            <label class="sb-form__label" for="today-task-due-at">Due date</label>
+            <input id="today-task-due-at" name="dueAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultTaskDueAt(nowDate).getTime()))}">
+          </div>
         </div>
         <button class="btn btn-primary" type="submit">Add task</button>
       </form>
@@ -329,10 +326,17 @@ function renderTodayCaptureForm(nowDate) {
   if (state.todayCaptureKind === 'event') {
     return `
       <form class="sb-form" data-today-capture-form="event">
-        <input name="title" type="text" placeholder="Block time or add an event" required>
+        <label class="sb-form__label" for="today-event-title">Event title</label>
+        <input id="today-event-title" name="title" type="text" placeholder="Block time or add an event" required>
         <div class="sb-form__row">
-          <input name="startsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultEventStart(nowDate).getTime()))}" required>
-          <input name="endsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultEventEnd(nowDate).getTime()))}">
+          <div class="sb-form__group">
+            <label class="sb-form__label" for="today-event-starts-at">Start time</label>
+            <input id="today-event-starts-at" name="startsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultEventStart(nowDate).getTime()))}" required>
+          </div>
+          <div class="sb-form__group">
+            <label class="sb-form__label" for="today-event-ends-at">End time</label>
+            <input id="today-event-ends-at" name="endsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(defaultEventEnd(nowDate).getTime()))}">
+          </div>
         </div>
         <button class="btn btn-primary" type="submit">Add event</button>
       </form>
@@ -341,35 +345,37 @@ function renderTodayCaptureForm(nowDate) {
 
   return `
     <form class="sb-form" data-today-capture-form="note">
-      <input name="title" type="text" placeholder="Optional note title">
-      <textarea name="content" rows="5" placeholder="Capture a promise, idea, detail, or follow-up." required></textarea>
+      <label class="sb-form__label" for="today-note-title">Note title</label>
+      <input id="today-note-title" name="title" type="text" placeholder="Optional note title">
+      <label class="sb-form__label" for="today-note-content">Note body</label>
+      <textarea id="today-note-content" name="content" rows="5" placeholder="Capture a promise, idea, detail, or follow-up." required></textarea>
       <button class="btn btn-primary" type="submit">Save note</button>
     </form>
   `;
 }
 
 function renderCalendar(panel, data) {
-  const monthStart = startOfMonthDate(state.calendarCursor.getTime());
-  const gridStart = startOfWeek(monthStart);
   const selectedDate = parseDayKey(state.selectedCalendarDate);
-  const selectedEvent = findRecord(data.calendarEvents, state.selectedCalendarEventId);
-  const dayEvents = getEventsForDay(data.calendarEvents, selectedDate);
-  const days = [];
-  const cursor = new Date(gridStart.getTime());
-  for (let index = 0; index < 42; index += 1) {
-    days.push(new Date(cursor.getTime()));
-    cursor.setDate(cursor.getDate() + 1);
-  }
+  const selectedEvent = state.creatingCalendarEvent
+    ? null
+    : (findRecord(data.calendarEvents, state.selectedCalendarEventId) ?? findRecord(data.focusEvents, state.selectedCalendarEventId));
+  const dayEventMap = buildDayEventMap(data.calendarEvents);
+  const dayEvents = getDayEvents(dayEventMap, selectedDate);
 
   panel.innerHTML = `
     <section class="sb-section">
       <div class="sb-section__header">
         <div>
           <div class="sb-card__eyebrow">Calendar</div>
-          <h3>${esc(formatMonthLabel(monthStart))}</h3>
-          <p class="sb-section__copy">Choose a day to review events and add your own event or time block.</p>
+          <h3>${esc(formatCalendarHeading(state.calendarCursor, state.calendarView))}</h3>
+          <p class="sb-section__copy">${esc(calendarViewCopy(state.calendarView))}</p>
         </div>
         <div class="sb-toolbar">
+          <div class="sb-segmented">
+            ${renderSegmentButton('week', 'Week', state.calendarView === 'week', 'data-calendar-view')}
+            ${renderSegmentButton('month', 'Month', state.calendarView === 'month', 'data-calendar-view')}
+            ${renderSegmentButton('year', 'Year', state.calendarView === 'year', 'data-calendar-view')}
+          </div>
           <button class="btn btn-secondary btn-sm" type="button" data-calendar-nav="prev">Previous</button>
           <button class="btn btn-secondary btn-sm" type="button" data-calendar-nav="today">Today</button>
           <button class="btn btn-secondary btn-sm" type="button" data-calendar-nav="next">Next</button>
@@ -377,16 +383,6 @@ function renderCalendar(panel, data) {
         </div>
       </div>
       <div class="sb-split sb-split--calendar">
-        <article class="sb-card">
-          <div class="sb-calendar">
-            <div class="sb-calendar__weekdays">
-              ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => `<span>${esc(label)}</span>`).join('')}
-            </div>
-            <div class="sb-calendar__grid">
-              ${days.map((day) => renderCalendarDay(day, monthStart, data.calendarEvents)).join('')}
-            </div>
-          </div>
-        </article>
         <aside class="sb-card sb-card--sidebar">
           <div class="sb-card__header">
             <div>
@@ -394,39 +390,196 @@ function renderCalendar(panel, data) {
               <h3>${esc(formatLongDate(selectedDate.getTime()))}</h3>
             </div>
           </div>
-      <div class="sb-agenda-pane">
-        ${renderAgenda(dayEvents, 'No events on this day.')}
-      </div>
+          <div class="sb-agenda-pane">
+            ${renderAgenda(dayEvents, 'No events on this day.')}
+          </div>
           <div class="sb-divider"></div>
           ${renderCalendarEditor(selectedEvent, selectedDate)}
         </aside>
+        <article class="sb-card sb-card--calendar-main">
+          ${renderCalendarSurface(state.calendarView, state.calendarCursor, dayEventMap)}
+        </article>
       </div>
     </section>
   `;
 }
 
-function renderCalendarDay(day, monthStart, events) {
+function renderCalendarSurface(view, cursor, dayEventMap) {
+  switch (view) {
+    case 'week':
+      return renderCalendarWeekView(cursor, dayEventMap);
+    case 'year':
+      return renderCalendarYearView(cursor, dayEventMap);
+    default:
+      return renderCalendarMonthView(cursor, dayEventMap);
+  }
+}
+
+function renderCalendarMonthView(cursor, dayEventMap) {
+  const monthStart = startOfMonthDate(cursor.getTime());
+  const gridStart = startOfWeek(monthStart);
+  const days = [];
+  const dayCursor = new Date(gridStart.getTime());
+  for (let index = 0; index < 42; index += 1) {
+    days.push(new Date(dayCursor.getTime()));
+    dayCursor.setDate(dayCursor.getDate() + 1);
+  }
+
+  return `
+    <div class="sb-calendar">
+      <div class="sb-calendar__weekdays">
+        ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => `<span>${esc(label)}</span>`).join('')}
+      </div>
+      <div class="sb-calendar__grid">
+        ${days.map((day) => renderCalendarMonthDay(day, monthStart, dayEventMap)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderCalendarMonthDay(day, monthStart, dayEventMap) {
   const key = dayKey(day);
-  const dayEvents = getEventsForDay(events, day).slice(0, 3);
+  const dayEvents = getDayEvents(dayEventMap, day);
   const isOutside = !isSameMonth(day, monthStart);
   const isSelected = key === state.selectedCalendarDate;
   const isToday = key === dayKey(new Date());
 
   return `
     <article class="sb-calendar-day${isOutside ? ' is-outside' : ''}${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}">
-      <button class="sb-calendar-day__label" type="button" data-calendar-select-date="${escAttr(key)}">
+      <button
+        class="sb-calendar-day__hit"
+        type="button"
+        data-calendar-select-date="${escAttr(key)}"
+        aria-label="${escAttr(`Select ${formatLongDate(day.getTime())}`)}"
+      ></button>
+      <div class="sb-calendar-day__label" aria-hidden="true">
         <span>${esc(String(day.getDate()))}</span>
-      </button>
+      </div>
       <div class="sb-calendar-day__events">
-        ${dayEvents.map((event) => `
-          <button class="sb-event-chip" type="button" data-calendar-select-event="${escAttr(event.id)}" data-calendar-select-date="${escAttr(key)}">
-            <span class="sb-event-chip__time">${esc(formatEventChipTime(event, day))}</span>
-            <span class="sb-event-chip__title">${esc(event.title)}</span>
-          </button>
-        `).join('')}
-        ${getEventsForDay(events, day).length > 3 ? `<div class="sb-event-chip sb-event-chip--overflow">+${esc(String(getEventsForDay(events, day).length - 3))} more</div>` : ''}
+        ${renderCalendarEventChips(dayEvents, key, day, 3)}
       </div>
     </article>
+  `;
+}
+
+function renderCalendarWeekView(cursor, dayEventMap) {
+  const weekStart = startOfWeek(cursor);
+  const days = [];
+  const dayCursor = new Date(weekStart.getTime());
+  for (let index = 0; index < 7; index += 1) {
+    days.push(new Date(dayCursor.getTime()));
+    dayCursor.setDate(dayCursor.getDate() + 1);
+  }
+
+  return `
+    <div class="sb-calendar sb-calendar--week">
+      <div class="sb-calendar-week">
+        ${days.map((day) => renderCalendarWeekDay(day, dayEventMap)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderCalendarWeekDay(day, dayEventMap) {
+  const key = dayKey(day);
+  const dayEvents = getDayEvents(dayEventMap, day);
+  const isSelected = key === state.selectedCalendarDate;
+  const isToday = key === dayKey(new Date());
+
+  return `
+    <article class="sb-calendar-day sb-calendar-day--week${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}">
+      <button
+        class="sb-calendar-day__hit"
+        type="button"
+        data-calendar-select-date="${escAttr(key)}"
+        aria-label="${escAttr(`Select ${formatLongDate(day.getTime())}`)}"
+      ></button>
+      <div class="sb-calendar-day__header" aria-hidden="true">
+        <span class="sb-calendar-day__weekday">${esc(formatWeekdayLabel(day))}</span>
+        <strong>${esc(formatMonthDayLabel(day))}</strong>
+      </div>
+      <div class="sb-calendar-day__events">
+        ${dayEvents.length > 0
+          ? renderCalendarEventChips(dayEvents, key, day, 6)
+          : '<div class="sb-calendar-day__empty">No events scheduled.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderCalendarYearView(cursor, dayEventMap) {
+  const yearStart = startOfYear(cursor);
+  const months = [];
+  for (let index = 0; index < 12; index += 1) {
+    const month = new Date(yearStart.getTime());
+    month.setMonth(index);
+    months.push(month);
+  }
+
+  return `
+    <div class="sb-calendar sb-calendar--year">
+      <div class="sb-calendar-year">
+        ${months.map((monthStart) => renderCalendarMiniMonth(monthStart, dayEventMap)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderCalendarMiniMonth(monthStart, dayEventMap) {
+  const gridStart = startOfWeek(monthStart);
+  const days = [];
+  const dayCursor = new Date(gridStart.getTime());
+  for (let index = 0; index < 42; index += 1) {
+    days.push(new Date(dayCursor.getTime()));
+    dayCursor.setDate(dayCursor.getDate() + 1);
+  }
+
+  return `
+    <article class="sb-calendar-mini-month">
+      <div class="sb-calendar-mini-month__header">${esc(new Date(monthStart).toLocaleDateString([], { month: 'long' }))}</div>
+      <div class="sb-calendar-mini-month__weekdays">
+        ${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label) => `<span>${esc(label)}</span>`).join('')}
+      </div>
+      <div class="sb-calendar-mini-month__grid">
+        ${days.map((day) => renderCalendarMiniDay(day, monthStart, dayEventMap)).join('')}
+      </div>
+    </article>
+  `;
+}
+
+function renderCalendarMiniDay(day, monthStart, dayEventMap) {
+  if (!isSameMonth(day, monthStart)) {
+    return '<span class="sb-calendar-mini-day sb-calendar-mini-day--blank" aria-hidden="true"></span>';
+  }
+
+  const key = dayKey(day);
+  const eventCount = getDayEvents(dayEventMap, day).length;
+  const isSelected = key === state.selectedCalendarDate;
+  const isToday = key === dayKey(new Date());
+
+  return `
+    <button
+      class="sb-calendar-mini-day${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}${eventCount > 0 ? ' has-events' : ''}"
+      type="button"
+      data-calendar-select-date="${escAttr(key)}"
+      title="${escAttr(`${formatLongDate(day.getTime())}${eventCount > 0 ? ` · ${eventCount} event${eventCount === 1 ? '' : 's'}` : ''}`)}"
+    >
+      <span class="sb-calendar-mini-day__number">${esc(String(day.getDate()))}</span>
+      ${eventCount > 0 ? `<span class="sb-calendar-mini-day__count">${esc(String(eventCount))}</span>` : ''}
+    </button>
+  `;
+}
+
+function renderCalendarEventChips(events, dateKey, day, limit) {
+  const visibleEvents = events.slice(0, limit);
+  return `
+    ${visibleEvents.map((event) => `
+      <button class="sb-event-chip" type="button" data-calendar-select-event="${escAttr(event.id)}" data-calendar-select-date="${escAttr(dateKey)}">
+        <span class="sb-event-chip__time">${esc(formatEventChipTime(event, day))}</span>
+        <span class="sb-event-chip__title">${esc(event.title)}</span>
+      </button>
+    `).join('')}
+    ${events.length > limit ? `<div class="sb-event-chip sb-event-chip--overflow">+${esc(String(events.length - limit))} more</div>` : ''}
   `;
 }
 
@@ -453,20 +606,29 @@ function renderCalendarEditor(selectedEvent, selectedDate) {
     <form class="sb-form" data-calendar-form>
       <input type="hidden" name="id" value="${escAttr(selectedEvent?.id ?? '')}">
       <div class="sb-card__eyebrow">${selectedEvent ? 'Edit event' : 'New event'}</div>
-      <input name="title" type="text" placeholder="Event title" value="${escAttr(selectedEvent?.title ?? '')}" required>
+      <label class="sb-form__label" for="calendar-title">Event title</label>
+      <input id="calendar-title" name="title" type="text" placeholder="Event title" value="${escAttr(selectedEvent?.title ?? '')}" required>
       <div class="sb-form__row">
-        <input name="startsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(startsAt))}" required>
-        <input name="endsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(endsAt))}">
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="calendar-starts-at">Start time</label>
+          <input id="calendar-starts-at" name="startsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(startsAt))}" required>
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="calendar-ends-at">End time</label>
+          <input id="calendar-ends-at" name="endsAt" type="datetime-local" value="${escAttr(toDateTimeLocal(endsAt))}">
+        </div>
       </div>
-      <input name="location" type="text" placeholder="Location or call link" value="${escAttr(selectedEvent?.location ?? '')}">
-      <textarea name="description" rows="6" placeholder="Description, agenda, prep notes, or anything you want attached to this event">${esc(selectedEvent?.description ?? '')}</textarea>
+      <label class="sb-form__label" for="calendar-location">Location or link</label>
+      <input id="calendar-location" name="location" type="text" placeholder="Location or call link" value="${escAttr(selectedEvent?.location ?? '')}">
+      <label class="sb-form__label" for="calendar-description">Description</label>
+      <textarea id="calendar-description" name="description" rows="6" placeholder="Description, agenda, prep notes, or anything you want attached to this event">${esc(selectedEvent?.description ?? '')}</textarea>
       <button class="btn btn-primary" type="submit">${selectedEvent ? 'Save event' : 'Create event'}</button>
     </form>
   `;
 }
 
 function renderTasks(panel, data) {
-  const selectedTask = findRecord(data.tasks, state.selectedTaskId);
+  const selectedTask = state.creatingTask ? null : findRecord(data.tasks, state.selectedTaskId);
   const columns = {
     todo: data.tasks.filter((task) => task.status === 'todo'),
     in_progress: data.tasks.filter((task) => task.status === 'in_progress'),
@@ -476,24 +638,9 @@ function renderTasks(panel, data) {
   panel.innerHTML = `
     <section class="sb-section">
       <div class="sb-section__header">
-        <div>
-          <div class="sb-card__eyebrow">Tasks</div>
-          <h3>Task board</h3>
-          <p class="sb-section__copy">Move tasks between columns and edit the full details on the right.</p>
-        </div>
         <button class="btn btn-primary btn-sm" type="button" data-task-new="true">New task</button>
       </div>
-      <div class="sb-task-stats">
-        ${renderMetricCard('Todo', String(columns.todo.length), 'Queued for action')}
-        ${renderMetricCard('In progress', String(columns.in_progress.length), 'Active work')}
-        ${renderMetricCard('Done', String(columns.done.length), 'Closed out')}
-      </div>
       <div class="sb-split sb-split--board">
-        <div class="sb-board">
-          ${renderTaskColumn('Todo', 'todo', columns.todo)}
-          ${renderTaskColumn('In Progress', 'in_progress', columns.in_progress)}
-          ${renderTaskColumn('Done', 'done', columns.done)}
-        </div>
         <aside class="sb-card sb-card--sidebar">
           <div class="sb-card__header">
             <div>
@@ -503,6 +650,11 @@ function renderTasks(panel, data) {
           </div>
           ${renderTaskEditor(selectedTask)}
         </aside>
+        <div class="sb-board">
+          ${renderTaskColumn('Todo', 'todo', columns.todo)}
+          ${renderTaskColumn('In Progress', 'in_progress', columns.in_progress)}
+          ${renderTaskColumn('Done', 'done', columns.done)}
+        </div>
       </div>
     </section>
   `;
@@ -536,8 +688,8 @@ function renderTaskBoardCard(task, lane) {
         ${task.dueAt ? `<span class="badge badge-muted">${esc(formatShortDateTime(task.dueAt))}</span>` : ''}
       </div>
       <div class="sb-task-card__actions">
-        ${lane !== 'todo' ? '<button class="btn btn-secondary btn-sm" type="button" data-task-status="todo" data-task-id="' + escAttr(task.id) + '">Todo</button>' : ''}
-        ${lane !== 'in_progress' ? '<button class="btn btn-secondary btn-sm" type="button" data-task-status="in_progress" data-task-id="' + escAttr(task.id) + '">Start</button>' : ''}
+        ${lane !== 'todo' ? '<button class="btn btn-secondary btn-sm" type="button" data-task-status="todo" data-task-id="' + escAttr(task.id) + '">To do</button>' : ''}
+        ${lane !== 'in_progress' ? '<button class="btn btn-secondary btn-sm" type="button" data-task-status="in_progress" data-task-id="' + escAttr(task.id) + '">In progress</button>' : ''}
         ${lane !== 'done' ? '<button class="btn btn-secondary btn-sm" type="button" data-task-status="done" data-task-id="' + escAttr(task.id) + '">Done</button>' : ''}
       </div>
     </div>
@@ -548,25 +700,34 @@ function renderTaskEditor(task) {
   return `
     <form class="sb-form" data-task-form>
       <input type="hidden" name="id" value="${escAttr(task?.id ?? '')}">
-      <input name="title" type="text" placeholder="Task title" value="${escAttr(task?.title ?? '')}" required>
-      <textarea name="details" rows="6" placeholder="Context, checklist, blockers, or acceptance criteria">${esc(task?.details ?? '')}</textarea>
+      <label class="sb-form__label" for="task-title">Task title</label>
+      <input id="task-title" name="title" type="text" placeholder="Task title" value="${escAttr(task?.title ?? '')}" required>
+      <label class="sb-form__label" for="task-details">Details</label>
+      <textarea id="task-details" name="details" rows="6" placeholder="Context, checklist, blockers, or acceptance criteria">${esc(task?.details ?? '')}</textarea>
       <div class="sb-form__row">
-        <select name="priority">
-          ${renderSelectOptions([
-            { value: 'high', label: 'High priority' },
-            { value: 'medium', label: 'Medium priority' },
-            { value: 'low', label: 'Low priority' },
-          ], task?.priority ?? 'medium')}
-        </select>
-        <select name="status">
-          ${renderSelectOptions([
-            { value: 'todo', label: 'Todo' },
-            { value: 'in_progress', label: 'In progress' },
-            { value: 'done', label: 'Done' },
-          ], task?.status ?? 'todo')}
-        </select>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="task-priority">Priority</label>
+          <select id="task-priority" name="priority">
+            ${renderSelectOptions([
+              { value: 'high', label: 'High priority' },
+              { value: 'medium', label: 'Medium priority' },
+              { value: 'low', label: 'Low priority' },
+            ], task?.priority ?? 'medium')}
+          </select>
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="task-status">Status</label>
+          <select id="task-status" name="status">
+            ${renderSelectOptions([
+              { value: 'todo', label: 'To do' },
+              { value: 'in_progress', label: 'In progress' },
+              { value: 'done', label: 'Done' },
+            ], task?.status ?? 'todo')}
+          </select>
+        </div>
       </div>
-      <input name="dueAt" type="datetime-local" value="${escAttr(toDateTimeLocal(task?.dueAt ?? null))}">
+      <label class="sb-form__label" for="task-due-at">Due date</label>
+      <input id="task-due-at" name="dueAt" type="datetime-local" value="${escAttr(toDateTimeLocal(task?.dueAt ?? null))}">
       <button class="btn btn-primary" type="submit">${task ? 'Save task' : 'Create task'}</button>
     </form>
   `;
@@ -574,7 +735,9 @@ function renderTaskEditor(task) {
 
 function renderNotes(panel, data) {
   const filtered = data.notes.filter((note) => matchesNoteQuery(note, state.noteQuery));
-  const selectedNote = findRecord(filtered, state.selectedNoteId) ?? findRecord(data.notes, state.selectedNoteId);
+  const selectedNote = state.creatingNote
+    ? null
+    : (findRecord(filtered, state.selectedNoteId) ?? findRecord(data.notes, state.selectedNoteId));
 
   panel.innerHTML = `
     <section class="sb-section">
@@ -587,15 +750,6 @@ function renderNotes(panel, data) {
         <button class="btn btn-primary btn-sm" type="button" data-note-new="true">New note</button>
       </div>
       <div class="sb-split">
-        <article class="sb-card sb-card--rail">
-          <form class="sb-toolbar sb-toolbar--search" data-note-search-form>
-            <input name="query" type="search" placeholder="Search title, body, or tags" value="${escAttr(state.noteQuery)}">
-            <button class="btn btn-secondary btn-sm" type="submit">Search</button>
-          </form>
-          <div class="sb-stack">
-            ${filtered.length > 0 ? filtered.map((note) => renderNoteListItem(note)).join('') : '<div class="sb-empty">No notes match this search.</div>'}
-          </div>
-        </article>
         <article class="sb-card sb-card--editor">
           <div class="sb-card__header">
             <div>
@@ -604,6 +758,15 @@ function renderNotes(panel, data) {
             </div>
           </div>
           ${renderNoteEditor(selectedNote)}
+        </article>
+        <article class="sb-card sb-card--rail">
+          <form class="sb-toolbar sb-toolbar--search" data-note-search-form>
+            <input name="query" type="search" placeholder="Search title, body, or tags" value="${escAttr(state.noteQuery)}">
+            <button class="btn btn-secondary btn-sm" type="submit">Search</button>
+          </form>
+          <div class="sb-stack">
+            ${filtered.length > 0 ? filtered.map((note) => renderNoteListItem(note)).join('') : '<div class="sb-empty">No notes match this search.</div>'}
+          </div>
         </article>
       </div>
     </section>
@@ -629,17 +792,29 @@ function renderNoteEditor(note) {
   return `
     <form class="sb-form" data-note-form>
       <input type="hidden" name="id" value="${escAttr(note?.id ?? '')}">
-      <input name="title" type="text" placeholder="Note title" value="${escAttr(note?.title ?? '')}">
-      <input name="tags" type="text" placeholder="comma, separated, tags" value="${escAttr((note?.tags ?? []).join(', '))}">
-      <label class="sb-check">
-        <input name="pinned" type="checkbox" ${note?.pinned ? 'checked' : ''}>
-        <span>Pin note</span>
-      </label>
-      <label class="sb-check">
-        <input name="archived" type="checkbox" ${note?.archivedAt ? 'checked' : ''}>
-        <span>Archive note</span>
-      </label>
-      <textarea name="content" rows="14" placeholder="Write the note body" required>${esc(note?.content ?? '')}</textarea>
+      <label class="sb-form__label" for="note-title">Note title</label>
+      <input id="note-title" name="title" type="text" placeholder="Note title" value="${escAttr(note?.title ?? '')}">
+      <label class="sb-form__label" for="note-tags">Tags</label>
+      <input id="note-tags" name="tags" type="text" placeholder="comma, separated, tags" value="${escAttr((note?.tags ?? []).join(', '))}">
+      <div class="sb-form__label">Note options</div>
+      <div class="sb-check-grid sb-check-grid--options">
+        <label class="sb-check sb-check--surface">
+          <input name="pinned" type="checkbox" ${note?.pinned ? 'checked' : ''}>
+          <span class="sb-check__copy">
+            <strong>Pin note</strong>
+            <small>Keep it near the top of the note list.</small>
+          </span>
+        </label>
+        <label class="sb-check sb-check--surface">
+          <input name="archived" type="checkbox" ${note?.archivedAt ? 'checked' : ''}>
+          <span class="sb-check__copy">
+            <strong>Archive note</strong>
+            <small>Hide it from active work without deleting it.</small>
+          </span>
+        </label>
+      </div>
+      <label class="sb-form__label" for="note-content">Note body</label>
+      <textarea id="note-content" name="content" rows="14" placeholder="Write the note body" required>${esc(note?.content ?? '')}</textarea>
       <button class="btn btn-primary" type="submit">${note ? 'Save note' : 'Create note'}</button>
     </form>
   `;
@@ -647,27 +822,30 @@ function renderNoteEditor(note) {
 
 function renderPeople(panel, data) {
   const filtered = data.people.filter((person) => matchesPersonFilter(person));
-  const selectedPerson = findRecord(filtered, state.selectedPersonId) ?? findRecord(data.people, state.selectedPersonId);
+  const selectedPerson = state.creatingPerson
+    ? null
+    : (findRecord(filtered, state.selectedPersonId) ?? findRecord(data.people, state.selectedPersonId));
   const staleCount = data.people.filter((person) => isPersonStale(person, data.now)).length;
 
   panel.innerHTML = `
     <section class="sb-section">
       <div class="sb-section__header">
-        <div>
-          <div class="sb-card__eyebrow">People</div>
-          <h3>Contacts</h3>
-          <p class="sb-section__copy">Keep contact details, notes, and last-contact dates here.</p>
-        </div>
-        <button class="btn btn-primary btn-sm" type="button" data-person-new="true">New person</button>
-      </div>
-      <div class="sb-metric-row">
-        ${renderMetricCard('All contacts', String(data.people.length), 'Shared store')}
-        ${renderMetricCard('Need follow-up', String(staleCount), 'No recent contact')}
+        <button class="btn btn-primary btn-sm" type="button" data-person-new="true">New contact</button>
       </div>
       <div class="sb-split">
+        <article class="sb-card sb-card--editor">
+          <div class="sb-card__header">
+            <div>
+              <div class="sb-card__eyebrow">${selectedPerson ? 'Edit contact' : 'New contact'}</div>
+              <h3>${esc(selectedPerson?.name ?? 'Contact editor')}</h3>
+            </div>
+            ${selectedPerson ? `<button class="btn btn-secondary btn-sm" type="button" data-person-touch="${escAttr(selectedPerson.id)}">Mark contacted today</button>` : ''}
+          </div>
+          ${renderPersonEditor(selectedPerson)}
+        </article>
         <article class="sb-card sb-card--rail">
           <form class="sb-toolbar sb-toolbar--search" data-person-search-form>
-            <input name="query" type="search" placeholder="Search people" value="${escAttr(state.personQuery)}">
+            <input name="query" type="search" placeholder="Search contacts" value="${escAttr(state.personQuery)}">
             <button class="btn btn-secondary btn-sm" type="submit">Search</button>
           </form>
           <div class="sb-segmented">
@@ -678,18 +856,8 @@ function renderPeople(panel, data) {
             ${renderSegmentButton('vendor', 'Vendor', state.personRelationship === 'vendor', 'data-person-relationship')}
           </div>
           <div class="sb-stack">
-            ${filtered.length > 0 ? filtered.map((person) => renderPersonListItem(person, data.now)).join('') : '<div class="sb-empty">No people match this filter.</div>'}
+            ${filtered.length > 0 ? filtered.map((person) => renderPersonListItem(person, data.now)).join('') : '<div class="sb-empty">No contacts match this filter.</div>'}
           </div>
-        </article>
-        <article class="sb-card sb-card--editor">
-          <div class="sb-card__header">
-            <div>
-              <div class="sb-card__eyebrow">${selectedPerson ? 'Edit person' : 'New person'}</div>
-              <h3>${esc(selectedPerson?.name ?? 'Person editor')}</h3>
-            </div>
-            ${selectedPerson ? `<button class="btn btn-secondary btn-sm" type="button" data-person-touch="${escAttr(selectedPerson.id)}">Mark contacted today</button>` : ''}
-          </div>
-          ${renderPersonEditor(selectedPerson)}
         </article>
       </div>
     </section>
@@ -714,26 +882,45 @@ function renderPersonEditor(person) {
     <form class="sb-form" data-person-form>
       <input type="hidden" name="id" value="${escAttr(person?.id ?? '')}">
       <div class="sb-form__row">
-        <input name="name" type="text" placeholder="Name" value="${escAttr(person?.name ?? '')}">
-        <input name="email" type="email" placeholder="Email" value="${escAttr(person?.email ?? '')}">
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-name">Name</label>
+          <input id="person-name" name="name" type="text" placeholder="Name" value="${escAttr(person?.name ?? '')}">
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-email">Email</label>
+          <input id="person-email" name="email" type="email" placeholder="Email" value="${escAttr(person?.email ?? '')}">
+        </div>
       </div>
       <div class="sb-form__row">
-        <input name="title" type="text" placeholder="Title" value="${escAttr(person?.title ?? '')}">
-        <input name="company" type="text" placeholder="Company" value="${escAttr(person?.company ?? '')}">
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-title">Title</label>
+          <input id="person-title" name="title" type="text" placeholder="Title" value="${escAttr(person?.title ?? '')}">
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-company">Company</label>
+          <input id="person-company" name="company" type="text" placeholder="Company" value="${escAttr(person?.company ?? '')}">
+        </div>
       </div>
       <div class="sb-form__row">
-        <select name="relationship">
-          ${renderSelectOptions([
-            { value: 'work', label: 'Work' },
-            { value: 'personal', label: 'Personal' },
-            { value: 'family', label: 'Family' },
-            { value: 'vendor', label: 'Vendor' },
-            { value: 'other', label: 'Other' },
-          ], person?.relationship ?? 'work')}
-        </select>
-        <input name="lastContactAt" type="datetime-local" value="${escAttr(toDateTimeLocal(person?.lastContactAt ?? null))}">
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-relationship">Relationship</label>
+          <select id="person-relationship" name="relationship">
+            ${renderSelectOptions([
+              { value: 'work', label: 'Work' },
+              { value: 'personal', label: 'Personal' },
+              { value: 'family', label: 'Family' },
+              { value: 'vendor', label: 'Vendor' },
+              { value: 'other', label: 'Other' },
+            ], person?.relationship ?? 'work')}
+          </select>
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-last-contact-at">Last contacted</label>
+          <input id="person-last-contact-at" name="lastContactAt" type="datetime-local" value="${escAttr(toDateTimeLocal(person?.lastContactAt ?? null))}">
+        </div>
       </div>
-      <textarea name="notes" rows="10" placeholder="Relationship notes, context, promises, or follow-up cues">${esc(person?.notes ?? '')}</textarea>
+      <label class="sb-form__label" for="person-notes">Notes</label>
+      <textarea id="person-notes" name="notes" rows="10" placeholder="Relationship notes, context, promises, or follow-up cues">${esc(person?.notes ?? '')}</textarea>
       <button class="btn btn-primary" type="submit">${person ? 'Save person' : 'Create person'}</button>
     </form>
   `;
@@ -741,19 +928,26 @@ function renderPersonEditor(person) {
 
 function renderLibrary(panel, data) {
   const filtered = data.links.filter((link) => matchesLinkFilter(link));
-  const selectedLink = findRecord(filtered, state.selectedLinkId) ?? findRecord(data.links, state.selectedLinkId);
+  const selectedLink = state.creatingLink
+    ? null
+    : (findRecord(filtered, state.selectedLinkId) ?? findRecord(data.links, state.selectedLinkId));
 
   panel.innerHTML = `
     <section class="sb-section">
       <div class="sb-section__header">
-        <div>
-          <div class="sb-card__eyebrow">Library</div>
-          <h3>Saved links and files</h3>
-          <p class="sb-section__copy">Save links, documents, repos, and files you may want to come back to later.</p>
-        </div>
         <button class="btn btn-primary btn-sm" type="button" data-link-new="true">Add item</button>
       </div>
       <div class="sb-split">
+        <article class="sb-card sb-card--editor">
+          <div class="sb-card__header">
+            <div>
+              <div class="sb-card__eyebrow">${selectedLink ? 'Edit item' : 'Add item'}</div>
+              <h3>${esc(selectedLink?.title ?? 'Library editor')}</h3>
+            </div>
+            ${selectedLink ? `<a class="btn btn-secondary btn-sm" href="${escAttr(selectedLink.url)}" target="_blank" rel="noreferrer">Open link</a>` : ''}
+          </div>
+          ${renderLinkEditor(selectedLink)}
+        </article>
         <article class="sb-card sb-card--rail">
           <form class="sb-toolbar sb-toolbar--search" data-link-search-form>
             <input name="query" type="search" placeholder="Search library" value="${escAttr(state.linkQuery)}">
@@ -769,16 +963,6 @@ function renderLibrary(panel, data) {
           <div class="sb-stack">
             ${filtered.length > 0 ? filtered.map((link) => renderLinkListItem(link)).join('') : '<div class="sb-empty">No library items match this filter.</div>'}
           </div>
-        </article>
-        <article class="sb-card sb-card--editor">
-          <div class="sb-card__header">
-            <div>
-              <div class="sb-card__eyebrow">${selectedLink ? 'Edit item' : 'Add item'}</div>
-              <h3>${esc(selectedLink?.title ?? 'Library editor')}</h3>
-            </div>
-            ${selectedLink ? `<a class="btn btn-secondary btn-sm" href="${escAttr(selectedLink.url)}" target="_blank" rel="noreferrer">Open link</a>` : ''}
-          </div>
-          ${renderLinkEditor(selectedLink)}
         </article>
       </div>
     </section>
@@ -803,22 +987,34 @@ function renderLinkEditor(link) {
   return `
     <form class="sb-form" data-link-form>
       <input type="hidden" name="id" value="${escAttr(link?.id ?? '')}">
-      <input name="title" type="text" placeholder="Title" value="${escAttr(link?.title ?? '')}">
-      <input name="url" type="url" placeholder="https://..." value="${escAttr(link?.url ?? '')}" required>
-      <div class="sb-form__row">
-        <select name="kind">
-          ${renderSelectOptions([
-            { value: 'reference', label: 'Reference' },
-            { value: 'document', label: 'Document' },
-            { value: 'article', label: 'Article' },
-            { value: 'repo', label: 'Repository' },
-            { value: 'file', label: 'File' },
-            { value: 'other', label: 'Other' },
-          ], link?.kind ?? 'reference')}
-        </select>
-        <input name="tags" type="text" placeholder="comma, separated, tags" value="${escAttr((link?.tags ?? []).join(', '))}">
+      <label class="sb-form__label" for="link-title">Title</label>
+      <input id="link-title" name="title" type="text" placeholder="Title" value="${escAttr(link?.title ?? '')}">
+      <label class="sb-form__label" for="link-url">URL or Path</label>
+      <div style="display:flex;gap:0.5rem">
+        <input id="link-url" name="url" type="text" placeholder="https://... or file path" value="${escAttr(link?.url ?? '')}" required style="flex-grow:1">
+        <button class="btn btn-secondary" type="button" data-link-pick-file="true">File...</button>
       </div>
-      <textarea name="summary" rows="10" placeholder="Why this matters later">${esc(link?.summary ?? '')}</textarea>
+      <div class="sb-form__row">
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="link-kind">Kind</label>
+          <select id="link-kind" name="kind">
+            ${renderSelectOptions([
+              { value: 'reference', label: 'Reference' },
+              { value: 'document', label: 'Document' },
+              { value: 'article', label: 'Article' },
+              { value: 'repo', label: 'Repository' },
+              { value: 'file', label: 'File' },
+              { value: 'other', label: 'Other' },
+            ], link?.kind ?? 'reference')}
+          </select>
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="link-tags">Tags</label>
+          <input id="link-tags" name="tags" type="text" placeholder="comma, separated, tags" value="${escAttr((link?.tags ?? []).join(', '))}">
+        </div>
+      </div>
+      <label class="sb-form__label" for="link-summary">Why this matters</label>
+      <textarea id="link-summary" name="summary" rows="10" placeholder="Why this matters later">${esc(link?.summary ?? '')}</textarea>
       <button class="btn btn-primary" type="submit">${link ? 'Save item' : 'Add item'}</button>
     </form>
   `;
@@ -903,14 +1099,16 @@ function renderRoutines(panel, data) {
 
   panel.innerHTML = `
     <section class="sb-section">
-      <div class="sb-section__header">
-        <div>
-          <div class="sb-card__eyebrow">Routines</div>
-          <h3>Routines</h3>
-          <p class="sb-section__copy">Turn routines on or off, see when they run, and choose where their updates appear.</p>
-        </div>
-      </div>
       <div class="sb-split sb-split--board">
+        <aside class="sb-card sb-card--sidebar">
+          <div class="sb-card__header">
+            <div>
+              <div class="sb-card__eyebrow">${selectedRoutine ? 'Edit routine' : 'Routine details'}</div>
+              <h3>${esc(selectedRoutine?.name ?? 'Select a routine')}</h3>
+            </div>
+          </div>
+          ${selectedRoutine ? renderRoutineEditor(selectedRoutine) : '<div class="sb-empty">Select a routine card to edit its settings.</div>'}
+        </aside>
         <div class="sb-board">
           ${groupRoutines(data.routines).map(([category, routines]) => `
             <article class="sb-card sb-board__column">
@@ -924,15 +1122,6 @@ function renderRoutines(panel, data) {
             </article>
           `).join('')}
         </div>
-        <aside class="sb-card sb-card--sidebar">
-          <div class="sb-card__header">
-            <div>
-              <div class="sb-card__eyebrow">${selectedRoutine ? 'Edit routine' : 'Routine details'}</div>
-              <h3>${esc(selectedRoutine?.name ?? 'Select a routine')}</h3>
-            </div>
-          </div>
-          ${selectedRoutine ? renderRoutineEditor(selectedRoutine) : '<div class="sb-empty">Select a routine card to edit its settings.</div>'}
-        </aside>
       </div>
     </section>
   `;
@@ -964,9 +1153,26 @@ function renderRoutineEditor(routine) {
         <input name="enabled" type="checkbox" ${routine.enabled ? 'checked' : ''}>
         <span>Enabled</span>
       </label>
-      <div class="sb-readout">
-        <strong>Trigger</strong>
-        <span>${esc(describeRoutineTrigger(routine.trigger))}</span>
+      <label class="sb-form__label" for="routine-trigger-mode">Schedule</label>
+      <select id="routine-trigger-mode" name="triggerMode">
+        ${renderSelectOptions([
+          { value: 'cron', label: 'Scheduled' },
+          { value: 'manual', label: 'Manual (One-off)' }
+        ], routine.trigger?.mode || 'manual')}
+      </select>
+      <div id="routine-cron-group" style="display: ${routine.trigger?.mode === 'cron' ? 'block' : 'none'}">
+        <label class="sb-form__label" for="routine-cron">Time</label>
+        <select id="routine-cron" name="cron">
+          ${renderSelectOptions([
+            { value: '0 7 * * *', label: 'Daily at 7 a.m.' },
+            { value: '0 9 * * *', label: 'Daily at 9 a.m.' },
+            { value: '0 12 * * *', label: 'Daily at Noon' },
+            { value: '0 17 * * *', label: 'Daily at 5 p.m.' },
+            { value: '0 9 * * 1', label: 'Weekly on Monday at 9 a.m.' },
+            { value: '0 17 * * 5', label: 'Weekly on Friday at 5 p.m.' },
+            { value: '0 * * * *', label: 'Every Hour' }
+          ], routine.trigger?.cron || '0 7 * * *')}
+        </select>
       </div>
       <div class="sb-readout">
         <strong>Workload</strong>
@@ -1014,14 +1220,25 @@ function bindInteractions(container) {
     const calendarNav = target.closest('[data-calendar-nav]');
     if (calendarNav?.dataset.calendarNav) {
       if (calendarNav.dataset.calendarNav === 'prev') {
-        state.calendarCursor = addMonths(state.calendarCursor, -1);
+        state.calendarCursor = shiftCalendarCursor(state.calendarCursor, state.calendarView, -1);
       } else if (calendarNav.dataset.calendarNav === 'next') {
-        state.calendarCursor = addMonths(state.calendarCursor, 1);
+        state.calendarCursor = shiftCalendarCursor(state.calendarCursor, state.calendarView, 1);
       } else {
-        state.calendarCursor = startOfMonthDate(Date.now());
+        state.calendarCursor = startOfDay(Date.now());
         state.selectedCalendarDate = dayKey(new Date());
       }
       state.selectedCalendarEventId = null;
+      state.creatingCalendarEvent = true;
+      void renderSecondBrain(container, { tab: state.activeTab, refresh: true });
+      return;
+    }
+
+    const calendarView = target.closest('[data-calendar-view]');
+    if (calendarView?.dataset.calendarView) {
+      state.calendarView = normalizeCalendarView(calendarView.dataset.calendarView);
+      state.calendarCursor = parseDayKey(state.selectedCalendarDate);
+      state.selectedCalendarEventId = null;
+      state.creatingCalendarEvent = true;
       void renderSecondBrain(container, { tab: state.activeTab, refresh: true });
       return;
     }
@@ -1029,8 +1246,13 @@ function bindInteractions(container) {
     const selectDate = target.closest('[data-calendar-select-date]');
     if (selectDate?.dataset.calendarSelectDate) {
       state.selectedCalendarDate = selectDate.dataset.calendarSelectDate;
+      state.calendarCursor = parseDayKey(state.selectedCalendarDate);
       if (selectDate.dataset.calendarSelectEvent) {
         state.selectedCalendarEventId = selectDate.dataset.calendarSelectEvent;
+        state.creatingCalendarEvent = false;
+      } else {
+        state.selectedCalendarEventId = null;
+        state.creatingCalendarEvent = true;
       }
       void rerenderLocal();
       return;
@@ -1039,6 +1261,7 @@ function bindInteractions(container) {
     const selectEvent = target.closest('[data-calendar-select-event]');
     if (selectEvent?.dataset.calendarSelectEvent) {
       state.selectedCalendarEventId = selectEvent.dataset.calendarSelectEvent;
+      state.creatingCalendarEvent = false;
       if (selectEvent.dataset.calendarSelectDate) {
         state.selectedCalendarDate = selectEvent.dataset.calendarSelectDate;
       }
@@ -1049,8 +1272,10 @@ function bindInteractions(container) {
     const newEvent = target.closest('[data-calendar-new]');
     if (newEvent?.dataset.calendarNew) {
       state.selectedCalendarEventId = null;
+      state.creatingCalendarEvent = true;
       if (newEvent.dataset.dateKey) {
         state.selectedCalendarDate = newEvent.dataset.dateKey;
+        state.calendarCursor = parseDayKey(state.selectedCalendarDate);
       }
       void rerenderLocal();
       return;
@@ -1059,6 +1284,7 @@ function bindInteractions(container) {
     const taskSelect = target.closest('[data-task-select]');
     if (taskSelect?.dataset.taskSelect) {
       state.selectedTaskId = taskSelect.dataset.taskSelect;
+      state.creatingTask = false;
       void rerenderLocal();
       return;
     }
@@ -1066,6 +1292,7 @@ function bindInteractions(container) {
     const taskNew = target.closest('[data-task-new]');
     if (taskNew?.dataset.taskNew) {
       state.selectedTaskId = null;
+      state.creatingTask = true;
       void rerenderLocal();
       return;
     }
@@ -1079,6 +1306,7 @@ function bindInteractions(container) {
     const noteSelect = target.closest('[data-note-select]');
     if (noteSelect?.dataset.noteSelect) {
       state.selectedNoteId = noteSelect.dataset.noteSelect;
+      state.creatingNote = false;
       void rerenderLocal();
       return;
     }
@@ -1086,6 +1314,7 @@ function bindInteractions(container) {
     const noteNew = target.closest('[data-note-new]');
     if (noteNew?.dataset.noteNew) {
       state.selectedNoteId = null;
+      state.creatingNote = true;
       void rerenderLocal();
       return;
     }
@@ -1093,6 +1322,7 @@ function bindInteractions(container) {
     const personSelect = target.closest('[data-person-select]');
     if (personSelect?.dataset.personSelect) {
       state.selectedPersonId = personSelect.dataset.personSelect;
+      state.creatingPerson = false;
       void rerenderLocal();
       return;
     }
@@ -1100,6 +1330,7 @@ function bindInteractions(container) {
     const personNew = target.closest('[data-person-new]');
     if (personNew?.dataset.personNew) {
       state.selectedPersonId = null;
+      state.creatingPerson = true;
       void rerenderLocal();
       return;
     }
@@ -1107,6 +1338,7 @@ function bindInteractions(container) {
     const personRelationship = target.closest('[data-person-relationship]');
     if (personRelationship?.dataset.personRelationship) {
       state.personRelationship = personRelationship.dataset.personRelationship;
+      state.creatingPerson = false;
       state.selectedPersonId = preserveSelection(null, state.data?.people.filter((person) => matchesPersonFilter(person)) ?? []);
       void rerenderLocal();
       return;
@@ -1121,6 +1353,7 @@ function bindInteractions(container) {
     const linkSelect = target.closest('[data-link-select]');
     if (linkSelect?.dataset.linkSelect) {
       state.selectedLinkId = linkSelect.dataset.linkSelect;
+      state.creatingLink = false;
       void rerenderLocal();
       return;
     }
@@ -1128,6 +1361,7 @@ function bindInteractions(container) {
     const linkNew = target.closest('[data-link-new]');
     if (linkNew?.dataset.linkNew) {
       state.selectedLinkId = null;
+      state.creatingLink = true;
       void rerenderLocal();
       return;
     }
@@ -1135,8 +1369,23 @@ function bindInteractions(container) {
     const linkKind = target.closest('[data-link-kind]');
     if (linkKind?.dataset.linkKind) {
       state.linkKind = linkKind.dataset.linkKind;
+      state.creatingLink = false;
       state.selectedLinkId = preserveSelection(null, state.data?.links.filter((link) => matchesLinkFilter(link)) ?? []);
       void rerenderLocal();
+      return;
+    }
+
+    const linkPickFile = target.closest('[data-link-pick-file]');
+    if (linkPickFile?.dataset.linkPickFile) {
+      try {
+        const result = await api.pickSearchPath('file');
+        if (result && result.path) {
+          const urlInput = document.getElementById('link-url');
+          if (urlInput) urlInput.value = result.path;
+        }
+      } catch (err) {
+        setFlash('error', 'Failed to pick file: ' + (err instanceof Error ? err.message : String(err)));
+      }
       return;
     }
 
@@ -1170,15 +1419,26 @@ function bindInteractions(container) {
   });
 
   container.addEventListener('change', async (event) => {
-    const target = event.target instanceof HTMLInputElement ? event.target : null;
-    if (!target) return;
-    if (!target.dataset.routineQuickToggle) return;
-    await saveMutation(() => api.secondBrainRoutineUpdate({
-      id: target.dataset.routineQuickToggle,
-      enabled: target.checked,
-    }), (result) => {
-      state.selectedRoutineId = String(result?.details?.id ?? target.dataset.routineQuickToggle);
-    });
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+
+    if (target.id === 'routine-trigger-mode') {
+      const group = document.getElementById('routine-cron-group');
+      if (group && target instanceof HTMLSelectElement) {
+        group.style.display = target.value === 'cron' ? 'block' : 'none';
+      }
+      return;
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.routineQuickToggle) {
+      await saveMutation(() => api.secondBrainRoutineUpdate({
+        id: target.dataset.routineQuickToggle,
+        enabled: target.checked,
+      }), (result) => {
+        state.selectedRoutineId = String(result?.details?.id ?? target.dataset.routineQuickToggle);
+      });
+      return;
+    }
   });
 
   container.addEventListener('submit', async (event) => {
@@ -1203,6 +1463,7 @@ function bindInteractions(container) {
       }), (result) => {
         if (result?.details?.id) {
           state.selectedCalendarEventId = String(result.details.id);
+          state.creatingCalendarEvent = false;
         }
       });
       return;
@@ -1220,6 +1481,7 @@ function bindInteractions(container) {
       }), (result) => {
         if (result?.details?.id) {
           state.selectedTaskId = String(result.details.id);
+          state.creatingTask = false;
         }
       });
       return;
@@ -1237,6 +1499,7 @@ function bindInteractions(container) {
       }), (result) => {
         if (result?.details?.id) {
           state.selectedNoteId = String(result.details.id);
+          state.creatingNote = false;
         }
       });
       return;
@@ -1256,6 +1519,7 @@ function bindInteractions(container) {
       }), (result) => {
         if (result?.details?.id) {
           state.selectedPersonId = String(result.details.id);
+          state.creatingPerson = false;
         }
       });
       return;
@@ -1273,6 +1537,7 @@ function bindInteractions(container) {
       }), (result) => {
         if (result?.details?.id) {
           state.selectedLinkId = String(result.details.id);
+          state.creatingLink = false;
         }
       });
       return;
@@ -1280,9 +1545,15 @@ function bindInteractions(container) {
 
     if (target.matches('[data-routine-form]')) {
       event.preventDefault();
+      const triggerMode = readString(target, 'triggerMode');
+      const cron = readString(target, 'cron');
       await saveMutation(() => api.secondBrainRoutineUpdate({
         id: readString(target, 'id'),
         enabled: readCheckbox(target, 'enabled'),
+        trigger: {
+          mode: triggerMode || 'manual',
+          cron: triggerMode === 'cron' ? cron : undefined,
+        },
         defaultRoutingBias: readString(target, 'defaultRoutingBias') || 'local_first',
         budgetProfileId: readString(target, 'budgetProfileId') || undefined,
         deliveryDefaults: readCheckboxValues(target, 'deliveryDefaults'),
@@ -1297,6 +1568,7 @@ function bindInteractions(container) {
     if (target.matches('[data-note-search-form]')) {
       event.preventDefault();
       state.noteQuery = readString(target, 'query');
+      state.creatingNote = false;
       state.selectedNoteId = preserveSelection(null, state.data?.notes.filter((note) => matchesNoteQuery(note, state.noteQuery)) ?? []);
       void rerenderLocal();
       return;
@@ -1305,6 +1577,7 @@ function bindInteractions(container) {
     if (target.matches('[data-person-search-form]')) {
       event.preventDefault();
       state.personQuery = readString(target, 'query');
+      state.creatingPerson = false;
       state.selectedPersonId = preserveSelection(null, state.data?.people.filter((person) => matchesPersonFilter(person)) ?? []);
       void rerenderLocal();
       return;
@@ -1313,6 +1586,7 @@ function bindInteractions(container) {
     if (target.matches('[data-link-search-form]')) {
       event.preventDefault();
       state.linkQuery = readString(target, 'query');
+      state.creatingLink = false;
       state.selectedLinkId = preserveSelection(null, state.data?.links.filter((link) => matchesLinkFilter(link)) ?? []);
       void rerenderLocal();
     }
@@ -1326,7 +1600,10 @@ async function submitTodayCapture(form) {
       priority: readString(form, 'priority') || 'medium',
       dueAt: readString(form, 'dueAt') ? new Date(readString(form, 'dueAt')).getTime() : undefined,
     }), (result) => {
-      if (result?.details?.id) state.selectedTaskId = String(result.details.id);
+      if (result?.details?.id) {
+        state.selectedTaskId = String(result.details.id);
+        state.creatingTask = false;
+      }
     });
     return;
   }
@@ -1338,7 +1615,10 @@ async function submitTodayCapture(form) {
       endsAt: readString(form, 'endsAt') ? new Date(readString(form, 'endsAt')).getTime() : undefined,
       source: 'local',
     }), (result) => {
-      if (result?.details?.id) state.selectedCalendarEventId = String(result.details.id);
+      if (result?.details?.id) {
+        state.selectedCalendarEventId = String(result.details.id);
+        state.creatingCalendarEvent = false;
+      }
     });
     return;
   }
@@ -1347,7 +1627,10 @@ async function submitTodayCapture(form) {
     title: readString(form, 'title') || undefined,
     content: readString(form, 'content'),
   }), (result) => {
-    if (result?.details?.id) state.selectedNoteId = String(result.details.id);
+    if (result?.details?.id) {
+      state.selectedNoteId = String(result.details.id);
+      state.creatingNote = false;
+    }
   });
 }
 
@@ -1364,6 +1647,7 @@ async function updateTaskStatus(taskId, status) {
   }), (result) => {
     if (result?.details?.id) {
       state.selectedTaskId = String(result.details.id);
+      state.creatingTask = false;
     }
   });
 }
@@ -1555,13 +1839,17 @@ function renderUsageCard(usage) {
   `;
 }
 
-function renderInlineStat(label, value) {
+function renderReadoutCard(label, value) {
   return `
     <div class="sb-inline-stat">
       <span>${esc(label)}</span>
       <strong>${esc(value)}</strong>
     </div>
   `;
+}
+
+function formatUsageSummary(usage) {
+  return `${formatCount(usage.externalTokens)} / ${formatCount(usage.monthlyBudget)}`;
 }
 
 function renderFlash(flash) {
@@ -1609,6 +1897,14 @@ function describeRoutineTrigger(trigger) {
   return String(trigger.mode || 'manual');
 }
 
+function formatLinkHref(url) {
+  if (!url) return '';
+  if (url.match(/^[a-zA-Z]:\\/) || url.startsWith('/')) {
+    return `file://${url.startsWith('/') ? '' : '/'}${url.replace(/\\/g, '/')}`;
+  }
+  return url;
+}
+
 function matchesNoteQuery(note, query) {
   const normalized = String(query || '').trim().toLowerCase();
   if (!normalized) return true;
@@ -1647,6 +1943,32 @@ function matchesLinkFilter(link) {
     .join(' ')
     .toLowerCase();
   return haystack.includes(query);
+}
+
+function buildDayEventMap(events) {
+  const dayEventMap = new Map();
+  for (const event of events || []) {
+    const rangeStart = startOfDay(event.startsAt);
+    const rangeEnd = startOfDay(event.endsAt ?? event.startsAt);
+    const cursor = new Date(rangeStart.getTime());
+    while (cursor <= rangeEnd) {
+      const key = dayKey(cursor);
+      const bucket = dayEventMap.get(key) ?? [];
+      bucket.push(event);
+      dayEventMap.set(key, bucket);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+
+  for (const bucket of dayEventMap.values()) {
+    bucket.sort((left, right) => left.startsAt - right.startsAt);
+  }
+
+  return dayEventMap;
+}
+
+function getDayEvents(dayEventMap, date) {
+  return dayEventMap.get(dayKey(date)) ?? [];
 }
 
 function getEventsForDay(events, date) {
@@ -1762,6 +2084,10 @@ function normalizeTab(value) {
   return TAB_IDS.includes(value) ? value : 'today';
 }
 
+function normalizeCalendarView(value) {
+  return ['week', 'month', 'year'].includes(value) ? value : 'month';
+}
+
 function summarize(value, maxChars) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
@@ -1808,8 +2134,35 @@ function endOfWeek(value) {
   return date;
 }
 
+function startOfYear(value) {
+  const date = startOfDay(value);
+  date.setMonth(0, 1);
+  return date;
+}
+
+function endOfYear(value) {
+  const date = startOfYear(value);
+  date.setFullYear(date.getFullYear() + 1);
+  date.setMilliseconds(-1);
+  return date;
+}
+
 function addMonths(value, amount) {
   const date = startOfMonthDate(value);
+  date.setMonth(date.getMonth() + amount);
+  return date;
+}
+
+function shiftCalendarCursor(value, view, amount) {
+  const date = startOfDay(value);
+  if (view === 'week') {
+    date.setDate(date.getDate() + (amount * 7));
+    return date;
+  }
+  if (view === 'year') {
+    date.setFullYear(date.getFullYear() + amount);
+    return date;
+  }
   date.setMonth(date.getMonth() + amount);
   return date;
 }
@@ -1836,6 +2189,29 @@ function parseDayKey(value) {
   return new Date(`${value}T00:00:00`);
 }
 
+function getCalendarViewRange(value, view) {
+  if (view === 'week') {
+    return {
+      start: startOfWeek(value),
+      end: endOfWeek(value),
+      limit: 400,
+    };
+  }
+  if (view === 'year') {
+    return {
+      start: startOfYear(value),
+      end: endOfYear(value),
+      limit: 5000,
+    };
+  }
+  const monthStart = startOfMonthDate(value);
+  return {
+    start: startOfWeek(monthStart),
+    end: endOfWeek(endOfMonth(monthStart)),
+    limit: 900,
+  };
+}
+
 function toDateTimeLocal(value) {
   if (!value && value !== 0) return '';
   const date = new Date(value);
@@ -1850,6 +2226,45 @@ function toDateTimeLocal(value) {
 
 function formatMonthLabel(value) {
   return new Date(value).toLocaleDateString([], { month: 'long', year: 'numeric' });
+}
+
+function formatCalendarHeading(value, view) {
+  if (view === 'week') {
+    return formatWeekLabel(value);
+  }
+  if (view === 'year') {
+    return String(new Date(value).getFullYear());
+  }
+  return formatMonthLabel(value);
+}
+
+function formatWeekLabel(value) {
+  const weekStart = startOfWeek(value);
+  const weekEnd = endOfWeek(value);
+  const startLabel = weekStart.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const endOptions = weekStart.getFullYear() === weekEnd.getFullYear()
+    ? { month: 'short', day: 'numeric', year: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' };
+  const endLabel = weekEnd.toLocaleDateString([], endOptions);
+  return `${startLabel} - ${endLabel}`;
+}
+
+function formatWeekdayLabel(value) {
+  return new Date(value).toLocaleDateString([], { weekday: 'short' });
+}
+
+function formatMonthDayLabel(value) {
+  return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function calendarViewCopy(view) {
+  if (view === 'week') {
+    return 'Review one week at a time, click any day to load it, and open an event directly from the schedule.';
+  }
+  if (view === 'year') {
+    return 'Scan the full year for busy patches, then click any day to review its agenda and add or edit events.';
+  }
+  return 'Choose a day to review events and add your own event or time block. Click anywhere in an open day square to load it.';
 }
 
 function formatCount(value) {

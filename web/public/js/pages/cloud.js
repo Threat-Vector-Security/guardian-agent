@@ -194,7 +194,6 @@ const CLOUD_PROVIDER_DEFS = [
 export async function renderCloud(container, options = {}) {
   currentContainer = container;
   container.innerHTML = `
-    <h2 class="page-title">Cloud</h2>
     ${renderGuidancePanel({
       kicker: 'Cloud Guide',
       title: 'Connection setup, posture, and cloud operations',

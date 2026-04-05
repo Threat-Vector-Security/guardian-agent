@@ -7,16 +7,16 @@ import { api } from '../api.js';
 const MAX_SEARCH_RESULTS = 8;
 
 export async function renderReference(container) {
-  container.innerHTML = '<h2 class="page-title">Reference Guide</h2><div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     const guide = prepareGuide(apiReferenceToGuide(await api.reference()));
     const pages = guide.categories.flatMap((category) => category.pages);
 
-    container.innerHTML = '<h2 class="page-title">Reference Guide</h2>';
+    container.innerHTML = '';
     container.insertAdjacentHTML('beforeend', `
       <section class="guide-hero">
-        <div>
+        <div class="guide-hero-copy">
           <div class="guide-kicker">Operator Wiki</div>
           <h3>${esc(guide.title || 'Reference Guide')}</h3>
           <p>${esc(guide.intro || '')}</p>
@@ -108,7 +108,7 @@ export async function renderReference(container) {
     wireGuideInteractions(container, guide);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    container.innerHTML = `<h2 class="page-title">Reference Guide</h2><div class="loading">Error: ${esc(message)}</div>`;
+    container.innerHTML = `<div class="loading">Error: ${esc(message)}</div>`;
   }
 }
 

@@ -618,6 +618,7 @@ export function applyTheme(themeId) {
 
   localStorage.setItem(STORAGE_KEY, themeId);
   document.documentElement.dataset.theme = themeId;
+  document.documentElement.dataset.themeCategory = theme.category;
 }
 
 export function applyFontScale(scale) {
