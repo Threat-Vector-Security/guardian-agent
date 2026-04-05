@@ -148,7 +148,7 @@ const MEMORY_INPUT_TOOLTIPS = {
 
 export async function renderMemory(container) {
   currentContainer = container;
-  container.innerHTML = '<h2 class="page-title">Memory</h2><div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     const memory = await api.memory(buildMemoryRequestParams());
@@ -162,7 +162,6 @@ export async function renderMemory(container) {
       || ([globalScope, ...codeSessions].reduce((sum, scope) => sum + (scope.wikiPages || []).filter((page) => page.sourceClass === 'operator_curated').length, 0));
 
     container.innerHTML = `
-      <h2 class="page-title">Memory</h2>
       ${renderGuide({
         kicker: 'Memory Guide',
         title: 'Durable memory, curation, and hygiene',
@@ -236,7 +235,7 @@ export async function renderMemory(container) {
     tabs.switchTo(state.activeTab);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    container.innerHTML = `<h2 class="page-title">Memory</h2><div class="loading">Error: ${esc(message)}</div>`;
+    container.innerHTML = `<div class="loading">Error: ${esc(message)}</div>`;
   }
 }
 

@@ -130,7 +130,6 @@ const NETWORK_HELP = {
 export async function renderNetwork(container, options = {}) {
   currentPanel = container;
   container.innerHTML = `
-    <h2 class="page-title">Network</h2>
     ${renderGuidancePanel({
       kicker: 'Network Guide',
       title: 'Inventory, diagnostics, and network history',

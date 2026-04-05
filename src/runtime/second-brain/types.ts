@@ -14,13 +14,7 @@ export type SecondBrainTaskPriority = 'low' | 'medium' | 'high';
 export type SecondBrainPersonRelationship = 'work' | 'personal' | 'family' | 'vendor' | 'other';
 export type SecondBrainBriefKind = 'morning' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
-export type SecondBrainRoutineCategory =
-  | 'daily'
-  | 'meeting'
-  | 'follow_up'
-  | 'people'
-  | 'content'
-  | 'maintenance';
+export type SecondBrainRoutineCategory = 'scheduled' | 'one_off';
 export type SecondBrainDeliveryChannel = 'web' | 'cli' | 'telegram';
 export type SecondBrainRoutingBias = 'local_first' | 'balanced' | 'quality_first';
 export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
@@ -108,10 +102,8 @@ export interface SecondBrainRoutineManifest {
   category: SecondBrainRoutineCategory;
   enabledByDefault: boolean;
   trigger: {
-    mode: 'cron' | 'event' | 'horizon' | 'manual' | 'hybrid';
+    mode: 'cron' | 'manual';
     cron?: string;
-    eventType?: string;
-    lookaheadMinutes?: number;
   };
   workloadClass: SecondBrainWorkloadClass;
   externalCommMode: SecondBrainExternalCommMode;
@@ -221,6 +213,10 @@ export interface SecondBrainPersonUpsertInput {
 export interface SecondBrainRoutineUpdateInput {
   id: string;
   enabled?: boolean;
+  trigger?: {
+    mode: 'cron' | 'manual';
+    cron?: string;
+  };
   deliveryDefaults?: SecondBrainDeliveryChannel[];
   defaultRoutingBias?: SecondBrainRoutingBias;
   budgetProfileId?: string;

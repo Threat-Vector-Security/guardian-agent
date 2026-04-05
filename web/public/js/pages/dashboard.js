@@ -72,7 +72,7 @@ function resolveActiveLLM(agents = []) {
 
 export async function renderDashboard(container) {
   currentContainer = container;
-  container.innerHTML = '<h2 class="page-title">Dashboard</h2><div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     const [agents, summary, providers, readiness, assistantState, recentWarn, recentCritical, routingTrace] = await Promise.all([
@@ -103,7 +103,6 @@ export async function renderDashboard(container) {
     const activeLLM = resolveActiveLLM(agents);
 
     container.innerHTML = `
-      <h2 class="page-title">Dashboard</h2>
       ${renderGuidancePanel({
         kicker: 'Orientation',
         title: 'Dashboard at a glance',
@@ -247,7 +246,7 @@ export async function renderDashboard(container) {
     };
     onSSE('metrics', metricsHandler);
   } catch (err) {
-    container.innerHTML = `<h2 class="page-title">Dashboard</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    container.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
 }
 

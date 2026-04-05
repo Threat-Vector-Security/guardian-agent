@@ -101,14 +101,16 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Today is the landing surface for the current day. It brings together your agenda, quick capture, priority tasks, follow-up people, recent notes, brief actions, and routine status.',
                   'The quick-add control on Today lets you create a note, task, or local event without leaving the daily view.',
                   'The summary cards on Today are there to help you triage quickly. They surface what matters now, but the dedicated tabs remain the deeper editing surfaces.',
-                  'The Cloud AI budget card in the header shows Second Brain cloud-model token usage for the current month. Local-only work does not count toward that number.',
+                  'The Today view includes a Cloud AI budget readout that shows Second Brain cloud-model token usage for the current month. Local-only work does not count toward that number.',
                   'Use Today when you want to decide what to do next fast instead of browsing every tab manually.',
                 ],
               },
               {
                 title: 'Calendar',
                 items: [
-                  'Calendar uses a real month grid. Choose a day to see its agenda, then select an event to review details in the side panel.',
+                  'Calendar supports `Week`, `Month`, and `Year` modes so you can zoom from day-to-day scheduling out to longer-range planning without leaving the tab.',
+                  'Clicking open space anywhere inside a day tile selects that day. Clicking an event opens that event directly instead.',
+                  'The day agenda and event editor live on the left, while the active calendar surface stays on the right.',
                   'Use `New event` to add a local event or time block that belongs only to your shared Second Brain store.',
                   'Local events currently support title, start time, end time, location, and description. The description field is where meeting context, prep notes, or agenda detail should live.',
                   'Google Calendar and Microsoft 365 events can appear in the grid when those providers are connected, but those synced events are read-only here. Edit them in the source calendar.',
@@ -119,6 +121,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Tasks',
                 items: [
                   'Tasks use a board layout with `Todo`, `In progress`, and `Done` columns.',
+                  'The task editor is on the left and the board is on the right so you can edit while keeping the live queue visible.',
                   'Use the lane buttons on each task card when you want to move work quickly without reopening the full editor.',
                   'Selecting a task opens the editor for the full title, details, priority, status, and due date fields.',
                   'Tasks created here feed the Today view and can also be pulled into meeting briefs and follow-up drafts when relevant.',
@@ -129,6 +132,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Notes And Ideas',
                 items: [
                   'Notes is the general capture area for decisions, loose context, prep material, promises, and anything else you may need later.',
+                  'The note editor is on the left and the searchable note list is on the right.',
                   'Search matches note title, body text, and tags, so the Notes tab is intended to work as a practical retrieval surface, not just a scratchpad.',
                   'Notes can be pinned when they should stay prominent and archived when they should stay searchable but stop cluttering the active list.',
                   'A title is optional when saving a note. If you leave it blank, Guardian infers one from the note content.',
@@ -139,6 +143,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Contacts',
                 items: [
                   'Contacts stores people with relationship type, company, title, email, notes, and last-contact date.',
+                  'The contact editor is on the left and the filtered contact list is on the right.',
                   'Use the relationship filter when you want to narrow the list to work, personal, family, vendor, or all contacts.',
                   'The `Mark contacted today` action is the fast path for keeping follow-up data accurate without manually editing the timestamp field.',
                   'Contact records can surface in briefs when the event, notes, or tasks suggest those people are relevant.',
@@ -149,6 +154,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Library',
                 items: [
                   'Library is for saved links, repositories, documents, files, and references you may want later.',
+                  'The item editor is on the left and the filtered saved-item list is on the right.',
                   'Each library item stores a title, URL, kind, tags, and a short summary of why it matters.',
                   'Use the kind filter when you want to narrow the list to references, documents, repositories, or files.',
                   'Use the summary field to explain why the item is useful instead of forcing future-you to reopen it cold.',
@@ -169,6 +175,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Routines',
                 items: [
                   'Routines exposes the built-in deterministic routines that support Second Brain today. This is not yet an open-ended routine builder.',
+                  'The routine editor is on the left and the grouped routine cards are on the right.',
                   'Routine cards show whether a routine is enabled, what category it belongs to, and the trigger style it uses.',
                   'Selecting a routine lets you change enabled state, routing bias, budget profile ID, and default delivery channels.',
                   'Routine output can be delivered to web, CLI, or Telegram depending on the routine settings and the supported runtime path.',

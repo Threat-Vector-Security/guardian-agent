@@ -238,7 +238,7 @@ const CONFIG_HELP = {
 
 export async function renderConfig(container, options = {}) {
   currentContainer = container;
-  container.innerHTML = '<h2 class="page-title">Configuration</h2><div class="loading">Loading...</div>';
+  container.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
     [sharedConfig, sharedProviders, sharedSetupStatus, sharedAuthStatus, sharedProviderTypes] = await Promise.all([
@@ -250,7 +250,6 @@ export async function renderConfig(container, options = {}) {
     ]);
 
     container.innerHTML = `
-      <h2 class="page-title">Configuration</h2>
       ${renderGuidancePanel({
         kicker: 'Configuration Guide',
         title: 'Product setup and policy ownership',
@@ -271,7 +270,7 @@ export async function renderConfig(container, options = {}) {
     ], normalizeConfigTab(options?.tab));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    container.innerHTML = `<h2 class="page-title">Configuration</h2><div class="loading">Error: ${esc(message)}</div>`;
+    container.innerHTML = `<div class="loading">Error: ${esc(message)}</div>`;
   }
 }
 

@@ -78,7 +78,7 @@ export class HorizonScanner {
 
     const radarRoutine = routines.find((routine) => routine.id === 'next-24-hours-radar');
     if (radarRoutine) {
-      const horizonMinutes = radarRoutine.trigger.lookaheadMinutes ?? 1440;
+      const horizonMinutes = 1440;
       const upcomingEvents = this.secondBrainService.listEvents({
         fromTime: scannedAt,
         includePast: false,
@@ -96,7 +96,7 @@ export class HorizonScanner {
 
     const preMeetingRoutine = routines.find((routine) => routine.id === 'pre-meeting-brief');
     if (preMeetingRoutine) {
-      const lookaheadMinutes = preMeetingRoutine.trigger.lookaheadMinutes ?? 60;
+      const lookaheadMinutes = 60;
       const upcomingEvents = this.secondBrainService.listEvents({
         fromTime: scannedAt,
         includePast: false,

@@ -118,7 +118,6 @@ function renderGuide(config = {}) {
 export async function renderSecurity(container, options = {}) {
   currentContainer = container;
   container.innerHTML = `
-    <h2 class="page-title">Security</h2>
     ${renderGuide({
       kicker: 'Security Guide',
       title: 'Investigation, posture, and response',

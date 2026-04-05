@@ -67,7 +67,42 @@ describe('HorizonScanner', () => {
   });
 
   it('runs sync and triggers morning, pre-meeting, and follow-up routines deterministically', async () => {
-    const { service, briefing, scheduledTaskService, now } = createFixture();
+    const { store, service, briefing, scheduledTaskService, now } = createFixture();
+    
+    // Add routines since they are no longer built-in
+    store.routines.upsertRoutine({
+      id: 'pre-meeting-brief',
+      name: 'Pre-Meeting Brief',
+      category: 'scheduled',
+      enabledByDefault: true,
+      enabled: true,
+      trigger: { mode: 'cron', cron: '0 * * * *' },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'test',
+      deliveryDefaults: [],
+      defaultRoutingBias: 'balanced',
+      createdAt: now(),
+      updatedAt: now(),
+      lastRunAt: null,
+    });
+    store.routines.upsertRoutine({
+      id: 'follow-up-watch',
+      name: 'Follow-Up Watch',
+      category: 'scheduled',
+      enabledByDefault: true,
+      enabled: true,
+      trigger: { mode: 'cron', cron: '0 * * * *' },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'test',
+      deliveryDefaults: [],
+      defaultRoutingBias: 'balanced',
+      createdAt: now(),
+      updatedAt: now(),
+      lastRunAt: null,
+    });
+
     service.upsertTask({
       title: 'Finalize board deck',
       priority: 'high',

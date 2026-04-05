@@ -73,8 +73,8 @@ export function renderGuidancePanel({
           ${title ? `<h3 class="context-title">${esc(title)}</h3>` : ''}
         </div>
         <div class="context-panel__summary-toggle" aria-hidden="true">
-          <span class="context-panel__summary-open-label">Open guide</span>
-          <span class="context-panel__summary-close-label">Hide guide</span>
+          <span class="context-panel__summary-open-label">Guide</span>
+          <span class="context-panel__summary-close-label">Hide</span>
         </div>
       </summary>
       <div class="context-panel__content">
