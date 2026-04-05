@@ -158,6 +158,7 @@ export function buildToolContext(input: ToolContextInput): string {
     `Enabled tool categories: ${input.enabledCategories.join(', ') || '(none)'}`,
     input.policyUpdateActions,
     'Provider/model management via find_tools: llm_provider_list, llm_provider_models, llm_provider_update.',
+    'Performance operations via find_tools: performance_status_get, performance_action_preview, performance_action_run, performance_profile_apply.',
     'Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.',
   ];
 

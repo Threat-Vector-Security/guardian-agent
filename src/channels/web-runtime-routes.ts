@@ -15,6 +15,7 @@ type PrivilegedTicketAction =
   | 'tools.policy'
   | 'config.security'
   | 'memory.config'
+  | 'performance.manage'
   | 'search.pick-path'
   | 'killswitch'
   | 'factory-reset';
@@ -45,6 +46,13 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function trimStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => trimOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasOwn(value: object, key: string): boolean {
@@ -464,6 +472,95 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       return true;
     }
     sendJSON(res, 200, dashboard.onSecondBrainUsage());
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/performance/status') {
+    if (!dashboard.onPerformanceStatus) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const status = await dashboard.onPerformanceStatus();
+      sendJSON(res, 200, status);
+    } catch (err) {
+      context.logInternalError('Performance status failed', err);
+      sendJSON(res, 500, { error: 'Performance status failed' });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/performance/profile/apply') {
+    if (!dashboard.onPerformanceApplyProfile) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const bodyTicket = trimOptionalString(parsed.ticket);
+      if (!context.requirePrivilegedTicket(req, res, url, 'performance.manage', bodyTicket)) {
+        return true;
+      }
+      const profileId = trimOptionalString(parsed.profileId);
+      if (!profileId) {
+        sendJSON(res, 400, { error: 'profileId is required' });
+        return true;
+      }
+      const result = await dashboard.onPerformanceApplyProfile(profileId);
+      sendJSON(res, result.success ? 200 : 400, result);
+      context.maybeEmitUIInvalidation(result, ['performance'], 'performance.profile.applied', url.pathname);
+    } catch (err) {
+      sendBadRequestError(res, err);
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/performance/action/preview') {
+    if (!dashboard.onPerformancePreviewAction) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const actionId = trimOptionalString(parsed.actionId);
+      if (!actionId) {
+        sendJSON(res, 400, { error: 'actionId is required' });
+        return true;
+      }
+      const result = await dashboard.onPerformancePreviewAction(actionId);
+      sendJSON(res, 200, result);
+    } catch (err) {
+      sendBadRequestError(res, err);
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/performance/action/run') {
+    if (!dashboard.onPerformanceRunAction) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const bodyTicket = trimOptionalString(parsed.ticket);
+      if (!context.requirePrivilegedTicket(req, res, url, 'performance.manage', bodyTicket)) {
+        return true;
+      }
+      const previewId = trimOptionalString(parsed.previewId);
+      if (!previewId) {
+        sendJSON(res, 400, { error: 'previewId is required' });
+        return true;
+      }
+      const result = await dashboard.onPerformanceRunAction({
+        previewId,
+        selectedProcessTargetIds: trimStringArray(parsed.selectedProcessTargetIds),
+        selectedCleanupTargetIds: trimStringArray(parsed.selectedCleanupTargetIds),
+      });
+      sendJSON(res, result.success ? 200 : 400, result);
+      context.maybeEmitUIInvalidation(result, ['performance'], 'performance.action.run', url.pathname);
+    } catch (err) {
+      sendBadRequestError(res, err);
+    }
     return true;
   }
 

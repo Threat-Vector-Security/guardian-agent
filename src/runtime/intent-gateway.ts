@@ -54,7 +54,7 @@ export interface IntentGatewayEntities {
   manualOnly?: boolean;
   scheduled?: boolean;
   enabled?: boolean;
-  uiSurface?: 'automations' | 'dashboard' | 'config' | 'chat' | 'unknown';
+  uiSurface?: 'automations' | 'system' | 'dashboard' | 'config' | 'chat' | 'unknown';
   urls?: string[];
   query?: string;
   path?: string;
@@ -195,7 +195,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       },
       uiSurface: {
         type: 'string',
-        enum: ['automations', 'dashboard', 'config', 'chat', 'unknown'],
+        enum: ['automations', 'system', 'dashboard', 'config', 'chat', 'unknown'],
       },
       urls: {
         type: 'array',
@@ -260,7 +260,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- automation_authoring: creating a new automation or changing automation definition content from freeform requirements.',
   '- automation_control: operating on an existing automation definition or run, such as rename, delete, toggle, clone, inspect, or run.',
   '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
-  '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, dashboard, config, or Guardian chat.',
+  '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, system, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
   '- personal_assistant_task: personal productivity work in Second Brain such as notes, tasks, reminders, calendar planning, meeting prep, people context, routines, briefs, and personal retrieval across messages, docs, events, and notes.',
   '- workspace_task: explicit provider CRUD or administration in managed Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Calendar object edits, OneDrive, SharePoint, or Teams. Use this when the provider object or provider surface itself is the target, not Second Brain synthesis.',
@@ -1038,6 +1038,7 @@ function normalizeUiSurface(
 ): IntentGatewayEntities['uiSurface'] | undefined {
   switch (value) {
     case 'automations':
+    case 'system':
     case 'dashboard':
     case 'config':
     case 'chat':

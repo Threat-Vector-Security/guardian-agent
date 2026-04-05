@@ -1,6 +1,19 @@
 import type { GuardianAgentConfig } from './types.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 
+function trimOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function trimStringArray(values: string[] | undefined): string[] | undefined {
+  if (!values) return undefined;
+  const normalized = values
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function normalizeHttpUrlInput(
   raw: string,
   options?: { allowPath?: boolean },
@@ -110,6 +123,41 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
           }
           : config.assistant.tools.cloud,
       },
+      performance: config.assistant.performance
+        ? {
+          ...config.assistant.performance,
+          protectedProcesses: config.assistant.performance.protectedProcesses
+            ? {
+              ...config.assistant.performance.protectedProcesses,
+              names: trimStringArray(config.assistant.performance.protectedProcesses.names) ?? [],
+            }
+            : config.assistant.performance.protectedProcesses,
+          profiles: (config.assistant.performance.profiles ?? []).map((profile) => ({
+            ...profile,
+            id: trimOptionalString(profile.id) ?? profile.id,
+            name: trimOptionalString(profile.name) ?? profile.name,
+            processRules: profile.processRules
+              ? {
+                ...profile.processRules,
+                terminate: trimStringArray(profile.processRules.terminate),
+                protect: trimStringArray(profile.processRules.protect),
+              }
+              : profile.processRules,
+            autoActions: profile.autoActions
+              ? {
+                ...profile.autoActions,
+                allowedActionIds: trimStringArray(profile.autoActions.allowedActionIds) ?? [],
+              }
+              : profile.autoActions,
+            latencyTargets: (profile.latencyTargets ?? []).map((target) => ({
+              ...target,
+              id: trimOptionalString(target.id) ?? target.id,
+              target: normalizeOptionalHttpUrlInput(target.target),
+              targetRef: trimOptionalString(target.targetRef),
+            })),
+          })),
+        }
+        : config.assistant.performance,
     },
   };
 }

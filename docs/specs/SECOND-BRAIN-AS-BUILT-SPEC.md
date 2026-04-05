@@ -37,7 +37,8 @@ This spec does not claim that every item from the proposal or implementation pla
 ### Web entry points
 
 - `#/` is the default `Second Brain` home.
-- `#/dashboard` remains available as the operator-focused Dashboard alias.
+- `#/system` is the operator-focused status and activity surface outside Second Brain.
+- `#/dashboard` may remain as a compatibility alias to `#/system`, but it is not the canonical nav destination.
 
 ### Current `Second Brain` tabs
 

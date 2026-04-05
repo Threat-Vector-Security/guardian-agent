@@ -2844,6 +2844,130 @@ describe('WebChannel', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('GET /api/performance/status should return performance status', async () => {
+    web = new WebChannel({
+      port: 18982,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onPerformanceStatus: async () => ({
+          activeProfile: 'coding-focus',
+          os: 'win32',
+          snapshot: {
+            cpuPercent: 41,
+            memoryMb: 4096,
+            diskFreeMb: 120000,
+            activeProfile: 'coding-focus',
+            sampledAt: Date.now(),
+          },
+          capabilities: {
+            canManageProcesses: true,
+            canManagePower: false,
+            canRunCleanup: false,
+            canProbeLatency: true,
+            supportedActionIds: ['cleanup'],
+          },
+          profiles: [{
+            id: 'coding-focus',
+            name: 'Coding Focus',
+            autoActionsEnabled: false,
+            allowedActionIds: [],
+            terminateProcessNames: ['Discord.exe'],
+            protectProcessNames: ['node'],
+          }],
+          latencyTargets: [],
+          history: [],
+        }),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18982/api/performance/status', { headers: authHeaders });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { activeProfile: string; capabilities: { canManageProcesses: boolean } };
+    expect(body.activeProfile).toBe('coding-focus');
+    expect(body.capabilities.canManageProcesses).toBe(true);
+  });
+
+  it('requires a privileged ticket for performance profile apply', async () => {
+    const appliedProfiles: string[] = [];
+    web = new WebChannel({
+      port: 18983,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onPerformanceApplyProfile: async (profileId) => {
+          appliedProfiles.push(profileId);
+          return { success: true, message: `applied:${profileId}` };
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18983/api/performance/profile/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ profileId: 'coding-focus' }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(appliedProfiles).toHaveLength(0);
+
+    const ticket = await issuePrivilegedTicket(18983, 'performance.manage');
+    const authorized = await fetch('http://localhost:18983/api/performance/profile/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ profileId: 'coding-focus', ticket }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(appliedProfiles).toEqual(['coding-focus']);
+  });
+
+  it('requires a privileged ticket for performance action runs', async () => {
+    const actions: Array<{ previewId: string; selectedProcessTargetIds: string[]; selectedCleanupTargetIds: string[] }> = [];
+    web = new WebChannel({
+      port: 18984,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onPerformanceRunAction: async (action) => {
+          actions.push(action);
+          return { success: true, message: 'ran' };
+        },
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const unauthorized = await fetch('http://localhost:18984/api/performance/action/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({
+        previewId: 'preview-1',
+        selectedProcessTargetIds: ['pid:200'],
+        selectedCleanupTargetIds: [],
+      }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(actions).toHaveLength(0);
+
+    const ticket = await issuePrivilegedTicket(18984, 'performance.manage');
+    const authorized = await fetch('http://localhost:18984/api/performance/action/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({
+        previewId: 'preview-1',
+        selectedProcessTargetIds: ['pid:200'],
+        selectedCleanupTargetIds: [],
+        ticket,
+      }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(actions).toEqual([{
+      previewId: 'preview-1',
+      selectedProcessTargetIds: ['pid:200'],
+      selectedCleanupTargetIds: [],
+    }]);
+  });
+
   it('propagates baseline rejections from direct config updates', async () => {
     web = new WebChannel({
       port: 18973,

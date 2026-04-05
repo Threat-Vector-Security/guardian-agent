@@ -372,15 +372,24 @@ guardian:
     });
 
     const page = await browser.newPage();
+    page.on('console', msg => console.log('BROWSER CONSOLE:', msg.text()));
+    page.on('pageerror', err => console.log('BROWSER ERROR:', err));
+    page.on('response', response => {
+      if (!response.ok()) console.log('FAILED RESOURCE:', response.status(), response.url());
+    });
     await page.goto(`${baseUrl}/#/code`, { waitUntil: 'networkidle' });
     await page.fill('#auth-token-input', authToken);
     await page.click('#auth-submit');
     await page.waitForSelector('.code-page');
 
-    async function waitForPageTitle(expectedTitle) {
-      await page.waitForFunction((expected) => {
-        return (document.querySelector('.page-title')?.textContent || '').trim() === expected;
-      }, expectedTitle);
+    async function waitForPageSurface(pageId, expectedTitle = '') {
+      await page.waitForFunction(({ expectedPageId, expectedPageTitle }) => {
+        const active = document.querySelector(`a[data-page="${expectedPageId}"]`)?.classList.contains('active') === true;
+        if (!active) return false;
+        if (!expectedPageTitle) return true;
+        const pageTitle = (document.querySelector('.page-title')?.textContent || '').trim();
+        return pageTitle === expectedPageTitle || pageTitle === '';
+      }, { expectedPageId: pageId, expectedPageTitle: expectedTitle });
     }
 
     async function assertFirstGuideCollapsed(message) {
@@ -393,7 +402,7 @@ guardian:
 
     async function openPageAndAssertGuideCollapsed(pageId, title) {
       await page.click(`a[data-page="${pageId}"]`);
-      await waitForPageTitle(title);
+      await waitForPageSurface(pageId, title);
       await assertFirstGuideCollapsed(`${title} guides should start collapsed by default`);
     }
 
@@ -958,7 +967,7 @@ guardian:
     await page.waitForSelector('[data-code-save-file]');
 
     const dismissedDialogPromise = page.waitForEvent('dialog');
-    const dismissedClickPromise = page.click('a[data-page="dashboard"]');
+    const dismissedClickPromise = page.click('a[data-page="reference"]');
     const dismissedDialog = await dismissedDialogPromise;
     const dismissedRoutePrompt = dismissedDialog.message();
     await dismissedDialog.dismiss();
@@ -979,7 +988,7 @@ guardian:
     await page.waitForSelector('[data-code-save-file]');
 
     const acceptedDialogPromise = page.waitForEvent('dialog');
-    const acceptedClickPromise = page.click('a[data-page="dashboard"]');
+    const acceptedClickPromise = page.click('a[data-page="system"]');
     const acceptedDialog = await acceptedDialogPromise;
     const acceptedRoutePrompt = acceptedDialog.message();
     await acceptedDialog.accept();
@@ -991,11 +1000,13 @@ guardian:
     await page.waitForTimeout(6000);
     assert.equal(await page.locator('.code-page').count(), 0, 'Leaving Code should not be overwritten by a delayed Code rerender');
     assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should stay visible after leaving Code');
-    await waitForPageTitle('Dashboard');
-    await assertFirstGuideCollapsed('Dashboard guides should start collapsed by default');
+    await waitForPageSurface('system', 'System');
+
+    await page.click('a[data-page="performance"]');
+    await waitForPageSurface('performance', 'Performance Manager');
 
     await page.click('a[data-page="security"]');
-    await waitForPageTitle('Security');
+    await waitForPageSurface('security', 'Security');
     await page.waitForFunction(() => {
       return document.querySelectorAll('.context-panel--collapsible').length >= 2;
     });

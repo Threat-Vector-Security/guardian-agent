@@ -1,0 +1,57 @@
+# GuardianAgent Configuration
+# Docs: https://github.com/alexkenley/guardian-agent
+
+llm:
+  ollama:
+    provider: ollama
+    baseUrl: http://127.0.0.1:11434
+    model: llama3.2
+
+  # Uncomment to use Anthropic:
+  # claude:
+  #   provider: anthropic
+  #   apiKey: ${ANTHROPIC_API_KEY}
+  #   model: claude-sonnet-4-20250514
+
+  # Uncomment to use OpenAI:
+  # gpt:
+  #   provider: openai
+  #   apiKey: ${OPENAI_API_KEY}
+  #   model: gpt-4o
+
+defaultProvider: ollama
+
+# Fallback providers tried when the default fails (rate limit, timeout, etc.)
+# fallbacks:
+#   - claude
+
+channels:
+  cli:
+    enabled: true
+  telegram:
+    enabled: false
+  web:
+    enabled: true
+    port: 3000
+
+guardian:
+  enabled: true
+  logDenials: true
+
+runtime:
+  maxStallDurationMs: 60000
+  watchdogIntervalMs: 10000
+  logLevel: warn
+
+assistant:
+  soul:
+    enabled: true
+    path: SOUL.md
+    primaryMode: full
+    delegatedMode: summary
+    maxChars: 10000
+    summaryMaxChars: 1000
+  connectors:
+    enabled: false
+    executionMode: plan_then_execute
+    maxConnectorCallsPerRun: 12

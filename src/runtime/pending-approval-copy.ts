@@ -39,6 +39,10 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function describePerformanceSelectionMode(value: string): string {
+  return value === 'all_selectable' ? 'all selectable targets' : 'default recommended selection';
+}
+
 function describePolicyUpdate(preview: string): string | null {
   const parsed = tryParsePreview(preview);
   if (!parsed) return null;
@@ -158,6 +162,34 @@ function describeAutomationAction(toolName: string, preview: string): string | n
   }
 }
 
+function describePerformanceAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) {
+    const normalized = normalizePreview(preview);
+    if (!normalized) return null;
+    return normalized;
+  }
+
+  if (toolName === 'performance_profile_apply') {
+    const profileId = asString(parsed.profileId);
+    return profileId ? `apply performance profile ${profileId}` : null;
+  }
+
+  const actionId = asString(parsed.actionId) || 'cleanup';
+  const previewId = asString(parsed.previewId);
+  const processCount = Array.isArray(parsed.selectedProcessTargetIds) ? parsed.selectedProcessTargetIds.length : 0;
+  const cleanupCount = Array.isArray(parsed.selectedCleanupTargetIds) ? parsed.selectedCleanupTargetIds.length : 0;
+  const totalTargets = processCount + cleanupCount;
+  const selectionMode = asString(parsed.selectionMode);
+
+  if (previewId) {
+    return `run performance action ${actionId} from preview ${previewId}${totalTargets > 0 ? ` on ${totalTargets} selected target(s)` : ''}`;
+  }
+  return selectionMode
+    ? `run performance action ${actionId} using ${describePerformanceSelectionMode(selectionMode)}`
+    : `run performance action ${actionId}`;
+}
+
 export function describePendingApproval(summary: PendingApprovalSummary): string {
   const preview = normalizePreview(summary.argsPreview);
 
@@ -195,6 +227,11 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   ) {
     const automationDescription = describeAutomationAction(summary.toolName, preview);
     if (automationDescription) return automationDescription;
+  }
+
+  if (summary.toolName === 'performance_profile_apply' || summary.toolName === 'performance_action_run') {
+    const performanceDescription = describePerformanceAction(summary.toolName, preview);
+    if (performanceDescription) return performanceDescription;
   }
 
   if (preview) {

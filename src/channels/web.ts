@@ -76,6 +76,7 @@ type PrivilegedTicketAction =
   | 'tools.policy'
   | 'config.security'
   | 'memory.config'
+  | 'performance.manage'
   | 'search.pick-path'
   | 'killswitch'
   | 'factory-reset';
@@ -781,6 +782,7 @@ export class WebChannel implements ChannelAdapter {
       || value === 'tools.policy'
       || value === 'config.security'
       || value === 'memory.config'
+      || value === 'performance.manage'
       || value === 'search.pick-path'
       || value === 'killswitch'
       || value === 'factory-reset';

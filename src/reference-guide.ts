@@ -56,10 +56,11 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Verify Readiness',
                 items: [
                   'Use the Second Brain home at `#/` to confirm the assistant is running and ready for day-to-day work.',
-                  'Open `#/dashboard` when you want the older operator-focused runtime summary during the migration period.',
+                  'Open `#/system` when you want the cross-product status and activity monitoring surface.',
+                  'Open `#/performance` when you want the operator-facing workstation health and reviewed cleanup surface.',
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
-                  'Open Configuration > Appearance when you want to raise the dashboard text size slightly, switch to a more readable font preset, or reduce interface motion.',
+                  'Open Configuration > Appearance when you want to raise the web UI text size slightly, switch to a more readable font preset, or reduce interface motion.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
@@ -70,7 +71,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Which Page To Use',
                 items: [
                   'Use Second Brain for tasks, notes, routines, and the personal-assistant home view.',
-                  'Use Dashboard at `#/dashboard` for the legacy operator summary, routing trace, and runtime health view.',
+                  'Use System for cross-product status, attention, runtime activity, and routing visibility.',
+                  'Use Performance for workstation health, reviewed process cleanup, and profile switching.',
                   'Use Code for repo work, coding sessions, approvals, and workspace activity.',
                   'Use Automations for saved workflows, schedules, output, and run history.',
                   'Use Security for alerts, Assistant Security, threat intel, and security activity.',
@@ -91,7 +93,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The current tabs are `Today`, `Calendar`, `Tasks`, `Notes`, `People`, `Library`, `Briefs`, and `Routines`.',
                   'Second Brain is the personal-assistant home, not the operator runtime page. Use it for your day, your commitments, your notes, and your planning context.',
                   'The shared store behind Second Brain is also used by web chat, CLI, Telegram, and deterministic brief generation, so saved items are not trapped in one panel.',
-                  'Dashboard at `#/dashboard` remains the operator-focused page for runtime health, traces, jobs, and broader system status.',
+                  'Performance, Security, Automations, and Configuration are the main operator-facing control surfaces outside Second Brain.',
                   'Use explicit Gmail, Outlook, Drive, OneDrive, SharePoint, or Docs CRUD requests when you want direct provider operations rather than Second Brain retrieval or planning.',
                 ],
               },
@@ -199,7 +201,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Second Brain is meant to be understandable from the UI alone. Controls that only duplicate nearby actions should be removed rather than explained away.',
                   'The current implementation exposes budget visibility and attribution, but it is not yet a separate policy engine that automatically pauses or downgrades work when you cross a threshold.',
                   'Second Brain is intentionally bounded. Briefs are deterministic, routines are built-in, and provider sync is curated rather than free-form.',
-                  'Use Second Brain for planning, retrieval, and bounded capture. Use Dashboard, Configuration, Security, Automations, and Code for the heavier operator control surfaces.',
+                  'Use Second Brain for planning, retrieval, and bounded capture. Use Performance, Configuration, Security, Automations, and Code for the heavier operator control surfaces.',
                   'If you need direct provider changes, provider-specific messages, or broader workflow automation, move to the explicit feature surface instead of trying to force it through Second Brain.',
                 ],
               },
@@ -252,7 +254,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Session Management',
                 items: [
                   'Use CLI `/session list`, `/session use <sessionId>`, and `/session new` to revisit or branch prior work.',
-                  'Assistant state in the dashboard shows queued and running sessions, wait times, execution times, and recent traces.',
+                  'Assistant state in the System page shows queued and running sessions, wait times, execution times, and recent traces.',
                   'Quick actions are available through the web quick-action bar, CLI `/quick <action> <details>`, and Telegram `/quick ...`.',
                   'Built-in quick actions cover email, task planning, calendar planning, and a security review that runs the Assistant Security scan flow.',
                   'Chat can show whether a reply came from the local or hosted model path when that is useful for troubleshooting.',
@@ -271,7 +273,8 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Web Control Surfaces',
                 items: [
-                  'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
+                  'System is the cross-product monitoring surface for status, attention, routing visibility, and recent assistant activity.',
+                  'Performance shows workstation pressure, reviewed cleanup previews, and profile-aware latency targets.',
                   'Use `Agent Runtime` when you want the recent job view for assistant work, delegated work, and held results.',
                   'Held delegated results can be replayed, kept held, or dismissed directly from `Agent Runtime`.',
                   'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
@@ -309,7 +312,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Treat allowed paths, commands, and domains as trust boundaries, not convenience toggles.',
                   'Coding work stays scoped to the active coding session instead of silently widening normal chat access.',
-                  'If a protected setting change is interrupted by auth, sign in again and retry the change from the dashboard.',
+                  'If a protected setting change is interrupted by auth, sign in again and retry the change from the web UI.',
                 ],
               },
               {
@@ -347,7 +350,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian can inspect page state, extract content, follow links, and interact with supported web pages through the managed browser surface.',
                   'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
                   'Use Configuration > Security > Browser Automation > Allowed Domains to add browser hosts manually. An entry such as `httpbin.org` also covers subdomains like `www.httpbin.org`.',
-                  'Browser configuration changes can be applied from the dashboard or CLI.',
+                  'Browser configuration changes can be applied from the web UI or CLI.',
                   'Third-party browser-like integrations should still be treated carefully and require explicit approval before use.',
                 ],
               },
@@ -636,8 +639,46 @@ export function getReferenceGuide(): ReferenceGuide {
       {
         id: 'automation-and-operations',
         title: 'Automation And Operations',
-        description: 'Operate scheduled work, inspect tool output, and manage network or intel workflows.',
+        description: 'Operate workstation performance, scheduled work, tool output, and network or intel workflows.',
         pages: [
+          {
+            id: 'performance',
+            title: 'Performance',
+            summary: 'Use the Performance page for workstation health, profile switching, latency checks, and reviewed process cleanup actions.',
+            sections: [
+              {
+                title: 'What Performance Owns',
+                items: [
+                  'Performance is the workstation-operations page for host pressure, process visibility, profile selection, and reviewed cleanup actions.',
+                  'Overview shows the latest CPU, memory, disk, and process snapshot for the active profile.',
+                  'Profiles lists the configured performance profiles and lets you switch between them quickly before building a preview.',
+                  'Live shows the latest high-impact process rows together with Guardian protection status.',
+                  'Latency shows the configured internet and API targets for the active profile and the latest probe result Guardian recorded.',
+                ],
+              },
+              {
+                title: 'Reviewed Process Cleanup',
+                items: [
+                  'Use the Actions tab to generate a reviewed cleanup preview before Guardian stops any process.',
+                  'Guardian shows the exact process rows it proposes, and selectable rows are checked by default.',
+                  'Protected rows remain visible but disabled so you can see why Guardian refused to include them.',
+                  'Uncheck any process you do not want touched, then confirm the final selected subset with the run button.',
+                  'If a preview expires, generate a fresh preview before trying again so Guardian does not act on stale process state.',
+                ],
+              },
+              {
+                title: 'Profiles And Limits',
+                items: [
+                  'Profiles are configuration-backed; the page is the operational selector, not the profile editor.',
+                  'Performance is a top-level operator surface separate from Second Brain. Use it for workstation state and guarded cleanup, not personal planning or knowledge capture.',
+                  'The active profile controls which process names are treated as terminate candidates and which names are protected.',
+                  'This build keeps cleanup behavior conservative: the reviewed process-selection path is the primary supported mutation surface.',
+                  'If a profile reports that host power-mode changes are not implemented on the current OS, Guardian still switches the active runtime profile and tells you that the host-side tuning was skipped.',
+                  'Power users can also reach the same runtime from chat or saved automations through the deferred built-in tools `performance_status_get`, `performance_action_preview`, `performance_action_run`, and `performance_profile_apply`.',
+                ],
+              },
+            ],
+          },
           {
             id: 'automations',
             title: 'Automations',
@@ -650,6 +691,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Automations can run a single tool, multiple workflow steps, a scheduled assistant task, or a manual on-demand assistant automation.',
                   'You can combine read, write, browser, instruction, and delay-style steps in one workflow when the job needs more than a single action.',
                   'The tool picker (Browse button) lets you search tools by name or description and shows integration requirements (e.g. Google Workspace connected, AWS profile configured).',
+                  'Performance automation for power users should use the performance built-in tools directly rather than trying to route workstation cleanup through Second Brain.',
                   'If a single-tool automation also needs a written summary, the editor can help you expand it into a multi-step workflow.',
                   'The AI selector lets you use auto mode or force a local or hosted model path for the automation.',
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
@@ -729,7 +771,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The Diagnostics tab groups network tools by category and uses dropdown selectors instead of a scrolling tab strip.',
                   'Choose a category first, then select the specific tool to run.',
                   'Each tool panel keeps its own argument form and result viewer so raw output is inspectable immediately.',
-                  'Live result panels include Copy, Text export, and HTML export actions so one-off scan output can be reused outside the dashboard.',
+                  'Live result panels include Copy, Text export, and HTML export actions so one-off scan output can be reused outside the web UI.',
                 ],
               },
               {
@@ -853,7 +895,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Operator Views',
                 items: [
-                  'Analytics summary is available in the dashboard and with CLI `/analytics [minutes]`.',
+                  'Analytics summary is available in the System page and with CLI `/analytics [minutes]`.',
                   'Assistant state shows recent jobs, failures, and what Guardian has been doing recently.',
                   'Security monitoring shows alerts, Assistant Security findings, and recent security activity.',
                 ],
@@ -952,8 +994,8 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'First Checks',
                 items: [
-                  'If the web dashboard rejects you, confirm whether Web Authentication is set to bearer_required and then check the bearer token or session cookie state.',
-                  'If a dashboard save or browser-config action drops you back to the auth prompt, the secure web session expired. Re-enter the current dashboard token and retry the change.',
+                  'If the web UI rejects you, confirm whether Web Authentication is set to bearer_required and then check the bearer token or session cookie state.',
+                  'If a save or browser-config action drops you back to the auth prompt, the secure web session expired. Re-enter the current web access token and retry the change.',
                   'If a model appears offline, verify connectivity in Configuration > AI Providers or with CLI `/providers`.',
                   'If file or command execution is blocked, review Configuration > Tools and Configuration > Security before retrying.',
                   'If repo execution is blocked in the Code page, inspect the code session workspace trust badge, native AV summary, approvals tab, and recent jobs before assuming the coding tools are broken.',
@@ -965,7 +1007,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
                   'New code sessions authorize the workspace path for repo-local access, but they do not treat the attached repo as automatically safe for execution.',
-                  'Web Authentication can be disabled on trusted networks, but bearer_required remains the safer default for the dashboard.',
+                  'Web Authentication can be disabled on trusted networks, but bearer_required remains the safer default for the web UI.',
                   'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`; toggle bearer protection from CLI with `/auth enable` or `/auth disable`.',
                   'Security alerts stay focused on the higher-signal detections by default.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',

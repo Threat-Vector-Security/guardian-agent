@@ -86,6 +86,7 @@ import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.
 import type { AutomationSaveInput } from '../runtime/automation-save.js';
 import type { AutomationOutputStore } from '../runtime/automation-output-store.js';
 import type { PersistMemoryEntryResult } from '../runtime/memory-mutation-service.js';
+import type { PerformanceService } from '../runtime/performance-service.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import {
   getMemoryMutationIntentDeniedMessage,
@@ -117,6 +118,7 @@ import { registerBuiltinMemoryTools } from './builtin/memory-tools.js';
 import { registerBuiltinNetworkSystemTools } from './builtin/network-system-tools.js';
 import { registerBuiltinPolicyTools } from './builtin/policy-tools.js';
 import { registerBuiltinProviderTools } from './builtin/provider-tools.js';
+import { registerBuiltinPerformanceTools } from './builtin/performance-tools.js';
 import { registerBuiltinSecurityIntelTools } from './builtin/security-intel-tools.js';
 import { registerBuiltinSearchTools } from './builtin/search-tools.js';
 import { registerBuiltinSecondBrainTools } from './builtin/second-brain-tools.js';
@@ -442,6 +444,8 @@ export interface ToolExecutorOptions {
   docSearch?: import('../search/search-service.js').SearchService;
   /** Shared Second Brain runtime service for notes, tasks, routines, and usage. */
   secondBrainService?: import('../runtime/second-brain/second-brain-service.js').SecondBrainService;
+  /** Shared performance runtime service for host status, profile switching, and reviewed cleanup actions. */
+  performanceService?: PerformanceService;
   /** Shared Second Brain briefing service for deterministic brief generation. */
   secondBrainBriefingService?: import('../runtime/second-brain/briefing-service.js').BriefingService;
   /** Shared Second Brain horizon scanner for deterministic maintenance runs. */
@@ -4276,6 +4280,19 @@ export class ToolExecutor {
         return `Would post to forum thread '${args.threadId}'`;
       case 'intel_action':
         return `Would perform intel action '${args.action}' on finding '${args.findingId}'`;
+      case 'performance_profile_apply':
+        return `Would apply performance profile '${args.profileId}'`;
+      case 'performance_action_run': {
+        const previewId = asString(args.previewId).trim();
+        const actionId = asString(args.actionId, 'cleanup').trim() || 'cleanup';
+        if (previewId) {
+          const processCount = asStringArray(args.selectedProcessTargetIds).length;
+          const cleanupCount = asStringArray(args.selectedCleanupTargetIds).length;
+          return `Would run performance action '${actionId}' from preview '${previewId}' on ${processCount + cleanupCount} selected target(s)`;
+        }
+        const selectionMode = asString(args.selectionMode, 'checked_by_default').trim().toLowerCase() || 'checked_by_default';
+        return `Would run performance action '${actionId}' using ${describePerformanceSelectionMode(selectionMode)}`;
+      }
       case 'whm_accounts': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create') {
@@ -4704,6 +4721,14 @@ export class ToolExecutor {
       deviceInventory: this.options.deviceInventory,
       networkBaseline: this.options.networkBaseline,
       networkTraffic: this.options.networkTraffic,
+    });
+
+    registerBuiltinPerformanceTools({
+      registry: this.registry,
+      requireString,
+      asString,
+      asStringArray,
+      getPerformanceService: () => this.options.performanceService,
     });
 
     registerBuiltinCloudTools({
@@ -6271,6 +6296,14 @@ function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string 
     const summary = summarizeGwsPreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
   }
+  if (toolName === 'performance_profile_apply') {
+    const summary = summarizePerformanceProfilePreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  if (toolName === 'performance_action_run') {
+    const summary = summarizePerformanceActionRunPreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
   return sanitizePreview(JSON.stringify(redactedArgs));
 }
 
@@ -6322,6 +6355,26 @@ function summarizeAutomationDeletePreview(args: Record<string, unknown>): string
   const automationId = asString(args.automationId).trim();
   if (!automationId) return null;
   return `delete automation ${automationId}`;
+}
+
+function summarizePerformanceProfilePreview(args: Record<string, unknown>): string | null {
+  const profileId = asString(args.profileId).trim();
+  return profileId ? `apply performance profile ${profileId}` : null;
+}
+
+function describePerformanceSelectionMode(value: string): string {
+  return value === 'all_selectable' ? 'all selectable targets' : 'default recommended selection';
+}
+
+function summarizePerformanceActionRunPreview(args: Record<string, unknown>): string | null {
+  const actionId = asString(args.actionId, 'cleanup').trim() || 'cleanup';
+  const previewId = asString(args.previewId).trim();
+  if (previewId) {
+    const totalTargets = asStringArray(args.selectedProcessTargetIds).length + asStringArray(args.selectedCleanupTargetIds).length;
+    return `run performance action ${actionId} from preview ${previewId} on ${totalTargets} selected target(s)`;
+  }
+  const selectionMode = asString(args.selectionMode, 'checked_by_default').trim() || 'checked_by_default';
+  return `run performance action ${actionId} using ${describePerformanceSelectionMode(selectionMode)}`;
 }
 
 function summarizeGwsPreview(args: Record<string, unknown>): string | null {
