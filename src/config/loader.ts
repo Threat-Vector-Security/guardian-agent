@@ -905,6 +905,75 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   }
 
+  const performanceConfig = assistant.performance ?? DEFAULT_CONFIG.assistant.performance!;
+  if (performanceConfig.sampleIntervalSec < 1) {
+    errors.push('assistant.performance.sampleIntervalSec must be >= 1');
+  }
+  if (performanceConfig.trendRetentionDays < 1) {
+    errors.push('assistant.performance.trendRetentionDays must be >= 1');
+  }
+  for (const name of performanceConfig.protectedProcesses?.names ?? []) {
+    if (!name.trim()) {
+      errors.push('assistant.performance.protectedProcesses.names must contain only non-empty strings');
+      break;
+    }
+  }
+
+  const seenPerformanceProfileIds = new Set<string>();
+  for (const profile of performanceConfig.profiles ?? []) {
+    const profilePath = `assistant.performance.profiles['${profile.id || '?'}']`;
+    if (!profile.id?.trim()) {
+      errors.push('assistant.performance.profiles[].id is required');
+    } else if (seenPerformanceProfileIds.has(profile.id)) {
+      errors.push(`assistant.performance.profiles contains duplicate id '${profile.id}'`);
+    } else {
+      seenPerformanceProfileIds.add(profile.id);
+    }
+    if (!profile.name?.trim()) {
+      errors.push(`${profilePath}.name is required`);
+    }
+    if (profile.powerMode && !['balanced', 'high_performance', 'power_saver'].includes(profile.powerMode)) {
+      errors.push(`${profilePath}.powerMode must be 'balanced', 'high_performance', or 'power_saver'`);
+    }
+    for (const actionId of profile.autoActions?.allowedActionIds ?? []) {
+      if (!actionId.trim()) {
+        errors.push(`${profilePath}.autoActions.allowedActionIds cannot contain empty strings`);
+        break;
+      }
+    }
+    for (const processName of profile.processRules?.terminate ?? []) {
+      if (!processName.trim()) {
+        errors.push(`${profilePath}.processRules.terminate cannot contain empty strings`);
+        break;
+      }
+    }
+    for (const processName of profile.processRules?.protect ?? []) {
+      if (!processName.trim()) {
+        errors.push(`${profilePath}.processRules.protect cannot contain empty strings`);
+        break;
+      }
+    }
+    for (const target of profile.latencyTargets ?? []) {
+      const targetPath = `${profilePath}.latencyTargets['${target.id || '?'}']`;
+      if (!target.id?.trim()) {
+        errors.push(`${profilePath}.latencyTargets[].id is required`);
+      }
+      if (target.kind !== 'internet' && target.kind !== 'api') {
+        errors.push(`${targetPath}.kind must be 'internet' or 'api'`);
+      }
+      if (!target.target?.trim() && !target.targetRef?.trim()) {
+        errors.push(`${targetPath} must set either target or targetRef`);
+      }
+      if (target.target?.trim()) {
+        try {
+          normalizeHttpUrlInput(target.target);
+        } catch (error) {
+          errors.push(`${targetPath}.target ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  }
+
   const network = assistant.network;
   if (!['bundled', 'remote'].includes(network.deviceIntelligence.ouiDatabase)) {
     errors.push("assistant.network.deviceIntelligence.ouiDatabase must be 'bundled' or 'remote'");

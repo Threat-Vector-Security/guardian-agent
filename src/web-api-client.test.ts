@@ -129,4 +129,41 @@ describe('dashboard api client', () => {
     expect(fetchMock.mock.calls[3]?.[0]).toBe('/api/guardian-agent/config');
     expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({ enabled: true, ticket: 'ticket-guardian' });
   });
+
+  it('uses privileged tickets for performance mutations', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock
+      .mockResolvedValueOnce(makeJsonResponse(200, { ticket: 'ticket-performance-profile' }) as Response)
+      .mockResolvedValueOnce(makeJsonResponse(200, { success: true, message: 'profile switched' }) as Response)
+      .mockResolvedValueOnce(makeJsonResponse(200, { ticket: 'ticket-performance-run' }) as Response)
+      .mockResolvedValueOnce(makeJsonResponse(200, { success: true, message: 'cleanup complete' }) as Response);
+
+    const { api, setToken } = await import('../web/public/js/api.js');
+    setToken('dashboard-token');
+
+    await api.performanceApplyProfile('coding-focus');
+    await api.performanceRunAction({
+      previewId: 'preview-1',
+      selectedProcessTargetIds: ['pid:200'],
+      selectedCleanupTargetIds: [],
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/auth/ticket');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ action: 'performance.manage' });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/performance/profile/apply');
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      profileId: 'coding-focus',
+      ticket: 'ticket-performance-profile',
+    });
+
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/auth/ticket');
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({ action: 'performance.manage' });
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('/api/performance/action/run');
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
+      previewId: 'preview-1',
+      selectedProcessTargetIds: ['pid:200'],
+      selectedCleanupTargetIds: [],
+      ticket: 'ticket-performance-run',
+    });
+  });
 });

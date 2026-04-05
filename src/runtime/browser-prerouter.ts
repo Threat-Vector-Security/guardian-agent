@@ -297,8 +297,8 @@ function parseDirectBrowserIntent(content: string): DirectBrowserIntent | null {
 }
 
 function isInternalDashboardPageReference(text: string): boolean {
-  return /\b(?:automations?|automation catalog|workflow(?:s)?|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text)
-    || /\bin\s+the\s+(?:automations?|automation catalog|workflow(?:s)?|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text);
+  return /\b(?:automations?|automation catalog|workflow(?:s)?|system|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text)
+    || /\bin\s+the\s+(?:automations?|automation catalog|workflow(?:s)?|system|dashboard|config|security|network|operations|chat)\s+page\b/i.test(text);
 }
 
 function isGoogleWorkspaceBrowserIntent(intent: DirectBrowserIntent): boolean {

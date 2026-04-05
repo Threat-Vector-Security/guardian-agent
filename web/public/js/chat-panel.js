@@ -26,7 +26,7 @@ const WEB_USER_KEY = 'guardianagent_web_user';
 const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
-let currentChatContext = 'dashboard';
+let currentChatContext = 'second-brain';
 let refreshCurrentCodeSessions = null;
 let refreshCodeSessionsPromise = null;
 

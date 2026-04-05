@@ -4,7 +4,7 @@
 **Date:** 2026-03-31
 **Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/docs/plans/UI-TARS-UPLIFT-ROADMAP.md)
 **Primary Runtime:** [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts), [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-**Primary Web Surface:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [dashboard.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/dashboard.js), [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+**Primary Web Surface:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [system.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/system.js), [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
 
 ## Purpose
 
@@ -14,12 +14,12 @@ The goal is operator visibility, not a new execution engine. Guardian already ha
 
 Current as-built deltas:
 - the timeline projection is implemented as `src/runtime/run-timeline.ts`
-- the Dashboard exposes a compact Routing Trace inspector alongside the execution timeline
+- the System page exposes a compact Routing Trace inspector alongside the execution timeline
 - run and routing views support `continuityKey` and `activeExecutionRef` filters
 - routing-trace rows can deep-link to the matched run, a best-fit timeline event, and the related coding session
 - Automations history deep links support `assistantRunId` and `assistantRunItemId` so a caller can land on a specific timeline event instead of only the run row
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
-- Dashboard `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
+- System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
 - delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
 - assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
 - context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
@@ -39,7 +39,7 @@ The result is that Guardian can tell the user that work happened, but it does no
 
 - expose a unified run timeline across assistant dispatch, deterministic workflow events, and coding-session activity
 - provide typed HTTP and SSE contracts for recent runs and per-run detail
-- add a dashboard surface for recent runs and live run status
+- add a System-page surface for recent runs and live run status
 - add a Code-page activity surface for approvals, tool jobs, and verification in one ordered stream
 - keep the implementation bounded, read-only, and compatible with Guardian's current security model
 
@@ -67,7 +67,7 @@ Phase 1 should reuse current runtime data instead of inventing new semantics:
   - `recentJobs`
   - `verification`
 - [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-  - existing assembly of dashboard assistant state
+  - existing assembly of System-page assistant state
   - current code-session mutations after tool execution and approvals
 - [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
   - existing authenticated JSON endpoints
@@ -100,7 +100,7 @@ This module should be a bounded in-memory projection, not a new durable store.
 Responsibilities:
 
 - normalize live updates from orchestrator traces, workflow run events, and code-session work-state changes
-- materialize recent run summaries for dashboard and Code UI queries
+- materialize recent run summaries for System and Code UI queries
 - materialize per-run ordered timeline items
 - support incremental subscriptions so the web layer can emit SSE deltas
 
@@ -333,7 +333,7 @@ Phase 1 should add dedicated endpoints instead of overloading `GET /api/assistan
 
 Purpose:
 
-- recent run list for dashboard and other overview surfaces
+- recent run list for System and other overview surfaces
 
 Suggested query params:
 
@@ -429,16 +429,16 @@ Do not send the full run payload on every event.
 
 ## UI Plan
 
-### Dashboard
+### System
 
-Add a recent-runs section to [dashboard.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/dashboard.js):
+Add a recent-runs section to [system.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/system.js):
 
 - show run title, status, source kind, agent, and relative time
 - show badges for approvals pending and verification pending
 - show last event detail or failure reason when present
 - allow opening run detail inline or in a lightweight drawer
 
-The dashboard should remain summary-first. It does not need full code-session detail density.
+The System page should remain summary-first. It does not need full code-session detail density.
 
 ### Code Page
 
@@ -455,7 +455,7 @@ Phase 1 should not try to delete or fully redesign the current Code page. The ti
 
 No new dedicated chat-page run viewer is required in Phase 1.
 
-The dashboard and Code page are enough to validate the model before expanding it further.
+The System page and Code page are enough to validate the model before expanding it further.
 
 ## Security And Privacy Constraints
 
@@ -516,11 +516,11 @@ Deliver:
 - code-session timeline endpoint
 - `run.timeline` SSE event wiring
 
-### Step 4. Add Dashboard UI
+### Step 4. Add System UI
 
 Files:
 
-- `web/public/js/pages/dashboard.js`
+- `web/public/js/pages/system.js`
 
 Deliver:
 
@@ -586,8 +586,8 @@ Mitigation:
 
 ## Open Questions
 
-- Should deterministic scheduled-task history and assistant dispatch runs share one recent-runs list in the initial dashboard release, or should scheduled-task-only rows wait for a follow-up?
-- Should the run-detail UI live as a shared component across dashboard and Code page, or should Phase 1 allow each page to render the same data differently?
+- Should deterministic scheduled-task history and assistant dispatch runs share one recent-runs list in the initial System release, or should scheduled-task-only rows wait for a follow-up?
+- Should the run-detail UI live as a shared component across System and Code page, or should Phase 1 allow each page to render the same data differently?
 - If a code-session run spans multiple assistant dispatch traces, should the Code page show them as separate runs or a grouped session activity cluster by default?
 
 ## Recommendation

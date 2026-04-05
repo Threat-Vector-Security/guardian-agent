@@ -179,10 +179,10 @@ const CONFIG_HELP = {
   },
   system: {
     'Web Authentication': {
-      whatItIs: 'This section controls how access to the dashboard and API is authenticated, including whether bearer-token protection is enforced at all.',
+      whatItIs: 'This section controls how access to the web UI and API is authenticated, including whether bearer-token protection is enforced at all.',
       whatSeeing: 'You are seeing access mode, token source, session timing, and the controls to rotate or reveal the active token.',
       whatCanDo: 'Require a bearer token for entry, disable it on trusted networks, rotate web access credentials, and tune how long browser sessions should remain valid.',
-      howLinks: 'These settings govern entry into the whole web surface, so every other dashboard feature depends on them being correct.',
+      howLinks: 'These settings govern entry into the whole web surface, so every other operator page and feature depends on them being correct.',
     },
     'Security Alerts': {
       whatItIs: 'This section decides which security events should create outbound notifications and where those notifications should go.',
@@ -504,36 +504,6 @@ function renderIntegrationsTab(panel) {
 
   applyInputTooltips(panel);
   enhanceSectionHelp(panel, CONFIG_HELP.integrations, createGenericHelpFactory('Configuration Integrations'));
-  activateContextHelp(panel);
-}
-
-function renderSystemTab(panel) {
-  panel.innerHTML = '';
-  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
-    kicker: 'System',
-    compact: true,
-    whatItIs: 'This tab contains system-wide controls for authentication, notifications, trust posture, and internal policy engines.',
-    whatSeeing: 'You are seeing overview cards plus configuration panels for auth, alert delivery, Guardian, Sentinel, and trust posture.',
-    whatCanDo: 'Adjust the product-level controls that affect access, enforcement, alert delivery, and reset behavior.',
-    howLinks: 'These are system settings, not operational dashboards, and they influence behavior across the whole app.',
-  }));
-
-  // Re-added the system overview cards from the old dashboard page
-  panel.appendChild(createOverview(sharedConfig, sharedProviders, sharedSetupStatus));
-  const dashboardStrip = document.createElement('div');
-  dashboardStrip.id = 'system-dashboard-strip';
-  panel.appendChild(dashboardStrip);
-  
-  panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
-  panel.appendChild(createNotificationsPanel(sharedConfig, panel));
-  panel.appendChild(createGuardianAgentPanel());
-  panel.appendChild(createPolicyEnginePanel());
-  panel.appendChild(createSentinelAuditPanel());
-  panel.appendChild(createTrustPresetPanel(sharedConfig));
-  panel.appendChild(createDangerZonePanel());
-
-  applyInputTooltips(panel);
-  enhanceSectionHelp(panel, CONFIG_HELP.system, createGenericHelpFactory('Configuration System'));
   activateContextHelp(panel);
 }
 
@@ -3242,7 +3212,7 @@ function createNotificationsPanel(config, settingsPanel) {
       </div>
 
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Defaults are CLI-only and limited to primary security events. Low-confidence drift signals and expected guardrail denials are muted by default so the notification stream stays focused on primary detections. Web alerts appear as a live tray in the dashboard shell. Add <code>automation_finding</code> only if you want follow-up triage or automation summaries to notify. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
+        Defaults are CLI-only and limited to primary security events. Low-confidence drift signals and expected guardrail denials are muted by default so the notification stream stays focused on primary detections. Web alerts appear as a live tray in the main web shell. Add <code>automation_finding</code> only if you want follow-up triage or automation summaries to notify. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="cfg-notify-save" type="button">Save Alert Settings</button>
@@ -3302,18 +3272,18 @@ function createNotificationsPanel(config, settingsPanel) {
 
 async function refreshSettingsOverview(panel) {
   try {
-    const [nextConfig, nextSetupStatus] = await Promise.all([
+    const [nextConfig, nextAuthStatus] = await Promise.all([
       api.config().catch(() => sharedConfig),
-      api.setupStatus().catch(() => sharedSetupStatus),
+      api.authStatus().catch(() => sharedAuthStatus),
     ]);
 
     if (nextConfig) sharedConfig = nextConfig;
-    if (nextSetupStatus) sharedSetupStatus = nextSetupStatus;
+    if (nextAuthStatus) sharedAuthStatus = nextAuthStatus;
 
     const currentOverview = panel.querySelector('.cfg-settings-overview');
     if (!currentOverview || !sharedConfig) return;
 
-    const updatedOverview = createOverview(sharedConfig, sharedProviders || [], sharedSetupStatus);
+    const updatedOverview = createIntegrationOverview(sharedConfig, sharedAuthStatus);
     panel.replaceChild(updatedOverview, currentOverview);
   } catch {
     // Best-effort refresh; keep existing UI if status fetch fails.
@@ -4522,12 +4492,12 @@ function createAuthPanel(config, authStatus, panel) {
   const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? '';
   const isBearerRequired = mode !== 'disabled';
   const modeNote = isBearerRequired
-    ? 'Dashboard and API requests require a bearer token or an existing session cookie.'
-    : 'Dashboard and API access is open to anyone who can reach this port. Use only on trusted networks.';
+    ? 'Web UI and API requests require a bearer token or an existing session cookie.'
+    : 'Web UI and API access is open to anyone who can reach this port. Use only on trusted networks.';
   void panel;
 
   section.innerHTML = `
-    <div class="table-header"><h3>Web Authentication</h3><span class="cfg-header-note">Choose whether the dashboard requires a bearer token or stays open on trusted networks</span></div>
+    <div class="table-header"><h3>Web Authentication</h3><span class="cfg-header-note">Choose whether the web UI requires a bearer token or stays open on trusted networks</span></div>
     <div class="cfg-center-body">
       <div class="cfg-form-grid">
         <div class="cfg-field">
@@ -4567,8 +4537,8 @@ function createAuthPanel(config, authStatus, panel) {
     if (!modeNoteEl) return;
     const nextBearerRequired = nextMode !== 'disabled';
     modeNoteEl.textContent = nextBearerRequired
-      ? 'Dashboard and API requests require a bearer token or an existing session cookie.'
-      : 'Dashboard and API access is open to anyone who can reach this port. Use only on trusted networks.';
+      ? 'Web UI and API requests require a bearer token or an existing session cookie.'
+      : 'Web UI and API access is open to anyone who can reach this port. Use only on trusted networks.';
     modeNoteEl.style.color = nextBearerRequired ? 'var(--text-muted)' : 'var(--warning)';
   };
   const applyStatus = (status) => {

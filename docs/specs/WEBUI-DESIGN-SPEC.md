@@ -92,20 +92,25 @@ Maintain consistent, generous padding (typically 1.25rem - 1.5rem) to ensure inf
 Required left-nav order:
 
 1. `Second Brain`
-2. `Reference`
-3. `Performance`
-4. `Configuration`
-5. `Automations`
-6. `Security`
-7. `Cloud`
-8. `Network`
-9. `Memory`
+2. `System`
+3. `Security`
+4. `Network`
+5. `Cloud`
+6. `Automations`
+7. `Code`
+8. `Memory`
+9. `Reference`
+10. `Performance`
+11. `Configuration`
 
 Notes:
 
 - the persistent chat panel remains part of the shell, not a left-nav page
+- `System` is the dedicated cross-product status and activity monitoring surface
+- `Performance` remains a first-class workstation-operations page and must not be folded back into `Second Brain`
 - `Cloud` is a first-class operational area and must not live only inside Configuration
 - legacy `Workflows` and `Operations` routes remain redirected to `Automations`
+- `#/dashboard` may remain as a compatibility alias, but `#/system` is the canonical route and nav destination
 - the sidebar is a fixed 220px width for a stable operational feel
 - nav items use high-contrast text and explicit 4px accent-left markers for the active state
 
@@ -113,15 +118,17 @@ Notes:
 
 | Domain | Canonical page | Allowed secondary surfaces |
 |---|---|---|
-| app health and readiness | `Dashboard` | compact status only |
-| agent status | `Dashboard` | none |
-| audit log and policy decisions | `Security` | dashboard count only |
-| active alerts | `Security` | dashboard strip, network/cloud counts |
+| app health and readiness | `System` | compact status only |
+| agent status | `System` | none |
+| audit log and policy decisions | `Security` | system count only |
+| active alerts | `Security` | system attention queue, network/cloud counts |
 | threat intel | `Security` | none |
-| network inventory and diagnostics | `Network` | dashboard count only |
-| cloud connections and cloud posture | `Cloud` | dashboard count only |
-| automations, schedules, run history | `Automations` | dashboard count only |
-| AI provider config and search config | `Configuration` | single dashboard summary card |
+| workstation performance, latency, profiles, and reviewed cleanup | `Performance` | compact counts or deep links only |
+| coding sessions, repo activity, and coding approvals | `Code` | compact links only |
+| network inventory and diagnostics | `Network` | system count only |
+| cloud connections and cloud posture | `Cloud` | system count only |
+| automations, schedules, run history | `Automations` | system count only |
+| AI provider config and search config | `Configuration` | compact system card only |
 | tools, approvals, runtime routing | `Configuration > Tools` | filtered links only |
 | sandbox, allowlists, trust, browser risk controls, security-related configuration | `Configuration > Security` | filtered links only |
 | auth, integrations, system settings | `Configuration` | status only elsewhere |
@@ -132,12 +139,12 @@ Notes:
 
 - A page may have a summary card grid only for its own domain.
 - Secondary pages may show one compact count or badge for another domain, but not another full card grid for the same data.
-- Dashboard is the only page allowed to summarize multiple domains at once.
+- `System` is the only page allowed to summarize multiple domains at once.
 
 ### Alert rules
 
 - `Security` owns the unified alert queue.
-- `Dashboard` may show only a compact recent-attention strip.
+- `System` may show a compact recent-attention queue and bounded high-signal status summaries.
 - `Network` and `Cloud` may show domain-specific counts and short summaries.
 - the global web alert tray remains available everywhere.
 
@@ -146,7 +153,7 @@ Notes:
 - `Automations` owns all automation and schedule run history.
 - `Network` may own network-specific one-off tool and scan history.
 - `Cloud` may own cloud-specific activity and cloud-action history.
-- Dashboard must not duplicate full run-history tables.
+- `System` must not duplicate full run-history consoles or owner-page history tables.
 
 ## Contextual Guidance Standard
 
@@ -239,41 +246,42 @@ Guidance copy must not:
 - dump raw schema details into normal-user help text
 - duplicate a full help manual inside the page
 
-### Dashboard exception
+### System exception
 
-`Dashboard` remains the lightest-weight page and does not require a large explanatory banner.
+`System` remains the lightest-weight cross-domain monitoring page and does not require a large explanatory banner.
 
 However:
 
-- linked dashboard cards must always expose destination tooltips
+- linked System cards must always expose destination tooltips
 - quick links must always expose destination tooltips
-- dashboard sections should still use the section-help pattern where practical
-- dashboard copy should emphasize orientation and navigation rather than detailed operations
+- System sections should still use the section-help pattern where practical
+- System copy should emphasize monitoring, orientation, and next actions rather than configuration editing
 
 ## Page Specs
 
-## Dashboard
+## System
 
 ### Purpose
 
-Landing page for high-level health, attention, and navigation.
+Cross-product status and activity monitoring page for high-level health, attention, runtime visibility, and operator navigation.
 
 ### Guidance standard
 
-Dashboard uses the lightweight variant of the contextual guidance standard.
+System uses the lightweight variant of the contextual guidance standard.
 
 It must provide:
 
 - destination tooltips on all linked cards and quick links
 - section-level info affordances for major content blocks when implemented
-- orientation-focused copy rather than long instructional text
+- monitoring-focused copy rather than configuration instructions
 
 ### Required sections
 
 - `System Summary`
 - `Needs Attention`
 - `Agent Runtime`
-- `Quick Links / Quick Actions`
+- `Routing Trace`
+- `Owner Pages`
 
 ### Allowed content
 
@@ -281,14 +289,15 @@ It must provide:
 - current provider summary
 - active alert counts
 - agent counts
+- bounded routing visibility
+- bounded job and session visibility
 - top-level health indicators
 
 ### Disallowed content
 
 - full provider management tables
 - full audit/policy tables
-- scheduled job tables
-- large background-job consoles
+- full owner-page history consoles
 - duplicate network/cloud posture tables
 
 ### Current content to relocate
@@ -296,7 +305,71 @@ It must provide:
 - `LLM Providers` table -> `Configuration > AI Providers`
 - `Scheduled Cron Jobs` -> `Automations`
 - `Recent Policy Decisions` -> `Security > Security Log`
-- `Session Queue` and `Background Jobs` -> future runtime detail surface or collapsible advanced panel
+- `full session queue and deep background-job management` -> owner pages such as `Automations`, `Code`, or a future runtime-detail surface
+
+## Performance
+
+### Purpose
+
+Workstation operations page for host pressure, latency, profile switching, and reviewed cleanup actions.
+
+### Guidance standard
+
+Performance must make clear that it is separate from `Second Brain` and focused on workstation operations rather than planning or personal knowledge capture.
+
+Each tab must explain:
+
+- what host state or action surface is being shown
+- whether the user is monitoring, selecting a profile, or preparing a guarded mutation
+- when the user should go to `Configuration`, `Automations`, or `Code` instead
+
+### Required tabs
+
+- `Overview`
+- `Profiles`
+- `Live`
+- `Latency`
+- `Actions`
+- `History`
+
+### `Actions`
+
+Must support:
+
+- preview-first reviewed cleanup
+- selectable process rows checked by default
+- protected rows shown but disabled with a reason
+- explicit confirmation of the final selected subset before execution
+
+Must not become:
+
+- a profile editor
+- a duplicate configuration surface
+- a generic automation history page
+
+### Ownership boundary
+
+- `Performance` owns live workstation status, guarded cleanup previews, and operator-initiated performance actions
+- `Configuration` owns profile definitions and policy
+- `Automations` owns scheduled or saved automation definitions that happen to call performance tools
+
+## Code
+
+### Purpose
+
+Dedicated repo-scoped coding workspace for code sessions, repo activity, and coding approvals.
+
+### Guidance standard
+
+Code must stay distinct from both `Second Brain` and `Performance`.
+
+It is the place for:
+
+- coding session selection
+- repo-scoped editing and investigation
+- coding activity and approval follow-up
+
+It must not be treated as a generic system-operations or workstation-cleanup surface.
 
 ## Security
 

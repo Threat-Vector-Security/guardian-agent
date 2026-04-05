@@ -3,8 +3,9 @@
  */
 
 import { api, setToken, clearToken, AUTH_FAILED_EVENT, AUTH_RECOVERED_EVENT } from './api.js';
-import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecondBrain, updateSecondBrain } from './pages/second-brain.js';
+import { renderSystem, updateSystem } from './pages/system.js';
+import { renderPerformance, updatePerformance } from './pages/performance.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig, updateConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
@@ -266,6 +267,18 @@ const routes = {
     name: 'second-brain',
     invalidateTags: ['second-brain'],
   },
+  '/system': {
+    render: renderSystem,
+    update: updateSystem,
+    name: 'system',
+    invalidateTags: ['system', 'dashboard', 'config', 'security', 'network', 'cloud', 'automations', 'providers', 'tools', 'performance', 'code-sessions'],
+  },
+  '/dashboard': {
+    render: renderSystem,
+    update: updateSystem,
+    name: 'system',
+    invalidateTags: ['system', 'dashboard', 'config', 'security', 'network', 'cloud', 'automations', 'providers', 'tools', 'performance', 'code-sessions'],
+  },
   '/performance': {
     render: renderPerformance,
     update: updatePerformance,
@@ -505,7 +518,7 @@ window.addEventListener(AUTH_FAILED_EVENT, () => {
   }
   indicator.className = 'indicator disconnected';
   indicator.textContent = 'Disconnected';
-  showAuthPrompt('Session expired. Enter the dashboard token again.');
+  showAuthPrompt('Session expired. Enter the web access token again.');
 });
 
 // ─── Init ────────────────────────────────────────────────
@@ -517,10 +530,6 @@ function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-ce(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }

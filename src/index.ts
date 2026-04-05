@@ -609,6 +609,7 @@ function buildDashboardCallbacks(
   codeSessionMemoryStore: AgentMemoryStore,
   codeSessionStore: CodeSessionStore,
   secondBrainService: SecondBrainService,
+  performanceService: PerformanceService,
   secondBrainBriefingService: BriefingService,
   persistMemoryEntry: (input: {
     target: {
@@ -1843,7 +1844,7 @@ function buildDashboardCallbacks(
     }),
 
     ...operationsDashboard.callbacks,
-    ...createPerformanceDashboardCallbacks(new PerformanceService(createPerformanceAdapter())),
+    ...createPerformanceDashboardCallbacks(performanceService),
 
     connectorWorkflowOps: operationsDashboard.connectorWorkflowOps,
 
@@ -4174,6 +4175,11 @@ async function main(): Promise<void> {
   let listModelsForConfiguredLlmProviderForTools: ToolExecutorOptions['listModelsForLlmProvider'];
   let applyDirectLlmProviderConfigUpdateForTools: ToolExecutorOptions['onLlmProviderConfigUpdate'];
   const codingBackendServiceRef: { current: CodingBackendService | null } = { current: null };
+  const performanceService = new PerformanceService({
+    adapter: createPerformanceAdapter(),
+    getConfig: () => configRef.current,
+    auditLog: runtime.auditLog,
+  });
 
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
@@ -4227,6 +4233,7 @@ async function main(): Promise<void> {
 
       const hostRelevant = new Set([
         'shell_safe', 'package_install', 'net_connections', 'sys_processes',
+        'performance_status_get', 'performance_action_preview', 'performance_action_run', 'performance_profile_apply',
         'browser_navigate', 'browser_read', 'browser_links', 'browser_extract', 'browser_state', 'browser_act', 'browser_interact',
         'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
         'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
@@ -4312,6 +4319,7 @@ async function main(): Promise<void> {
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
     secondBrainService,
+    performanceService,
     secondBrainBriefingService,
     secondBrainHorizonScanner,
     googleService,
@@ -5552,6 +5560,7 @@ async function main(): Promise<void> {
     codeSessionMemoryStore,
     codeSessionStore,
     secondBrainService,
+    performanceService,
     secondBrainBriefingService,
     (input) => (
       memoryMutationServiceRef.current?.persist(input)

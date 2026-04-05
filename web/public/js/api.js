@@ -1,5 +1,5 @@
 /**
- * API client for GuardianAgent dashboard.
+ * API client for the GuardianAgent web UI.
  *
  * Wraps fetch with Bearer token from sessionStorage.
  */
@@ -240,18 +240,12 @@ export const api = {
   }),
   secondBrainUsage: () => request('/api/second-brain/usage'),
   performanceStatus: () => request('/api/performance/status'),
-  performanceApplyProfile: (profileId) => request('/api/performance/profile/apply', {
-    method: 'POST',
-    body: JSON.stringify({ profileId }),
-  }),
+  performanceApplyProfile: (profileId) => requestPrivileged('/api/performance/profile/apply', 'performance.manage', { profileId }),
   performancePreviewAction: (actionId) => request('/api/performance/action/preview', {
     method: 'POST',
     body: JSON.stringify({ actionId }),
   }),
-  performanceRunAction: (action) => request('/api/performance/action/run', {
-    method: 'POST',
-    body: JSON.stringify(action),
-  }),
+  performanceRunAction: (action) => requestPrivileged('/api/performance/action/run', 'performance.manage', action || {}),
   setupStatus:  () => request('/api/setup/status'),
   applySetup:   (input) => request('/api/setup/apply', {
     method: 'POST',

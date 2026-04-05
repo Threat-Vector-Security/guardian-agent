@@ -4702,7 +4702,7 @@ type DirectIntentShadowCandidate =
         ...(typeof entities.manualOnly === 'boolean' ? { manualOnly: entities.manualOnly } : {}),
         ...(typeof entities.scheduled === 'boolean' ? { scheduled: entities.scheduled } : {}),
         ...(typeof entities.enabled === 'boolean' ? { enabled: entities.enabled } : {}),
-        ...((uiSurface === 'automations' || uiSurface === 'dashboard' || uiSurface === 'config' || uiSurface === 'chat' || uiSurface === 'unknown')
+        ...((uiSurface === 'automations' || uiSurface === 'system' || uiSurface === 'dashboard' || uiSurface === 'config' || uiSurface === 'chat' || uiSurface === 'unknown')
           ? { uiSurface }
           : {}),
         ...(Array.isArray(entities.urls) ? { urls: entities.urls.filter((value): value is string => typeof value === 'string') } : {}),

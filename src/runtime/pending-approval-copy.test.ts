@@ -62,6 +62,15 @@ describe('pending approval copy', () => {
     ])).toBe('Waiting for approval to switch ollama to model gemma3:latest.');
   });
 
+  it('formats performance actions as concrete approval copy', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'performance_action_run',
+        argsPreview: '{"actionId":"cleanup","selectionMode":"checked_by_default"}',
+      },
+    ])).toBe('Waiting for approval to run performance action cleanup using default recommended selection.');
+  });
+
   it('formats multiple approvals as a short action list', () => {
     expect(formatPendingApprovalMessage([
       {

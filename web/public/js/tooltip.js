@@ -1,12 +1,12 @@
 /**
- * Shared tooltip helper for dashboard input controls.
+ * Shared tooltip helper for web UI input controls.
  *
  * Applies explicit tooltips first, then fills any missing input/select/textarea
  * title attributes from nearby labels/placeholders.
  */
 
 const DEFAULT_TOOLTIPS = {
-  '#auth-token-input': 'Paste the bearer token shown at startup only if this browser is not already using the session cookie. The token grants dashboard access.',
+  '#auth-token-input': 'Paste the bearer token shown at startup only if this browser is not already using the session cookie. The token grants web UI access.',
   '#filter-type': 'Restrict the audit list to one class of events such as approvals, denials, auth changes, or anomaly detections.',
   '#filter-severity': 'Use severity to cut noise fast: critical for urgent incidents, warn for review items, info for normal operational history.',
   '#filter-agent': 'Show only events tied to one agent or control-plane actor. Useful when tracing a single automation or assistant session.',
@@ -39,8 +39,8 @@ const DEFAULT_TOOLTIPS = {
   '#cfg-telegram-credential-ref': 'Advanced path for Telegram token management. Use this when the bot token lives in an environment variable instead of the app’s secret store.',
   '#cfg-telegram-chatids': 'Comma-separated allowlist of Telegram chat IDs. Only these chats can use the bot once Telegram is enabled.',
   '#cfg-telegram-save': 'Applies Telegram enablement, token source, and allowlist settings. Guardian will hot-reload the Telegram channel when the config is valid.',
-  '#auth-mode': 'Guardian currently enforces bearer authentication for dashboard/API access. This setting is mainly here for visibility and runtime control.',
-  '#auth-token-source': 'Shows where the active dashboard token came from: persisted config, environment, or a runtime-generated ephemeral token.',
+  '#auth-mode': 'Guardian currently enforces bearer authentication for web UI and API access. This setting is mainly here for visibility and runtime control.',
+  '#auth-token-source': 'Shows where the active web access token came from: persisted config, environment, or a runtime-generated ephemeral token.',
   '#auth-ttl': 'Optional browser session lifetime hint in minutes. Shorter sessions reduce exposure if a browser is left open.',
   '#auth-token-preview': 'Masked preview of the currently active token so you can confirm rotation happened without exposing the full secret.',
   '#cfg-cred-ref-select': 'Inspect an existing credential ref or create an env-backed one. Local secret-store refs appear here for visibility but are managed by the key fields elsewhere.',
@@ -166,9 +166,9 @@ const DEFAULT_TOOLTIPS = {
   '#auto-engine-save': 'Saves the runtime-wide automation engine settings shown above.',
   '#auto-pack-json': 'Raw JSON editor for access profiles. These profiles add tighter restrictions to selected automation steps.',
   '#auto-pack-upsert': 'Creates or updates the access profile defined in the JSON editor above.',
-  '#appearance-font-scale': 'Increase or decrease the base text size across the entire dashboard. This adjusts the root font scale, not just one page.',
+  '#appearance-font-scale': 'Increase or decrease the base text size across the entire web UI. This adjusts the root font scale, not just one page.',
   '#appearance-font-family': 'Switch the app-wide typography preset to a more readable sans or serif stack without changing the functional layout.',
-  '#appearance-reduce-motion': 'Reduces transitions and animation time across the dashboard for motion-sensitive operators.',
+  '#appearance-reduce-motion': 'Reduces transitions and animation time across the web UI for motion-sensitive operators.',
   '#appearance-reset': 'Restores the default Guardian theme, default font preset, the slightly larger default text size, and normal motion.',
 };
 

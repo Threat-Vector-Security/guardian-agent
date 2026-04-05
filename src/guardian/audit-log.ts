@@ -58,6 +58,8 @@ export type AuditEventType =
   | 'skill_read'
   | 'skill_tool_executed'
   | 'tool.executed'
+  | 'performance.profile_applied'
+  | 'performance.action_run'
   | 'threat_intel.autoscan'
   | 'threat_intel_autoscan'
   | 'threat_intel_autoscan_failed'

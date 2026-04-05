@@ -94,6 +94,7 @@ const CODING_BACKEND_HINTS: Record<string, string[]> = {
 
 const UI_SURFACE_HINTS: Record<string, string[]> = {
   automations: ['automation', 'workflow', 'schedule'],
+  system: ['system', 'status'],
   dashboard: ['dashboard'],
   config: ['config', 'configuration', 'settings'],
   chat: ['chat'],

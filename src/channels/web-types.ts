@@ -1042,17 +1042,76 @@ export interface ApprovedPerformanceAction {
   selectedCleanupTargetIds: string[];
 }
 
+export interface PerformanceProcessSummary {
+  targetId: string;
+  pid: number;
+  name: string;
+  cpuPercent?: number;
+  memoryMb?: number;
+  protected?: boolean;
+  protectionReason?: string;
+}
+
+export interface PerformanceProfileSummary {
+  id: string;
+  name: string;
+  powerMode?: 'balanced' | 'high_performance' | 'power_saver';
+  autoActionsEnabled: boolean;
+  allowedActionIds: string[];
+  terminateProcessNames: string[];
+  protectProcessNames: string[];
+}
+
+export interface PerformanceLatencyStatus {
+  id: string;
+  kind: 'internet' | 'api';
+  label: string;
+  target?: string;
+  state: 'ok' | 'error' | 'disabled' | 'idle';
+  latencyMs?: number;
+  detail?: string;
+}
+
+export interface PerformanceActionHistoryEntry {
+  id: string;
+  actionId: string;
+  executedAt: number;
+  success: boolean;
+  message: string;
+  selectedProcessCount: number;
+  selectedCleanupCount: number;
+}
+
+export interface PerformanceCapabilities {
+  canManageProcesses: boolean;
+  canManagePower: boolean;
+  canRunCleanup: boolean;
+  canProbeLatency: boolean;
+  supportedActionIds: string[];
+}
+
 export interface PerformanceSnapshot {
   cpuPercent: number;
   memoryMb: number;
+  memoryTotalMb?: number;
+  memoryPercent?: number;
   diskFreeMb: number;
+  diskTotalMb?: number;
+  diskPercentFree?: number;
   activeProfile: string;
+  processCount?: number;
+  topProcesses?: PerformanceProcessSummary[];
+  sampledAt: number;
 }
 
 export interface PerformanceStatus {
   activeProfile: string;
   os: string;
   snapshot: PerformanceSnapshot;
+  capabilities: PerformanceCapabilities;
+  profiles: PerformanceProfileSummary[];
+  latencyTargets: PerformanceLatencyStatus[];
+  history: PerformanceActionHistoryEntry[];
 }
 
 /** Dashboard API callbacks supplied by index.ts to WebChannel. */

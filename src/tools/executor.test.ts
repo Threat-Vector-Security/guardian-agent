@@ -122,6 +122,10 @@ describe('ToolExecutor', () => {
     expect(names).toContain('campaign_run');
     expect(names).toContain('gmail_draft');
     expect(names).toContain('gmail_send');
+    expect(names).toContain('performance_status_get');
+    expect(names).toContain('performance_profile_apply');
+    expect(names).toContain('performance_action_preview');
+    expect(names).toContain('performance_action_run');
     expect(names).toContain('llm_provider_list');
     expect(names).toContain('llm_provider_models');
     expect(names).toContain('llm_provider_update');
@@ -444,11 +448,13 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Enabled tool categories:');
     expect(context).toContain('Policy updates via chat: enabled via update_tool_policy (add_path, remove_path, add_domain, remove_domain)');
     expect(context).toContain('Provider/model management via find_tools: llm_provider_list, llm_provider_models, llm_provider_update.');
+    expect(context).toContain('Performance operations via find_tools: performance_status_get, performance_action_preview, performance_action_run, performance_profile_apply.');
     expect(context).toContain('Provider/model summary: use llm_provider_list for configured providers and llm_provider_models for detailed model catalogs.');
     expect(context).toContain('Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.');
     expect(context).toContain('Deferred tool inventory (compact names only).');
     expect(context).toContain('Deferred system tools (');
     expect(context).toContain('llm_provider_update');
+    expect(context).toContain('performance_action_run');
     expect(context).toContain('Deferred cloud tools (');
     expect(context).toContain('whm_status');
     expect(context).toContain('Cloud tools: enabled');
@@ -615,6 +621,68 @@ describe('ToolExecutor', () => {
           model: 'gemma3:latest',
         },
       },
+    });
+  });
+
+  it('requires approval before running a performance cleanup action and can generate the preview internally', async () => {
+    const root = createExecutorRoot();
+    const previewAction = vi.fn(async () => ({
+      previewId: 'preview-1',
+      profileId: 'coding-focus',
+      processTargets: [
+        {
+          targetId: 'pid:200',
+          label: 'Discord.exe',
+          suggestedReason: 'Matched an active profile terminate rule.',
+          checkedByDefault: true,
+          selectable: true,
+          risk: 'low',
+        },
+      ],
+      cleanupTargets: [],
+    }));
+    const runAction = vi.fn(async () => ({ success: true, message: 'Stopped 1 selected process(es).' }));
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      performanceService: {
+        getStatus: vi.fn(),
+        previewAction,
+        runAction,
+        applyProfile: vi.fn(),
+      } as any,
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'performance_action_run',
+      args: {
+        actionId: 'cleanup',
+        selectionMode: 'checked_by_default',
+      },
+      origin: 'assistant',
+      channel: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+    });
+
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+    expect(pending.approvalId).toBeDefined();
+    expect(previewAction).not.toHaveBeenCalled();
+    expect(runAction).not.toHaveBeenCalled();
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'web-user');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.success).toBe(true);
+    expect(previewAction).toHaveBeenCalledWith('cleanup');
+    expect(runAction).toHaveBeenCalledWith({
+      previewId: 'preview-1',
+      selectedProcessTargetIds: ['pid:200'],
+      selectedCleanupTargetIds: [],
     });
   });
 
