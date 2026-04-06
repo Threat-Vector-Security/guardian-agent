@@ -177,6 +177,7 @@ Web requirements:
 - the transcript should only inline blocker UI when the current response carries `response.metadata.pendingAction`
 - `/api/chat/pending-action` is the canonical recovery/status fallback when streamed response metadata is missing, delayed, or the page reconnects
 - the fallback lookup must use the canonical user id and the current chat surface id
+- page, panel, or route changes must not silently drop the visible in-flight / pending-action state for the current Guardian chat surface
 - switching the focused coding workspace must not swap the visible Guardian chat transcript; pending actions remain surface-scoped and continue inside the same transcript
 
 ### CLI

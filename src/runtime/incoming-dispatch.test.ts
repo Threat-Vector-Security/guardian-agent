@@ -159,4 +159,45 @@ describe('createIncomingDispatchPreparer', () => {
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(3, expect.objectContaining({ stage: 'tier_routing_decided' }));
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(4, expect.objectContaining({ stage: 'pre_routed_metadata_attached' }));
   });
+
+  it('strips the web context prefix before classifying and tier-routing the request', async () => {
+    const gatewayRecord = createGatewayRecord({
+      route: 'personal_assistant_task',
+      operation: 'create',
+      entities: { personalItemType: 'calendar', calendarTarget: 'local' },
+    });
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: { content: string }) => {
+        expect(input.content).toBe('Create a calendar entry for tomorrow at 12 pm called Dentist.');
+        return gatewayRecord;
+      }),
+    };
+    const router = {
+      findAgentByRole: vi.fn((role: string) => {
+        if (role === 'local') return { id: 'local-agent' };
+        if (role === 'external') return { id: 'external-agent' };
+        return undefined;
+      }),
+      route: vi.fn(() => ({ agentId: 'fallback-agent', confidence: 'low', reason: 'fallback' })),
+      routeWithTier: vi.fn(() => ({ agentId: 'local-agent', confidence: 'medium', reason: 'tier route', tier: 'local' })),
+      routeWithTierFromIntent: vi.fn((_decision, content: string) => {
+        expect(content).toBe('Create a calendar entry for tomorrow at 12 pm called Dentist.');
+        return { agentId: 'local-agent', confidence: 'high', reason: 'intent tier route', tier: 'local' };
+      }),
+    } as unknown as MessageRouter;
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      router,
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: '[Context: User is currently viewing the second-brain panel] Create a calendar entry for tomorrow at 12 pm called Dentist.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(result.gateway).toEqual(gatewayRecord);
+    expect(result.decision.agentId).toBe('local-agent');
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(1);
+  });
 });

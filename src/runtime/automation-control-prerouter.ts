@@ -23,6 +23,7 @@ export interface AutomationControlPendingApprovalMetadata {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 export interface AutomationControlPreRouteResult {

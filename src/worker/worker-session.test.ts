@@ -385,4 +385,188 @@ describe('BrokeredWorkerSession automation control', () => {
       'automation_run',
     ]);
   });
+
+  it('normalizes local Second Brain calendar mutations in brokered sessions', async () => {
+    const referenceTime = new Date(2026, 3, 5, 0, 20, 0, 0).getTime();
+    const expectedStart = new Date(2026, 3, 6, 12, 0, 0, 0).getTime();
+    const expectedEnd = new Date(2026, 3, 6, 13, 0, 0, 0).getTime();
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create a local calendar event.',
+            personalItemType: 'calendar',
+            calendarTarget: 'local',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === 'tool') {
+        return {
+          content: 'Saved the event in the local calendar.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'anthropic',
+        } as ChatResponse;
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'tool-calendar-local',
+          name: 'second_brain_calendar_upsert',
+          arguments: JSON.stringify({
+            title: "Doctor's Appointment",
+            startsAt: expectedStart,
+            endsAt: expectedStart,
+            location: "Narangba doctor's surgery",
+          }),
+        }],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string; args: Record<string, unknown> }) => {
+      expect(request.toolName).toBe('second_brain_calendar_upsert');
+      expect(request.args).toMatchObject({
+        title: "Doctor's Appointment",
+        startsAt: expectedStart,
+        endsAt: expectedEnd,
+        location: "Narangba doctor's surgery",
+      });
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-calendar-local',
+        message: 'Saved event.',
+        output: {
+          event: {
+            startsAt: expectedStart,
+            endsAt: expectedEnd,
+          },
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'second_brain_calendar_upsert',
+        description: 'Create or update a local calendar entry.',
+        parameters: { type: 'object', properties: {} },
+        risk: 'medium',
+      }],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-local-calendar',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: "Add a calendar entry for tomorrow at 12 pm for a doctor's appointment at Narangba doctor's surgery.",
+        timestamp: referenceTime,
+      },
+    });
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe('Saved the event in the local calendar.');
+  });
+
+  it('blocks provider calendar mutations when the routed turn is local Second Brain work', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create a local calendar event.',
+            personalItemType: 'calendar',
+            calendarTarget: 'local',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === 'tool') {
+        expect(lastMessage.content).toContain('local Second Brain calendar');
+        return {
+          content: 'Stayed on the local calendar path.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'anthropic',
+        } as ChatResponse;
+      }
+      expect(systemPrompt).toContain('[routed-intent]');
+      expect(systemPrompt).toContain('route: personal_assistant_task');
+      expect(systemPrompt).toContain('Do not ask the user to choose Google or Microsoft for this turn.');
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'tool-gws-calendar',
+          name: 'gws',
+          arguments: JSON.stringify({
+            method: 'calendar events create',
+          }),
+        }],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const callTool = vi.fn();
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'gws',
+        description: 'Google Workspace integration.',
+        parameters: { type: 'object', properties: {} },
+        risk: 'high',
+      }],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-gws-denied',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: "Add a calendar entry for tomorrow at 12 pm for a doctor's appointment at Narangba doctor's surgery.",
+        timestamp: new Date(2026, 3, 5, 0, 20, 0, 0).getTime(),
+      },
+    });
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.content).toBe('Stayed on the local calendar path.');
+  });
 });

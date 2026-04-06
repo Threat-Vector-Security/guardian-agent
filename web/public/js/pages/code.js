@@ -2533,6 +2533,7 @@ function normalizePendingApprovals(values, existing = []) {
           id: entry.id,
           toolName: String(entry.toolName || previous.toolName || 'unknown'),
           argsPreview: String(entry.argsPreview || previous.argsPreview || ''),
+          actionLabel: String(entry.actionLabel || previous.actionLabel || ''),
           createdAt: Number(entry.createdAt || previous.createdAt) || null,
           risk: String(entry.risk || previous.risk || ''),
           origin: String(entry.origin || previous.origin || ''),
@@ -3453,6 +3454,7 @@ function getSessionRenderSignature(session) {
         id: approval.id,
         toolName: approval.toolName,
         argsPreview: approval.argsPreview,
+        actionLabel: approval.actionLabel || '',
         createdAt: approval.createdAt || null,
         risk: approval.risk || '',
         origin: approval.origin || '',
@@ -4109,7 +4111,7 @@ function renderApprovalList(session) {
               </div>
             </div>
           </div>
-          <div class="approval-card__preview">${esc(approval.argsPreview || 'No preview available.')}</div>
+          <div class="approval-card__preview">${esc(approval.actionLabel || approval.argsPreview || 'No preview available.')}</div>
           <div class="approval-card__actions">
             ${renderCodeApprovalActionsMarkup(approval)}
           </div>

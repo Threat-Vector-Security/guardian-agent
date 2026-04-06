@@ -1,6 +1,7 @@
 export interface PendingApprovalSummary {
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 export interface PendingApprovalMetadata extends PendingApprovalSummary {
@@ -22,6 +23,10 @@ function normalizePreview(preview: string | undefined): string {
   return (preview ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function tryParsePreview(preview: string): Record<string, unknown> | null {
   const normalized = normalizePreview(preview);
   if (!normalized.startsWith('{') || !normalized.endsWith('}')) return null;
@@ -37,6 +42,280 @@ function tryParsePreview(preview: string): Record<string, unknown> | null {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function titleCaseWords(value: string): string {
+  return value
+    .split(/\s+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function humanizeToolName(toolName: string): string {
+  return toolName
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function quote(value: string): string {
+  return `"${value}"`;
+}
+
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatDateTime(timestamp: number): string {
+  return `${formatDate(timestamp)} at ${formatTime(timestamp)}`;
+}
+
+function formatTimeRange(startAt: number | null, endAt: number | null): string | null {
+  if (startAt == null) return null;
+  if (endAt == null || endAt <= startAt) {
+    return `on ${formatDate(startAt)} at ${formatTime(startAt)}`;
+  }
+  const startDate = formatDate(startAt);
+  const endDate = formatDate(endAt);
+  if (startDate === endDate) {
+    return `on ${startDate} from ${formatTime(startAt)} to ${formatTime(endAt)}`;
+  }
+  return `from ${formatDateTime(startAt)} to ${formatDateTime(endAt)}`;
+}
+
+function formatMaybeTimestamp(key: string, value: unknown): string | null {
+  const numeric = finiteNumber(value);
+  if (numeric == null || numeric < 1_000_000_000_000) return null;
+  const lowerKey = key.toLowerCase();
+  if (!/(?:^|_)(?:startsat|endsat|dueat|lastcontactat|createdat|updatedat|fromtime|totime)$/.test(lowerKey.replace(/[^a-z]/g, ''))) {
+    return null;
+  }
+  return formatDateTime(numeric);
+}
+
+function summarizeGenericPreview(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const preferredKeys = [
+    'action',
+    'method',
+    'title',
+    'name',
+    'subject',
+    'task',
+    'provider',
+    'backend',
+    'path',
+    'source',
+    'destination',
+    'url',
+    'location',
+    'startsAt',
+    'endsAt',
+    'dueAt',
+    'lastContactAt',
+    'id',
+  ];
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const key of preferredKeys) {
+    if (!(key in parsed) || seen.has(key)) continue;
+    const value = parsed[key];
+    const timestamp = formatMaybeTimestamp(key, value);
+    if (timestamp) {
+      parts.push(`${humanizeToolName(key)} ${timestamp}`);
+      seen.add(key);
+      continue;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      parts.push(`${humanizeToolName(key)} ${value.trim()}`);
+      seen.add(key);
+      continue;
+    }
+    if (typeof value === 'boolean') {
+      parts.push(`${humanizeToolName(key)} ${value ? 'yes' : 'no'}`);
+      seen.add(key);
+      continue;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      parts.push(`${humanizeToolName(key)} ${String(value)}`);
+      seen.add(key);
+      continue;
+    }
+  }
+  return parts.length > 0 ? parts.slice(0, 4).join(', ') : null;
+}
+
+function describeCodingBackendRun(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const backend = asString(parsed.backend);
+  const task = asString(parsed.task);
+  const backendLabel = backend
+    ? titleCaseWords(backend.replace(/-/g, ' '))
+    : 'coding backend';
+  if (task) {
+    return `run ${backendLabel} task ${quote(task)}`;
+  }
+  return `run ${backendLabel}`;
+}
+
+function describeSecondBrainCalendarAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const title = asString(parsed.title);
+  const location = asString(parsed.location);
+  const when = formatTimeRange(finiteNumber(parsed.startsAt), finiteNumber(parsed.endsAt));
+  if (toolName === 'second_brain_calendar_delete') {
+    return title
+      ? `delete local calendar event ${quote(title)}`
+      : 'delete local calendar event';
+  }
+  const parts = [
+    asString(parsed.id) ? 'update local calendar event' : 'create local calendar event',
+    title ? quote(title) : '',
+    when ?? '',
+    location ? `at ${location}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function describeSecondBrainTaskAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const title = asString(parsed.title);
+  const dueAt = finiteNumber(parsed.dueAt);
+  if (toolName === 'second_brain_task_delete') {
+    return title ? `delete local task ${quote(title)}` : 'delete local task';
+  }
+  const parts = [
+    asString(parsed.id) ? 'update local task' : 'create local task',
+    title ? quote(title) : '',
+    dueAt != null ? `due ${formatDateTime(dueAt)}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function describeSecondBrainNoteAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const title = asString(parsed.title);
+  if (toolName === 'second_brain_note_delete') {
+    return title ? `delete local note ${quote(title)}` : 'delete local note';
+  }
+  return title
+    ? `${asString(parsed.id) ? 'update' : 'save'} local note ${quote(title)}`
+    : `${asString(parsed.id) ? 'update' : 'save'} local note`;
+}
+
+function describeSecondBrainPersonAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const name = asString(parsed.name);
+  const lastContactAt = finiteNumber(parsed.lastContactAt);
+  if (toolName === 'second_brain_person_delete') {
+    return name ? `delete local person ${quote(name)}` : 'delete local person';
+  }
+  const parts = [
+    asString(parsed.id) ? 'update local person' : 'save local person',
+    name ? quote(name) : '',
+    lastContactAt != null ? `last contacted ${formatDateTime(lastContactAt)}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function describeSecondBrainLibraryAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const title = asString(parsed.title) || asString(parsed.url);
+  if (toolName === 'second_brain_library_delete') {
+    return title ? `delete local library item ${quote(title)}` : 'delete local library item';
+  }
+  return title
+    ? `${asString(parsed.id) ? 'update' : 'save'} local library item ${quote(title)}`
+    : `${asString(parsed.id) ? 'update' : 'save'} local library item`;
+}
+
+function describeSecondBrainBriefAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const title = asString(parsed.title) || asString(parsed.id);
+  switch (toolName) {
+    case 'second_brain_generate_brief':
+      return title ? `generate brief ${quote(title)}` : 'generate brief';
+    case 'second_brain_brief_update':
+      return title ? `update brief ${quote(title)}` : 'update brief';
+    case 'second_brain_brief_delete':
+      return title ? `delete brief ${quote(title)}` : 'delete brief';
+    default:
+      return null;
+  }
+}
+
+function describeSecondBrainRoutineAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const name = asString(parsed.name) || asString(parsed.templateId) || asString(parsed.id);
+  switch (toolName) {
+    case 'second_brain_routine_create':
+      return name ? `create Second Brain routine ${quote(name)}` : 'create Second Brain routine';
+    case 'second_brain_routine_update':
+      return name ? `update Second Brain routine ${quote(name)}` : 'update Second Brain routine';
+    case 'second_brain_routine_delete':
+      return name ? `delete Second Brain routine ${quote(name)}` : 'delete Second Brain routine';
+    default:
+      return null;
+  }
+}
+
+function describeProviderEventAction(providerLabel: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const method = asString(parsed.method);
+  const title = asString(parsed.title) || asString(parsed.subject);
+  const location = asString(parsed.location);
+  const when = formatTimeRange(finiteNumber(parsed.startsAt), finiteNumber(parsed.endsAt));
+  const parts = [
+    method ? `run ${providerLabel} action ${quote(method)}` : `run ${providerLabel} action`,
+    title ? `for ${quote(title)}` : '',
+    when ?? '',
+    location ? `at ${location}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function describeMailAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const subject = asString(parsed.subject);
+  const to = Array.isArray(parsed.to)
+    ? parsed.to.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(', ')
+    : asString(parsed.to);
+  const provider = toolName.startsWith('gmail_')
+    ? 'Gmail'
+    : toolName.startsWith('outlook_')
+      ? 'Outlook'
+      : 'email';
+  const verb = toolName.endsWith('_draft') ? 'create' : toolName.endsWith('_send') ? 'send' : 'run';
+  const parts = [
+    `${verb} ${provider} message`,
+    subject ? quote(subject) : '',
+    to ? `to ${to}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 function describePerformanceSelectionMode(value: string): string {
@@ -191,7 +470,13 @@ function describePerformanceAction(toolName: string, preview: string): string | 
 }
 
 export function describePendingApproval(summary: PendingApprovalSummary): string {
+  if (summary.actionLabel?.trim()) return summary.actionLabel.trim();
   const preview = normalizePreview(summary.argsPreview);
+
+  if (summary.toolName === 'coding_backend_run') {
+    const codingBackendDescription = describeCodingBackendRun(preview);
+    if (codingBackendDescription) return codingBackendDescription;
+  }
 
   if (summary.toolName === 'update_tool_policy') {
     const policyDescription = describePolicyUpdate(preview);
@@ -234,11 +519,78 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
     if (performanceDescription) return performanceDescription;
   }
 
-  if (preview) {
-    return `run ${summary.toolName} - ${preview}`;
+  if (summary.toolName === 'second_brain_calendar_upsert' || summary.toolName === 'second_brain_calendar_delete') {
+    const secondBrainCalendarDescription = describeSecondBrainCalendarAction(summary.toolName, preview);
+    if (secondBrainCalendarDescription) return secondBrainCalendarDescription;
   }
 
-  return `run ${summary.toolName}`;
+  if (summary.toolName === 'second_brain_task_upsert' || summary.toolName === 'second_brain_task_delete') {
+    const secondBrainTaskDescription = describeSecondBrainTaskAction(summary.toolName, preview);
+    if (secondBrainTaskDescription) return secondBrainTaskDescription;
+  }
+
+  if (summary.toolName === 'second_brain_note_upsert' || summary.toolName === 'second_brain_note_delete') {
+    const secondBrainNoteDescription = describeSecondBrainNoteAction(summary.toolName, preview);
+    if (secondBrainNoteDescription) return secondBrainNoteDescription;
+  }
+
+  if (summary.toolName === 'second_brain_person_upsert' || summary.toolName === 'second_brain_person_delete') {
+    const secondBrainPersonDescription = describeSecondBrainPersonAction(summary.toolName, preview);
+    if (secondBrainPersonDescription) return secondBrainPersonDescription;
+  }
+
+  if (summary.toolName === 'second_brain_library_upsert' || summary.toolName === 'second_brain_library_delete') {
+    const secondBrainLibraryDescription = describeSecondBrainLibraryAction(summary.toolName, preview);
+    if (secondBrainLibraryDescription) return secondBrainLibraryDescription;
+  }
+
+  if (
+    summary.toolName === 'second_brain_generate_brief'
+    || summary.toolName === 'second_brain_brief_update'
+    || summary.toolName === 'second_brain_brief_delete'
+  ) {
+    const secondBrainBriefDescription = describeSecondBrainBriefAction(summary.toolName, preview);
+    if (secondBrainBriefDescription) return secondBrainBriefDescription;
+  }
+
+  if (
+    summary.toolName === 'second_brain_routine_create'
+    || summary.toolName === 'second_brain_routine_update'
+    || summary.toolName === 'second_brain_routine_delete'
+  ) {
+    const secondBrainRoutineDescription = describeSecondBrainRoutineAction(summary.toolName, preview);
+    if (secondBrainRoutineDescription) return secondBrainRoutineDescription;
+  }
+
+  if (summary.toolName === 'gws') {
+    const providerEventDescription = describeProviderEventAction('Google Workspace', preview);
+    if (providerEventDescription) return providerEventDescription;
+  }
+
+  if (summary.toolName === 'm365') {
+    const providerEventDescription = describeProviderEventAction('Microsoft 365', preview);
+    if (providerEventDescription) return providerEventDescription;
+  }
+
+  if (
+    summary.toolName === 'gmail_draft'
+    || summary.toolName === 'gmail_send'
+    || summary.toolName === 'outlook_draft'
+    || summary.toolName === 'outlook_send'
+  ) {
+    const mailDescription = describeMailAction(summary.toolName, preview);
+    if (mailDescription) return mailDescription;
+  }
+
+  if (preview) {
+    const genericPreview = summarizeGenericPreview(preview);
+    if (genericPreview) {
+      return `run ${humanizeToolName(summary.toolName)} with ${genericPreview}`;
+    }
+    return `run ${humanizeToolName(summary.toolName)} - ${preview}`;
+  }
+
+  return `run ${humanizeToolName(summary.toolName)}`;
 }
 
 export function formatPendingApprovalMessage(approvals: readonly PendingApprovalSummary[]): string {
@@ -269,6 +621,11 @@ export function buildPendingApprovalMetadata(
       id,
       toolName: summary?.toolName ?? 'unknown',
       argsPreview: summary?.argsPreview ?? '',
+      actionLabel: describePendingApproval({
+        toolName: summary?.toolName ?? 'unknown',
+        argsPreview: summary?.argsPreview ?? '',
+        ...(summary?.actionLabel ? { actionLabel: summary.actionLabel } : {}),
+      }),
     });
   }
   return metadata;

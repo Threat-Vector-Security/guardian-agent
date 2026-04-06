@@ -11,6 +11,7 @@ import type { ChannelAdapter, MessageCallback } from './types.js';
 import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
+import { describePendingApproval } from '../runtime/pending-approval-copy.js';
 import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('channel:telegram');
@@ -26,6 +27,7 @@ interface PendingTelegramApproval {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 interface PendingTelegramApprovalState {
@@ -50,11 +52,21 @@ function extractPendingActionApprovals(
         && typeof (approval as { id?: unknown }).id === 'string'
         && typeof (approval as { toolName?: unknown }).toolName === 'string';
     })
-    .map((approval) => ({
-      id: approval.id,
-      toolName: approval.toolName,
-      argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
-    }));
+    .map((approval) => {
+      const argsPreview = typeof approval.argsPreview === 'string' ? approval.argsPreview : '';
+      const actionLabel = typeof approval.actionLabel === 'string' && approval.actionLabel.trim()
+        ? approval.actionLabel
+        : describePendingApproval({
+            toolName: approval.toolName,
+            argsPreview,
+          });
+      return {
+        id: approval.id,
+        toolName: approval.toolName,
+        argsPreview,
+        ...(actionLabel ? { actionLabel } : {}),
+      };
+    });
 }
 
 function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
@@ -514,6 +526,7 @@ export class TelegramChannel implements ChannelAdapter {
         id: approval.id,
         toolName: approval.toolName,
         argsPreview: approval.argsPreview,
+        ...(approval.actionLabel ? { actionLabel: approval.actionLabel } : {}),
       })),
       agentId,
     });
@@ -525,19 +538,19 @@ export class TelegramChannel implements ChannelAdapter {
     // or per-item buttons for multiple.
     if (approvals.length === 1) {
       const a = approvals[0];
-      const preview = a.argsPreview ? ` — ${a.argsPreview}` : '';
+      const preview = a.actionLabel || a.argsPreview;
       const keyboard = new InlineKeyboard()
         .text('✅ Approve', `approve:${a.id}`)
         .text('❌ Deny', `deny:${a.id}`);
-      await ctx.reply(`⚠️ ${a.toolName}${preview}`, { reply_markup: keyboard });
+      await ctx.reply(`⚠️ ${preview || a.toolName}`, { reply_markup: keyboard });
     } else {
       // Multiple approvals: show each with its own buttons
       for (const a of approvals) {
-        const preview = a.argsPreview ? ` — ${a.argsPreview}` : '';
+        const preview = a.actionLabel || a.argsPreview;
         const keyboard = new InlineKeyboard()
           .text('✅ Approve', `approve:${a.id}`)
           .text('❌ Deny', `deny:${a.id}`);
-        await ctx.reply(`⚠️ ${a.toolName}${preview}`, { reply_markup: keyboard });
+        await ctx.reply(`⚠️ ${preview || a.toolName}`, { reply_markup: keyboard });
       }
     }
   }

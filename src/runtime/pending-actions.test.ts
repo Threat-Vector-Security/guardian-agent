@@ -109,7 +109,7 @@ describe('PendingActionStore', () => {
         prompt: 'Approve the coding backend run.',
         approvalIds: ['approval-1'],
         approvalSummaries: [
-          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}', actionLabel: 'run Codex' },
         ],
       },
       intent: {
@@ -135,8 +135,8 @@ describe('PendingActionStore', () => {
         prompt: 'Approve the coding backend run.',
         approvalIds: ['approval-1', 'approval-2'],
         approvalSummaries: [
-          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
-          { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}' },
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}', actionLabel: 'run Codex' },
+          { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}', actionLabel: 'write ./tmp/test.txt' },
         ],
       },
       intent: {
@@ -152,7 +152,7 @@ describe('PendingActionStore', () => {
     expect(updated?.status).toBe('pending');
     expect(updated?.blocker.approvalIds).toEqual(['approval-2']);
     expect(updated?.blocker.approvalSummaries).toEqual([
-      { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}' },
+      { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}', actionLabel: 'write ./tmp/test.txt' },
     ]);
     expect(store.get(created.id)?.blocker.approvalIds).toEqual(['approval-2']);
   });
@@ -167,7 +167,7 @@ describe('PendingActionStore', () => {
         prompt: 'Approve the coding backend run.',
         approvalIds: ['approval-1'],
         approvalSummaries: [
-          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}', actionLabel: 'run Codex' },
         ],
       },
       intent: {
@@ -213,7 +213,7 @@ describe('PendingActionStore', () => {
         prompt: 'Approve the coding backend run.',
         approvalIds: ['approval-1'],
         approvalSummaries: [
-          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}', actionLabel: 'run Codex' },
         ],
       },
       intent: {

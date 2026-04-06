@@ -27,8 +27,51 @@ const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 let currentChatContext = 'second-brain';
-let refreshCurrentCodeSessions = null;
+let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
+let activeChatIndicator = null;
+
+function clearActiveChatIndicator() {
+  if (activeChatIndicator?.element?.isConnected) {
+    activeChatIndicator.element.remove();
+  }
+  activeChatIndicator = null;
+}
+
+function setActiveChatIndicator(state) {
+  clearActiveChatIndicator();
+  activeChatIndicator = state;
+}
+
+function updateActiveChatIndicatorLabel(label) {
+  if (!activeChatIndicator) return;
+  activeChatIndicator.label = String(label || 'Working…');
+  if (activeChatIndicator.element?.isConnected) {
+    setThinkingLabel(activeChatIndicator.element, activeChatIndicator.label);
+  }
+}
+
+function updateActiveChatIndicatorTimeline(run) {
+  if (!activeChatIndicator || !run?.summary) return;
+  activeChatIndicator.timeline = run;
+  if (activeChatIndicator.element?.isConnected) {
+    updateThinkingEl(activeChatIndicator.element, run);
+  }
+}
+
+function syncActiveChatIndicator(historyEl, agentId) {
+  if (!historyEl || !activeChatIndicator || activeChatIndicator.historyKey !== agentId) return;
+  if (activeChatIndicator.element?.isConnected && activeChatIndicator.element.parentElement === historyEl) {
+    return;
+  }
+  const nextEl = createThinkingEl(activeChatIndicator.label);
+  if (activeChatIndicator.timeline) {
+    updateThinkingEl(nextEl, activeChatIndicator.timeline);
+  }
+  historyEl.appendChild(nextEl);
+  activeChatIndicator.element = nextEl;
+  historyEl.scrollTop = historyEl.scrollHeight;
+}
 
 function isCodeSessionInvalidation(payload) {
   const topics = Array.isArray(payload?.topics) ? payload.topics : [];
@@ -176,12 +219,9 @@ export async function initChatPanel(container) {
     currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
     if (history) {
       renderHistory(history, getHistoryKey(), approvalHandler);
+      refreshVisiblePendingAction?.();
     }
     return result;
-  };
-
-  refreshCurrentCodeSessions = () => {
-    void refreshCodeSessions();
   };
 
   const notifyCodeSessionsChanged = (detail = {}) => {
@@ -246,6 +286,7 @@ export async function initChatPanel(container) {
         activeAgentId = selected;
       }
       renderHistory(history, getHistoryKey() || selected, approvalHandler);
+      refreshVisiblePendingAction?.();
     });
   }
 
@@ -267,6 +308,7 @@ export async function initChatPanel(container) {
       }
       chatHistoryByAgent.delete(resetId);
       renderHistory(history, resetId, approvalHandler);
+      refreshVisiblePendingAction?.();
     } catch (err) {
       console.error('Reset failed', err);
     }
@@ -299,13 +341,20 @@ export async function initChatPanel(container) {
     input.disabled = true;
     sendBtn.disabled = true;
 
+    const historyKey = getHistoryKey();
     const thinkingEl = createThinkingEl('Continuing after approval…');
     history.appendChild(thinkingEl);
+    setActiveChatIndicator({
+      historyKey,
+      label: 'Continuing after approval…',
+      timeline: null,
+      element: thinkingEl,
+    });
     history.scrollTop = history.scrollHeight;
 
     const onRunTimeline = (data) => {
       if (!sessionId || data?.summary?.codeSessionId !== sessionId) return;
-      updateThinkingEl(thinkingEl, data);
+      updateActiveChatIndicatorTimeline(data);
       history.scrollTop = history.scrollHeight;
     };
 
@@ -314,12 +363,12 @@ export async function initChatPanel(container) {
     }
 
     return {
-      setLabel: (label) => setThinkingLabel(thinkingEl, label),
+      setLabel: (label) => updateActiveChatIndicatorLabel(label),
       finish: () => {
         if (sessionId) {
           offSSE('run.timeline', onRunTimeline);
         }
-        thinkingEl.remove();
+        clearActiveChatIndicator();
         restoreInput();
       },
     };
@@ -463,6 +512,29 @@ export async function initChatPanel(container) {
     }
   };
 
+  const ensureVisiblePendingAction = async () => {
+    const historyKey = getHistoryKey();
+    if (!historyKey || !history || activeChatIndicator) return;
+    const pendingAction = await resolvePendingActionForDisplay();
+    if (!pendingAction || typeof pendingAction !== 'object') return;
+    const pendingId = typeof pendingAction.id === 'string' ? pendingAction.id.trim() : '';
+    const chatHistory = getHistory(historyKey);
+    const alreadyPresent = chatHistory.some((entry) => (
+      entry?.pendingAction
+      && typeof entry.pendingAction === 'object'
+      && entry.pendingAction.id === pendingId
+    ));
+    if (alreadyPresent) return;
+    const prompt = typeof pendingAction?.blocker?.prompt === 'string'
+      ? pendingAction.blocker.prompt
+      : 'This request is waiting on approval.';
+    chatHistory.push({ role: 'agent', content: prompt, pendingAction });
+    renderHistory(history, historyKey, approvalHandler);
+  };
+  refreshVisiblePendingAction = () => {
+    void ensureVisiblePendingAction();
+  };
+
   // ── Send logic ──────────────────────────────────────────────
 
   const send = async () => {
@@ -486,6 +558,12 @@ export async function initChatPanel(container) {
     // Add thinking indicator
     const thinkingEl = createThinkingEl();
     history.appendChild(thinkingEl);
+    setActiveChatIndicator({
+      historyKey,
+      label: 'Starting…',
+      timeline: null,
+      element: thinkingEl,
+    });
     history.scrollTop = history.scrollHeight;
 
     try {
@@ -508,7 +586,7 @@ export async function initChatPanel(container) {
         if (finalised) return;
         finalised = true;
         cleanup();
-        thinkingEl.remove();
+        clearActiveChatIndicator();
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
           .then((pendingAction) => {
@@ -541,7 +619,7 @@ export async function initChatPanel(container) {
         if (finalised) return;
         finalised = true;
         cleanup();
-        thinkingEl.remove();
+        clearActiveChatIndicator();
         restoreInput();
         history.appendChild(createMessageEl('error', message || 'Stream error'));
       };
@@ -552,7 +630,7 @@ export async function initChatPanel(container) {
         } else if (data?.summary?.runId !== requestId) {
           return;
         }
-        updateThinkingEl(thinkingEl, data);
+        updateActiveChatIndicatorTimeline(data);
         history.scrollTop = history.scrollHeight;
       };
 
@@ -596,11 +674,11 @@ export async function initChatPanel(container) {
           undefined,
           GUARDIAN_CHAT_SURFACE_ID,
         );
-        thinkingEl.remove();
+        clearActiveChatIndicator();
         addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       }
     } catch (err) {
-      thinkingEl.remove();
+      clearActiveChatIndicator();
       const errorMsg = err.message === 'AUTH_FAILED' ? 'Auth failed' : (err.message || 'Error');
       history.appendChild(createMessageEl('error', errorMsg));
     }
@@ -626,13 +704,12 @@ export async function initChatPanel(container) {
   container.appendChild(wrapper);
   autoResizeChatInput(input);
   input.focus();
+  refreshVisiblePendingAction?.();
 }
 
 export function setChatContext(context) {
   currentChatContext = context;
-  if (refreshCurrentCodeSessions) {
-    refreshCurrentCodeSessions();
-  }
+  refreshVisiblePendingAction?.();
 }
 
 // ── Pure helpers (no closure dependencies) ──────────────────
@@ -677,6 +754,7 @@ function renderHistory(historyEl, agentId, onApproval) {
       onApproval,
     }));
   }
+  syncActiveChatIndicator(historyEl, agentId);
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
@@ -864,6 +942,7 @@ function extractPendingActionApprovals(pendingAction) {
       id: approval.id,
       toolName: approval.toolName,
       argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
+      actionLabel: typeof approval.actionLabel === 'string' ? approval.actionLabel : '',
     }));
 }
 
@@ -1031,6 +1110,9 @@ function describePolicyApproval(preview) {
 }
 
 function describeApprovalAction(approval) {
+  if (approval?.actionLabel) {
+    return sentenceCaseApprovalPreview(approval.actionLabel);
+  }
   const toolName = String(approval?.toolName || '').trim();
   const preview = normalizeApprovalPreview(approval?.argsPreview);
 

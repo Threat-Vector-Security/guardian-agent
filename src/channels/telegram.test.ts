@@ -204,7 +204,7 @@ describe('Telegram approval flow', () => {
     }, 'default');
 
     expect(replies[0]?.text).toBe("Let's add `S:\\Development` to the allowed paths, then I'll create the file **test32.txt** there. Please approve this action.");
-    expect(replies[1]?.text).toContain('⚠️ update_tool_policy');
+    expect(replies[1]?.text).toContain('⚠️ add S:\\Development to allowed paths');
   });
 
   it('acknowledges inline approval buttons immediately before slow continuation finishes', async () => {

@@ -689,6 +689,38 @@ This should not load.
     expect(resolved[0]?.id).toBe('microsoft-365');
   });
 
+  it('suppresses provider skills for local Second Brain calendar work', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Create a calendar entry for tomorrow at 12 pm called Dentist.',
+      intentRoute: 'personal_assistant_task',
+      intentEntities: { calendarTarget: 'local' },
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+    const resolvedIds = resolved.map((skill) => skill.id);
+
+    expect(resolvedIds).not.toContain('google-workspace');
+    expect(resolvedIds).not.toContain('microsoft-365');
+  });
+
+  it('uses calendarTarget to favor the matching provider skill for explicit calendar CRUD', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Add this meeting to my Google Calendar.',
+      intentRoute: 'workspace_task',
+      intentEntities: { calendarTarget: 'gws' },
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved[0]?.id).toBe('google-workspace');
+  });
+
   it('keeps prior active skills sticky across clarification answers', async () => {
     const registry = new SkillRegistry();
     await registry.loadFromRoots([join(process.cwd(), 'skills')]);

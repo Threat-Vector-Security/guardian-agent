@@ -8,6 +8,7 @@ const TAB_IDS = ['today', 'calendar', 'tasks', 'notes', 'people', 'library', 'br
 let currentContainer = null;
 let flashTimer = null;
 const boundContainers = new WeakSet();
+const dirtyTabs = new Set();
 const state = {
   activeTab: 'today',
   data: null,
@@ -50,6 +51,7 @@ export async function renderSecondBrain(container, options = {}) {
     container.innerHTML = '<div class="loading">Loading your day...</div>';
     try {
       state.data = await loadSecondBrainData();
+      dirtyTabs.clear();
     } catch (error) {
       container.innerHTML = `<div class="loading">Error: ${esc(error instanceof Error ? error.message : String(error))}</div>`;
       return;
@@ -60,10 +62,23 @@ export async function renderSecondBrain(container, options = {}) {
   paint(container);
 }
 
-export function updateSecondBrain() {
-  if (currentContainer) {
+export function updateSecondBrain(_container, options = {}) {
+  if (!currentContainer) return;
+  const invalidations = Array.isArray(options?.invalidations)
+    ? options.invalidations.filter((payload) => Array.isArray(payload?.topics) && payload.topics.includes('second-brain'))
+    : [];
+  if (invalidations.length === 0) {
     void renderSecondBrain(currentContainer, { tab: state.activeTab, refresh: true });
+    return;
   }
+  const impactedTabs = collectDirtySecondBrainTabs(invalidations);
+  for (const tabId of impactedTabs) {
+    dirtyTabs.add(tabId);
+  }
+  if (!dirtyTabs.has(state.activeTab)) {
+    return;
+  }
+  void refreshSecondBrainTabs([state.activeTab]);
 }
 
 function paint(container) {
@@ -99,6 +114,9 @@ function paint(container) {
     const button = event.target.closest('.tab-btn');
     if (!button?.dataset.tabId) return;
     state.activeTab = normalizeTab(button.dataset.tabId);
+    if (dirtyTabs.has(state.activeTab)) {
+      void refreshSecondBrainTabs([state.activeTab]);
+    }
   });
   tabs.switchTo(state.activeTab);
 
@@ -107,8 +125,7 @@ function paint(container) {
 
 async function loadSecondBrainData() {
   const now = Date.now();
-  const focusWindowStart = startOfDay(new Date(now - (7 * DAY_MS)));
-  const focusWindowEnd = endOfDay(new Date(now + (7 * DAY_MS)));
+  const { focusWindowStart, focusWindowEnd } = getSecondBrainFocusWindow(now);
   const calendarRange = getCalendarViewRange(state.calendarCursor, state.calendarView);
 
   const [overview, focusEvents, calendarEvents, tasks, notes, people, links, routineCatalog, routines, briefs] = await Promise.all([
@@ -146,6 +163,156 @@ async function loadSecondBrainData() {
     briefs,
     calendarRange,
   };
+}
+
+function getSecondBrainFocusWindow(now = Date.now()) {
+  return {
+    focusWindowStart: startOfDay(new Date(now - (7 * DAY_MS))),
+    focusWindowEnd: endOfDay(new Date(now + (7 * DAY_MS))),
+  };
+}
+
+async function loadSecondBrainTabData(tabId) {
+  const now = Date.now();
+  const { focusWindowStart, focusWindowEnd } = getSecondBrainFocusWindow(now);
+  const calendarRange = getCalendarViewRange(state.calendarCursor, state.calendarView);
+
+  switch (tabId) {
+    case 'today': {
+      const [overview, focusEvents, tasks, notes, people, briefs] = await Promise.all([
+        api.secondBrainOverview(),
+        api.secondBrainCalendar({
+          fromTime: focusWindowStart.getTime(),
+          toTime: focusWindowEnd.getTime(),
+          limit: 200,
+        }),
+        api.secondBrainTasks({ limit: 200 }),
+        api.secondBrainNotes({ limit: 200, includeArchived: true }),
+        api.secondBrainPeople({ limit: 200 }),
+        api.secondBrainBriefs({ limit: 100 }),
+      ]);
+      return { now, overview, focusEvents, tasks, notes, people, briefs };
+    }
+    case 'calendar': {
+      const [focusEvents, calendarEvents] = await Promise.all([
+        api.secondBrainCalendar({
+          fromTime: focusWindowStart.getTime(),
+          toTime: focusWindowEnd.getTime(),
+          limit: 200,
+        }),
+        api.secondBrainCalendar({
+          fromTime: calendarRange.start.getTime(),
+          toTime: calendarRange.end.getTime(),
+          limit: calendarRange.limit,
+        }),
+      ]);
+      return { now, focusEvents, calendarEvents, calendarRange };
+    }
+    case 'tasks':
+      return {
+        now,
+        tasks: await api.secondBrainTasks({ limit: 200 }),
+      };
+    case 'notes':
+      return {
+        now,
+        notes: await api.secondBrainNotes({ limit: 200, includeArchived: true }),
+      };
+    case 'people':
+      return {
+        now,
+        people: await api.secondBrainPeople({ limit: 200 }),
+      };
+    case 'library':
+      return {
+        now,
+        links: await api.secondBrainLinks({ limit: 200 }),
+      };
+    case 'briefs': {
+      const [briefs, focusEvents, calendarEvents] = await Promise.all([
+        api.secondBrainBriefs({ limit: 100 }),
+        api.secondBrainCalendar({
+          fromTime: focusWindowStart.getTime(),
+          toTime: focusWindowEnd.getTime(),
+          limit: 200,
+        }),
+        api.secondBrainCalendar({
+          fromTime: calendarRange.start.getTime(),
+          toTime: calendarRange.end.getTime(),
+          limit: calendarRange.limit,
+        }),
+      ]);
+      return { now, briefs, focusEvents, calendarEvents, calendarRange };
+    }
+    case 'routines': {
+      const [routineCatalog, routines] = await Promise.all([
+        api.secondBrainRoutineCatalog(),
+        api.secondBrainRoutines(),
+      ]);
+      return { now, routineCatalog, routines };
+    }
+    default:
+      return loadSecondBrainData();
+  }
+}
+
+async function refreshSecondBrainTabs(tabIds) {
+  if (!currentContainer || !state.data) return;
+  const uniqueTabs = [...new Set((tabIds || []).map((tabId) => normalizeTab(tabId)).filter(Boolean))];
+  if (uniqueTabs.length === 0) return;
+
+  const partialResults = await Promise.all(uniqueTabs.map((tabId) => loadSecondBrainTabData(tabId)));
+  state.data = partialResults.reduce((nextData, partial) => ({
+    ...nextData,
+    ...partial,
+  }), { ...state.data });
+  for (const tabId of uniqueTabs) {
+    dirtyTabs.delete(tabId);
+  }
+  synchronizeStateWithData();
+  paint(currentContainer);
+}
+
+function collectDirtySecondBrainTabs(invalidations) {
+  const impactedTabs = new Set();
+  for (const payload of invalidations || []) {
+    for (const tabId of tabsForSecondBrainInvalidation(payload)) {
+      impactedTabs.add(tabId);
+    }
+  }
+  return impactedTabs;
+}
+
+function tabsForSecondBrainInvalidation(payload) {
+  const signature = `${String(payload?.reason || '')} ${String(payload?.path || '')}`.toLowerCase();
+  if (!signature.trim()) {
+    return TAB_IDS;
+  }
+  if (signature.includes('calendar')) {
+    return ['calendar', 'today'];
+  }
+  if (signature.includes('task')) {
+    return ['tasks', 'today'];
+  }
+  if (signature.includes('note')) {
+    return ['notes', 'today'];
+  }
+  if (signature.includes('person') || signature.includes('people')) {
+    return ['people', 'today'];
+  }
+  if (signature.includes('link') || signature.includes('library')) {
+    return ['library'];
+  }
+  if (signature.includes('brief')) {
+    return ['briefs', 'today'];
+  }
+  if (signature.includes('routine')) {
+    return ['routines', 'today'];
+  }
+  if (signature.includes('overview') || signature.includes('usage')) {
+    return ['today'];
+  }
+  return TAB_IDS;
 }
 
 function synchronizeStateWithData() {

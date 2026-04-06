@@ -94,6 +94,7 @@ import {
   isElevatedMemoryMutationToolName,
   isMemoryMutationToolName,
 } from '../util/memory-intent.js';
+import { describePendingApproval, type PendingApprovalSummary } from '../runtime/pending-approval-copy.js';
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
 import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from './cloud/azure-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
@@ -2468,6 +2469,7 @@ export class ToolExecutor {
     id: string;
     toolName: string;
     argsPreview: string;
+    actionLabel?: string;
     createdAt: number;
     risk: ToolDefinition['risk'];
     origin: ToolApprovalRequest['origin'];
@@ -2485,6 +2487,10 @@ export class ToolExecutor {
           id: approval.id,
           toolName: approval.toolName,
           argsPreview: job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120),
+          actionLabel: describePendingApproval({
+            toolName: approval.toolName,
+            argsPreview: job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120),
+          }),
           createdAt: approval.createdAt,
           risk: approval.risk,
           origin: approval.origin,
@@ -2506,16 +2512,21 @@ export class ToolExecutor {
   }
 
   /** Return approval ID → tool name + args preview for display in approval prompts. */
-  getApprovalSummaries(approvalIds: string[]): Map<string, { toolName: string; argsPreview: string }> {
-    const result = new Map<string, { toolName: string; argsPreview: string }>();
+  getApprovalSummaries(approvalIds: string[]): Map<string, PendingApprovalSummary> {
+    const result = new Map<string, PendingApprovalSummary>();
     for (const id of approvalIds) {
       const pending = this.approvals.list(MAX_APPROVALS, 'pending');
       const approval = pending.find(a => a.id === id);
       if (approval) {
         const job = this.jobsById.get(approval.jobId);
+        const argsPreview = job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120);
         result.set(id, {
           toolName: approval.toolName,
-          argsPreview: job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120),
+          argsPreview,
+          actionLabel: describePendingApproval({
+            toolName: approval.toolName,
+            argsPreview,
+          }),
         });
       }
     }

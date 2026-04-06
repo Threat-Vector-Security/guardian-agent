@@ -147,6 +147,34 @@ function hasAnyMatch(normalizedContent: string, candidates: readonly string[]): 
   return candidates.some((candidate) => containsNormalizedPhrase(normalizedContent, candidate));
 }
 
+function normalizeManagedProviderEntity(value: string | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'gws' || normalized === 'm365') {
+    return normalized;
+  }
+  return null;
+}
+
+function explicitlyTargetsManagedProvider(
+  input: SkillResolutionInput,
+  provider: string,
+): boolean {
+  const emailProvider = normalizeManagedProviderEntity(input.intentEntities?.emailProvider);
+  if (emailProvider === provider) return true;
+  const calendarTarget = normalizeManagedProviderEntity(input.intentEntities?.calendarTarget);
+  return calendarTarget === provider;
+}
+
+function shouldAllowManagedProviderSkill(
+  manifest: LoadedSkill['manifest'],
+  input: SkillResolutionInput,
+): boolean {
+  const provider = normalizeManagedProviderEntity(manifest.requiredManagedProvider);
+  if (!provider) return true;
+  if (input.intentRoute !== 'personal_assistant_task') return true;
+  return explicitlyTargetsManagedProvider(input, provider);
+}
+
 function scoreIntentEntityMatches(
   manifest: LoadedSkill['manifest'],
   input: SkillResolutionInput,
@@ -160,6 +188,12 @@ function scoreIntentEntityMatches(
 
   const emailProvider = entities.emailProvider?.trim().toLowerCase();
   if (emailProvider && hasAnyMatch(normalizedContent, PROVIDER_ENTITY_HINTS[emailProvider] ?? [])) {
+    score += 2;
+    specificity += 4;
+  }
+
+  const calendarTarget = normalizeManagedProviderEntity(entities.calendarTarget);
+  if (calendarTarget && hasAnyMatch(normalizedContent, PROVIDER_ENTITY_HINTS[calendarTarget] ?? [])) {
     score += 2;
     specificity += 4;
   }
@@ -191,6 +225,10 @@ function scoreIntentEntityMatches(
   for (const keyword of manifest.triggers?.keywords ?? []) {
     if (!containsNormalizedPhrase(normalizedContent, keyword)) continue;
     if (emailProvider && hasAnyMatch(normalizeTriggerText(keyword), PROVIDER_ENTITY_HINTS[emailProvider] ?? [])) {
+      score += 2;
+      specificity += phraseSpecificity(keyword);
+    }
+    if (calendarTarget && hasAnyMatch(normalizeTriggerText(keyword), PROVIDER_ENTITY_HINTS[calendarTarget] ?? [])) {
       score += 2;
       specificity += phraseSpecificity(keyword);
     }
@@ -380,6 +418,7 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
   if (manifest.requiredManagedProvider) {
     const providers = input.enabledManagedProviders ?? new Set<string>();
     if (!providers.has(manifest.requiredManagedProvider)) return { score: 0, specificity: 0 };
+    if (!shouldAllowManagedProviderSkill(manifest, input)) return { score: 0, specificity: 0 };
   }
 
   if (manifest.requiredCapabilities?.length) {

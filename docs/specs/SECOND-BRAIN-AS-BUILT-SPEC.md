@@ -171,6 +171,27 @@ Current mutation behavior note:
 - chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
 - unqualified calendar CRUD still targets the local Guardian `Second Brain` calendar; explicit Google Calendar or Microsoft 365 calendar CRUD stays on the provider route
 
+### Ownership model: current vs target
+
+Current shipped ownership:
+- notes, tasks, library items, briefs, and routines are Guardian-owned records in the shared `Second Brain` store
+- local calendar events are Guardian-owned records in the shared `Second Brain` store
+- Google and Microsoft calendar events are synced into the shared store as provider-backed records and remain read-only in `Second Brain`
+- people records live in the shared `Second Brain` store, with Google and Microsoft contacts syncing into that same store
+- direct mailbox work remains provider-owned and routes through Gmail / Google Workspace or Outlook / Microsoft 365 rather than `Second Brain`
+
+Documented target direction, not yet fully implemented:
+- Guardian should become the canonical assistant-facing source of truth for calendar and people / relationship context
+- generic assistant requests about calendar and people should resolve against Guardian-owned records by default, even when Google Workspace or Microsoft 365 is connected
+- Google Calendar and Microsoft 365 calendar should act as sync adapters for Guardian-owned calendar state rather than peer destinations for generic chat CRUD
+- Google and Microsoft contacts should sync into Guardian-owned people records as enrichments or mirrors rather than acting as competing first-class context stores
+- email should remain provider-owned, with Guardian storing synced and derived context for retrieval, planning, and drafting rather than becoming a mailbox of record
+
+Planned ownership list:
+- Guardian canonical: calendar, people / contacts context, notes, tasks, library, briefs, routines
+- Provider canonical with Guardian-derived context layered on top: email, Drive / Docs / Sheets, OneDrive / SharePoint, and other provider-native files
+- Explicit provider routes remain valid for provider administration, provider-only maintenance, and direct provider CRUD where the user intentionally targets that provider
+
 ### Built-in routines
 
 Current seeded routines are:
@@ -217,6 +238,8 @@ Current limitations:
 - sync cursors are persisted, but the current implementation stores timestamped sync markers rather than provider-native delta tokens
 - sync is pull-based only
 - no webhook or push-based provider change ingestion is implemented yet
+- provider-backed calendar events are still modeled as read-only remote-owned records; outbound calendar sync from Guardian-owned local events is not implemented yet
+- people / contact unification still uses one shared store today, but ownership and conflict semantics are not yet explicitly modeled as Guardian-canonical vs remote-mirror records
 
 ## Briefing Model
 

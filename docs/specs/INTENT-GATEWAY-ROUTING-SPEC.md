@@ -129,6 +129,27 @@ Calendar target metadata:
 Direct-routing note:
 - `direct-intent-routing.ts` maps `personal_assistant_task` to the bounded `personal_assistant` candidate
 - `chat-agent.ts` may answer simple `Second Brain` reads directly from the shared store without a full tool loop
+- downstream prompt, skill, and tool-execution layers must honor the routed `calendarTarget` / provider entities so generic `Second Brain` requests do not drift into Google Workspace or Microsoft 365 tooling unless the user explicitly named that provider
+- the same routed-intent enforcement applies in brokered worker sessions; a correctly classified local `Second Brain` calendar mutation must stay local even when the turn executes through delegated worker infrastructure
+
+### Ownership Direction
+
+Current routing model:
+- generic `Second Brain` productivity requests stay on `personal_assistant_task`
+- generic calendar CRUD already defaults to Guardian-local `Second Brain`
+- explicit Google Workspace or Microsoft 365 calendar CRUD uses `workspace_task`
+- direct mailbox work uses `email_task`
+
+Documented target direction, not yet fully implemented:
+- Guardian should become the canonical assistant-facing source of truth for calendar and people / relationship context
+- generic calendar and people / contact context requests should prefer `personal_assistant_task` even when provider integrations are enabled
+- explicit provider wording should remain the boundary for Google Workspace or Microsoft 365 calendar maintenance and administration
+- email should remain provider-owned, so mailbox reads, drafts, replies, sends, and forwards stay on `email_task`
+
+Ownership list for routing:
+- `personal_assistant_task`: Guardian-canonical calendar, people / contact context, notes, tasks, library, briefs, routines, and cross-source personal retrieval
+- `workspace_task`: explicit Google Workspace or Microsoft 365 document, file, calendar-maintenance, and provider-admin operations
+- `email_task`: provider-owned Gmail / Outlook mailbox work
 
 ### Turn Relations
 

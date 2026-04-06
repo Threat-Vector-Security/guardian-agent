@@ -8,7 +8,7 @@ import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
-  | ((params: Record<string, unknown>) => { content: string; metadata?: Record<string, unknown> })
+  | ((params: Record<string, unknown>) => Promise<{ content: string; metadata?: Record<string, unknown> }> | { content: string; metadata?: Record<string, unknown> })
   | undefined;
 
 function approvalPendingActionMetadata(
@@ -80,12 +80,14 @@ class FakeWorkerChild extends EventEmitter {
           })}\n`);
         }
         if (message.method === 'message.handle') {
-          const response = workerMessageHandler?.(message.params ?? {}) ?? { content: 'ok' };
-          this.stdout.write(`${JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'message.response',
-            params: response,
-          })}\n`);
+          Promise.resolve(workerMessageHandler?.(message.params ?? {}) ?? { content: 'ok' })
+            .then((response) => {
+              this.stdout.write(`${JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'message.response',
+                params: response,
+              })}\n`);
+            });
         }
       }
     });
@@ -185,6 +187,149 @@ describe('WorkerManager', () => {
       'message.handle',
     ]);
     expect(typeof workerNotifications[0]?.params.capabilityToken).toBe('string');
+
+    manager.shutdown();
+  });
+
+  it('spawns separate workers for the same surface session when the agent lane changes', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+    const sandbox = await import('../sandbox/index.js');
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const baseRequest = {
+      sessionId: 'tester:web',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-lane-1',
+        userId: 'tester',
+        channel: 'web',
+        content: 'hello',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    };
+
+    await manager.handleMessage({
+      ...baseRequest,
+      agentId: 'local',
+    });
+    await manager.handleMessage({
+      ...baseRequest,
+      agentId: 'external',
+      message: {
+        ...baseRequest.message,
+        id: 'm-lane-2',
+        content: 'hello again',
+      },
+    });
+
+    expect(vi.mocked(sandbox.sandboxedSpawn)).toHaveBeenCalledTimes(2);
+
+    manager.shutdown();
+  });
+
+  it('serializes overlapping dispatches on a reused worker', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const starts: string[] = [];
+    const finishers: Array<() => void> = [];
+    workerMessageHandler = (params) => new Promise((resolve) => {
+      const message = params.message as { id?: string };
+      const messageId = String(message.id ?? 'unknown');
+      starts.push(messageId);
+      finishers.push(() => resolve({ content: `done:${messageId}` }));
+    });
+
+    const baseRequest = {
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    };
+
+    const first = manager.handleMessage({
+      ...baseRequest,
+      message: {
+        id: 'm-queue-1',
+        userId: 'tester',
+        channel: 'web',
+        content: 'first',
+        timestamp: Date.now(),
+      },
+    });
+
+    while (starts.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const second = manager.handleMessage({
+      ...baseRequest,
+      message: {
+        id: 'm-queue-2',
+        userId: 'tester',
+        channel: 'web',
+        content: 'second',
+        timestamp: Date.now(),
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(starts).toEqual(['m-queue-1']);
+
+    finishers[0]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(starts).toEqual(['m-queue-1', 'm-queue-2']);
+
+    finishers[1]?.();
+    await expect(first).resolves.toMatchObject({ content: 'done:m-queue-1' });
+    await expect(second).resolves.toMatchObject({ content: 'done:m-queue-2' });
 
     manager.shutdown();
   });
@@ -1210,6 +1355,7 @@ describe('WorkerManager', () => {
     const worker = {
       id: 'worker-busy',
       sessionId: 'tester:web',
+      workerSessionKey: 'tester:web::local',
       agentId: 'local',
       authorizedBy: 'tester',
       grantedCapabilities: [],
@@ -1218,6 +1364,7 @@ describe('WorkerManager', () => {
       workspacePath,
       lastActivityMs: Date.now(),
       status: 'ready' as 'starting' | 'ready' | 'error' | 'shutting_down',
+      dispatchQueue: Promise.resolve(),
     };
 
     const managerState = manager as unknown as {
@@ -1227,7 +1374,7 @@ describe('WorkerManager', () => {
     };
 
     managerState.workers.set(worker.id, worker);
-    managerState.sessionToWorker.set(worker.sessionId, worker.id);
+    managerState.sessionToWorker.set(worker.workerSessionKey, worker.id);
     const removeWorkspacePath = vi.fn(() => {
       throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
     });

@@ -23,6 +23,7 @@ import {
 } from './cli-command-guide.js';
 import { formatGuideForCLI } from '../reference-guide.js';
 import {
+  describePendingApproval,
   formatPendingApprovalMessage,
   shouldUseStructuredPendingApprovalMessage,
 } from '../runtime/pending-approval-copy.js';
@@ -44,6 +45,7 @@ interface PendingApprovalSummary {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 interface CliLiveProgressState {
@@ -103,11 +105,21 @@ function extractPendingAction(
           && typeof (approval as Record<string, unknown>).id === 'string'
           && typeof (approval as Record<string, unknown>).toolName === 'string';
       })
-      .map((approval) => ({
-        id: approval.id,
-        toolName: approval.toolName,
-        argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
-      }))
+      .map((approval) => {
+        const argsPreview = typeof approval.argsPreview === 'string' ? approval.argsPreview : '';
+        const actionLabel = typeof approval.actionLabel === 'string' && approval.actionLabel.trim()
+          ? approval.actionLabel
+          : describePendingApproval({
+              toolName: approval.toolName,
+              argsPreview,
+            });
+        return {
+          id: approval.id,
+          toolName: approval.toolName,
+          argsPreview,
+          ...(actionLabel ? { actionLabel } : {}),
+        };
+      })
     : undefined;
   return {
     blocker: {

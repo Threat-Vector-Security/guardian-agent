@@ -93,6 +93,7 @@ export function createToolsDashboardCallbacks(
           id,
           toolName: summary?.toolName ?? 'unknown',
           argsPreview: summary?.argsPreview ?? '',
+          actionLabel: summary?.actionLabel ?? '',
         };
       });
     },
