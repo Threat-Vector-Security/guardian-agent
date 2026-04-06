@@ -40,6 +40,7 @@ export interface CodeSessionPendingApproval {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
   createdAt?: number | null;
   risk?: string;
   origin?: string;

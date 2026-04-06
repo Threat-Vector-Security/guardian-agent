@@ -43,6 +43,30 @@ describe('normalizeSecondBrainMutationArgs', () => {
     }
   });
 
+  it('falls back to a one-hour local event when the model guessed a zero-length calendar duration', () => {
+    const referenceTime = new Date(2026, 3, 6, 10, 0, 0, 0).getTime();
+    const { service, close } = createService(referenceTime);
+
+    try {
+      const normalized = normalizeSecondBrainMutationArgs({
+        toolName: 'second_brain_calendar_upsert',
+        args: {
+          title: "Doctor's Appointment",
+          startsAt: new Date(2026, 3, 7, 12, 0, 0, 0).getTime(),
+          endsAt: new Date(2026, 3, 7, 12, 0, 0, 0).getTime(),
+        },
+        userContent: "Add a calendar entry for tomorrow at 12 pm for a doctor's appointment at Narangba doctor's surgery.",
+        referenceTime,
+        getEventById: (id) => service.getEventById(id),
+      });
+
+      expect(normalized.startsAt).toBe(new Date(2026, 3, 7, 12, 0, 0, 0).getTime());
+      expect(normalized.endsAt).toBe(new Date(2026, 3, 7, 13, 0, 0, 0).getTime());
+    } finally {
+      close();
+    }
+  });
+
   it('preserves an existing event time and duration when the user only changes the date', () => {
     const referenceTime = new Date(2026, 3, 5, 9, 0, 0, 0).getTime();
     const { service, close } = createService(referenceTime);

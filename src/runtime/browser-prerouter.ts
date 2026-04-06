@@ -6,6 +6,7 @@ export interface BrowserPendingApprovalMetadata {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 export interface BrowserPreRouteResult {

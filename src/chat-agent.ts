@@ -8,6 +8,7 @@ import { findCliHelpTopic, formatCliCommandGuideForPrompt } from './channels/cli
 import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
+import { formatGuideForPrompt } from './reference-guide.js';
 import {
   buildCodeSessionTaggedFilePromptContext,
   buildCodeSessionWorkspaceAwarenessQuery,
@@ -140,10 +141,14 @@ import {
   buildPromptAssemblySectionFootprints,
   buildSystemPromptWithContext,
   formatCodeSessionActiveSkillsPrompt,
+  type PromptAssemblyAdditionalSection,
   type PromptAssemblyDiagnostics,
   type PromptAssemblyKnowledgeBase,
 } from './runtime/context-assembly.js';
-import { normalizeSecondBrainMutationArgs } from './runtime/second-brain/chat-mutation-normalization.js';
+import {
+  buildRoutedIntentAdditionalSection,
+  prepareToolExecutionForIntent,
+} from './runtime/routed-tool-execution.js';
 import {
   isGenericPendingActionContinuationRequest,
   isWorkspaceSwitchPendingActionSatisfied,
@@ -421,32 +426,23 @@ type DirectIntentShadowCandidate =
   /** Shadow-mode structured classifier for top-level request routing. */
   private readonly intentGateway: IntentGateway;
 
-  private normalizeToolArgsForExecution(
-    toolName: string,
-    args: Record<string, unknown>,
-    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-    referenceTime: number,
-  ): Record<string, unknown> {
-    const service = this.secondBrainService;
-    const userContent = toolExecOrigin.requestText?.trim();
-    if (!service || !userContent) {
-      return args;
+  private buildPromptAdditionalSections(
+    skillPromptMaterial: SkillPromptMaterialResult | undefined,
+    intentDecision?: IntentGatewayDecision | null,
+  ): PromptAssemblyAdditionalSection[] | undefined {
+    const sections: PromptAssemblyAdditionalSection[] = [...(skillPromptMaterial?.additionalSections ?? [])];
+    const routedIntentSection = buildRoutedIntentAdditionalSection(intentDecision);
+    if (routedIntentSection && !sections.some((section) => section.section === routedIntentSection.section)) {
+      sections.push(routedIntentSection);
     }
-    return normalizeSecondBrainMutationArgs({
-      toolName,
-      args,
-      userContent,
-      referenceTime,
-      getEventById: (id) => service.getEventById(id),
-      getTaskById: (id) => service.getTaskById(id),
-      getPersonById: (id) => service.getPersonById(id),
-    });
+    return sections.length > 0 ? sections : undefined;
   }
 
   private executeToolsConflictAware(
     toolCalls: Array<{ id: string; name: string; arguments?: string }>,
     toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
     referenceTime: number,
+    intentDecision?: IntentGatewayDecision,
   ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
     const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
     const locks = new Map<string, Promise<void>>();
@@ -469,9 +465,27 @@ type DirectIntentShadowCandidate =
         continue;
       }
 
-      parsedArgs = this.normalizeToolArgsForExecution(tc.name, parsedArgs, toolExecOrigin, referenceTime);
-
       const def = this.tools?.getToolDefinition(tc.name);
+      const prepared = prepareToolExecutionForIntent({
+        toolName: tc.name,
+        args: parsedArgs,
+        requestText: toolExecOrigin.requestText,
+        referenceTime,
+        intentDecision,
+        toolDefinition: def,
+        getEventById: (id) => this.secondBrainService?.getEventById(id) ?? null,
+        getTaskById: (id) => this.secondBrainService?.getTaskById(id) ?? null,
+        getPersonById: (id) => this.secondBrainService?.getPersonById(id) ?? null,
+      });
+      parsedArgs = prepared.args;
+      if (prepared.immediateResult) {
+        promises.push(Promise.resolve({
+          toolCall: tc,
+          result: prepared.immediateResult,
+        }));
+        continue;
+      }
+
       const isMutating = def ? def.risk !== 'read_only' : true;
       let conflictKey: string | null = null;
 
@@ -947,7 +961,10 @@ type DirectIntentShadowCandidate =
     if (resolvedCodeSession) {
       resolvedCodeSession = this.refreshCodeSessionWorkspaceAwareness(
         resolvedCodeSession,
-        buildCodeSessionWorkspaceAwarenessQuery(message.content, requestedCodeContext?.fileReferences),
+        buildCodeSessionWorkspaceAwarenessQuery(
+          stripLeadingContextPrefix(message.content),
+          requestedCodeContext?.fileReferences,
+        ),
       );
     }
     const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? message.userId;
@@ -996,7 +1013,7 @@ type DirectIntentShadowCandidate =
       userId: conversationUserId,
       channel: conversationChannel,
     }, {
-      query: scopedMessage.content,
+      query: stripLeadingContextPrefix(scopedMessage.content),
     }) ?? [];
     const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
     const suspendedScope = normalizeApprovalContinuationScope({
@@ -1022,7 +1039,7 @@ type DirectIntentShadowCandidate =
       agentId: this.id,
       channel: message.channel,
       requestType: 'chat',
-      content: groundedScopedMessage.content,
+      content: stripLeadingContextPrefix(groundedScopedMessage.content),
       codeSessionAttached: !!resolvedCodeSession,
       hasTaggedFileContext: (requestedCodeContext?.fileReferences?.length ?? 0) > 0,
       enabledManagedProviders: this.enabledManagedProviders,
@@ -1351,9 +1368,9 @@ type DirectIntentShadowCandidate =
       baseSystemPrompt: string,
       promptKnowledge: PromptKnowledgeBundle | undefined,
       runtimeSkills: ResolvedSkill[],
-      skillPromptMaterial: PromptSkillMaterialBundle,
       toolContext: string,
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>,
+      additionalSections?: PromptAssemblyAdditionalSection[],
     ) => buildPromptAssemblySectionFootprints({
       baseSystemPrompt,
       knowledgeBases: promptKnowledge?.knowledgeBases ?? [],
@@ -1370,7 +1387,7 @@ type DirectIntentShadowCandidate =
       pendingAction: this.buildPendingActionPromptContext(pendingAction),
       pendingApprovalNotice,
       continuity: summarizeContinuityThreadForGateway(continuityThread),
-      additionalSections: skillPromptMaterial?.additionalSections,
+      additionalSections,
     });
     const buildContextDiagnostics = (input: {
       promptKnowledge: PromptKnowledgeBundle | undefined;
@@ -1380,6 +1397,7 @@ type DirectIntentShadowCandidate =
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
       baseSystemPrompt: string;
       codeSessionId?: string;
+      additionalSections?: PromptAssemblyAdditionalSection[];
       compaction?: ContextCompactionResult;
     }): PromptAssemblyDiagnostics => this.buildContextAssemblyMetadata({
       memoryScope: 'global',
@@ -1397,9 +1415,9 @@ type DirectIntentShadowCandidate =
         input.baseSystemPrompt,
         input.promptKnowledge,
         input.runtimeSkills,
-        input.skillPromptMaterial,
         input.toolContext,
         input.runtimeNotices,
+        input.additionalSections,
       ),
       preservedExecutionState: buildPreservedExecutionState(),
       ...(input.compaction?.applied
@@ -1492,6 +1510,10 @@ type DirectIntentShadowCandidate =
         requestText: routedScopedMessage.content,
       }) ?? '';
       const runtimeNotices = this.tools?.getRuntimeNotices() ?? [];
+      const promptAdditionalSections = this.buildPromptAdditionalSections(
+        skillPromptMaterial,
+        earlyGateway?.decision,
+      );
       const baseSystemPrompt = enrichedSystemPrompt;
       enrichedSystemPrompt = this.buildAssembledSystemPrompt({
         baseSystemPrompt,
@@ -1502,7 +1524,7 @@ type DirectIntentShadowCandidate =
         pendingAction,
         pendingApprovalNotice,
         continuityThread,
-        additionalSections: skillPromptMaterial?.additionalSections,
+        additionalSections: promptAdditionalSections,
       });
       contextAssemblyMeta = buildContextDiagnostics({
         promptKnowledge,
@@ -1512,6 +1534,7 @@ type DirectIntentShadowCandidate =
         runtimeNotices,
         baseSystemPrompt,
         codeSessionId: resolvedCodeSession?.session.id,
+        additionalSections: promptAdditionalSections,
       });
       llmMessages = buildChatMessagesFromHistory({
         systemPrompt: enrichedSystemPrompt,
@@ -1943,6 +1966,10 @@ type DirectIntentShadowCandidate =
           requestText: routedScopedMessage.content,
         }) ?? '';
         const workerRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
+        const workerAdditionalSections = this.buildPromptAdditionalSections(
+          workerSkillPromptMaterial,
+          earlyGateway?.decision,
+        );
         const workerContextAssemblyMeta = buildContextDiagnostics({
           promptKnowledge,
           runtimeSkills: preResolvedSkills,
@@ -1951,6 +1978,7 @@ type DirectIntentShadowCandidate =
           runtimeNotices: workerRuntimeNotices,
           baseSystemPrompt: workerSystemPrompt,
           codeSessionId: resolvedCodeSession?.session.id,
+          additionalSections: workerAdditionalSections,
           compaction: latestContextCompaction,
         });
         const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
@@ -1969,7 +1997,7 @@ type DirectIntentShadowCandidate =
           history: priorHistory,
           knowledgeBases: promptKnowledge.knowledgeBases,
           activeSkills: preResolvedSkills,
-          additionalSections: workerSkillPromptMaterial?.additionalSections,
+          additionalSections: workerAdditionalSections,
           toolContext: workerToolContext,
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
           continuity: continuitySummary,
@@ -2320,11 +2348,11 @@ type DirectIntentShadowCandidate =
           agentContext: { checkAction: ctx.checkAction },
           codeContext: effectiveCodeContext,
           activeSkills: activeSkills.map((skill) => skill.id),
-          requestText: routedScopedMessage.content,
+          requestText: stripLeadingContextPrefix(routedScopedMessage.content),
         };
 
         const toolResults = await Promise.allSettled(
-          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, message.timestamp)
+          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, message.timestamp, directIntent?.decision)
         );
         lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
           if (settled.status !== 'fulfilled') return acc;
@@ -2553,10 +2581,10 @@ type DirectIntentShadowCandidate =
               agentContext: { checkAction: ctx.checkAction },
               codeContext: effectiveCodeContext,
               activeSkills: activeSkills.map((skill) => skill.id),
-              requestText: routedScopedMessage.content,
+              requestText: stripLeadingContextPrefix(routedScopedMessage.content),
             };
             const fbToolResults = await Promise.allSettled(
-              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, message.timestamp)
+              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, message.timestamp, directIntent?.decision)
             );
             let fallbackHasPending = false;
             for (const settled of fbToolResults) {
@@ -2723,6 +2751,7 @@ type DirectIntentShadowCandidate =
             id,
             toolName: summary?.toolName ?? 'unknown',
             argsPreview: summary?.argsPreview ?? '',
+            actionLabel: summary?.actionLabel ?? '',
           };
         });
         const pendingActionResult = this.setPendingApprovalAction(
@@ -3103,10 +3132,14 @@ type DirectIntentShadowCandidate =
     const cliCommandGuide = this.shouldIncludeCliCommandGuide(message?.content)
       ? `<cli-command-guide>\n${formatCliCommandGuideForPrompt()}\n</cli-command-guide>`
       : '';
+    const referenceGuide = this.shouldIncludeReferenceGuide(message?.content)
+      ? `<reference-guide>\n${formatGuideForPrompt(message?.content)}\n</reference-guide>`
+      : '';
     if (!resolvedCodeSession) {
       return [
         this.systemPrompt,
         cliCommandGuide,
+        referenceGuide,
       ].filter((section) => section && section.trim()).join('\n\n');
     }
     const requestedCodeContext = readCodeRequestMetadata(message?.metadata);
@@ -3119,6 +3152,7 @@ type DirectIntentShadowCandidate =
       this.buildCodeSessionSystemContext(resolvedCodeSession.session),
       taggedFileContext,
       cliCommandGuide,
+      referenceGuide,
     ].filter((section) => section && section.trim()).join('\n\n');
   }
 
@@ -3322,13 +3356,24 @@ type DirectIntentShadowCandidate =
   }
 
   private shouldIncludeCliCommandGuide(content?: string): boolean {
-    const normalized = content?.trim().toLowerCase() ?? '';
+    const normalized = stripLeadingContextPrefix(content ?? '').trim().toLowerCase();
     if (!normalized) return false;
     if (findCliHelpTopic(normalized)) return true;
     return /\bcli\b/.test(normalized)
       || /\bslash commands?\b/.test(normalized)
       || (/\bterminal\b/.test(normalized) && /\bguardian\b/.test(normalized))
       || /\/(?:help|chat|code|tools|assistant|guide|config|models|security|automations|connectors)\b/.test(normalized);
+  }
+
+  private shouldIncludeReferenceGuide(content?: string): boolean {
+    const normalized = stripLeadingContextPrefix(content ?? '').trim().toLowerCase();
+    if (!normalized) return false;
+    const asksUsageQuestion = /\b(?:how do i|how can i|how to|where do i|where can i|where is|which page|what page|what tab|which tab|show me|walk me through|help me)\b/.test(normalized);
+    const asksCapabilityQuestion = /\b(?:what can guardian|what does guardian|can guardian|does guardian)\b/.test(normalized);
+    const mentionsProductSurface = /\b(?:guardian|app|web ui|ui|page|panel|tab|screen|dashboard|second brain|automations|configuration|security|performance|system|code|memory)\b/.test(normalized);
+    return asksUsageQuestion
+      || asksCapabilityQuestion
+      || (mentionsProductSurface && normalized.endsWith('?'));
   }
 
   private buildPendingActionPromptContext(
@@ -3504,6 +3549,7 @@ type DirectIntentShadowCandidate =
               id,
               toolName: summary?.toolName ?? 'unknown',
               argsPreview: summary?.argsPreview ?? '',
+              actionLabel: summary?.actionLabel ?? '',
             };
           })
         : [];
@@ -4396,6 +4442,7 @@ type DirectIntentShadowCandidate =
               id,
               toolName: summary?.toolName ?? 'unknown',
               argsPreview: summary?.argsPreview ?? '',
+              actionLabel: summary?.actionLabel ?? '',
             };
           }),
           originalUserContent: delegatedTask,
@@ -5047,6 +5094,7 @@ type DirectIntentShadowCandidate =
           id,
           toolName: summary?.toolName ?? 'unknown',
           argsPreview: summary?.argsPreview ?? '',
+          actionLabel: summary?.actionLabel ?? '',
         };
       });
       const nextActionResult = this.setPendingApprovalAction(
@@ -5500,12 +5548,13 @@ type DirectIntentShadowCandidate =
       return;
     }
     const summaries = this.tools?.getApprovalSummaries(approvalIds);
-    const approvalSummaries = approvalIds.map((id) => {
+      const approvalSummaries = approvalIds.map((id) => {
       const summary = summaries?.get(id);
       return {
         id,
         toolName: summary?.toolName ?? 'unknown',
         argsPreview: summary?.argsPreview ?? '',
+        actionLabel: summary?.actionLabel ?? '',
       };
     });
     this.setPendingApprovalAction(
@@ -6390,6 +6439,7 @@ type DirectIntentShadowCandidate =
             id,
             toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
             argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
           };
         });
       },
@@ -6465,6 +6515,7 @@ type DirectIntentShadowCandidate =
             id,
             toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
             argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
           };
         });
       },
@@ -6588,6 +6639,7 @@ type DirectIntentShadowCandidate =
             id,
             toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
             argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
           };
         });
       },
@@ -6663,7 +6715,7 @@ type DirectIntentShadowCandidate =
     if (!ctx.llm) return preRouted ?? null;
     const classified = await this.intentGateway.classify(
       {
-        content: message.content,
+        content: stripLeadingContextPrefix(message.content),
         channel: message.channel,
         recentHistory: options?.recentHistory,
         pendingAction: options?.pendingAction

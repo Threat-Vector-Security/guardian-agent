@@ -37,4 +37,11 @@ describe('code-session-core prompt', () => {
     expect(prompt).toContain('answer from that guide instead of guessing');
     expect(prompt).toContain('Do not invent slash commands or hidden subcommands');
   });
+
+  it('tells coding-session agents how to answer Guardian product-usage questions', () => {
+    const prompt = composeCodeSessionSystemPrompt();
+    expect(prompt).toContain('<reference-guide>');
+    expect(prompt).toContain('navigate the app, or understand product capabilities');
+    expect(prompt).toContain('Do not treat it as implementation or architecture documentation');
+  });
 });

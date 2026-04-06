@@ -104,9 +104,12 @@ function normalizeCalendarMutationArgs(
     argEnd,
     fallbackMinutes: 60,
   });
-  const endsAt = parsed.endTime
+  const provisionalEndsAt = parsed.endTime
     ? buildTimestamp(baseDate, parsed.endTime)
     : startAt + durationMinutes * 60_000;
+  const endsAt = provisionalEndsAt > startAt
+    ? provisionalEndsAt
+    : startAt + Math.max(durationMinutes, 60) * 60_000;
 
   nextArgs.startsAt = startAt;
   nextArgs.endsAt = endsAt;

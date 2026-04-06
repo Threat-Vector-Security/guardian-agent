@@ -53,6 +53,7 @@ export interface PendingActionApprovalSummary {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 export interface PendingActionIntent {
@@ -285,6 +286,9 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
         id: typeof item.id === 'string' ? item.id.trim() : '',
         toolName: typeof item.toolName === 'string' ? item.toolName.trim() : '',
         argsPreview: typeof item.argsPreview === 'string' ? item.argsPreview : '',
+        ...(typeof item.actionLabel === 'string' && item.actionLabel.trim()
+          ? { actionLabel: item.actionLabel.trim() }
+          : {}),
       }))
       .filter((item) => item.id && item.toolName)
     : undefined;

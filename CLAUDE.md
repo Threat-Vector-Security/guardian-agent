@@ -79,9 +79,21 @@ The dispatch flow is: **Channel → ChatAgent.onMessage → Intent Gateway class
 - **Entities**: If the new route needs to extract structured data from the user's message (e.g. a target name, path, or ID), add it to `IntentGatewayEntities`, the tool schema properties, and `normalizeIntentGatewayDecision`.
 - **Never intercept messages before the Intent Gateway**. Pre-gateway interception creates brittle regex that misses natural phrasings. The only pre-gateway handling allowed is slash-command parsing (e.g. `/code list`) in channel adapters, and continuation/approval flow detection.
 - **Architect blocked-work fixes at the shared orchestration layer**. When a bug is about approvals, clarifications, prerequisites, workspace switching, cross-turn resume, or channel drift, extend the shared runtime state system (`PendingActionStore`, shared response metadata, shared channel behavior) instead of adding bespoke per-tool flows.
-- **Use the routing trace when debugging runtime behavior**. The canonical trace is `~/.guardianagent/routing/intent-routing.jsonl` on the host running Guardian (Windows-hosted runs typically write to `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`). Check it before inferring behavior from chat transcripts alone. It records intent-gateway classification, tier routing, direct-tool candidate evaluation, pending-action creation, approval propagation, and final dispatch locality. For web-only issues, pair the trace with server/channel inspection and `web/public/js/chat-panel.js`, because the trace will not show frontend rendering or input-lock failures on its own.
 
 Current routes: `automation_authoring`, `automation_control`, `automation_output_task`, `ui_control`, `browser_task`, `workspace_task`, `email_task`, `search_task`, `filesystem_task`, `coding_task`, `coding_session_control`, `security_task`, `general_assistant`.
+
+### Routing Trace (CRITICAL)
+
+**When debugging routing, approvals, pending actions, direct tool dispatch, worker locality, or cross-channel continuation, inspect the routing trace before guessing from transcripts alone.** The canonical trace is `~/.guardianagent/routing/intent-routing.jsonl` on the host running Guardian. On Windows-hosted runs this is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`.
+
+Use it to confirm:
+- intent-gateway classification
+- tier routing and fallback locality
+- direct-tool candidate evaluation
+- tool start/completion and approval propagation
+- pending-action creation and held-result behavior
+
+For web-only issues, pair the trace with server/channel inspection and `web/public/js/chat-panel.js`, because the routing trace will not show frontend rendering or input-lock failures on its own.
 
 ### LLM Provider Layer
 - Unified `LLMProvider` interface with `chat()` and `stream()` (AsyncGenerator) for **Ollama**, **Anthropic**, **OpenAI**, plus 6 OpenAI-compatible providers (**Groq**, **Mistral**, **DeepSeek**, **Together**, **xAI**, **Google Gemini**) via `ProviderRegistry`

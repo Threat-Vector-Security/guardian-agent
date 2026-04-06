@@ -30,6 +30,12 @@ describe('guardian-core prompt', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Prefer /help <command> for exact syntax and /guide for broader operator workflows');
   });
 
+  it('tells the model to answer product-usage questions from the shared reference guide', () => {
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('<reference-guide>');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('navigate the app, or understand product capabilities');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('GitHub Repository page in the guide');
+  });
+
   it('tells the model to use configured cloud profiles from tool context', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('inspect <tool-context> for configured cloud profiles before asking follow-up questions');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('use that profile id directly');
@@ -44,5 +50,11 @@ describe('guardian-core prompt', () => {
   it('tells general chat agents how to handle explicit external coding backend requests', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly asks to use an external coding backend such as Codex, Claude Code, Gemini CLI, or Aider, use the coding_backend_run tool');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Coding Workspace / code session must be attached first');
+  });
+
+  it('distinguishes local Second Brain requests from explicit Google Workspace or Microsoft 365 requests', () => {
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Unqualified Guardian / Second Brain requests for notes, tasks, people, library items, briefs, routines, or calendar CRUD stay local');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly targets Google Workspace surfaces');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly targets Microsoft 365 / Outlook surfaces');
   });
 });

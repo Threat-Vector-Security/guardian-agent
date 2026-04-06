@@ -1,5 +1,12 @@
 /**
  * Shared reference guide content for CLI, Telegram, and Web UI.
+ *
+ * AGENT NOTE:
+ * This file is a user/operator guide only.
+ * Keep it focused on how to use the product, navigate the surfaces, and understand shipped capabilities.
+ * Do not turn this file into implementation documentation, code-path notes, architecture commentary,
+ * test guidance, or internal troubleshooting details except where an operator directly needs them to use
+ * or diagnose the product from the outside.
  */
 
 export interface ReferenceGuidePageSection {
@@ -28,10 +35,41 @@ export interface ReferenceGuide {
   categories: ReferenceGuideCategory[];
 }
 
+const GUIDE_PROMPT_STOP_WORDS = new Set([
+  'a',
+  'about',
+  'an',
+  'and',
+  'app',
+  'are',
+  'can',
+  'do',
+  'for',
+  'guardian',
+  'how',
+  'i',
+  'in',
+  'is',
+  'it',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'the',
+  'this',
+  'to',
+  'use',
+  'using',
+  'what',
+  'where',
+  'with',
+]);
+
 export function getReferenceGuide(): ReferenceGuide {
   return {
     title: 'Guardian Agent Reference Guide',
-    intro: 'Operator guide for setup, day-to-day use, coding workflows, cloud connections, automations, and security controls across web, CLI, and Telegram. For implementation details and deeper technical documentation, use the GitHub repository links in this guide.',
+    intro: 'Operator guide for setup, day-to-day use, coding workflows, cloud connections, automations, and security controls across web, CLI, and Telegram. For source code, deeper technical documentation, and contribution workflow, use the GitHub Repository section in this guide.',
     categories: [
       {
         id: 'getting-started',
@@ -65,7 +103,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
                 ],
-                note: 'Most configuration changes now appear in the web UI without a manual browser refresh because the web channel listens for server-sent invalidation events.',
+                note: 'Most configuration changes should appear in the web UI without a manual browser refresh.',
               },
               {
                 title: 'Which Page To Use',
@@ -91,8 +129,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Open Second Brain at `#/` for the main personal-assistant surface.',
                   'The current tabs are `Today`, `Calendar`, `Tasks`, `Notes`, `People`, `Library`, `Briefs`, and `Routines`.',
-                  'Second Brain is the personal-assistant home, not the operator runtime page. Use it for your day, your commitments, your notes, and your planning context.',
-                  'The shared store behind Second Brain is also used by web chat, CLI, Telegram, and deterministic brief generation, so saved items are not trapped in one panel.',
+                  'Second Brain is the personal-assistant home, not the main operator dashboard. Use it for your day, your commitments, your notes, and your planning context.',
+                  'Items you save in Second Brain are available across the supported Guardian surfaces instead of being trapped in one panel.',
                   'Performance, Security, Automations, and Configuration are the main operator-facing control surfaces outside Second Brain.',
                   'Use explicit Gmail, Outlook, Drive, OneDrive, SharePoint, or Docs CRUD requests when you want direct provider operations rather than Second Brain retrieval or planning.',
                 ],
@@ -117,6 +155,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Local events currently support title, start time, end time, location, and description. The same editor also handles later updates and deletes for local events.',
                   'Google Calendar and Microsoft 365 events can appear in the grid when those providers are connected, but those synced events are read-only here. Edit or delete them in the source calendar.',
                   'If a synced event is selected, you can generate a pre-meeting brief from it directly from the Calendar view.',
+                  'If a local Guardian event is added or changed from chat while you are already on the Calendar tab, the tab should refresh in place so the updated event appears without leaving Second Brain.',
                 ],
               },
               {
@@ -128,6 +167,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Selecting a task opens the editor for the full title, details, priority, status, and due date fields, including in-place delete.',
                   'Tasks created here feed the Today view and can also be pulled into meeting briefs and follow-up drafts when relevant.',
                   'Use the top-right `New task` action when you want a clean editor instead of changing the currently selected task.',
+                  'If a task is created or updated from chat while you are already on the Tasks tab, the tab should refresh in place so the board stays current.',
                 ],
               },
               {
@@ -186,30 +226,36 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `Create routine` to add an unconfigured built-in routine such as Pre-Meeting Brief or Follow-Up Watch without leaving the tab.',
                   'The create or edit pane is on the left, and the routine catalog table is on the right.',
                   'Selecting a configured routine lets you change its enabled state, supported trigger settings, routing bias, budget profile ID, name, default delivery channels, or delete it from the catalog.',
-                  'Routine output can be delivered to web, CLI, or Telegram depending on the routine settings and the supported runtime path.',
+                  'Routine output can be delivered to web, CLI, or Telegram depending on the routine settings and supported delivery path.',
                   'Use Routines when you want predictable assistance on a schedule without turning Second Brain into an always-running autonomous agent.',
                 ],
               },
               {
                 title: 'Sync And Shared Data',
                 items: [
-                  'If Google Workspace or Microsoft 365 is connected, Second Brain can sync calendar events and contacts into the shared store.',
+                  'If Google Workspace or Microsoft 365 is connected, Second Brain can sync calendar events and contacts into Guardian.',
                   'Guardian runs a startup sync and a deterministic Second Brain horizon scan every 15 minutes.',
-                  'Second Brain data is shared across the supported surfaces. A task, note, event, person, or library item created in the web UI is part of the same backend store used by other channels.',
+                  'Second Brain data is shared across the supported surfaces. A task, note, event, person, or library item created in the web UI is available from Guardian on other supported surfaces too.',
+                  'Directionally, Guardian is the assistant-facing home for calendar and people context. Provider calendars and contacts sync into that shared context instead of replacing it.',
+                  'Generic requests for Second Brain notes, tasks, people, library items, briefs, routines, or local calendar work stay on the local Second Brain path even when Google Workspace or Microsoft 365 is connected.',
                   'Unqualified requests such as `create a calendar entry for tomorrow` default to a local Guardian Second Brain event. Say `Google Calendar` or `Outlook calendar` only when you want provider-specific calendar CRUD.',
-                  'Chat-driven local calendar, task due-date, and contact last-contact updates now resolve phrases like `tomorrow at 12 pm`, `move it to Friday`, or `I talked to her yesterday` in Guardian\'s local runtime timezone before the shared record is written.',
-                  'Simple chat questions such as `What do I have today?` or `Show my tasks` can be answered directly from that shared store without a full open-ended tool loop.',
-                  'The assistant can create, update, and delete local Second Brain notes, tasks, calendar events, people, library items, briefs, and configured routines through that shared store.',
-                  'Saved briefs can be generated, reviewed, edited, regenerated, and deleted from the same backend state.',
+                  'That local-vs-provider calendar boundary is enforced all the way through execution. A generic local calendar request should not drift into Google Workspace or Microsoft 365 just because those providers are connected.',
+                  'Local Second Brain writes such as calendar creation can still require approval. In that case the approval is for the local Guardian write, not for a provider calendar unless you explicitly named that provider.',
+                  'Treat notes, tasks, library items, briefs, and routines as Guardian-owned records. Calendar and people context are also moving in that direction, even when external providers are connected for sync.',
+                  'Email is different. Gmail and Outlook remain provider-owned mail systems, so explicit mail send, reply, inbox, and mailbox actions should still target the relevant provider rather than Second Brain storage.',
+                  'Chat-driven local calendar, task due-date, and contact last-contact updates resolve phrases like `tomorrow at 12 pm`, `move it to Friday`, or `I talked to her yesterday` in Guardian\'s local timezone before the change is saved.',
+                  'Simple chat questions such as `What do I have today?` or `Show my tasks` can be answered directly from your saved Guardian data.',
+                  'The assistant can create, update, and delete local Second Brain notes, tasks, calendar events, people, library items, briefs, and configured routines.',
+                  'Saved briefs can be generated, reviewed, edited, regenerated, and deleted from the same saved data.',
                   'Event descriptions, task details, note content, people notes, and library summaries are part of the stored records, so they are available to the assistant logic that reads those records.',
                 ],
-                note: 'Provider-backed calendar events remain editable in the source provider, but their synced detail can still be used for read-only review and brief generation inside Second Brain.',
+                note: 'Provider-backed calendar events remain editable in the source provider, and Guardian-first sync for calendar and contact records is still evolving rather than a fully shipped bidirectional sync contract.',
               },
               {
                 title: 'Operator Expectations And Limits',
                 items: [
                   'Second Brain is meant to be understandable from the UI alone. Controls that only duplicate nearby actions should be removed rather than explained away.',
-                  'The current implementation exposes budget visibility and attribution, but it is not yet a separate policy engine that automatically pauses or downgrades work when you cross a threshold.',
+                  'You can currently see budget visibility and attribution, but Guardian does not yet automatically pause or downgrade work when you cross a threshold.',
                   'Second Brain is intentionally bounded. Briefs are deterministic, routines are built-in, and provider sync is curated rather than free-form.',
                   'Use Second Brain for planning, retrieval, and bounded capture. Use Performance, Configuration, Security, Automations, and Code for the heavier operator control surfaces.',
                   'If you need direct provider changes, provider-specific messages, or broader workflow automation, move to the explicit feature surface instead of trying to force it through Second Brain.',
@@ -220,16 +266,17 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'github-repo',
             title: 'GitHub Repository',
-            summary: 'Use the public repository for technical documentation, security policy, and contribution workflow.',
+            summary: 'Use the public repository for source code, technical documentation, security policy, and contribution workflow.',
             sections: [
               {
                 title: 'Main Links',
                 items: [
                   'Repository: https://github.com/Threat-Vector-Security/guardian-agent',
+                  'Source code: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/src',
                   'README: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/README.md',
                   'Security policy: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/SECURITY.md',
                   'Second Brain as-built spec: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md',
-                  'Docs and architecture notes: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/docs',
+                  'Docs and technical notes: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/docs',
                   'Issues and pull requests: https://github.com/Threat-Vector-Security/guardian-agent/issues',
                 ],
               },
@@ -237,7 +284,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'When To Use GitHub',
                 items: [
                   'Use this in-product guide for normal operation and day-to-day workflows.',
-                  'Use GitHub when you want implementation details, design specs, security notes, or troubleshooting depth that would clutter the operator guide.',
+                  'Use GitHub when you want source code, design specs, security notes, or deeper technical documentation that would clutter the operator guide.',
                   'If you want to contribute, start from the repo README and docs folder, then use issues and pull requests from the repository.',
                 ],
               },
@@ -278,7 +325,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'assistant-control-plane',
             title: 'Assistant Control Plane',
-            summary: 'Inspect runtime state, approvals, jobs, traces, and policy decisions from the operator surfaces.',
+            summary: 'Inspect system state, approvals, jobs, traces, and policy decisions from the operator surfaces.',
             sections: [
               {
                 title: 'Web Control Surfaces',
@@ -290,6 +337,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
                   'Use the execution timeline when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed.',
                   'Routing Trace gives you a quick explanation of how Guardian interpreted a request and where it sent the work.',
+                  'If you need the detailed routing trace file for troubleshooting, it is usually at `~/.guardianagent/routing/intent-routing.jsonl`. On Windows-hosted runs this is typically `C:\\Users\\<user>\\.guardianagent\\routing\\intent-routing.jsonl`.',
                   'Configuration > Tools is where you manage tools and approvals. Security is where you review alerts, posture, and security activity.',
                 ],
               },
@@ -329,6 +377,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Approvals',
                 items: [
                   'Pending tool actions show up through web approvals, CLI prompts, and Telegram approval flows.',
+                  'Approval prompts should describe the requested action in readable product language rather than raw JSON or timestamps.',
                   'In web chat and the Coding Workspace, approvals should appear inline on the same blocked response that asked for approval.',
                   'Blocked approval or clarification state should stay durable even if you ask an unrelated question, but unrelated replies should not keep repeating the old blocker UI inline.',
                   'If you click a web approval button and then switch panels, the clicked approval state should persist instead of resetting back to fresh buttons.',
@@ -634,10 +683,10 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Document Search',
                 items: [
-                  'Native hybrid search combines BM25 keyword matching and vector similarity across local directories, repositories, URLs, and files.',
+                  'Document search can combine keyword and semantic matching across local directories, repositories, URLs, and files.',
                   'When you already know the exact local PDF path, use `fs_read` to extract the document text directly instead of indexing first.',
                   'Use Configuration > Search Providers to add, remove, enable, disable, or reindex document sources.',
-                  'The Search Providers overview now uses a compact runtime state summary instead of a vanity status-card strip, so the tab stays focused on source management.',
+                  'The Search Providers overview keeps the page focused on source management instead of decorative status cards.',
                   'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
                 ],
                 note: 'Treat web search and document search as complementary: web search is for external freshness, document search is for trusted local context.',
@@ -683,8 +732,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Performance is a top-level operator surface separate from Second Brain. Use it for workstation state and guarded cleanup, not personal planning or knowledge capture.',
                   'The active profile controls which process names are treated as terminate candidates and which names are protected.',
                   'This build keeps cleanup behavior conservative: the reviewed process-selection path is the primary supported mutation surface.',
-                  'If a profile reports that host power-mode changes are not implemented on the current OS, Guardian still switches the active runtime profile and tells you that the host-side tuning was skipped.',
-                  'Power users can also reach the same runtime from chat or saved automations through the deferred built-in tools `performance_status_get`, `performance_action_preview`, `performance_action_run`, and `performance_profile_apply`.',
+                  'If a profile reports that power-mode changes are not available on the current OS, Guardian still switches the active profile and tells you that the host tuning step was skipped.',
+                  'Power users can also reach the same performance controls from chat or saved automations.',
                 ],
               },
             ],
@@ -884,15 +933,15 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Memory Behavior',
                 items: [
-                  'Conversation memory is persisted when available, with retention settings exposed through configuration.',
+                  'Conversation memory is kept when available, with retention settings exposed through configuration.',
                   'The web `Memory` page is the unified operator surface for durable memory: global memory, code-session memory, operator-curated pages, derived indexes, linked outputs, and review-only records.',
-                  'Operator-curated memory pages can be created, edited, and archived from the Memory page when durable memory is writable; the runtime keeps those edits in the structured memory store rather than loose files.',
+                  'Operator-curated memory pages can be created, edited, and archived from the Memory page when durable memory is writable, and Guardian keeps those edits as durable memory entries.',
                   'Duplicate-safe memory writes are built in: exact repeats are skipped, matching curated pages are updated instead of duplicated, and stale system-managed flush material can be consolidated automatically.',
                   'Idle-time automated maintenance is configurable under `assistant.maintenance` and can sweep global memory plus idle code-session scopes without creating hidden assistant turns.',
                   'Derived memory pages and hygiene findings are inspectable but remain read-only and refreshable by design.',
                   'Switching between `auto`, `local-only`, and `external-only` changes who answers, but it does not create a separate conversation by itself.',
                   'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
-                  'Assistant memory, analytics, and search-oriented history should be reviewed together when debugging stale context.',
+                  'If context looks stale, review memory, analytics, and search-oriented history together.',
                 ],
               },
             ],
@@ -999,7 +1048,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'security-and-troubleshooting',
             title: 'Security And Troubleshooting',
-            summary: 'Start with auth, provider health, permissions, and audit evidence before assuming a deeper runtime bug.',
+            summary: 'Start with auth, provider health, permissions, and audit evidence before assuming a deeper product issue.',
             sections: [
               {
                 title: 'First Checks',
@@ -1024,7 +1073,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Outbound network tools are restricted to reduce private-host and metadata-service access risks.',
                   'Third-party connector servers should be treated with the same scrutiny as shell, browser, and network tooling when you decide whether to enable them.',
                 ],
-                note: 'Configuration changes now propagate to the web UI live, so if something still looks wrong after a save, verify the underlying runtime state rather than assuming the browser is stale.',
+                note: 'Configuration changes should appear live in the web UI, so if something still looks wrong after a save, verify the current product state rather than assuming the browser is stale.',
               },
             ],
           },
@@ -1091,4 +1140,110 @@ export function formatGuideForTelegram(guide: ReferenceGuide = getReferenceGuide
   }
 
   return lines.join('\n').trim();
+}
+
+function tokenizeGuidePromptQuery(value: string | undefined): string[] {
+  const normalized = (value ?? '').toLowerCase();
+  if (!normalized.trim()) return [];
+  return Array.from(new Set(
+    normalized
+      .split(/[^a-z0-9]+/g)
+      .filter((token) => token.length >= 3 || token === 'ui')
+      .filter((token) => !GUIDE_PROMPT_STOP_WORDS.has(token)),
+  ));
+}
+
+function countGuidePromptTokenMatches(text: string, tokens: readonly string[]): number {
+  if (!tokens.length) return 0;
+  const haystack = text.toLowerCase();
+  let score = 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += 1;
+  }
+  return score;
+}
+
+function buildGuidePromptSectionLine(
+  section: ReferenceGuidePageSection,
+  tokens: readonly string[],
+  maxItems: number,
+): string | null {
+  const scoredItems = section.items
+    .map((item, index) => ({
+      item,
+      index,
+      score: countGuidePromptTokenMatches(item, tokens),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const chosenItems = (scoredItems.some((entry) => entry.score > 0) ? scoredItems : scoredItems.slice(0, maxItems))
+    .slice(0, maxItems)
+    .map((entry) => entry.item.trim())
+    .filter(Boolean);
+  if (!chosenItems.length) {
+    return section.note?.trim()
+      ? `${section.title}: ${section.note.trim()}`
+      : null;
+  }
+  const note = section.note?.trim();
+  const noteIsRelevant = note ? countGuidePromptTokenMatches(note, tokens) > 0 : false;
+  return `${section.title}: ${chosenItems.join(' | ')}${note && noteIsRelevant ? ` | Note: ${note}` : ''}`;
+}
+
+export function formatGuideForPrompt(
+  query?: string,
+  guide: ReferenceGuide = getReferenceGuide(),
+  options?: {
+    maxPages?: number;
+    maxSectionsPerPage?: number;
+    maxItemsPerSection?: number;
+  },
+): string {
+  const maxPages = Math.max(1, options?.maxPages ?? 6);
+  const maxSectionsPerPage = Math.max(1, options?.maxSectionsPerPage ?? 2);
+  const maxItemsPerSection = Math.max(1, options?.maxItemsPerSection ?? 2);
+  const tokens = tokenizeGuidePromptQuery(query);
+  const pageEntries = guide.categories.flatMap((category) => category.pages.map((page, index) => ({
+    category,
+    page,
+    index,
+    score:
+      countGuidePromptTokenMatches(category.title, tokens) * 2
+      + countGuidePromptTokenMatches(page.title, tokens) * 6
+      + countGuidePromptTokenMatches(page.summary, tokens) * 4
+      + page.sections.reduce((total, section) => total + countGuidePromptTokenMatches(section.title, tokens) * 3, 0)
+      + page.sections.reduce((total, section) => total + section.items.reduce((sum, item) => sum + countGuidePromptTokenMatches(item, tokens), 0), 0),
+  })));
+  const rankedPages = [...pageEntries]
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const selectedPages = (rankedPages.some((entry) => entry.score > 0) ? rankedPages.filter((entry) => entry.score > 0) : rankedPages)
+    .slice(0, maxPages);
+
+  const lines = [
+    'Use this Guardian product and operator guide only when the user asks how to use Guardian, navigate the app, or understand available product capabilities.',
+    'Do not answer implementation, code-path, or architecture questions from this guide.',
+    'For source code and deeper technical documentation, point technical users to the GitHub Repository page in this guide.',
+    `Guide overview: ${guide.intro}`,
+  ];
+
+  for (const entry of selectedPages) {
+    lines.push(`- ${entry.page.title} (${entry.category.title}): ${entry.page.summary}`);
+    const rankedSections = entry.page.sections
+      .map((section, index) => ({
+        section,
+        index,
+        score:
+          countGuidePromptTokenMatches(section.title, tokens) * 4
+          + section.items.reduce((total, item) => total + countGuidePromptTokenMatches(item, tokens), 0)
+          + (section.note ? countGuidePromptTokenMatches(section.note, tokens) : 0),
+      }))
+      .sort((a, b) => b.score - a.score || a.index - b.index);
+    const selectedSections = (rankedSections.some((section) => section.score > 0) ? rankedSections.filter((section) => section.score > 0) : rankedSections)
+      .slice(0, maxSectionsPerPage);
+    for (const { section } of selectedSections) {
+      const sectionLine = buildGuidePromptSectionLine(section, tokens, maxItemsPerSection);
+      if (sectionLine) lines.push(`  ${sectionLine}`);
+    }
+  }
+
+  return lines.join('\n');
 }

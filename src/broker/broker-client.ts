@@ -77,8 +77,8 @@ export class BrokerClient {
 
   async callTool(
     request: ToolExecutionRequest,
-  ): Promise<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }> {
-    const result = await this.sendRequest<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }>('tool.call', {
+  ): Promise<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string; actionLabel?: string } }> {
+    const result = await this.sendRequest<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string; actionLabel?: string } }>('tool.call', {
       toolName: request.toolName,
       args: request.args,
       requestId: request.requestId,

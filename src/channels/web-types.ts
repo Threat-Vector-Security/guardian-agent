@@ -1394,6 +1394,7 @@ export interface DashboardCallbacks {
     id: string;
     toolName: string;
     argsPreview: string;
+    actionLabel?: string;
   }>;
   onPendingActionCurrent?: (args: {
     userId: string;

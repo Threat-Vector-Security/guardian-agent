@@ -30,6 +30,7 @@ let lastCommittedHash = window.location.hash || '#/';
 let invalidationTimer = null;
 let invalidationInFlight = false;
 let invalidationQueued = false;
+let pendingInvalidationPayloads = [];
 let securityAlertTray = null;
 let appStarted = false;
 let authRecoveryInProgress = false;
@@ -343,7 +344,7 @@ function routeMatchesInvalidation(route, payload) {
   return topics.some((topic) => invalidateTags.includes(topic));
 }
 
-async function refreshCurrentRoute() {
+async function refreshCurrentRoute(options = {}) {
   const { route } = getRouteState();
   const updater = route?.update || route?.render;
   if (!updater) return;
@@ -356,7 +357,7 @@ async function refreshCurrentRoute() {
     ? activeEl.getAttribute('name') || activeEl.getAttribute('data-tab-id') || null
     : null;
 
-  await updater(content);
+  await updater(content, options);
 
   // Restore scroll position
   content.scrollTop = scrollTop;
@@ -371,7 +372,10 @@ async function refreshCurrentRoute() {
   }
 }
 
-function scheduleCurrentRouteRefresh() {
+function scheduleCurrentRouteRefresh(payload = null) {
+  if (payload && typeof payload === 'object') {
+    pendingInvalidationPayloads.push(payload);
+  }
   if (invalidationTimer) {
     clearTimeout(invalidationTimer);
   }
@@ -386,7 +390,9 @@ function scheduleCurrentRouteRefresh() {
 
     invalidationInFlight = true;
     try {
-      await refreshCurrentRoute();
+      const invalidations = pendingInvalidationPayloads;
+      pendingInvalidationPayloads = [];
+      await refreshCurrentRoute({ invalidations });
     } finally {
       invalidationInFlight = false;
       if (invalidationQueued) {
@@ -457,7 +463,7 @@ function startApp() {
   onSSE('ui.invalidate', (payload) => {
     const { route } = getRouteState();
     if (!routeMatchesInvalidation(route, payload)) return;
-    scheduleCurrentRouteRefresh();
+    scheduleCurrentRouteRefresh(payload);
   });
   onSSE('security.alert', (payload) => {
     pushSecurityAlert(payload);

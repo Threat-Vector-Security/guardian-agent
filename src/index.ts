@@ -4330,6 +4330,48 @@ async function main(): Promise<void> {
   let listModelsForConfiguredLlmProviderForTools: ToolExecutorOptions['listModelsForLlmProvider'];
   let applyDirectLlmProviderConfigUpdateForTools: ToolExecutorOptions['onLlmProviderConfigUpdate'];
   const codingBackendServiceRef: { current: CodingBackendService | null } = { current: null };
+  const resolveSecondBrainToolInvalidation = (
+    toolName: string,
+    result: { success: boolean },
+  ): { topics: string[]; reason: string; path: string } | null => {
+    if (!result.success) return null;
+    switch (toolName) {
+      case 'second_brain_generate_brief':
+        return { topics: ['second-brain'], reason: 'second-brain.brief.generated', path: '/api/second-brain/briefs/generate' };
+      case 'second_brain_brief_update':
+        return { topics: ['second-brain'], reason: 'second-brain.brief.updated', path: '/api/second-brain/briefs/update' };
+      case 'second_brain_brief_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.brief.deleted', path: '/api/second-brain/briefs/delete' };
+      case 'second_brain_calendar_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.calendar.upserted', path: '/api/second-brain/calendar/upsert' };
+      case 'second_brain_calendar_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.calendar.deleted', path: '/api/second-brain/calendar/delete' };
+      case 'second_brain_task_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.task.upserted', path: '/api/second-brain/tasks/upsert' };
+      case 'second_brain_task_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.task.deleted', path: '/api/second-brain/tasks/delete' };
+      case 'second_brain_note_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.note.upserted', path: '/api/second-brain/notes/upsert' };
+      case 'second_brain_note_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.note.deleted', path: '/api/second-brain/notes/delete' };
+      case 'second_brain_person_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.person.upserted', path: '/api/second-brain/people/upsert' };
+      case 'second_brain_person_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.person.deleted', path: '/api/second-brain/people/delete' };
+      case 'second_brain_library_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.link.upserted', path: '/api/second-brain/links/upsert' };
+      case 'second_brain_library_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.link.deleted', path: '/api/second-brain/links/delete' };
+      case 'second_brain_routine_create':
+        return { topics: ['second-brain'], reason: 'second-brain.routine.created', path: '/api/second-brain/routines/create' };
+      case 'second_brain_routine_update':
+        return { topics: ['second-brain'], reason: 'second-brain.routine.updated', path: '/api/second-brain/routines/update' };
+      case 'second_brain_routine_delete':
+        return { topics: ['second-brain'], reason: 'second-brain.routine.deleted', path: '/api/second-brain/routines/delete' };
+      default:
+        return null;
+    }
+  };
   const performanceService = new PerformanceService({
     adapter: createPerformanceAdapter(),
     getConfig: () => configRef.current,
@@ -4374,6 +4416,14 @@ async function main(): Promise<void> {
         payload: { toolName, args, result, requestId: request.requestId },
       });
       trackSkillToolTelemetry(toolName, args, result, request);
+      const secondBrainInvalidation = resolveSecondBrainToolInvalidation(toolName, result);
+      if (secondBrainInvalidation) {
+        activeWebChannel?.emitDashboardInvalidation(
+          secondBrainInvalidation.topics,
+          secondBrainInvalidation.reason,
+          secondBrainInvalidation.path,
+        );
+      }
 
       if (request.requestId) {
         orchestrator.addTraceNode(request.requestId, {

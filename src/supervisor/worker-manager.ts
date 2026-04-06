@@ -42,6 +42,10 @@ const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
 
+function buildWorkerSessionKey(sessionId: string, agentId: string): string {
+  return `${sessionId}::${agentId}`;
+}
+
 export interface WorkerMessageRequest {
   sessionId: string;
   agentId: string;
@@ -75,6 +79,7 @@ export interface WorkerDelegationMetadata {
 export interface WorkerProcess {
   id: string;
   sessionId: string;
+  workerSessionKey: string;
   agentId: string;
   authorizedBy: string;
   grantedCapabilities: string[];
@@ -83,6 +88,7 @@ export interface WorkerProcess {
   workspacePath: string;
   lastActivityMs: number;
   status: 'starting' | 'ready' | 'error' | 'shutting_down';
+  dispatchQueue: Promise<void>;
   pendingMessageResolve?: (result: { content: string; metadata?: Record<string, unknown> }) => void;
   pendingMessageReject?: (error: Error) => void;
 }
@@ -95,6 +101,7 @@ interface DirectAutomationContinuation {
 
 interface WorkerSuspendedApprovalState {
   workerId: string;
+  workerSessionKey: string;
   sessionId: string;
   agentId: string;
   userId: string;
@@ -576,6 +583,7 @@ export class WorkerManager {
         id,
         toolName: summary?.toolName ?? 'unknown',
         argsPreview: summary?.argsPreview ?? '',
+        actionLabel: summary?.actionLabel ?? '',
       };
     });
   }
@@ -691,12 +699,12 @@ export class WorkerManager {
     userId: string,
     grantedCapabilities: string[],
   ): Promise<WorkerProcess> {
-    const existingId = this.sessionToWorker.get(sessionId);
+    const workerSessionKey = buildWorkerSessionKey(sessionId, agentId);
+    const existingId = this.sessionToWorker.get(workerSessionKey);
     if (existingId) {
       const existing = this.workers.get(existingId);
       if (existing && existing.status === 'ready') {
         this.refreshWorkerCapabilityToken(existing, agentId, userId, grantedCapabilities);
-        existing.agentId = agentId;
         existing.authorizedBy = userId;
         existing.grantedCapabilities = [...grantedCapabilities];
         existing.lastActivityMs = Date.now();
@@ -801,6 +809,7 @@ export class WorkerManager {
     const worker: WorkerProcess = {
       id: workerId,
       sessionId,
+      workerSessionKey,
       agentId,
       authorizedBy: userId,
       grantedCapabilities: [...grantedCapabilities],
@@ -809,6 +818,7 @@ export class WorkerManager {
       workspacePath,
       lastActivityMs: Date.now(),
       status: 'starting',
+      dispatchQueue: Promise.resolve(),
     };
 
     child.stderr?.setEncoding?.('utf8');
@@ -836,7 +846,7 @@ export class WorkerManager {
     });
 
     this.workers.set(workerId, worker);
-    this.sessionToWorker.set(sessionId, workerId);
+    this.sessionToWorker.set(workerSessionKey, workerId);
 
     brokerServer.sendNotification('worker.initialize', {
       agentId,
@@ -893,6 +903,31 @@ export class WorkerManager {
       hasFallbackProvider?: boolean;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const queuedDispatch = worker.dispatchQueue.then(() => this.dispatchToWorkerNow(worker, params));
+    worker.dispatchQueue = queuedDispatch.then(() => undefined, () => undefined);
+    return queuedDispatch;
+  }
+
+  private dispatchToWorkerNow(
+    worker: WorkerProcess,
+    params: {
+      message: UserMessage;
+      systemPrompt: string;
+      history: Array<{ role: 'user' | 'assistant'; content: string }>;
+      knowledgeBases: PromptAssemblyKnowledgeBase[];
+      activeSkills: ResolvedSkill[];
+      additionalSections: PromptAssemblyAdditionalSection[];
+      toolContext: string;
+      runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+      continuity?: PromptAssemblyContinuity | null;
+      pendingAction?: PromptAssemblyPendingAction | null;
+      pendingApprovalNotice?: string;
+      hasFallbackProvider?: boolean;
+    },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    if (!this.workers.has(worker.id) || worker.status !== 'ready') {
+      return Promise.reject(new Error('Worker is not available for dispatch'));
+    }
     worker.lastActivityMs = Date.now();
 
     return new Promise((resolve, reject) => {
@@ -947,6 +982,7 @@ export class WorkerManager {
   private handleWorkerCrash(workerId: string, error: Error): void {
     const worker = this.workers.get(workerId);
     if (!worker) return;
+    worker.status = 'error';
 
     this.runtime.auditLog.record({
       type: 'worker_crash',
@@ -965,11 +1001,11 @@ export class WorkerManager {
   }
 
   private cleanupWorker(worker: WorkerProcess): void {
-    this.clearWorkerSuspendedApprovals(worker.sessionId);
+    this.clearWorkerSuspendedApprovals(worker.workerSessionKey);
     this.tokenManager.revokeForWorker(worker.id);
     this.workers.delete(worker.id);
-    if (this.sessionToWorker.get(worker.sessionId) === worker.id) {
-      this.sessionToWorker.delete(worker.sessionId);
+    if (this.sessionToWorker.get(worker.workerSessionKey) === worker.id) {
+      this.sessionToWorker.delete(worker.workerSessionKey);
     }
     if (!existsSync(worker.workspacePath)) {
       return;
@@ -1020,10 +1056,11 @@ export class WorkerManager {
     const approvalIds = continueConversationAfterApproval
       ? extractPendingActionApprovalIds(metadata?.pendingAction)
       : [];
-    this.clearWorkerSuspendedApprovals(worker.sessionId);
+    this.clearWorkerSuspendedApprovals(worker.workerSessionKey);
     if (approvalIds.length === 0) return;
     this.setWorkerSuspendedApprovals({
       workerId: worker.id,
+      workerSessionKey: worker.workerSessionKey,
       sessionId: worker.sessionId,
       agentId: worker.agentId,
       userId: message.userId,
@@ -1036,34 +1073,34 @@ export class WorkerManager {
   }
 
   private setWorkerSuspendedApprovals(state: WorkerSuspendedApprovalState): void {
-    this.workerSuspendedApprovalsBySession.set(state.sessionId, state);
+    this.workerSuspendedApprovalsBySession.set(state.workerSessionKey, state);
     for (const approvalId of state.approvalIds) {
-      this.workerSuspendedApprovalToSession.set(approvalId, state.sessionId);
+      this.workerSuspendedApprovalToSession.set(approvalId, state.workerSessionKey);
     }
   }
 
-  private clearWorkerSuspendedApprovals(sessionId: string): void {
-    const existing = this.workerSuspendedApprovalsBySession.get(sessionId);
+  private clearWorkerSuspendedApprovals(workerSessionKey: string): void {
+    const existing = this.workerSuspendedApprovalsBySession.get(workerSessionKey);
     if (!existing) return;
     for (const approvalId of existing.approvalIds) {
       this.workerSuspendedApprovalToSession.delete(approvalId);
     }
-    this.workerSuspendedApprovalsBySession.delete(sessionId);
+    this.workerSuspendedApprovalsBySession.delete(workerSessionKey);
   }
 
   private getWorkerSuspendedApprovalState(
     approvalId: string,
     nowMs: number = Date.now(),
   ): WorkerSuspendedApprovalState | null {
-    const sessionId = this.workerSuspendedApprovalToSession.get(approvalId.trim());
-    if (!sessionId) return null;
-    const state = this.workerSuspendedApprovalsBySession.get(sessionId);
+    const workerSessionKey = this.workerSuspendedApprovalToSession.get(approvalId.trim());
+    if (!workerSessionKey) return null;
+    const state = this.workerSuspendedApprovalsBySession.get(workerSessionKey);
     if (!state) {
       this.workerSuspendedApprovalToSession.delete(approvalId.trim());
       return null;
     }
     if (state.expiresAt <= nowMs) {
-      this.clearWorkerSuspendedApprovals(sessionId);
+      this.clearWorkerSuspendedApprovals(workerSessionKey);
       return null;
     }
     return state;
@@ -1078,14 +1115,14 @@ export class WorkerManager {
     if (!state) return null;
 
     if (decision !== 'approved') {
-      this.clearWorkerSuspendedApprovals(state.sessionId);
+      this.clearWorkerSuspendedApprovals(state.workerSessionKey);
       return null;
     }
 
     const pendingIds = new Set(this.tools.listApprovals(500, 'pending').map((entry) => entry.id));
     const remaining = state.approvalIds.filter((id) => id !== approvalId && pendingIds.has(id));
     if (remaining.length > 0) {
-      this.clearWorkerSuspendedApprovals(state.sessionId);
+      this.clearWorkerSuspendedApprovals(state.workerSessionKey);
       this.setWorkerSuspendedApprovals({
         ...state,
         approvalIds: remaining,
@@ -1095,7 +1132,7 @@ export class WorkerManager {
     }
 
     const worker = this.workers.get(state.workerId);
-    this.clearWorkerSuspendedApprovals(state.sessionId);
+    this.clearWorkerSuspendedApprovals(state.workerSessionKey);
     if (!worker || worker.status !== 'ready') return null;
 
     return this.dispatchToWorker(worker, {

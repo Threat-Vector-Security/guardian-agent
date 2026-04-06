@@ -71,6 +71,51 @@ describe('pending approval copy', () => {
     ])).toBe('Waiting for approval to run performance action cleanup using default recommended selection.');
   });
 
+  it('formats local Second Brain calendar approvals without raw timestamps', () => {
+    const startsAt = new Date(2026, 3, 7, 12, 0, 0, 0).getTime();
+    const endsAt = new Date(2026, 3, 7, 13, 0, 0, 0).getTime();
+    const expectedDate = new Date(startsAt).toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    const expectedStartTime = new Date(startsAt).toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    const expectedEndTime = new Date(endsAt).toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    const message = formatPendingApprovalMessage([
+      {
+        toolName: 'second_brain_calendar_upsert',
+        argsPreview: JSON.stringify({
+          title: "Doctor's Appointment",
+          startsAt,
+          endsAt,
+          location: "Narangba Doctor's Surgery, Narangba",
+        }),
+      },
+    ]);
+
+    expect(message).toBe(
+      `Waiting for approval to create local calendar event "Doctor's Appointment" on ${expectedDate} from ${expectedStartTime} to ${expectedEndTime} at Narangba Doctor's Surgery, Narangba.`,
+    );
+    expect(message).not.toMatch(/\b\d{12,}\b/);
+  });
+
+  it('formats coding backend approvals without raw JSON', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'coding_backend_run',
+        argsPreview: '{"backend":"codex","task":"Fix the failing test"}',
+      },
+    ])).toBe('Waiting for approval to run Codex task "Fix the failing test".');
+  });
+
   it('formats multiple approvals as a short action list', () => {
     expect(formatPendingApprovalMessage([
       {
@@ -95,8 +140,18 @@ describe('pending approval copy', () => {
         ['approval-1', { toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' }],
       ]),
     )).toEqual([
-      { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
-      { id: 'approval-2', toolName: 'unknown', argsPreview: '' },
+      {
+        id: 'approval-1',
+        toolName: 'coding_backend_run',
+        argsPreview: '{"backend":"codex"}',
+        actionLabel: 'run Codex',
+      },
+      {
+        id: 'approval-2',
+        toolName: 'unknown',
+        argsPreview: '',
+        actionLabel: 'run unknown',
+      },
     ]);
   });
 });

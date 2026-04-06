@@ -33,12 +33,20 @@ import {
   type PromptAssemblyKnowledgeBase,
   type PromptAssemblyPendingAction,
 } from '../runtime/context-assembly.js';
+import {
+  buildRoutedIntentAdditionalSection,
+  prepareToolExecutionForIntent,
+} from '../runtime/routed-tool-execution.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
-import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
+import {
+  formatToolResultForLLM,
+  stripLeadingContextPrefix,
+  toLLMToolDef,
+} from '../chat-agent-helpers.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
@@ -66,6 +74,7 @@ interface PendingApprovalMetadata {
   id: string;
   toolName: string;
   argsPreview: string;
+  actionLabel?: string;
 }
 
 interface AutomationApprovalContinuation {
@@ -78,6 +87,18 @@ type BrokeredChatResponse = ChatResponse & {
   providerName?: string;
   providerLocality?: 'local' | 'external';
 };
+
+function buildWorkerPromptAdditionalSections(
+  baseSections: PromptAssemblyAdditionalSection[] | undefined,
+  intentDecision?: IntentGatewayDecision | null,
+): PromptAssemblyAdditionalSection[] | undefined {
+  const sections = [...(baseSections ?? [])];
+  const routedIntentSection = buildRoutedIntentAdditionalSection(intentDecision);
+  if (routedIntentSection && !sections.some((section) => section.section === routedIntentSection.section)) {
+    sections.push(routedIntentSection);
+  }
+  return sections.length > 0 ? sections : undefined;
+}
 
 export interface WorkerMessageHandleParams {
   message: UserMessage;
@@ -198,6 +219,9 @@ class BrokeredToolExecutor {
         id: result.approvalId,
         toolName: result.approvalSummary?.toolName ?? toolName,
         argsPreview: result.approvalSummary?.argsPreview ?? JSON.stringify(args).slice(0, 160),
+        ...(typeof result.approvalSummary?.actionLabel === 'string'
+          ? { actionLabel: result.approvalSummary.actionLabel }
+          : {}),
       });
     }
 
@@ -297,14 +321,21 @@ export class BrokeredWorkerSession {
       }
     }
 
-    const enrichedSystemPrompt = buildWorkerSystemPrompt(params);
+    const promptAdditionalSections = buildWorkerPromptAdditionalSections(
+      params.additionalSections,
+      directIntent?.decision,
+    );
+    const enrichedSystemPrompt = buildWorkerSystemPrompt({
+      ...params,
+      additionalSections: promptAdditionalSections,
+    });
     const llmMessages: ChatMessage[] = buildChatMessagesFromHistory({
       systemPrompt: enrichedSystemPrompt,
       history: params.history,
       userContent: params.message.content,
     });
 
-    return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, params);
+    return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, params, directIntent?.decision);
   }
 
   private async tryHandleApprovalMessage(
@@ -578,7 +609,7 @@ export class BrokeredWorkerSession {
     }
     return this.intentGateway.classify(
       {
-        content: message.content,
+        content: stripLeadingContextPrefix(message.content),
         channel: message.channel,
       },
       chatFn,
@@ -606,6 +637,7 @@ export class BrokeredWorkerSession {
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<BrokeredChatResponse>,
     toolExecutor: BrokeredToolExecutor,
     params: WorkerMessageHandleParams,
+    intentDecision?: IntentGatewayDecision,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const pendingTools: SuspendedToolCall[] = [];
     let responseSource: ResponseSourceMetadata | undefined;
@@ -657,7 +689,19 @@ export class BrokeredWorkerSession {
         listAlwaysLoaded: () => toolExecutor.listAlwaysLoadedDefinitions(),
         searchTools: (query) => toolExecutor.searchTools(query),
         callTool: async (request) => {
-          const runResult = await toolExecutor.executeModelTool(request.toolName, request.args, {
+          const toolDefinition = toolExecutor.getToolDefinition(request.toolName);
+          const prepared = prepareToolExecutionForIntent({
+            toolName: request.toolName,
+            args: request.args,
+            requestText: message.content,
+            referenceTime: message.timestamp,
+            intentDecision,
+            toolDefinition,
+          });
+          if (prepared.immediateResult) {
+            return prepared.immediateResult as unknown as ToolRunResponse;
+          }
+          const runResult = await toolExecutor.executeModelTool(request.toolName, prepared.args, {
             ...request,
             surfaceId: message.surfaceId,
             ...(codeContext ? { codeContext } : {}),

@@ -194,7 +194,7 @@ export function createIncomingDispatchPreparer(args: {
       userId: input.msg.userId,
       channel: input.msg.channel,
       agentId: input.agentId,
-      contentPreview: input.contentPreview ?? input.msg.content,
+      contentPreview: stripLeadingContextPrefix(input.contentPreview ?? input.msg.content),
       details: Object.keys(details).length > 0 ? details : undefined,
     });
   };
