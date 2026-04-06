@@ -1,7 +1,8 @@
 /**
  * LLM provider abstraction types.
  *
- * Unified interface for Ollama, Anthropic, and OpenAI providers.
+ * Unified interface for Ollama Local, Ollama Cloud, Anthropic, OpenAI,
+ * and OpenAI-compatible providers.
  * No LangChain — direct SDK calls for debuggability.
  */
 
@@ -98,7 +99,7 @@ export interface ChatOptions {
 
 /** Unified LLM provider interface. */
 export interface LLMProvider {
-  /** Provider name ('ollama', 'anthropic', 'openai'). */
+  /** Provider type name (for example 'ollama', 'ollama_cloud', 'anthropic', or 'openai'). */
   readonly name: string;
 
   /** Send a chat completion request. */

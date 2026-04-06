@@ -384,17 +384,19 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
-  it('should accept preferred local and external providers when they match locality', () => {
+  it('should accept preferred local, managed-cloud, and frontier providers when they match tier', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       llm: {
         ...DEFAULT_CONFIG.llm,
+        ollamaCloud: { provider: 'ollama_cloud', model: 'gpt-oss:120b', credentialRef: 'llm.ollama_cloud.primary' },
         claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
       },
       assistant: {
         ...DEFAULT_CONFIG.assistant,
         credentials: {
           refs: {
+            'llm.ollama_cloud.primary': { source: 'env', env: 'OLLAMA_API_KEY' },
             'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
           },
         },
@@ -402,7 +404,8 @@ describe('validateConfig', () => {
           ...DEFAULT_CONFIG.assistant.tools,
           preferredProviders: {
             local: 'ollama',
-            external: 'claude',
+            managedCloud: 'ollamaCloud',
+            frontier: 'claude',
           },
         },
       },
@@ -428,6 +431,34 @@ describe('validateConfig', () => {
 
     expect(validateConfig(config)).toContain(
       "assistant.tools.preferredProviders.external must reference an external provider, got 'ollama'",
+    );
+  });
+
+  it('should reject a preferred managed-cloud provider that points at a frontier model', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            managedCloud: 'claude',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain(
+      "assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider, got 'claude'",
     );
   });
 

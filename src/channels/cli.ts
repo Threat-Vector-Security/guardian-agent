@@ -1021,7 +1021,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
     this.write(this.bold('Chat\n'));
     this.write('  /chat [agentId]                        Switch active agent or show current\n');
-    this.write('  /mode [auto|local|external]            Switch routing mode (auto / local-only / external-only)\n');
+    this.write('  /mode [auto|local|managed-cloud|frontier]  Switch routing mode (auto / local / managed cloud / frontier)\n');
     this.write('  /code [list|current|create|attach|detach]  Coding-session focus controls for the CLI\n');
     this.write('  /approve [approvalId ...]              Approve pending chat tool action(s)\n');
     this.write('  /deny [approvalId ...]                 Deny pending chat tool action(s)\n');
@@ -1125,7 +1125,7 @@ export class CLIChannel implements ChannelAdapter {
             this.write(`  ${a.id} — ${a.name}${marker}\n`);
           }
         } else {
-          this.write(`Messages are automatically routed. Use ${this.cyan('/mode')} to switch between auto, local-only, or external-only.\n`);
+          this.write(`Messages are automatically routed. Use ${this.cyan('/mode')} to switch between auto, local, managed cloud, or frontier.\n`);
         }
       }
       this.write('\n');
@@ -1146,7 +1146,7 @@ export class CLIChannel implements ChannelAdapter {
         return;
       }
       if ((detail as { internal?: boolean }).internal) {
-        this.write(`\nAgent "${agentId}" is managed by automatic routing. Use ${this.cyan('/mode auto|local|external')} to switch routing mode.\n\n`);
+        this.write(`\nAgent "${agentId}" is managed by automatic routing. Use ${this.cyan('/mode auto|local|managed-cloud|frontier')} to switch routing mode.\n\n`);
         return;
       }
     }
@@ -1169,29 +1169,45 @@ export class CLIChannel implements ChannelAdapter {
     if (args.length === 0) {
       // Show current mode
       const current = this.dashboard.onRoutingMode();
-      this.write(`\nRouting mode: ${this.cyan(current.tierMode)}\n`);
+      const modeLabels: Record<string, string> = {
+        auto: 'auto',
+        'local-only': 'local',
+        'managed-cloud-only': 'managed cloud',
+        'frontier-only': 'frontier',
+      };
+      this.write(`\nRouting mode: ${this.cyan(modeLabels[current.tierMode] ?? current.tierMode)}\n`);
       this.write(`  Complexity threshold: ${current.complexityThreshold}\n`);
       this.write(`  Fallback on failure: ${current.fallbackOnFailure}\n`);
-      this.write(`\nAvailable modes: ${this.cyan('auto')} | ${this.cyan('local')} | ${this.cyan('external')}\n`);
+      this.write(`\nAvailable modes: ${current.availableModes.map((mode) => this.cyan(modeLabels[mode] ?? mode)).join(' | ')}\n`);
       this.write(`  auto     — Route by message complexity (recommended)\n`);
-      this.write(`  local    — Force all messages to local LLM\n`);
-      this.write(`  external — Force all messages to external LLM\n`);
+      if (current.availableModes.includes('local-only')) {
+        this.write(`  local    — Force all messages to local LLM\n`);
+      }
+      if (current.availableModes.includes('managed-cloud-only')) {
+        this.write(`  managed-cloud — Force all messages to the managed-cloud Ollama lane\n`);
+      }
+      if (current.availableModes.includes('frontier-only')) {
+        this.write(`  frontier — Force all messages to the frontier provider lane\n`);
+      }
       this.write('\n');
       return;
     }
 
     const modeArg = args[0].toLowerCase();
-    const modeMap: Record<string, 'auto' | 'local-only' | 'external-only'> = {
+    const modeMap: Record<string, 'auto' | 'local-only' | 'managed-cloud-only' | 'frontier-only'> = {
       auto: 'auto',
       local: 'local-only',
       'local-only': 'local-only',
-      external: 'external-only',
-      'external-only': 'external-only',
+      'managed-cloud': 'managed-cloud-only',
+      managed_cloud: 'managed-cloud-only',
+      'managed-cloud-only': 'managed-cloud-only',
+      frontier: 'frontier-only',
+      'frontier-only': 'frontier-only',
     };
 
     const mode = modeMap[modeArg];
     if (!mode) {
-      this.write(`\n${this.red('Error:')} Invalid mode "${modeArg}". Use: auto, local, or external\n\n`);
+      this.write(`\n${this.red('Error:')} Invalid mode "${modeArg}". Use: auto, local, managed-cloud, or frontier\n\n`);
       return;
     }
 

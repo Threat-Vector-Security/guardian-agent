@@ -35,6 +35,7 @@ describe('model-routing-ux', () => {
     })).toEqual({
       locality: 'external',
       providerName: 'openai',
+      providerTier: 'frontier',
       model: 'gpt-5.4',
       tier: 'external',
       usedFallback: true,

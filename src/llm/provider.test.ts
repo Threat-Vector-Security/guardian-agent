@@ -57,11 +57,15 @@ describe('createProviders', () => {
 
 describe('OllamaProvider', () => {
   it('should handle chat API errors', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'Internal Server Error',
-    }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('Internal Server Error', {
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: {
+          'content-type': 'text/plain',
+        },
+      }),
+    ));
 
     const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
     const provider = createProvider(config);
@@ -74,18 +78,26 @@ describe('OllamaProvider', () => {
   });
 
   it('should parse successful chat response', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        id: 'test',
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
         model: 'llama3.2',
-        choices: [{
-          message: { role: 'assistant', content: 'Hello!' },
-          finish_reason: 'stop',
-        }],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        created_at: new Date().toISOString(),
+        message: { role: 'assistant', content: 'Hello!' },
+        done: true,
+        done_reason: 'stop',
+        total_duration: 1,
+        load_duration: 1,
+        prompt_eval_count: 10,
+        prompt_eval_duration: 1,
+        eval_count: 5,
+        eval_duration: 1,
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
       }),
-    }));
+    ));
 
     const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
     const provider = createProvider(config);
@@ -113,15 +125,19 @@ describe('OllamaProvider', () => {
   });
 
   it('should list models via /api/tags', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
         models: [
           { name: 'llama3.2', size: 1000 },
           { name: 'mistral', size: 2000 },
         ],
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
       }),
-    }));
+    ));
 
     const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
     const provider = createProvider(config);

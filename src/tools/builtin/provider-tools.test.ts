@@ -38,18 +38,29 @@ describe('provider tools', () => {
           type: 'ollama',
           model: 'llama3.2',
           locality: 'local',
+          tier: 'local',
           connected: true,
           availableModels: ['llama3.2', 'gemma3:latest'],
           isDefault: true,
           isPreferredLocal: true,
         },
         {
+          name: 'ollama-cloud',
+          type: 'ollama_cloud',
+          model: 'gpt-oss:120b',
+          locality: 'external',
+          tier: 'managed_cloud',
+          connected: true,
+          isPreferredManagedCloud: true,
+        },
+        {
           name: 'openai',
           type: 'openai',
           model: 'gpt-4o',
           locality: 'external',
+          tier: 'frontier',
           connected: true,
-          isPreferredExternal: true,
+          isPreferredFrontier: true,
         },
       ],
     });
@@ -57,7 +68,7 @@ describe('provider tools', () => {
     const result = await runRegisteredTool(registry, 'llm_provider_list', {});
     expect(result.success).toBe(true);
     expect(result.output).toMatchObject({
-      providerCount: 2,
+      providerCount: 3,
       providers: [
         expect.objectContaining({
           name: 'ollama',
@@ -65,8 +76,12 @@ describe('provider tools', () => {
           isPreferredLocal: true,
         }),
         expect.objectContaining({
+          name: 'ollama-cloud',
+          isPreferredManagedCloud: true,
+        }),
+        expect.objectContaining({
           name: 'openai',
-          isPreferredExternal: true,
+          isPreferredFrontier: true,
         }),
       ],
     });
@@ -83,6 +98,7 @@ describe('provider tools', () => {
         type: 'ollama',
         model: 'llama3.2',
         locality: 'local',
+        tier: 'local',
         connected: true,
         availableModels: ['llama3.2', 'gemma3:latest'],
         isDefault: true,
@@ -110,6 +126,41 @@ describe('provider tools', () => {
       llm: {
         ollama: {
           model: 'gemma3:latest',
+        },
+      },
+    });
+  });
+
+  it('updates the preferred managed-cloud provider bucket', async () => {
+    const registry = new ToolRegistry();
+    const updateConfig = vi.fn(async () => ({ success: true, message: 'updated' }));
+    registerBuiltinProviderTools({
+      registry,
+      requireString,
+      listProviders: async () => [{
+        name: 'ollama-cloud',
+        type: 'ollama_cloud',
+        model: 'gpt-oss:120b',
+        locality: 'external',
+        tier: 'managed_cloud',
+        connected: true,
+      }],
+      updateConfig,
+    });
+
+    const result = await runRegisteredTool(registry, 'llm_provider_update', {
+      action: 'set_preferred',
+      provider: 'ollama-cloud',
+      locality: 'managed-cloud',
+    });
+
+    expect(result.success).toBe(true);
+    expect(updateConfig).toHaveBeenCalledWith({
+      assistant: {
+        tools: {
+          preferredProviders: {
+            managedCloud: 'ollama-cloud',
+          },
         },
       },
     });

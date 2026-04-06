@@ -6,7 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
-import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+import {
+  createOllamaHarnessChatResponse,
+  getHarnessProviderConfig,
+  readHarnessOllamaEnvOptions,
+  resolveRealOllamaProvider,
+} from './ollama-harness-provider.mjs';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -58,40 +64,6 @@ async function getPrivilegedTicket(baseUrl, token, action) {
   const response = await requestJson(baseUrl, token, 'POST', '/api/auth/ticket', { action });
   assert.equal(typeof response?.ticket, 'string');
   return response.ticket;
-}
-
-function requestJsonNoAuth(url, method, body, timeoutMs = 2_500) {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const req = http.request({
-      method,
-      hostname: parsed.hostname,
-      port: parsed.port || 80,
-      path: parsed.pathname + parsed.search,
-      timeout: timeoutMs,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        try {
-          resolve(data ? JSON.parse(data) : {});
-        } catch {
-          resolve(data);
-        }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error(`Timed out connecting to ${url}`)));
-    req.on('error', reject);
-    if (body) {
-      req.write(JSON.stringify(body));
-    }
-    req.end();
-  });
 }
 
 async function getFreePort() {
@@ -222,136 +194,19 @@ function parseHarnessOptions() {
     printHelp();
     process.exit(0);
   }
+  const ollamaEnv = readHarnessOllamaEnvOptions();
   return {
     useRealOllama: args.has('--use-ollama') || process.env.HARNESS_USE_REAL_OLLAMA === '1',
     keepTmp: args.has('--keep-tmp') || process.env.HARNESS_KEEP_TMP === '1',
-    ollamaBaseUrl: process.env.HARNESS_OLLAMA_BASE_URL?.trim() || '',
-    ollamaModel: process.env.HARNESS_OLLAMA_MODEL?.trim() || '',
-    wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
-    ollamaBin: process.env.HARNESS_OLLAMA_BIN?.trim() || '',
-    autostartLocalOllama: process.env.HARNESS_AUTOSTART_LOCAL_OLLAMA !== '0',
-    bypassLocalModelComplexityGuard: process.env.HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD !== '0',
+    ...ollamaEnv,
   };
-}
-
-function collectOllamaBaseUrlCandidates(options) {
-  const candidates = [];
-  const push = (value) => {
-    const trimmed = value?.trim();
-    if (!trimmed || candidates.includes(trimmed)) return;
-    candidates.push(trimmed.replace(/\/$/, ''));
-  };
-
-  push(options.ollamaBaseUrl);
-  push('http://127.0.0.1:11434');
-  push('http://localhost:11434');
-  push(options.wslHostIp ? `http://${options.wslHostIp}:11434` : '');
-
-  try {
-    const resolv = fs.readFileSync('/etc/resolv.conf', 'utf-8');
-    const match = resolv.match(/^nameserver\s+([0-9.]+)\s*$/m);
-    if (match?.[1]) {
-      push(`http://${match[1]}:11434`);
-    }
-  } catch {
-    // Ignore.
-  }
-
-  return candidates;
-}
-
-function isLoopbackOllamaUrl(candidate) {
-  try {
-    const parsed = new URL(candidate);
-    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
-  } catch {
-    return false;
-  }
-}
-
-async function canReachOllama(candidate) {
-  const result = await requestJsonNoAuth(`${candidate}/api/tags`, 'GET', undefined);
-  const models = Array.isArray(result?.models) ? result.models : [];
-  return models;
-}
-
-async function maybeStartLocalOllama(options, candidate) {
-  if (!options.autostartLocalOllama || !isLoopbackOllamaUrl(candidate)) {
-    return null;
-  }
-
-  const homeDir = os.homedir();
-  const binCandidates = [
-    options.ollamaBin,
-    path.join(homeDir, '.local', 'bin', 'ollama'),
-    'ollama',
-  ].filter(Boolean);
-
-  let ollamaBin = '';
-  for (const candidateBin of binCandidates) {
-    try {
-      const result = spawn(candidateBin, ['--version'], { stdio: 'ignore' });
-      const exitCode = await new Promise((resolve) => {
-        result.on('exit', resolve);
-        result.on('error', () => resolve(-1));
-      });
-      if (exitCode === 0) {
-        ollamaBin = candidateBin;
-        break;
-      }
-    } catch {
-      // Try next candidate.
-    }
-  }
-
-  if (!ollamaBin) {
-    return null;
-  }
-
-  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-coding-ollama-'));
-  const logPath = path.join(logDir, 'ollama.log');
-  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-  const processHandle = spawn(ollamaBin, ['serve'], {
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      NO_COLOR: '1',
-    },
-  });
-  processHandle.stdout.pipe(logStream);
-  processHandle.stderr.pipe(logStream);
-
-  const shutdown = async () => {
-    if (!processHandle.killed) {
-      if (process.platform === 'win32') {
-        processHandle.kill('SIGTERM');
-      } else {
-        process.kill(-processHandle.pid, 'SIGTERM');
-      }
-    }
-    logStream.end();
-  };
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      await canReachOllama(candidate);
-      return { close: shutdown, logPath };
-    } catch {
-      if (processHandle.exitCode !== null) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  await shutdown();
-  throw new Error(`Failed to autostart local Ollama at ${candidate}. See ${logPath}`);
 }
 
 async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
+    const isOpenAiCompatChat = req.method === 'POST' && url.pathname === '/v1/chat/completions';
 
     if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -359,16 +214,34 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    if (isOllamaNativeChat || isOpenAiCompatChat) {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const tools = Array.isArray(parsed.tools)
-        ? parsed.tools.map((tool) => String(tool?.function?.name ?? '')).filter(Boolean)
+        ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
       const systemPrompt = String(messages.find((message) => message.role === 'system')?.content ?? '');
       const latestGatewayRequest = latestUser.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? latestUser;
+      const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(
+          isOllamaNativeChat
+            ? createOllamaHarnessChatResponse({
+                model,
+                content,
+                doneReason: finishReason,
+                toolCalls,
+              })
+            : createChatCompletionResponse({
+                model,
+                content,
+                finishReason,
+                toolCalls,
+              }),
+        ));
+      };
 
       scenarioLog.push({
         latestUser,
@@ -414,11 +287,10 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
             summary: 'Detach this chat from the current coding workspace session.',
           };
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content: JSON.stringify(decision),
-        })));
+        });
         return;
       }
 
@@ -431,8 +303,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
           return !!writingPlansSkill && content.includes(writingPlansSkill);
         });
         if (!sawWritingPlansRead && !sawAcceptanceGates && !sawExistingChecks && writingPlansSkill) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
+          sendResponse({
             model: 'coding-harness-model',
             finishReason: 'tool_calls',
             toolCalls: [{
@@ -442,7 +313,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
                 path: writingPlansSkill,
               }),
             }],
-          })));
+          });
           return;
         }
 
@@ -457,11 +328,10 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
               '- keep broader verification in scope instead of proving only the easiest subset',
             ].join('\n')
           : 'Goal: add archived routines.\nTasks: update code, add tests, verify.';
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content,
-        })));
+        });
         return;
       }
 
@@ -474,8 +344,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
           return !!verificationSkill && content.includes(verificationSkill);
         });
         if (!sawVerificationRead && !sawFullLegitimateGreen && !sawProofSurface && verificationSkill) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
+          sendResponse({
             model: 'coding-harness-model',
             finishReason: 'tool_calls',
             toolCalls: [{
@@ -485,18 +354,17 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
                 path: verificationSkill,
               }),
             }],
-          })));
+          });
           return;
         }
 
         const content = sawFullLegitimateGreen && sawProofSurface
           ? 'Do not call it done yet. You need full legitimate green on the real proof surface; a weaker or narrower check is not enough.'
           : 'Run a test and then it is probably done.';
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content,
-        })));
+        });
         return;
       }
 
@@ -505,8 +373,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         const activeWorkspaceRoot = latestUser.includes('scopedMessage') ? scopedWorkspaceRoot : workspaceRoot;
         const responsePath = latestUser.includes('scopedMessage') ? 'src/scoped.ts' : 'src/example.ts';
         if (toolMessages.length === 0) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
+          sendResponse({
             model: 'coding-harness-model',
             finishReason: 'tool_calls',
             toolCalls: [{
@@ -517,13 +384,12 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
                 maxResults: 10,
               }),
             }],
-          })));
+          });
           return;
         }
 
         if (toolMessages.length === 1) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
+          sendResponse({
             model: 'coding-harness-model',
             finishReason: 'tool_calls',
             toolCalls: [{
@@ -536,22 +402,20 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
                 maxResults: 5,
               }),
             }],
-          })));
+          });
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content: `I found \`${searchQuery}\` in \`${responsePath}\` inside the active coding workspace.`,
-        })));
+        });
         return;
       }
 
       if (/git status/i.test(latestUser)) {
         if (toolMessages.length === 0) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
+          sendResponse({
             model: 'coding-harness-model',
             finishReason: 'tool_calls',
             toolCalls: [{
@@ -562,15 +426,14 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
                 cwd: workspaceRoot,
               }),
             }],
-          })));
+          });
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content: 'Git status ran inside the active coding workspace.',
-        })));
+        });
         return;
       }
 
@@ -578,19 +441,17 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         const domainSummary = /habit planning dashboard|weekly goals|daily check-ins/i.test(systemPrompt)
           ? 'This is Accomplish, a habit planning dashboard for routines, streaks, and weekly goals. Files inspected: README.md, package.json, src/App.tsx, src/routes/Dashboard.tsx.'
           : 'This looks like a small TypeScript test application workspace. Files inspected: README.md, package.json, tsconfig.json.';
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'coding-harness-model',
           content: domainSummary,
-        })));
+        });
         return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(createChatCompletionResponse({
+      sendResponse({
         model: 'coding-harness-model',
         content: 'Coding harness default response.',
-      })));
+      });
       return;
     }
 
@@ -616,56 +477,7 @@ async function resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoo
   if (!options.useRealOllama) {
     return startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog);
   }
-
-  const candidates = collectOllamaBaseUrlCandidates(options);
-  const errors = [];
-  let localOllama = null;
-  for (const candidate of candidates) {
-    try {
-      let models;
-      try {
-        models = await canReachOllama(candidate);
-      } catch (error) {
-        if (!localOllama) {
-          localOllama = await maybeStartLocalOllama(options, candidate);
-          if (localOllama) {
-            models = await canReachOllama(candidate);
-          } else {
-            throw error;
-          }
-        } else {
-          throw error;
-        }
-      }
-      const resolvedModel = resolveHarnessOllamaModel(options.ollamaModel, models);
-      if (!resolvedModel) {
-        throw new Error(
-          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
-        );
-      }
-      return {
-        baseUrl: candidate,
-        model: resolvedModel,
-        mode: 'real_ollama',
-        async close() {
-          if (localOllama) {
-            await localOllama.close();
-          }
-        },
-      };
-    } catch (error) {
-      errors.push(`${candidate} -> ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  throw new Error(
-    [
-      'Real Ollama mode was requested, but no reachable Ollama endpoint was found.',
-      'Set HARNESS_OLLAMA_BASE_URL to a reachable endpoint or install Ollama locally in WSL so the harness can autostart it on 127.0.0.1:11434.',
-      'If you intend to reach Windows-hosted Ollama from WSL, expose it on the Windows host IP and allow it through the firewall.',
-      `Tried: ${errors.join(' | ')}`,
-    ].join(' '),
-  );
+  return resolveRealOllamaProvider(options, { logPrefix: 'guardian-coding-ollama-' });
 }
 
 function setupGitWorkspace(workspaceRoot) {
@@ -822,13 +634,15 @@ async function runHarness() {
   setupGitWorkspace(suspiciousWorkspaceRoot);
 
   const provider = await resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, scenarioLog);
+  const providerConfig = getHarnessProviderConfig(provider);
   const config = `
 llm:
-  local:
-    provider: ollama
+  ${providerConfig.profileName}:
+    provider: ${providerConfig.llmEntry.provider}
     baseUrl: ${provider.baseUrl}
     model: ${provider.model}
-defaultProvider: local
+${providerConfig.credentialRef ? `    credentialRef: ${providerConfig.credentialRef}
+` : ''}defaultProvider: ${providerConfig.profileName}
 channels:
   cli:
     enabled: false
@@ -838,7 +652,12 @@ channels:
     port: ${harnessPort}
     authToken: "${harnessToken}"
 assistant:
-  identity:
+${providerConfig.credentialRef ? `  credentials:
+    refs:
+      ${providerConfig.credentialRef}:
+        source: env
+        env: ${providerConfig.credentialEnv}
+` : ''}  identity:
     mode: single_user
     primaryUserId: harness
   setup:

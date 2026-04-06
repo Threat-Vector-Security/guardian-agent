@@ -122,6 +122,15 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('maps coding_task search requests to the filesystem candidate when no coding backend was explicitly requested', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'coding_task', operation: 'search' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['filesystem']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('maps coding_task follow-up status checks to coding_backend candidate even without explicit backend', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({

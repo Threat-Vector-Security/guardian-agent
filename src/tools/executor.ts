@@ -502,11 +502,13 @@ export interface ToolExecutorOptions {
     model: string;
     baseUrl?: string;
     locality: 'local' | 'external';
+    tier: 'local' | 'managed_cloud' | 'frontier';
     connected: boolean;
     availableModels?: string[];
     isDefault?: boolean;
     isPreferredLocal?: boolean;
-    isPreferredExternal?: boolean;
+    isPreferredManagedCloud?: boolean;
+    isPreferredFrontier?: boolean;
   }>>;
   /** Load the available models for one configured LLM provider profile. */
   listModelsForLlmProvider?: (providerName: string) => Promise<string[]>;
@@ -2737,6 +2739,8 @@ export class ToolExecutor {
     actorRole: import('./types.js').PrincipalRole = 'owner',
     reason?: string,
   ): Promise<ToolApprovalDecisionResult> {
+    const existingApprovalStatus = this.approvals.get(approvalId)?.status;
+    const wasAlreadySettled = existingApprovalStatus === 'approved' || existingApprovalStatus === 'denied';
     const approval = this.approvals.decide(approvalId, decision, actor, actorRole, reason, this.now);
     if (!approval) {
       return { success: false, message: `Approval '${approvalId}' not found.` };
@@ -2748,6 +2752,42 @@ export class ToolExecutor {
     const job = this.jobsById.get(approval.jobId);
     if (!job) {
       return { success: false, message: `Job '${approval.jobId}' for approval '${approvalId}' was not found.` };
+    }
+
+    if (wasAlreadySettled) {
+      if (approval.status === 'approved') {
+        if (job.status === 'succeeded') {
+          return {
+            success: true,
+            message: job.resultPreview || `Approval '${approvalId}' was already approved and executed successfully.`,
+            job,
+          };
+        }
+        if (job.status === 'failed') {
+          return {
+            success: false,
+            message: job.error || `Approval '${approvalId}' was already approved, but execution failed.`,
+            job,
+          };
+        }
+        if (job.status === 'denied') {
+          return {
+            success: false,
+            message: job.error || `Approval '${approvalId}' was already denied.`,
+            job,
+          };
+        }
+        return {
+          success: false,
+          message: `Approval '${approvalId}' was already approved, but its execution context is no longer available.`,
+          job,
+        };
+      }
+      return {
+        success: false,
+        message: `Approval '${approvalId}' was already denied.`,
+        job,
+      };
     }
 
     if (decision === 'denied') {

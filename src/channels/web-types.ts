@@ -50,7 +50,14 @@ import type {
 import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type { RouteDecision } from '../runtime/message-router.js';
-import type { AssistantConnectorPackConfig, AssistantConnectorPlaybookDefinition, ConnectorExecutionMode } from '../config/types.js';
+import type {
+  AssistantConnectorPackConfig,
+  AssistantConnectorPlaybookDefinition,
+  ConnectorExecutionMode,
+  OllamaOptionsConfig,
+  OllamaThinkConfig,
+  RoutingTierMode,
+} from '../config/types.js';
 import type {
   AiSecurityFinding,
   AiSecurityFindingStatus,
@@ -413,7 +420,18 @@ export interface RedactedCloudConfig {
 
 /** Redacted config returned by GET /api/config. */
 export interface RedactedConfig {
-  llm: Record<string, { provider: string; model: string; baseUrl?: string; credentialRef?: string }>;
+  llm: Record<string, {
+    provider: string;
+    model: string;
+    baseUrl?: string;
+    credentialRef?: string;
+    maxTokens?: number;
+    temperature?: number;
+    timeoutMs?: number;
+    keepAlive?: string | number;
+    think?: OllamaThinkConfig;
+    ollamaOptions?: OllamaOptionsConfig;
+  }>;
   defaultProvider: string;
   channels: {
     cli?: { enabled: boolean };
@@ -603,6 +621,8 @@ export interface RedactedConfig {
       allowedDomains: string[];
       preferredProviders?: {
         local?: string;
+        managedCloud?: string;
+        frontier?: string;
         external?: string;
       };
       webSearch?: {
@@ -741,6 +761,8 @@ export interface DashboardProviderInfo {
   baseUrl?: string;
   /** 'local' for Ollama/local endpoints, 'external' for cloud APIs. */
   locality: 'local' | 'external';
+  /** Explicit provider tier used for managed-cloud vs frontier badging. */
+  tier?: 'local' | 'managed_cloud' | 'frontier';
   /** Whether the provider is currently reachable. */
   connected: boolean;
   /** Available models (for Ollama discovery). */
@@ -753,6 +775,8 @@ export interface DashboardProviderTypeInfo {
   displayName: string;
   compatible: boolean;
   locality: 'local' | 'external';
+  tier: 'local' | 'managed_cloud' | 'frontier';
+  requiresCredential: boolean;
 }
 
 export interface DashboardProviderModelsInput {
@@ -1590,8 +1614,18 @@ export interface DashboardCallbacks {
     deletedFiles: string[];
     errors: string[];
   }>;
-  onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
-  onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
+  onRoutingMode?: () => {
+    tierMode: RoutingTierMode;
+    availableModes: RoutingTierMode[];
+    complexityThreshold: number;
+    fallbackOnFailure: boolean;
+  };
+  onRoutingModeUpdate?: (mode: RoutingTierMode) => {
+    success: boolean;
+    message: string;
+    tierMode: RoutingTierMode;
+    availableModes: RoutingTierMode[];
+  };
   onAutomationCatalog?: () => AutomationCatalogViewEntry[];
   onAutomationRunHistory?: () => AutomationRunHistoryEntry[];
   onAutomationCreate?: (automationId: string) => AutomationCatalogCreateResult;
@@ -1746,6 +1780,12 @@ export interface ConfigUpdate {
     apiKey?: string;
     credentialRef?: string;
     baseUrl?: string;
+    maxTokens?: number;
+    temperature?: number;
+    timeoutMs?: number;
+    keepAlive?: string | number;
+    think?: OllamaThinkConfig;
+    ollamaOptions?: OllamaOptionsConfig;
   }>;
   channels?: {
     telegram?: {
@@ -1812,6 +1852,8 @@ export interface ConfigUpdate {
     tools?: {
       preferredProviders?: {
         local?: string;
+        managedCloud?: string;
+        frontier?: string;
         external?: string;
       };
       codingBackends?: {

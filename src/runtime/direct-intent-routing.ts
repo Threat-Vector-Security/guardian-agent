@@ -102,6 +102,9 @@ function preferredCandidatesForDecision(
       if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
         return ['coding_backend'];
       }
+      if (decision.operation === 'search') {
+        return ['filesystem'];
+      }
       return decision.operation === 'inspect'
         && decision.turnRelation === 'follow_up'
         && decision.entities.codingRunStatusCheck === true

@@ -72,6 +72,7 @@ describe('createProviderConfigHelpers', () => {
         model: 'gpt-4o',
         baseUrl: undefined,
         locality: 'external',
+        tier: 'frontier',
         connected: false,
       },
       {
@@ -80,6 +81,7 @@ describe('createProviderConfigHelpers', () => {
         model: 'llama3.2',
         baseUrl: 'http://127.0.0.1:11434',
         locality: 'local',
+        tier: 'local',
         connected: false,
       },
     ]);
@@ -91,6 +93,7 @@ describe('createProviderConfigHelpers', () => {
         model: 'gpt-4o',
         baseUrl: undefined,
         locality: 'external',
+        tier: 'frontier',
         connected: true,
         availableModels: ['gpt-4o'],
       },
@@ -100,6 +103,7 @@ describe('createProviderConfigHelpers', () => {
         model: 'llama3.2',
         baseUrl: 'http://127.0.0.1:11434',
         locality: 'local',
+        tier: 'local',
         connected: false,
       },
     ]);
@@ -126,6 +130,7 @@ describe('createProviderDashboardCallbacks', () => {
         type: 'openai',
         model: 'gpt-4o',
         locality: 'external' as const,
+        tier: 'frontier' as const,
         connected: false,
       },
     ];
@@ -138,8 +143,22 @@ describe('createProviderDashboardCallbacks', () => {
     ];
     const providerRegistry = {
       listProviderTypes: vi.fn(() => [
-        { name: 'ollama', displayName: 'Ollama', compatible: false },
-        { name: 'openai', displayName: 'OpenAI', compatible: false },
+        {
+          name: 'ollama',
+          displayName: 'Ollama',
+          compatible: false,
+          locality: 'local' as const,
+          tier: 'local' as const,
+          requiresCredential: false,
+        },
+        {
+          name: 'openai',
+          displayName: 'OpenAI',
+          compatible: false,
+          locality: 'external' as const,
+          tier: 'frontier' as const,
+          requiresCredential: true,
+        },
       ]),
       hasProvider: vi.fn((name: string) => name === 'ollama' || name === 'openai'),
       createProvider: vi.fn((_config: LLMConfig) => ({
@@ -154,14 +173,28 @@ describe('createProviderDashboardCallbacks', () => {
       buildProviderInfo: vi.fn(async () => status),
       resolveCredentialForProviderInput: vi.fn(() => 'resolved-secret'),
       getDefaultModelForProviderType: vi.fn(() => 'gpt-4o'),
-      isLocalProviderEndpoint: (_baseUrl, providerType) => providerType === 'ollama',
+      getDefaultBaseUrlForProviderType: vi.fn(() => undefined),
       providerRegistry,
     });
 
     expect(callbacks.onProviders?.()).toEqual(snapshot);
     expect(callbacks.onProviderTypes?.()).toEqual([
-      { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local' },
-      { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external' },
+      {
+        name: 'ollama',
+        displayName: 'Ollama',
+        compatible: false,
+        locality: 'local',
+        tier: 'local',
+        requiresCredential: false,
+      },
+      {
+        name: 'openai',
+        displayName: 'OpenAI',
+        compatible: false,
+        locality: 'external',
+        tier: 'frontier',
+        requiresCredential: true,
+      },
     ]);
     await expect(callbacks.onProvidersStatus?.()).resolves.toEqual(status);
     await expect(callbacks.onProviderModels?.({
@@ -184,9 +217,18 @@ describe('createProviderDashboardCallbacks', () => {
       buildProviderInfo: async () => [],
       resolveCredentialForProviderInput: () => undefined,
       getDefaultModelForProviderType: () => 'gpt-4o',
-      isLocalProviderEndpoint: () => false,
+      getDefaultBaseUrlForProviderType: () => undefined,
       providerRegistry: {
-        listProviderTypes: () => [],
+        listProviderTypes: () => [
+          {
+            name: 'openai',
+            displayName: 'OpenAI',
+            compatible: false,
+            locality: 'external',
+            tier: 'frontier',
+            requiresCredential: true,
+          },
+        ],
         hasProvider: (name: string) => name === 'openai',
         createProvider: () => ({
           listModels: async () => [],

@@ -1,3 +1,5 @@
+import { formatProviderTierLabel, getProviderLocality, getProviderTier } from '../llm/provider-metadata.js';
+
 export interface ResponseUsageMetadata {
   promptTokens: number;
   completionTokens: number;
@@ -9,6 +11,7 @@ export interface ResponseUsageMetadata {
 export interface ResponseSourceMetadata {
   locality: 'local' | 'external';
   providerName?: string;
+  providerTier?: 'local' | 'managed_cloud' | 'frontier';
   model?: string;
   tier?: 'local' | 'external';
   usedFallback?: boolean;
@@ -40,7 +43,7 @@ export function isLocalToolCallParseError(error: unknown): boolean {
 }
 
 export function getProviderLocalityFromName(providerName: string | undefined): 'local' | 'external' {
-  return providerName?.trim().toLowerCase() === 'ollama' ? 'local' : 'external';
+  return getProviderLocality(providerName) ?? 'external';
 }
 
 export function readResponseSourceMetadata(metadata?: Record<string, unknown>): ResponseSourceMetadata | undefined {
@@ -64,6 +67,9 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
   return {
     locality,
     providerName: typeof record.providerName === 'string' ? record.providerName : undefined,
+    providerTier: record.providerTier === 'local' || record.providerTier === 'managed_cloud' || record.providerTier === 'frontier'
+      ? record.providerTier
+      : (typeof record.providerName === 'string' ? getProviderTier(record.providerName) : undefined),
     model: typeof record.model === 'string' ? record.model : undefined,
     tier: record.tier === 'local' || record.tier === 'external' ? record.tier : undefined,
     usedFallback: record.usedFallback === true,
@@ -92,7 +98,7 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
 export function formatResponseSourceLabel(metadata?: Record<string, unknown>): string {
   const source = readResponseSourceMetadata(metadata);
   if (!source) return '';
-  const parts: string[] = [source.locality];
+  const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];
   if (source.usedFallback) parts.push('fallback');
   return `[${parts.join(' · ')}]`;
 }

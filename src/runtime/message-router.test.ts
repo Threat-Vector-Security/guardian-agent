@@ -372,11 +372,20 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBeUndefined();
     });
 
-    it('should force external agent in external-only mode', () => {
-      const result = router.routeWithTier('hello', 'external-only');
+    it('should force external agent in managed-cloud-only mode', () => {
+      const result = router.routeWithTier('hello', 'managed-cloud-only');
       expect(result.agentId).toBe('external');
       expect(result.tier).toBe('external');
       expect(result.fallbackAgentId).toBeUndefined();
+      expect(result.reason).toContain('managed-cloud-only');
+    });
+
+    it('should force external agent in frontier-only mode', () => {
+      const result = router.routeWithTier('hello', 'frontier-only');
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.fallbackAgentId).toBeUndefined();
+      expect(result.reason).toContain('frontier-only');
     });
 
     it('should handle single-tier gracefully (only local)', () => {
@@ -407,14 +416,24 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBeUndefined();
     });
 
-    it('should not label external-only as external when only local exists', () => {
+    it('should not label managed-cloud-only as external when only local exists', () => {
       const singleRouter = new MessageRouter({ strategy: 'keyword' });
       singleRouter.registerAgent('local', ['read_files'], {}, 'local');
 
-      const result = singleRouter.routeWithTier('hello', 'external-only', 0.5);
+      const result = singleRouter.routeWithTier('hello', 'managed-cloud-only', 0.5);
       expect(result.agentId).toBe('local');
       expect(result.tier).toBe('local');
-      expect(result.reason).toContain('external-only unavailable');
+      expect(result.reason).toContain('managed-cloud-only unavailable');
+    });
+
+    it('should not label frontier-only as external when only local exists', () => {
+      const singleRouter = new MessageRouter({ strategy: 'keyword' });
+      singleRouter.registerAgent('local', ['read_files'], {}, 'local');
+
+      const result = singleRouter.routeWithTier('hello', 'frontier-only', 0.5);
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.reason).toContain('frontier-only unavailable');
     });
 
     it('should fall through to plain route() when no role-tagged agents exist', () => {

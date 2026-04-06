@@ -1381,12 +1381,12 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
     try {
       const parsed = await readJsonBody<{ mode?: string }>(req, context.maxBodyBytes);
-      const valid = ['auto', 'local-only', 'external-only'];
+      const valid = ['auto', 'local-only', 'managed-cloud-only', 'frontier-only'];
       if (!parsed.mode || !valid.includes(parsed.mode)) {
         sendJSON(res, 400, { error: `mode must be one of: ${valid.join(', ')}` });
         return true;
       }
-      const result = dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'external-only');
+      const result = dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'managed-cloud-only' | 'frontier-only');
       sendJSON(res, 200, result);
       context.maybeEmitUIInvalidation(result, ['config', 'dashboard'], 'routing.mode.updated', url.pathname);
       return true;

@@ -28,6 +28,7 @@ import type {
   BrowserConfig,
   GuardianAgentConfig,
   MCPServerEntry,
+  RoutingTierMode,
   WebSearchConfig,
 } from './config/types.js';
 import yaml from 'js-yaml';
@@ -220,6 +221,11 @@ import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
 import { createProviders, getProviderRegistry } from './llm/provider.js';
+import {
+  getProviderLocality as getProviderConfiguredLocality,
+  getProviderTier,
+  providerRequiresCredential,
+} from './llm/provider-metadata.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 import {
   isDegradedSandboxFallbackActive,
@@ -252,11 +258,12 @@ let sharedCodeWorkspaceTrustService: CodeWorkspaceTrustService | undefined;
 
 function normalizeTierModeForRouter(
   router: MessageRouter,
-  mode: 'auto' | 'local-only' | 'external-only' | undefined,
-): 'auto' | 'local-only' | 'external-only' {
-  if (mode === 'local-only' && !router.findAgentByRole('local')) return 'auto';
-  if (mode === 'external-only' && !router.findAgentByRole('external')) return 'auto';
-  return mode ?? 'auto';
+  config: GuardianAgentConfig,
+  mode: RoutingTierMode | undefined,
+): RoutingTierMode {
+  const availableModes = new Set(buildAvailableRoutingModes(router, config));
+  const normalizedMode = mode ?? 'auto';
+  return availableModes.has(normalizedMode) ? normalizedMode : 'auto';
 }
 let sharedPackageInstallTrustService: PackageInstallTrustService | undefined;
 
@@ -277,65 +284,135 @@ const ChatAgent = createChatAgentClass({
 });
 type ChatAgentInstance = InstanceType<typeof ChatAgent>;
 
-function isLoopbackOrPrivateHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  if (!normalized) return false;
-  if (
-    normalized === 'localhost'
-    || normalized === '127.0.0.1'
-    || normalized === '::1'
-    || normalized === '0.0.0.0'
-    || normalized === 'host.docker.internal'
-  ) {
-    return true;
-  }
-  if (/^10\.\d+\.\d+\.\d+$/.test(normalized)) return true;
-  if (/^192\.168\.\d+\.\d+$/.test(normalized)) return true;
-  const private172 = normalized.match(/^172\.(\d+)\.\d+\.\d+$/);
-  if (private172) {
-    const secondOctet = Number(private172[1]);
-    if (secondOctet >= 16 && secondOctet <= 31) return true;
-  }
-  return false;
-}
-
-function isLocalProviderEndpoint(baseUrl: string | undefined, providerType: string | undefined): boolean {
-  if ((providerType ?? '').trim().toLowerCase() === 'ollama') return true;
-  if (!baseUrl) return false;
-  try {
-    const parsed = new URL(baseUrl);
-    return isLoopbackOrPrivateHost(parsed.hostname);
-  } catch {
-    return /localhost|127\.0\.0\.1|::1|0\.0\.0\.0|host\.docker\.internal/.test(baseUrl);
-  }
+function isLocalProviderEndpoint(_baseUrl: string | undefined, providerType: string | undefined): boolean {
+  return getProviderConfiguredLocality(providerType) === 'local';
 }
 
 function getProviderLocality(
   llmCfg: Pick<LLMConfig, 'provider' | 'baseUrl'> | undefined,
 ): 'local' | 'external' | undefined {
   if (!llmCfg?.provider) return undefined;
-  return isLocalProviderEndpoint(llmCfg.baseUrl, llmCfg.provider) ? 'local' : 'external';
+  return getProviderConfiguredLocality(llmCfg.provider);
+}
+
+function providerMatchesTier(
+  llmCfg: Pick<LLMConfig, 'provider' | 'baseUrl'> | undefined,
+  tier: 'local' | 'managed_cloud' | 'frontier',
+): boolean {
+  if (!llmCfg?.provider) return false;
+  if (tier === 'local') {
+    return getProviderLocality(llmCfg) === 'local';
+  }
+  return getProviderTier(llmCfg.provider) === tier;
+}
+
+function getPreferredProviderKeyForTier(
+  tier: 'local' | 'managed_cloud' | 'frontier',
+): 'local' | 'managedCloud' | 'frontier' {
+  if (tier === 'local') return 'local';
+  if (tier === 'managed_cloud') return 'managedCloud';
+  return 'frontier';
+}
+
+function findProviderByTier(
+  cfg: GuardianAgentConfig,
+  tier: 'local' | 'managed_cloud' | 'frontier',
+): string | null {
+  const preferredProviders = cfg.assistant.tools.preferredProviders ?? {};
+  const preferredKey = getPreferredProviderKeyForTier(tier);
+  const preferred = preferredProviders[preferredKey]?.trim();
+  if (preferred && providerMatchesTier(cfg.llm[preferred], tier)) {
+    return preferred;
+  }
+
+  if (tier !== 'local' && !preferred) {
+    const legacyExternal = preferredProviders.external?.trim();
+    if (legacyExternal && providerMatchesTier(cfg.llm[legacyExternal], tier)) {
+      return legacyExternal;
+    }
+  }
+
+  if (providerMatchesTier(cfg.llm[cfg.defaultProvider], tier)) {
+    return cfg.defaultProvider;
+  }
+
+  const matches = Object.entries(cfg.llm)
+    .filter(([, llmCfg]) => providerMatchesTier(llmCfg, tier))
+    .sort(([leftName], [rightName]) => leftName.localeCompare(rightName));
+
+  return matches[0]?.[0] ?? null;
+}
+
+function buildAutoFallbackOrder(config: GuardianAgentConfig): string[] {
+  const defaultName = config.defaultProvider;
+  const defaultTier = getProviderTier(config.llm[defaultName]?.provider) ?? 'frontier';
+  const remaining = Object.keys(config.llm).filter((name) => name !== defaultName);
+  const preferredTierOrder: Array<'local' | 'managed_cloud' | 'frontier'> = defaultTier === 'local'
+    ? ['managed_cloud', 'frontier', 'local']
+    : defaultTier === 'managed_cloud'
+      ? ['frontier', 'local', 'managed_cloud']
+      : ['managed_cloud', 'local', 'frontier'];
+
+  remaining.sort((left, right) => {
+    const leftTier = getProviderTier(config.llm[left]?.provider) ?? 'frontier';
+    const rightTier = getProviderTier(config.llm[right]?.provider) ?? 'frontier';
+    const leftRank = preferredTierOrder.indexOf(leftTier);
+    const rightRank = preferredTierOrder.indexOf(rightTier);
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return left.localeCompare(right);
+  });
+
+  return [defaultName, ...remaining];
 }
 
 function findProviderByLocality(
   cfg: GuardianAgentConfig,
   locality: 'local' | 'external',
 ): string | null {
-  const preferred = cfg.assistant.tools.preferredProviders?.[locality]?.trim();
-  if (preferred && getProviderLocality(cfg.llm[preferred]) === locality) {
-    return preferred;
+  if (locality === 'local') {
+    return findProviderByTier(cfg, 'local');
   }
+  return findProviderByTier(cfg, 'managed_cloud')
+    ?? findProviderByTier(cfg, 'frontier');
+}
 
-  if (getProviderLocality(cfg.llm[cfg.defaultProvider]) === locality) {
-    return cfg.defaultProvider;
+function findProviderForRoutingMode(
+  cfg: GuardianAgentConfig,
+  mode: RoutingTierMode,
+): string | null {
+  if (mode === 'managed-cloud-only') {
+    return findProviderByTier(cfg, 'managed_cloud')
+      ?? findProviderByTier(cfg, 'frontier');
   }
+  if (mode === 'frontier-only') {
+    return findProviderByTier(cfg, 'frontier')
+      ?? findProviderByTier(cfg, 'managed_cloud');
+  }
+  return findProviderByLocality(cfg, 'external');
+}
 
-  for (const [name, llmCfg] of Object.entries(cfg.llm)) {
-    if (getProviderLocality(llmCfg) === locality) {
-      return name;
-    }
+function buildAvailableRoutingModes(
+  router: MessageRouter,
+  cfg: GuardianAgentConfig,
+): RoutingTierMode[] {
+  const modes: RoutingTierMode[] = ['auto'];
+  if (router.findAgentByRole('local') && findProviderByTier(cfg, 'local')) {
+    modes.push('local-only');
   }
-  return null;
+  if (router.findAgentByRole('external') && findProviderByTier(cfg, 'managed_cloud')) {
+    modes.push('managed-cloud-only');
+  }
+  if (router.findAgentByRole('external') && findProviderByTier(cfg, 'frontier')) {
+    modes.push('frontier-only');
+  }
+  return modes;
+}
+
+function formatRoutingModeLabel(mode: RoutingTierMode): string {
+  if (mode === 'local-only') return 'local';
+  if (mode === 'managed-cloud-only') return 'managed cloud';
+  if (mode === 'frontier-only') return 'frontier';
+  return 'auto';
 }
 
 function resolveSecurityTriageProviderName(cfg: GuardianAgentConfig): string {
@@ -366,7 +443,8 @@ function bindTierRoutingProviders(runtime: Runtime, router: MessageRouter, cfg: 
     runtime.rebindAgentProvider(localAgentId, findProviderByLocality(cfg, 'local') ?? undefined);
   }
   if (externalAgentId) {
-    runtime.rebindAgentProvider(externalAgentId, findProviderByLocality(cfg, 'external') ?? undefined);
+    const normalizedMode = normalizeTierModeForRouter(router, cfg, cfg.routing?.tierMode);
+    runtime.rebindAgentProvider(externalAgentId, findProviderForRoutingMode(cfg, normalizedMode) ?? undefined);
   }
 }
 
@@ -689,11 +767,13 @@ function buildDashboardCallbacks(
     model: string;
     baseUrl?: string;
     locality: 'local' | 'external';
+    tier: 'local' | 'managed_cloud' | 'frontier';
     connected: boolean;
     availableModels?: string[];
     isDefault?: boolean;
     isPreferredLocal?: boolean;
-    isPreferredExternal?: boolean;
+    isPreferredManagedCloud?: boolean;
+    isPreferredFrontier?: boolean;
   }>>;
   listModelsForConfiguredLlmProvider: (providerName: string) => Promise<string[]>;
   applyDirectLlmProviderConfigUpdate: (updates: import('./channels/web-types.js').ConfigUpdate) => Promise<DashboardMutationResult>;
@@ -1406,6 +1486,7 @@ function buildDashboardCallbacks(
     getProviderInfoSnapshot,
     buildProviderInfo,
     getDefaultModelForProviderType,
+    getDefaultBaseUrlForProviderType,
     resolveCredentialForProviderInput,
   } = createProviderConfigHelpers({
     configRef,
@@ -1469,7 +1550,7 @@ function buildDashboardCallbacks(
     buildProviderInfo,
     resolveCredentialForProviderInput,
     getDefaultModelForProviderType,
-    isLocalProviderEndpoint,
+    getDefaultBaseUrlForProviderType,
   });
   const listConfiguredLlmProviders = async () => {
     const currentConfig = configRef.current;
@@ -1482,7 +1563,9 @@ function buildDashboardCallbacks(
       ...runtimeProvidersByName.keys(),
     ]);
     const preferredLocal = currentConfig.assistant.tools.preferredProviders?.local?.trim();
-    const preferredExternal = currentConfig.assistant.tools.preferredProviders?.external?.trim();
+    const preferredManagedCloud = currentConfig.assistant.tools.preferredProviders?.managedCloud?.trim();
+    const preferredFrontier = currentConfig.assistant.tools.preferredProviders?.frontier?.trim();
+    const legacyPreferredExternal = currentConfig.assistant.tools.preferredProviders?.external?.trim();
     const defaultProvider = currentConfig.defaultProvider.trim();
 
     return [...configuredProviderNames]
@@ -1490,17 +1573,25 @@ function buildDashboardCallbacks(
       .map((name) => {
         const configured = currentConfig.llm[name];
         const runtimeInfo = runtimeProvidersByName.get(name);
+        const providerType = configured?.provider ?? runtimeInfo?.type ?? 'unknown';
+        const tier = getProviderTier(providerType) ?? runtimeInfo?.tier ?? 'frontier';
+        const isManagedCloudDefault = name === preferredManagedCloud
+          || (!preferredManagedCloud && name === legacyPreferredExternal && tier === 'managed_cloud');
+        const isFrontierDefault = name === preferredFrontier
+          || (!preferredFrontier && name === legacyPreferredExternal && tier === 'frontier');
         return {
           name,
-          type: configured?.provider ?? runtimeInfo?.type ?? 'unknown',
+          type: providerType,
           model: configured?.model ?? runtimeInfo?.model ?? 'unknown',
           baseUrl: configured?.baseUrl ?? runtimeInfo?.baseUrl,
           locality: getProviderLocality(configured) ?? runtimeInfo?.locality ?? 'external',
+          tier,
           connected: runtimeInfo?.connected ?? false,
           availableModels: runtimeInfo?.availableModels,
           isDefault: name === defaultProvider,
           isPreferredLocal: name === preferredLocal,
-          isPreferredExternal: name === preferredExternal,
+          isPreferredManagedCloud: isManagedCloudDefault,
+          isPreferredFrontier: isFrontierDefault,
         };
       });
   };
@@ -1518,7 +1609,7 @@ function buildDashboardCallbacks(
       ...configured,
       apiKey,
     };
-    if (resolvedConfig.provider !== 'ollama' && !resolvedConfig.apiKey) {
+    if (providerRequiresCredential(resolvedConfig.provider) && !resolvedConfig.apiKey) {
       throw new Error(`Provider '${normalizedProviderName}' is missing a resolved credential, so available models cannot be loaded.`);
     }
     const models = await getProviderRegistry().createProvider(resolvedConfig).listModels();
@@ -1565,7 +1656,9 @@ function buildDashboardCallbacks(
       input.actorRole ?? 'owner',
       input.reason,
     );
-    clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId);
+    if (result.success || input.decision === 'denied') {
+      clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId);
+    }
     if (!result.success) {
       log.warn({
         approvalId: input.approvalId,
@@ -1587,8 +1680,9 @@ function buildDashboardCallbacks(
     const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
       || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
     const shouldContinue = continueConversation || continueAutomation;
+    const allowContinuation = result.success && shouldContinue;
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
-    if (result.success && shouldContinue) {
+    if (allowContinuation) {
       continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;
       if (!continuedResponse) {
         for (const agent of chatAgents.values()) {
@@ -1601,7 +1695,7 @@ function buildDashboardCallbacks(
       }
     }
     let displayMessage: string | undefined;
-    if (!shouldContinue && !continuedResponse) {
+    if (!allowContinuation && !continuedResponse) {
       for (const agent of chatAgents.values()) {
         const followUp = agent.takeApprovalFollowUp(input.approvalId, input.decision);
         if (followUp) {
@@ -1610,7 +1704,7 @@ function buildDashboardCallbacks(
         }
       }
     }
-    if (!displayMessage && !shouldContinue) {
+    if (!displayMessage && !allowContinuation) {
       displayMessage = result.message;
     }
     analytics.track({
@@ -1627,7 +1721,7 @@ function buildDashboardCallbacks(
     return {
       success: result.success,
       message: result.message,
-      continueConversation: shouldContinue,
+      continueConversation: allowContinuation,
       displayMessage,
       ...(continuedResponse ? { continuedResponse } : {}),
     };
@@ -5166,7 +5260,8 @@ async function main(): Promise<void> {
     const providerNames = Object.keys(resolvedRuntimeCredentials.resolvedLLM);
     if (providerNames.length > 1) {
       const allProviders = createProviders(resolvedRuntimeCredentials.resolvedLLM);
-      const order = [config.defaultProvider, ...providerNames.filter(n => n !== config.defaultProvider)];
+      const order = buildAutoFallbackOrder(config)
+        .filter((name) => providerNames.includes(name));
       fallbackChain = new ModelFallbackChain(allProviders, order);
       log.info({ order: fallbackChain.getProviderOrder(), auto: true }, 'Auto-configured model fallback chain');
     }
@@ -5522,9 +5617,9 @@ async function main(): Promise<void> {
     for (const [name, llmCfg] of Object.entries(config.llm)) {
       const provider = runtime.getProvider(name);
       if (!provider) continue;
-      if (llmCfg.provider === 'ollama' && !localProvider) {
+      if (getProviderLocality(llmCfg) === 'local' && !localProvider) {
         localProvider = provider;
-      } else if (llmCfg.provider !== 'ollama' && !externalLlmProvider) {
+      } else if (getProviderLocality(llmCfg) === 'external' && !externalLlmProvider) {
         externalLlmProvider = provider;
       }
     }
@@ -6011,16 +6106,19 @@ async function main(): Promise<void> {
   // Routing mode: read/write tier mode at runtime
   dashboardCallbacks.onRoutingMode = () => {
     const r = configRef.current.routing;
-    const tierMode = normalizeTierModeForRouter(router, r?.tierMode);
+    const tierMode = normalizeTierModeForRouter(router, configRef.current, r?.tierMode);
+    const availableModes = buildAvailableRoutingModes(router, configRef.current);
     if (tierMode !== (r?.tierMode ?? 'auto')) {
       configRef.current.routing = {
         strategy: r?.strategy ?? 'keyword',
         ...r,
         tierMode,
       };
+      bindTierRoutingProviders(runtime, router, configRef.current);
     }
     return {
       tierMode,
+      availableModes,
       complexityThreshold: r?.complexityThreshold ?? 0.5,
       fallbackOnFailure: r?.fallbackOnFailure !== false,
     };
@@ -6029,15 +6127,18 @@ async function main(): Promise<void> {
     if (!configRef.current.routing) {
       configRef.current.routing = { strategy: 'keyword' };
     }
-    const normalizedMode = normalizeTierModeForRouter(router, mode);
+    const normalizedMode = normalizeTierModeForRouter(router, configRef.current, mode);
     configRef.current.routing.tierMode = normalizedMode;
+    bindTierRoutingProviders(runtime, router, configRef.current);
+    const availableModes = buildAvailableRoutingModes(router, configRef.current);
     log.info({ requestedTierMode: mode, tierMode: normalizedMode }, 'Tier routing mode updated');
     return {
       success: normalizedMode === mode,
       message: normalizedMode === mode
-        ? `Routing mode set to: ${mode}`
-        : `Routing mode ${mode} is unavailable right now. Falling back to: ${normalizedMode}`,
+        ? `Routing mode set to: ${formatRoutingModeLabel(mode)}`
+        : `Routing mode ${formatRoutingModeLabel(mode)} is unavailable right now. Falling back to: ${formatRoutingModeLabel(normalizedMode)}`,
       tierMode: normalizedMode,
+      availableModes,
     };
   };
 

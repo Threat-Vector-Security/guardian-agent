@@ -36,25 +36,27 @@ let sharedProviderTypes = null;
 const configUiState = {
   selectedProviderProfiles: {
     local: null,
+    cloud: null,
     external: null,
   },
 };
 const FALLBACK_PROVIDER_TYPES = [
-  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local' },
-  { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external' },
-  { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external' },
-  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external' },
-  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external' },
-  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external' },
-  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external' },
-  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external' },
-  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external' },
+  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false },
+  { name: 'ollama_cloud', displayName: 'Ollama Cloud', compatible: false, locality: 'external', tier: 'managed_cloud', requiresCredential: true },
+  { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
 ];
 const CONFIG_HELP = {
   aiSearch: {
     'AI Provider Configuration': {
-      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local runtimes such as Ollama and hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
-      whatSeeing: 'You are seeing separate local and external provider editors, saved provider-profile buttons, provider-type selectors, model controls, credential fields, endpoint overrides, and test/save actions.',
+      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud Ollama Cloud, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
+      whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test/save actions.',
       whatCanDo: 'Add a new provider, edit an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profile exists for routing and fallback.',
       howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here.',
     },
@@ -532,34 +534,64 @@ function createProviderPanel(config, providers, panel) {
 
   const providerMap = Object.entries(config.llm || {}).reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
+    const typeMeta = getProviderTypeMeta(cfg.provider);
     acc[name] = {
       ...cfg,
-      locality: live?.locality || (cfg.provider === 'ollama' ? 'local' : 'external'),
+      locality: live?.locality || typeMeta?.locality || 'external',
+      tier: live?.tier || typeMeta?.tier || 'frontier',
       connected: live?.connected,
       availableModels: live?.availableModels || [],
     };
     return acc;
   }, {});
+  const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
+  const preferredManagedCloud = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap);
+  const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
 
+  const providerSides = ['local', 'cloud', 'external'];
   const localNames = Object.keys(providerMap).filter(name => providerMap[name].locality === 'local');
-  const externalNames = Object.keys(providerMap).filter(name => providerMap[name].locality !== 'local');
+  const cloudNames = Object.keys(providerMap).filter(name => providerMap[name].tier === 'managed_cloud');
+  const externalNames = Object.keys(providerMap).filter((name) => {
+    const info = providerMap[name];
+    return info.locality !== 'local' && info.tier !== 'managed_cloud';
+  });
+  const getSidePrefix = (side) => (side === 'local' ? 'cfg-local' : side === 'cloud' ? 'cfg-mcloud' : 'cfg-ext');
+  const getSideNames = (side) => (side === 'local' ? localNames : side === 'cloud' ? cloudNames : externalNames);
+  const getDefaultProviderTypeForSide = (side) => (side === 'local' ? 'ollama' : side === 'cloud' ? 'ollama_cloud' : 'openai');
+  const getSideLabel = (side) => (side === 'local' ? 'Local' : side === 'cloud' ? 'Ollama Cloud' : 'Frontier');
+  const getSideEditorTitle = (side) => (side === 'local'
+    ? 'Local Provider Settings'
+    : side === 'cloud'
+      ? 'Ollama Cloud Settings'
+      : 'Frontier Provider Settings');
+  const getProviderEditorSide = (entry) => {
+    if (!entry) return 'external';
+    if (entry.locality === 'local') return 'local';
+    if (entry.tier === 'managed_cloud') return 'cloud';
+    return 'external';
+  };
   const defaultProviderEntry = config.defaultProvider ? providerMap[config.defaultProvider] : null;
   const activeProviderSelection = (() => {
     const localSelected = configUiState.selectedProviderProfiles.local;
     if (localSelected && providerMap[localSelected]?.locality === 'local') {
       return { side: 'local', name: localSelected };
     }
+    const cloudSelected = configUiState.selectedProviderProfiles.cloud;
+    if (cloudSelected && providerMap[cloudSelected]?.tier === 'managed_cloud') {
+      return { side: 'cloud', name: cloudSelected };
+    }
     const externalSelected = configUiState.selectedProviderProfiles.external;
-    if (externalSelected && providerMap[externalSelected]?.locality === 'external') {
+    if (externalSelected && getProviderEditorSide(providerMap[externalSelected]) === 'external') {
       return { side: 'external', name: externalSelected };
     }
     if (defaultProviderEntry) {
       return {
-        side: defaultProviderEntry.locality === 'local' ? 'local' : 'external',
+        side: getProviderEditorSide(defaultProviderEntry),
         name: config.defaultProvider,
       };
     }
     if (localNames[0]) return { side: 'local', name: localNames[0] };
+    if (cloudNames[0]) return { side: 'cloud', name: cloudNames[0] };
     if (externalNames[0]) return { side: 'external', name: externalNames[0] };
     return null;
   })();
@@ -567,8 +599,12 @@ function createProviderPanel(config, providers, panel) {
     .filter((type) => type.locality === 'local')
     .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
     .join('');
+  const cloudProviderTypeOptions = providerTypes
+    .filter((type) => type.tier === 'managed_cloud')
+    .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
+    .join('');
   const externalProviderTypeOptions = providerTypes
-    .filter((type) => type.locality !== 'local')
+    .filter((type) => type.locality !== 'local' && type.tier !== 'managed_cloud')
     .map((type) => `<option value="${escAttr(type.name)}">${esc(type.displayName)}</option>`)
     .join('');
 
@@ -576,7 +612,7 @@ function createProviderPanel(config, providers, panel) {
     <details class="cfg-provider-accordion" id="cfg-provider-panel" open>
       <summary class="cfg-provider-summary">
         <span class="cfg-provider-summary-title">AI Provider Configuration</span>
-        <span class="cfg-provider-summary-note">Local and external providers live here. Hosted providers support both simple paste-once keys and advanced env-backed credential refs.</span>
+        <span class="cfg-provider-summary-note">Provider configuration is split into local Ollama, managed-cloud Ollama Cloud, and frontier hosted providers. Managed-cloud and frontier profiles both support direct stored credentials or env-backed credential refs.</span>
       </summary>
       <div class="cfg-center-body">
         <datalist id="cfg-credential-ref-options">${credentialRefOptions}</datalist>
@@ -592,11 +628,20 @@ function createProviderPanel(config, providers, panel) {
               </div>
               <div id="cfg-local-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
             </div>
-            
-            <!-- External Providers -->
+
+            <!-- Managed-Cloud Providers -->
             <div>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">External</h4>
+                <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Managed Cloud</h4>
+                <button class="btn btn-secondary" id="cfg-mcloud-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius:0;">+ Add</button>
+              </div>
+              <div id="cfg-mcloud-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
+            </div>
+
+            <!-- Frontier Providers -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Frontier</h4>
                 <button class="btn btn-secondary" id="cfg-ext-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius:0;">+ Add</button>
               </div>
               <div id="cfg-ext-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
@@ -626,6 +671,23 @@ function createProviderPanel(config, providers, panel) {
                 <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
                 <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
               </div>
+              <details id="cfg-local-advanced-wrap" style="margin-top:1rem;">
+                <summary style="cursor:pointer;font-weight:600;">Advanced Ollama Settings</summary>
+                <div class="cfg-form-grid" style="margin-top:0.85rem;">
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-local-max-tokens" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-local-temperature" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-local-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Keep Alive</label><input id="cfg-local-keep-alive" type="text" placeholder="5m or 300"></div>
+                  <div class="cfg-field"><label>Think Mode</label><select id="cfg-local-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                </div>
+                <div class="cfg-field" style="margin-top:0.85rem;">
+                  <label>Native Ollama Options (JSON)</label>
+                  <textarea id="cfg-local-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "num_thread": 8, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
+                </div>
+                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                  These values are passed through to the native Ollama SDK request. Use JSON for any supported runtime option you want to control beyond the common fields above.
+                </div>
+              </details>
               <div class="cfg-actions" style="margin-top: 1.5rem;">
                 <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
                 <button class="btn btn-primary" id="cfg-local-save" type="button">Save Config</button>
@@ -633,10 +695,52 @@ function createProviderPanel(config, providers, panel) {
               </div>
             </div>
 
+            <div id="cfg-mcloud-panel" style="display: none;">
+              <div class="table-header" style="padding-left:0;padding-right:0;">
+                <h3>Ollama Cloud Settings</h3>
+                <span class="cfg-header-note">Managed-cloud Ollama between the local lane and frontier providers</span>
+              </div>
+              <div id="cfg-mcloud-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
+              <div class="cfg-form-grid">
+                <div class="cfg-field"><label>Provider Name</label><input id="cfg-mcloud-name" type="text" placeholder="ollama-cloud"></div>
+                <div class="cfg-field"><label>Provider Type</label><select id="cfg-mcloud-type">${cloudProviderTypeOptions}</select></div>
+                <div class="cfg-field"><label>Model</label><select id="cfg-mcloud-model-select" style="display:none"></select><input id="cfg-mcloud-model" type="text" placeholder="gpt-oss:120b"></div>
+                <div class="cfg-field"><label>Ollama Cloud API Key</label><input id="cfg-mcloud-key" type="password" placeholder="Paste Ollama Cloud key once to store securely"></div>
+                <div class="cfg-field"><label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-mcloud-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store"> Enable Credential Ref</label><input id="cfg-mcloud-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.ollama-cloud.primary" disabled></div>
+                <div class="cfg-field"><label>Base URL</label><input id="cfg-mcloud-url" type="text" placeholder="https://ollama.com"></div>
+              </div>
+              <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                Paste an Ollama Cloud API key once and Guardian stores it in the encrypted local secret store. Leave the key blank and use an env-backed credential ref when you want Guardian to resolve the credential from the runtime environment instead.
+              </div>
+              <details id="cfg-mcloud-advanced-wrap" style="margin-top:1rem;">
+                <summary style="cursor:pointer;font-weight:600;">Advanced Ollama Cloud Settings</summary>
+                <div class="cfg-form-grid" style="margin-top:0.85rem;">
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-mcloud-max-tokens" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-mcloud-temperature" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-mcloud-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Keep Alive</label><input id="cfg-mcloud-keep-alive" type="text" placeholder="5m or 300"></div>
+                  <div class="cfg-field"><label>Think Mode</label><select id="cfg-mcloud-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                </div>
+                <div class="cfg-field" style="margin-top:0.85rem;">
+                  <label>Native Ollama Options (JSON)</label>
+                  <textarea id="cfg-mcloud-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
+                </div>
+                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                  These values are passed through to the native Ollama SDK request for Ollama Cloud.
+                </div>
+              </details>
+              <div id="cfg-mcloud-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
+              <div class="cfg-actions" style="margin-top: 1.5rem;">
+                <button class="btn btn-secondary" id="cfg-mcloud-test" type="button">Test Connection</button>
+                <button class="btn btn-primary" id="cfg-mcloud-save" type="button">Save Config</button>
+                <span id="cfg-mcloud-status" class="cfg-save-status"></span>
+              </div>
+            </div>
+
             <div id="cfg-ext-panel" style="display: none;">
               <div class="table-header" style="padding-left:0;padding-right:0;">
-                <h3>External Provider Settings</h3>
-                <span class="cfg-header-note">Hosted APIs and OpenAI-compatible provider families</span>
+                <h3>Frontier Provider Settings</h3>
+                <span class="cfg-header-note">Premium frontier provider families used beyond local and managed-cloud Ollama</span>
               </div>
               <div id="cfg-ext-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-form-grid">
@@ -650,6 +754,23 @@ function createProviderPanel(config, providers, panel) {
               <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
                 Simple mode: paste a key once and Guardian stores it in the encrypted local secret store. Advanced mode: leave API Key blank and use an environment-backed Credential Ref. App-managed local secrets stay automatic and do not show up in the advanced field.
               </div>
+              <details id="cfg-ext-advanced-wrap" style="margin-top:1rem;display:none;">
+                <summary style="cursor:pointer;font-weight:600;">Advanced Hosted Settings</summary>
+                <div class="cfg-form-grid" style="margin-top:0.85rem;">
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-ext-max-tokens" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-ext-temperature" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-ext-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Keep Alive</label><input id="cfg-ext-keep-alive" type="text" placeholder="5m or 300"></div>
+                  <div class="cfg-field"><label>Think Mode</label><select id="cfg-ext-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+                </div>
+                <div class="cfg-field" style="margin-top:0.85rem;">
+                  <label>Native Ollama Options (JSON)</label>
+                  <textarea id="cfg-ext-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
+                </div>
+                <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+                  These fields are unused for frontier providers and are only retained for shared editor behavior.
+                </div>
+              </details>
               <div id="cfg-ext-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-actions" style="margin-top: 1.5rem;">
                 <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
@@ -666,6 +787,7 @@ function createProviderPanel(config, providers, panel) {
   function getSuggestedName(side, type) {
     const normalizedType = String(type || '').trim().toLowerCase();
     let base = side === 'local' ? 'ollama' : 'openai';
+    if (normalizedType === 'ollama_cloud') base = 'ollama-cloud';
     if (normalizedType === 'anthropic') base = 'claude';
     else if (normalizedType === 'google') base = 'gemini';
     else if (normalizedType && normalizedType !== 'openai' && normalizedType !== 'ollama') base = normalizedType.replace(/[^a-z0-9]+/g, '-') || base;
@@ -678,6 +800,7 @@ function createProviderPanel(config, providers, panel) {
   function getDefaultModel(side, type) {
     const normalizedType = String(type || '').trim().toLowerCase();
     if (normalizedType === 'ollama') return 'llama3.2';
+    if (normalizedType === 'ollama_cloud') return 'gpt-oss:120b';
     if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
     if (normalizedType === 'openai') return 'gpt-4o';
     if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
@@ -691,28 +814,43 @@ function createProviderPanel(config, providers, panel) {
 
   function isKnownProviderType(side, type) {
     const normalizedType = String(type || '').trim().toLowerCase();
-    const expectedLocality = side === 'local' ? 'local' : 'external';
-    return providerTypes.some((candidate) => candidate.name === normalizedType && candidate.locality === expectedLocality);
+    return providerTypes.some((candidate) => {
+      if (candidate.name !== normalizedType) return false;
+      if (side === 'local') return candidate.locality === 'local';
+      if (side === 'cloud') return candidate.tier === 'managed_cloud';
+      return candidate.locality === 'external' && candidate.tier !== 'managed_cloud';
+    });
   }
 
   function wirePanel(side) {
     const isLocal = side === 'local';
-    const prefix = isLocal ? 'cfg-local' : 'cfg-ext';
-    const names = isLocal ? localNames : externalNames;
+    const isCloud = side === 'cloud';
+    const prefix = getSidePrefix(side);
+    const names = getSideNames(side);
+    const defaultKeyPlaceholder = isCloud
+      ? 'Paste Ollama Cloud key once to store securely'
+      : externalDefaultKeyPlaceholder;
 
     const profilesEl = section.querySelector(`#${prefix}-profiles`);
     const newBtnEl = section.querySelector(`#${prefix}-new`);
     const activeNoteEl = section.querySelector(`#${prefix}-active-note`);
-    const secretNoteEl = isLocal ? null : section.querySelector('#cfg-ext-secret-note');
+    const secretNoteEl = isLocal ? null : section.querySelector(`#${prefix}-secret-note`);
     const nameEl = section.querySelector(`#${prefix}-name`);
     const modelInputEl = section.querySelector(`#${prefix}-model`);
     const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
     const urlEl = section.querySelector(`#${prefix}-url`);
     const statusEl = section.querySelector(`#${prefix}-status`);
     const typeEl = section.querySelector(`#${prefix}-type`);
-    const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
-    const credentialRefEl = isLocal ? null : section.querySelector('#cfg-ext-credential-ref');
-    const credentialRefCheckbox = isLocal ? null : section.querySelector('#cfg-ext-credential-ref-enabled');
+    const keyEl = isLocal ? null : section.querySelector(`#${prefix}-key`);
+    const credentialRefEl = isLocal ? null : section.querySelector(`#${prefix}-credential-ref`);
+    const credentialRefCheckbox = isLocal ? null : section.querySelector(`#${prefix}-credential-ref-enabled`);
+    const advancedWrapEl = section.querySelector(`#${prefix}-advanced-wrap`);
+    const maxTokensEl = section.querySelector(`#${prefix}-max-tokens`);
+    const temperatureEl = section.querySelector(`#${prefix}-temperature`);
+    const timeoutEl = section.querySelector(`#${prefix}-timeout`);
+    const keepAliveEl = section.querySelector(`#${prefix}-keep-alive`);
+    const thinkEl = section.querySelector(`#${prefix}-think`);
+    const ollamaOptionsEl = section.querySelector(`#${prefix}-ollama-options`);
     if (credentialRefCheckbox && credentialRefEl) {
       credentialRefCheckbox.addEventListener('change', () => {
         credentialRefEl.disabled = !credentialRefCheckbox.checked;
@@ -728,6 +866,36 @@ function createProviderPanel(config, providers, panel) {
       get value() { return modelSelectEl.style.display !== 'none' ? modelSelectEl.value : modelInputEl.value; },
       set value(v) { modelInputEl.value = v; if (modelSelectEl.style.display !== 'none') modelSelectEl.value = v; },
     };
+
+    function toggleAdvancedVisibility(providerType = typeEl?.value) {
+      if (!advancedWrapEl) return;
+      advancedWrapEl.style.display = isOllamaProviderType(providerType) ? '' : 'none';
+      if (!isOllamaProviderType(providerType)) {
+        if (maxTokensEl) maxTokensEl.value = '';
+        if (temperatureEl) temperatureEl.value = '';
+        if (timeoutEl) timeoutEl.value = '';
+        if (keepAliveEl) keepAliveEl.value = '';
+        if (thinkEl) thinkEl.value = '';
+        if (ollamaOptionsEl) ollamaOptionsEl.value = '';
+      }
+    }
+
+    function setAdvancedValues(entry, providerType = typeEl?.value) {
+      toggleAdvancedVisibility(providerType);
+      if (!advancedWrapEl || !isOllamaProviderType(providerType)) return;
+      if (maxTokensEl) maxTokensEl.value = entry?.maxTokens ?? '';
+      if (temperatureEl) temperatureEl.value = entry?.temperature ?? '';
+      if (timeoutEl) timeoutEl.value = entry?.timeoutMs ?? '';
+      if (keepAliveEl) keepAliveEl.value = entry?.keepAlive ?? '';
+      if (thinkEl) thinkEl.value = entry?.think === true ? 'true'
+        : entry?.think === false ? 'false'
+          : (entry?.think || '');
+      if (ollamaOptionsEl) {
+        ollamaOptionsEl.value = entry?.ollamaOptions && Object.keys(entry.ollamaOptions).length > 0
+          ? JSON.stringify(entry.ollamaOptions, null, 2)
+          : '';
+      }
+    }
 
     /** Show a <select> dropdown if models are available, otherwise fall back to text input. */
     function updateModelSelector(models, currentModel) {
@@ -766,9 +934,10 @@ function createProviderPanel(config, providers, panel) {
 
     function refreshSecretNote(nextProviderType = typeEl?.value) {
       if (!secretNoteEl) return;
+      const credentialLabel = isCloud ? 'Ollama Cloud API key' : 'API key';
       const explicitRef = credentialRefEl?.value.trim();
       if (keyEl?.value.trim()) {
-        secretNoteEl.textContent = 'A newly pasted key will be stored in Guardian\'s encrypted local secret store when you save.';
+        secretNoteEl.textContent = `A newly pasted ${credentialLabel} will be stored in Guardian's encrypted local secret store when you save.`;
         return;
       }
       if (explicitRef) {
@@ -781,7 +950,9 @@ function createProviderPanel(config, providers, panel) {
       const existingRef = entry?.credentialRef?.trim();
       const existingMeta = getCredentialRefMeta(existingRef);
       if (!entry || !existingRef) {
-        secretNoteEl.textContent = 'No credential is configured yet. Paste an API key for the simple path or choose an env-backed credential ref for the advanced path.';
+        secretNoteEl.textContent = isCloud
+          ? 'No Ollama Cloud credential is configured yet. Paste an Ollama Cloud API key for the simple path or choose an env-backed credential ref for the advanced path.'
+          : 'No credential is configured yet. Paste an API key for the simple path or choose an env-backed credential ref for the advanced path.';
         return;
       }
       if (isProviderTypeChanged(nextProviderType)) {
@@ -789,7 +960,9 @@ function createProviderPanel(config, providers, panel) {
         return;
       }
       if (existingMeta?.source === 'local') {
-        secretNoteEl.textContent = 'This profile already has a key stored in Guardian\'s encrypted local secret store. Leave API Key blank to keep it, or paste a new key to replace it.';
+        secretNoteEl.textContent = isCloud
+          ? 'This profile already has an Ollama Cloud key stored in Guardian\'s encrypted local secret store. Leave the key blank to keep it, or paste a new key to replace it.'
+          : 'This profile already has a key stored in Guardian\'s encrypted local secret store. Leave API Key blank to keep it, or paste a new key to replace it.';
         return;
       }
       if (existingMeta?.source === 'env') {
@@ -801,7 +974,7 @@ function createProviderPanel(config, providers, panel) {
     }
 
     async function refreshLiveModels(options = {}) {
-      const providerType = typeEl?.value.trim().toLowerCase() || (isLocal ? 'ollama' : 'openai');
+      const providerType = typeEl?.value.trim().toLowerCase() || getDefaultProviderTypeForSide(side);
       const currentModel = options.currentModel || modelEl.value.trim() || getDefaultModel(side, providerType);
       if (!providerType || !isKnownProviderType(side, providerType)) {
         updateModelSelector([], currentModel);
@@ -813,7 +986,9 @@ function createProviderPanel(config, providers, panel) {
       if (!isLocal && !keyEl?.value.trim() && !effectiveCredentialRef) {
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
-        activeNoteEl.textContent = 'Select a provider type, then paste an API key or choose an env-backed credential ref to load the live model list.';
+        activeNoteEl.textContent = isCloud
+          ? 'Paste an Ollama Cloud API key or choose an env-backed credential ref to load the live model list.'
+          : 'Select a provider type, then paste an API key or choose an env-backed credential ref to load the live model list.';
         return;
       }
 
@@ -851,20 +1026,23 @@ function createProviderPanel(config, providers, panel) {
         const info = providerMap[name];
         const isActive = selectedProfile === name;
         const tone = info.connected === false ? 'badge-errored' : 'badge-idle';
+        const tierLabel = getProviderTierLabel(info.tier);
         const roleBadges = [];
+        const preferredBucket = getPreferredProviderBucketForEntry(info);
         if (name === config.defaultProvider) roleBadges.push('global');
-        if (info.locality === 'local' && preferredProviders.local === name) roleBadges.push('local');
-        if (info.locality === 'external' && preferredProviders.external === name) roleBadges.push('external');
+        if (preferredBucket === 'local' && preferredLocal === name) roleBadges.push('local');
+        if (preferredBucket === 'managedCloud' && preferredManagedCloud === name) roleBadges.push('managed cloud');
+        if (preferredBucket === 'frontier' && preferredFrontier === name) roleBadges.push('frontier');
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
         return `
           <div
             style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius:0; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
             data-provider-profile="${escAttr(name)}"
-            title="${escAttr(`${name} (${info.provider}${badgeLabel})`)}"
+            title="${escAttr(`${name} (${info.provider}, ${tierLabel}${badgeLabel})`)}"
           >
             <div style="display:flex; flex-direction:column; overflow:hidden;">
               <span style="font-size: 0.85rem; font-weight: ${isActive ? '600' : '500'}; color: ${isActive ? 'var(--text-primary)' : 'var(--text-secondary)'}; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${esc(name)}</span>
-              <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
+              <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)} • ${esc(tierLabel)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
             </div>
             <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${info.connected === false ? 'offline' : 'online'}</span>
           </div>
@@ -873,20 +1051,20 @@ function createProviderPanel(config, providers, panel) {
       profilesEl.innerHTML = buttons || '<span class="text-muted" style="font-size:0.78rem;">No configured providers yet.</span>';
       profilesEl.querySelectorAll('[data-provider-profile]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          // Deselect the other side explicitly via DOM state
-          const otherSide = isLocal ? 'external' : 'local';
-          configUiState.selectedProviderProfiles[otherSide] = null;
-          const otherPrefix = isLocal ? 'cfg-ext' : 'cfg-local';
-          const otherProfilesEl = section.querySelector(`#${otherPrefix}-profiles`);
-          if (otherProfilesEl) {
-            otherProfilesEl.querySelectorAll('[data-provider-profile]').forEach(el => {
-              el.style.background = 'transparent';
-              el.style.border = '1px solid transparent';
-              const spans = el.querySelectorAll('span');
-              if (spans.length > 0) spans[0].style.fontWeight = '500';
-              if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+          providerSides
+            .filter((candidateSide) => candidateSide !== side)
+            .forEach((candidateSide) => {
+              configUiState.selectedProviderProfiles[candidateSide] = null;
+              const candidateProfilesEl = section.querySelector(`#${getSidePrefix(candidateSide)}-profiles`);
+              if (!candidateProfilesEl) return;
+              candidateProfilesEl.querySelectorAll('[data-provider-profile]').forEach((el) => {
+                el.style.background = 'transparent';
+                el.style.border = '1px solid transparent';
+                const spans = el.querySelectorAll('span');
+                if (spans.length > 0) spans[0].style.fontWeight = '500';
+                if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+              });
             });
-          }
 
           selectedProfile = btn.getAttribute('data-provider-profile');
           configUiState.selectedProviderProfiles[side] = selectedProfile;
@@ -899,54 +1077,64 @@ function createProviderPanel(config, providers, panel) {
     function applyProfile(name) {
       const placeholder = section.querySelector('#cfg-provider-placeholder');
       const localPanel = section.querySelector('#cfg-local-panel');
+      const cloudPanel = section.querySelector('#cfg-mcloud-panel');
       const extPanel = section.querySelector('#cfg-ext-panel');
-      const titleEl = isLocal ? localPanel?.querySelector('h3') : extPanel?.querySelector('h3');
-      const saveBtnEl = isLocal ? section.querySelector('#cfg-local-save') : section.querySelector('#cfg-ext-save');
+      const panelEl = side === 'local' ? localPanel : side === 'cloud' ? cloudPanel : extPanel;
+      const titleEl = panelEl?.querySelector('h3');
+      const saveBtnEl = section.querySelector(`#${prefix}-save`);
 
       if (placeholder) placeholder.style.display = 'none';
-      if (localPanel) localPanel.style.display = isLocal ? 'block' : 'none';
-      if (extPanel) extPanel.style.display = isLocal ? 'none' : 'block';
+      if (localPanel) localPanel.style.display = side === 'local' ? 'block' : 'none';
+      if (cloudPanel) cloudPanel.style.display = side === 'cloud' ? 'block' : 'none';
+      if (extPanel) extPanel.style.display = side === 'external' ? 'block' : 'none';
 
-      // Clear selection from other side
-      const otherSide = isLocal ? 'external' : 'local';
-      configUiState.selectedProviderProfiles[otherSide] = null;
-      const otherPrefix = isLocal ? 'cfg-ext' : 'cfg-local';
-      const otherProfilesEl = section.querySelector(`#${otherPrefix}-profiles`);
-      if (otherProfilesEl) {
-        otherProfilesEl.querySelectorAll('[data-provider-profile]').forEach(el => {
-          el.style.background = 'transparent';
-          el.style.border = '1px solid transparent';
-          const spans = el.querySelectorAll('span');
-          if (spans.length > 0) spans[0].style.fontWeight = '500';
-          if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+      providerSides
+        .filter((candidateSide) => candidateSide !== side)
+        .forEach((candidateSide) => {
+          configUiState.selectedProviderProfiles[candidateSide] = null;
+          const candidateProfilesEl = section.querySelector(`#${getSidePrefix(candidateSide)}-profiles`);
+          if (!candidateProfilesEl) return;
+          candidateProfilesEl.querySelectorAll('[data-provider-profile]').forEach((el) => {
+            el.style.background = 'transparent';
+            el.style.border = '1px solid transparent';
+            const spans = el.querySelectorAll('span');
+            if (spans.length > 0) spans[0].style.fontWeight = '500';
+            if (spans.length > 0) spans[0].style.color = 'var(--text-secondary)';
+          });
         });
-      }
 
       if (!name) {
-        if (titleEl) titleEl.textContent = isLocal ? 'Add New Local Provider' : 'Add New External Provider';
+        if (titleEl) titleEl.textContent = side === 'local'
+          ? 'Add New Local Provider'
+          : side === 'cloud'
+            ? 'Add New Ollama Cloud Provider'
+            : 'Add New Frontier Provider';
         if (saveBtnEl) saveBtnEl.textContent = 'Create Provider';
         if (typeEl) typeEl.disabled = false;
         if (nameEl) nameEl.disabled = false;
-        const pt = isLocal ? 'ollama' : 'openai';
+        const pt = getDefaultProviderTypeForSide(side);
         if (typeEl) typeEl.value = pt;
         nameEl.value = getSuggestedName(side, pt);
         const defaultModel = getDefaultModel(side, pt);
         updateModelSelector([], null);
         modelInputEl.value = defaultModel;
-        urlEl.value = isLocal && pt === 'ollama' ? 'http://127.0.0.1:11434' : '';
+        urlEl.value = getDefaultProviderBaseUrl(pt);
         if (keyEl) {
           keyEl.value = '';
-          keyEl.placeholder = externalDefaultKeyPlaceholder;
+          keyEl.placeholder = defaultKeyPlaceholder;
         }
         if (credentialRefEl) {
           credentialRefEl.value = '';
           credentialRefEl.disabled = true;
           if (credentialRefCheckbox) credentialRefCheckbox.checked = false;
         }
+        setAdvancedValues(null, pt);
         configUiState.selectedProviderProfiles[side] = null;
         activeNoteEl.textContent = isLocal
           ? 'Creating a new local provider. Choose the provider type from the dropdown, then set its name and model.'
-          : 'Creating a new external provider. All supported hosted provider families are listed in the Provider Type dropdown.';
+          : isCloud
+            ? 'Creating a new Ollama Cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly.'
+            : 'Creating a new frontier provider. All supported frontier provider families are listed in the Provider Type dropdown.';
         refreshSecretNote(pt);
         void refreshLiveModels({ currentModel: defaultModel });
         return;
@@ -964,7 +1152,7 @@ function createProviderPanel(config, providers, panel) {
       urlEl.value = entry.baseUrl || '';
       if (keyEl) {
         keyEl.value = '';
-        keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, externalDefaultKeyPlaceholder);
+        keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, defaultKeyPlaceholder);
       }
       if (credentialRefEl) {
         const editableRef = getEditableCredentialRef(entry.credentialRef);
@@ -974,8 +1162,9 @@ function createProviderPanel(config, providers, panel) {
           credentialRefEl.disabled = !editableRef;
         }
       }
+      setAdvancedValues(entry, entry.provider || '');
       configUiState.selectedProviderProfiles[side] = name;
-      activeNoteEl.textContent = `Editing ${name}. Provider type is shown explicitly in the dropdown; use New ${isLocal ? 'Local' : 'External'} Provider to start a fresh one.`;
+      activeNoteEl.textContent = `Editing ${name}. Provider type is shown explicitly in the dropdown; use New ${getSideLabel(side)} Provider to start a fresh one.`;
       refreshSecretNote(entry.provider || '');
       void refreshLiveModels({ currentModel: entry.model || '' });
     }
@@ -996,6 +1185,7 @@ function createProviderPanel(config, providers, panel) {
         }
         if (keyEl) keyEl.value = '';
       }
+      toggleAdvancedVisibility(typeEl.value);
       if (!selectedProfile) {
         const lastSuggestedName = nameEl.dataset.lastSuggestedName || '';
         if (!nameEl.value.trim() || nameEl.value === lastSuggestedName) {
@@ -1003,6 +1193,9 @@ function createProviderPanel(config, providers, panel) {
         }
         if (!modelEl.value.trim()) {
           modelEl.value = getDefaultModel(side, typeEl.value);
+        }
+        if (!urlEl.value.trim()) {
+          urlEl.value = getDefaultProviderBaseUrl(typeEl.value);
         }
         nameEl.dataset.lastSuggestedType = typeEl.value;
         nameEl.dataset.lastSuggestedName = nameEl.value;
@@ -1052,6 +1245,12 @@ function createProviderPanel(config, providers, panel) {
       const model = modelEl.value.trim();
       const baseUrl = urlEl.value.trim();
       const providerType = typeEl?.value.trim().toLowerCase() || (isLocal ? 'ollama' : 'openai');
+      const maxTokens = parseOptionalNumberInput(maxTokensEl?.value);
+      const temperature = parseOptionalNumberInput(temperatureEl?.value);
+      const timeoutMs = parseOptionalNumberInput(timeoutEl?.value);
+      const keepAlive = parseOptionalKeepAliveInput(keepAliveEl?.value);
+      const think = parseThinkModeInput(thinkEl?.value);
+      let ollamaOptions;
 
       if (!providerName) { statusEl.textContent = 'Provider name is required.'; statusEl.style.color = 'var(--error)'; return; }
       if (!providerType) { statusEl.textContent = 'Provider type is required.'; statusEl.style.color = 'var(--error)'; return; }
@@ -1066,6 +1265,23 @@ function createProviderPanel(config, providers, panel) {
         statusEl.style.color = 'var(--error)';
         return;
       }
+      if (Number.isNaN(maxTokens) || Number.isNaN(temperature) || Number.isNaN(timeoutMs)) {
+        statusEl.textContent = 'Advanced numeric Ollama settings must be valid numbers.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      if (isOllamaProviderType(providerType) && ollamaOptionsEl?.value.trim()) {
+        try {
+          ollamaOptions = JSON.parse(ollamaOptionsEl.value);
+          if (!ollamaOptions || typeof ollamaOptions !== 'object' || Array.isArray(ollamaOptions)) {
+            throw new Error('Native Ollama options must be a JSON object.');
+          }
+        } catch (err) {
+          statusEl.textContent = err instanceof Error ? err.message : 'Native Ollama options must be valid JSON.';
+          statusEl.style.color = 'var(--error)';
+          return;
+        }
+      }
 
       const payload = {
         llmMode: isLocal ? 'ollama' : 'external',
@@ -1073,6 +1289,16 @@ function createProviderPanel(config, providers, panel) {
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
         credentialRef: credentialRefCheckbox?.checked && credentialRefEl ? credentialRefEl.value.trim() : undefined,
+        ...(isOllamaProviderType(providerType)
+          ? {
+              maxTokens: maxTokens === undefined ? undefined : maxTokens,
+              temperature: temperature === undefined ? undefined : temperature,
+              timeoutMs: timeoutMs === undefined ? undefined : timeoutMs,
+              keepAlive,
+              think,
+              ollamaOptions,
+            }
+          : {}),
         setupCompleted: true,
       };
 
@@ -1083,9 +1309,12 @@ function createProviderPanel(config, providers, panel) {
         statusEl.textContent = result.message;
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
         if (result.success) {
-          const otherSide = isLocal ? 'external' : 'local';
           configUiState.selectedProviderProfiles[side] = providerName;
-          configUiState.selectedProviderProfiles[otherSide] = null;
+          providerSides
+            .filter((candidateSide) => candidateSide !== side)
+            .forEach((candidateSide) => {
+              configUiState.selectedProviderProfiles[candidateSide] = null;
+            });
           await updateConfig();
         }
       } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }
@@ -1098,6 +1327,7 @@ function createProviderPanel(config, providers, panel) {
   }
 
   wirePanel('local');
+  wirePanel('cloud');
   wirePanel('external');
   applyInputTooltips(section);
   return section;
@@ -1108,6 +1338,81 @@ function getProviderTypeCatalog() {
     return sharedProviderTypes;
   }
   return FALLBACK_PROVIDER_TYPES;
+}
+
+function getProviderTypeMeta(providerType) {
+  const normalized = String(providerType || '').trim().toLowerCase();
+  return getProviderTypeCatalog().find((type) => type.name === normalized) || null;
+}
+
+function getProviderLocalityForType(providerType) {
+  return getProviderTypeMeta(providerType)?.locality || 'external';
+}
+
+function getProviderTierLabel(tier) {
+  if (tier === 'managed_cloud') return 'managed cloud';
+  if (tier === 'frontier') return 'frontier';
+  if (tier === 'local') return 'local';
+  return 'system';
+}
+
+function getPreferredProviderBucketForEntry(entry) {
+  if (!entry) return 'frontier';
+  if (entry.locality === 'local' || entry.tier === 'local') return 'local';
+  if (entry.tier === 'managed_cloud') return 'managedCloud';
+  return 'frontier';
+}
+
+function getPreferredProviderNameForBucket(preferredProviders, bucket, providerMap) {
+  const explicit = preferredProviders?.[bucket];
+  if (explicit) return explicit;
+  if (bucket === 'local') return null;
+  const legacy = preferredProviders?.external;
+  if (!legacy || !providerMap?.[legacy]) return null;
+  return getPreferredProviderBucketForEntry(providerMap[legacy]) === bucket ? legacy : null;
+}
+
+function getPreferredProviderBucketLabel(bucket) {
+  if (bucket === 'local') return 'Local';
+  if (bucket === 'managedCloud') return 'Managed Cloud';
+  return 'Frontier';
+}
+
+function getDefaultProviderBaseUrl(providerType) {
+  const normalized = String(providerType || '').trim().toLowerCase();
+  if (normalized === 'ollama') return 'http://127.0.0.1:11434';
+  if (normalized === 'ollama_cloud') return 'https://ollama.com';
+  return '';
+}
+
+function isOllamaProviderType(providerType) {
+  const normalized = String(providerType || '').trim().toLowerCase();
+  return normalized === 'ollama' || normalized === 'ollama_cloud';
+}
+
+function parseOptionalNumberInput(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function parseOptionalKeepAliveInput(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return undefined;
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : trimmed;
+  }
+  return trimmed;
+}
+
+function parseThinkModeInput(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return undefined;
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  return trimmed;
 }
 
 function getCredentialRefRegistry(config = sharedConfig) {
@@ -1308,39 +1613,55 @@ function createProviderStatusTable(config, providers, panel) {
   section.className = 'table-container';
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
   const providerEntries = Object.entries(config.llm || {});
+  const providerMap = providerEntries.reduce((acc, [name, cfg]) => {
+    const live = providers.find(p => p.name === name);
+    const typeMeta = getProviderTypeMeta(cfg.provider);
+    acc[name] = {
+      ...cfg,
+      locality: live?.locality || typeMeta?.locality || 'external',
+      tier: live?.tier || typeMeta?.tier || 'frontier',
+      connected: live?.connected,
+      availableModels: live?.availableModels || [],
+    };
+    return acc;
+  }, {});
+  const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
+  const preferredManagedCloud = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap);
+  const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
   const rows = providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const connected = live ? (live.connected !== false) : true;
-    const locality = live?.locality || (cfg.provider === 'ollama' ? 'local' : 'external');
+    const typeMeta = getProviderTypeMeta(cfg.provider);
+    const locality = live?.locality || typeMeta?.locality || 'external';
+    const tier = live?.tier || typeMeta?.tier || 'frontier';
+    const preferredBucket = getPreferredProviderBucketForEntry({ locality, tier });
+    const isPreferredBucket = preferredBucket === 'local'
+      ? preferredLocal === name
+      : preferredBucket === 'managedCloud'
+        ? preferredManagedCloud === name
+        : preferredFrontier === name;
+    const preferredBucketLabel = getPreferredProviderBucketLabel(preferredBucket);
     const statusBadge = '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
     const isDefault = name === config.defaultProvider;
-    const isLocalDefault = locality === 'local' && preferredProviders.local === name;
-    const isExternalDefault = locality === 'external' && preferredProviders.external === name;
     const defaultBadges = [
       isDefault ? ' <span class="badge badge-idle">global default</span>' : '',
-      isLocalDefault ? ' <span class="badge badge-running">local default</span>' : '',
-      isExternalDefault ? ' <span class="badge badge-running">external default</span>' : '',
+      isPreferredBucket ? ` <span class="badge badge-running">${esc(preferredBucketLabel.toLowerCase())} default</span>` : '',
     ].join('');
     const globalActionBtn = isDefault
-      ? '<span class="config-provider-current" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the preferred local or external routed provider.">Current default</span>'
-      : '<button class="btn btn-primary btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the preferred local or external routed provider.">Set Global Default</button>';
-    const localityLabel = locality === 'local' ? 'Local' : 'External';
-    const preferredActionBtn = (locality === 'local' ? isLocalDefault : isExternalDefault)
-      ? '<span class="config-provider-current" title="' + escAttr(locality === 'local'
-        ? 'Preferred provider when Guardian routes work to the local tier. This does not change the global default provider.'
-        : 'Preferred provider when Guardian routes work to the external tier. This does not change the global default provider.') + '">Current ' + localityLabel.toLowerCase() + ' default</span>'
-      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-locality="' + esc(locality) + '" title="' + escAttr(locality === 'local'
-        ? 'Set the preferred provider used when Guardian routes work to the local tier. This does not change the global default provider.'
-        : 'Set the preferred provider used when Guardian routes work to the external tier. This does not change the global default provider.') + '">Set ' + localityLabel + ' Default</button>';
-    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions">' + globalActionBtn + preferredActionBtn + '</td></tr>';
+      ? '<span class="config-provider-current" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the tier-specific routed defaults.">Current default</span>'
+      : '<button class="btn btn-primary btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the local, managed-cloud, or frontier routed defaults.">Set Global Default</button>';
+    const preferredActionBtn = isPreferredBucket
+      ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier. This does not change the global default provider.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
+      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier. This does not change the global default provider.') + '">Set ' + preferredBucketLabel + ' Default</button>';
+    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions">' + globalActionBtn + preferredActionBtn + '</td></tr>';
   }).join('');
 
   section.innerHTML = `
     <div class="table-header"><h3>Configured Providers</h3></div>
     <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Locality</th><th>Status</th><th>Available Models</th><th>Actions</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="7">No providers configured</td></tr>'}</tbody>
+      <thead><tr><th>Name</th><th>Type</th><th>Tier</th><th>Model</th><th>Locality</th><th>Status</th><th>Available Models</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8">No providers configured</td></tr>'}</tbody>
     </table>
   `;
 
@@ -1367,8 +1688,9 @@ function createProviderStatusTable(config, providers, panel) {
   section.querySelectorAll('.set-preferred-provider-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const providerName = btn.dataset.provider;
-      const locality = btn.dataset.locality;
-      if (!providerName || (locality !== 'local' && locality !== 'external')) return;
+      const bucket = btn.dataset.bucket;
+      if (!providerName || !['local', 'managedCloud', 'frontier'].includes(bucket)) return;
+      const bucketLabel = getPreferredProviderBucketLabel(bucket);
       btn.disabled = true;
       btn.textContent = 'Saving...';
       try {
@@ -1377,7 +1699,7 @@ function createProviderStatusTable(config, providers, panel) {
             tools: {
               preferredProviders: {
                 ...(sharedConfig?.assistant?.tools?.preferredProviders || {}),
-                [locality]: providerName,
+                [bucket]: providerName,
               },
             },
           },
@@ -1387,11 +1709,11 @@ function createProviderStatusTable(config, providers, panel) {
           sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
           sharedConfig.assistant.tools.preferredProviders = {
             ...(sharedConfig.assistant.tools.preferredProviders || {}),
-            [locality]: providerName,
+            [bucket]: providerName,
           };
           if (panel) renderProvidersTab(panel);
         } else {
-          alert('Failed to set ' + locality + ' default provider: ' + (result.message || 'Unknown error'));
+          alert('Failed to set ' + bucketLabel.toLowerCase() + ' default provider: ' + (result.message || 'Unknown error'));
         }
       } catch (err) {
         alert('Error: ' + err.message);

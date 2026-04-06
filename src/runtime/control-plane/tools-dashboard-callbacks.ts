@@ -5,6 +5,7 @@ import type { IdentityService } from '../identity.js';
 import type { PendingActionStore } from '../pending-actions.js';
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import type { SkillRegistry } from '../../skills/registry.js';
+import { getProviderLocality } from '../../llm/provider-metadata.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { ToolPolicySnapshot, ToolRunResponse } from '../../tools/types.js';
 
@@ -73,9 +74,8 @@ export function createToolsDashboardCallbacks(
       providerRouting: options.configRef.current.assistant.tools.providerRouting ?? {},
       providerRoutingEnabled: options.configRef.current.assistant.tools.providerRoutingEnabled !== false,
       defaultProviderLocality: (
-        options.configRef.current.llm[options.configRef.current.defaultProvider]?.provider === 'ollama'
-          ? 'local'
-          : 'external'
+        getProviderLocality(options.configRef.current.llm[options.configRef.current.defaultProvider]?.provider)
+          ?? 'external'
       ) as 'local' | 'external',
       categoryDefaults: options.getCategoryDefaults(),
     }),

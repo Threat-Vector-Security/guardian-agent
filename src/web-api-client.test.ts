@@ -130,6 +130,35 @@ describe('dashboard api client', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({ enabled: true, ticket: 'ticket-guardian' });
   });
 
+  it('includes requestId when sending a plain chat message', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockResolvedValueOnce(makeJsonResponse(200, { content: 'ok' }) as Response);
+
+    const { api, setToken } = await import('../web/public/js/api.js');
+    setToken('dashboard-token');
+
+    await api.sendMessage(
+      'Continue after approval',
+      'agent-1',
+      'web-user',
+      'web',
+      undefined,
+      'web-guardian-chat',
+      'req-plain-1',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/message');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      content: 'Continue after approval',
+      agentId: 'agent-1',
+      userId: 'web-user',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      requestId: 'req-plain-1',
+    });
+  });
+
   it('uses privileged tickets for performance mutations', async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     fetchMock

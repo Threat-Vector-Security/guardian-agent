@@ -33,10 +33,125 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
-function parseTimestamp(value: unknown): number | null {
+interface ZonedDateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  millisecond: number;
+}
+
+const TIME_ZONE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+
+function getTimeZoneFormatter(timeZone: string): Intl.DateTimeFormat | null {
+  const normalized = timeZone.trim();
+  if (!normalized) return null;
+  const cached = TIME_ZONE_FORMATTER_CACHE.get(normalized);
+  if (cached) return cached;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: normalized,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+    TIME_ZONE_FORMATTER_CACHE.set(normalized, formatter);
+    return formatter;
+  } catch {
+    return null;
+  }
+}
+
+function parseIsoDateTimeParts(value: string): ZonedDateTimeParts | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?/);
+  if (!match) return null;
+  return {
+    year: Number.parseInt(match[1], 10),
+    month: Number.parseInt(match[2], 10),
+    day: Number.parseInt(match[3], 10),
+    hour: Number.parseInt(match[4], 10),
+    minute: Number.parseInt(match[5], 10),
+    second: Number.parseInt(match[6] ?? '0', 10),
+    millisecond: Number.parseInt((match[7] ?? '0').padEnd(3, '0'), 10),
+  };
+}
+
+function hasExplicitOffset(value: string): boolean {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
+}
+
+function readWallClockParts(timestamp: number, timeZone: string): ZonedDateTimeParts | null {
+  const formatter = getTimeZoneFormatter(timeZone);
+  if (!formatter) return null;
+  const parts = formatter.formatToParts(new Date(timestamp));
+  const lookup = (type: Intl.DateTimeFormatPartTypes): number | null => {
+    const part = parts.find((entry) => entry.type === type)?.value;
+    if (!part) return null;
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const year = lookup('year');
+  const month = lookup('month');
+  const day = lookup('day');
+  const hour = lookup('hour');
+  const minute = lookup('minute');
+  const second = lookup('second');
+  if (year == null || month == null || day == null || hour == null || minute == null || second == null) {
+    return null;
+  }
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    millisecond: new Date(timestamp).getUTCMilliseconds(),
+  };
+}
+
+function compareWallClockParts(a: ZonedDateTimeParts, b: ZonedDateTimeParts): number {
+  return Date.UTC(a.year, a.month - 1, a.day, a.hour, a.minute, a.second, a.millisecond)
+    - Date.UTC(b.year, b.month - 1, b.day, b.hour, b.minute, b.second, b.millisecond);
+}
+
+function parseTimestamp(value: unknown, timeZone?: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string' || !value.trim()) return null;
-  const parsed = Date.parse(value);
+  const trimmed = value.trim();
+  const zone = typeof timeZone === 'string' && timeZone.trim() ? timeZone.trim() : '';
+  if (!zone || hasExplicitOffset(trimmed)) {
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const target = parseIsoDateTimeParts(trimmed);
+  if (target) {
+    let candidate = Date.UTC(
+      target.year,
+      target.month - 1,
+      target.day,
+      target.hour,
+      target.minute,
+      target.second,
+      target.millisecond,
+    );
+    for (let i = 0; i < 4; i += 1) {
+      const actual = readWallClockParts(candidate, zone);
+      if (!actual) break;
+      const delta = compareWallClockParts(target, actual);
+      if (delta === 0) {
+        return candidate;
+      }
+      candidate += delta;
+    }
+  }
+  const parsed = Date.parse(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -136,10 +251,12 @@ export class SyncService {
 
         const items = asArray<Record<string, unknown>>((eventsResult.data as { items?: unknown })?.items);
         for (const item of items) {
-          const start = parseTimestamp((item.start as Record<string, unknown> | undefined)?.dateTime)
+          const startRecord = item.start as Record<string, unknown> | undefined;
+          const endRecord = item.end as Record<string, unknown> | undefined;
+          const start = parseTimestamp(startRecord?.dateTime, startRecord?.timeZone)
             ?? parseTimestamp((item.start as Record<string, unknown> | undefined)?.date);
           if (start == null) continue;
-          const end = parseTimestamp((item.end as Record<string, unknown> | undefined)?.dateTime)
+          const end = parseTimestamp(endRecord?.dateTime, endRecord?.timeZone)
             ?? parseTimestamp((item.end as Record<string, unknown> | undefined)?.date);
           this.secondBrainService.upsertSyncedEvent({
             id: `google:event:${String(item.id ?? start)}`,
@@ -280,9 +397,11 @@ export class SyncService {
 
         const items = asArray<Record<string, unknown>>((eventsResult.data as { value?: unknown })?.value);
         for (const item of items) {
-          const start = parseTimestamp((item.start as Record<string, unknown> | undefined)?.dateTime);
+          const startRecord = item.start as Record<string, unknown> | undefined;
+          const endRecord = item.end as Record<string, unknown> | undefined;
+          const start = parseTimestamp(startRecord?.dateTime, startRecord?.timeZone);
           if (start == null) continue;
-          const end = parseTimestamp((item.end as Record<string, unknown> | undefined)?.dateTime);
+          const end = parseTimestamp(endRecord?.dateTime, endRecord?.timeZone);
           const location = item.location && typeof item.location === 'object'
             ? textOrUndefined((item.location as Record<string, unknown>).displayName)
             : undefined;

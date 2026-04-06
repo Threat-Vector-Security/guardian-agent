@@ -478,9 +478,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(updates),
   }),
-  sendMessage:  (content, agentId, userId, channel = 'web', metadata, surfaceId) => {
+  sendMessage:  (content, agentId, userId, channel = 'web', metadata, surfaceId, requestId) => {
     const payload = { content, userId, channel };
     if (agentId) payload.agentId = agentId;
+    if (requestId) payload.requestId = requestId;
     if (metadata && typeof metadata === 'object') payload.metadata = metadata;
     if (surfaceId) payload.surfaceId = surfaceId;
     return request('/api/message', {

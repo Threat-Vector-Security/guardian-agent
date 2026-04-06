@@ -102,6 +102,43 @@ export interface LocalCredentialRefConfig {
 
 export type CredentialRefConfig = EnvCredentialRefConfig | LocalCredentialRefConfig;
 
+export type OllamaThinkConfig = boolean | 'high' | 'medium' | 'low';
+export type RoutingTierMode = 'auto' | 'local-only' | 'managed-cloud-only' | 'frontier-only';
+export type PreferredProviderKey = 'local' | 'managedCloud' | 'frontier' | 'external';
+
+export interface OllamaOptionsConfig {
+  numa?: boolean;
+  num_ctx?: number;
+  num_batch?: number;
+  num_gpu?: number;
+  main_gpu?: number;
+  low_vram?: boolean;
+  f16_kv?: boolean;
+  logits_all?: boolean;
+  vocab_only?: boolean;
+  use_mmap?: boolean;
+  use_mlock?: boolean;
+  embedding_only?: boolean;
+  num_thread?: number;
+  num_keep?: number;
+  seed?: number;
+  num_predict?: number;
+  top_k?: number;
+  top_p?: number;
+  tfs_z?: number;
+  typical_p?: number;
+  repeat_last_n?: number;
+  temperature?: number;
+  repeat_penalty?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  mirostat?: number;
+  mirostat_tau?: number;
+  mirostat_eta?: number;
+  penalize_newline?: boolean;
+  stop?: string[];
+}
+
 /** Shared credential reference registry for provider/tool integrations. */
 export interface AssistantCredentialsConfig {
   /** Named credential references resolved at runtime. */
@@ -110,7 +147,7 @@ export interface AssistantCredentialsConfig {
 
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
-  /** Provider type. Built-in families come from the runtime registry, including ollama, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
+  /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
   provider: string;
   /** Runtime-only resolved API key. Do not persist raw values in config files; use credentialRef instead. */
   apiKey?: string;
@@ -128,6 +165,12 @@ export interface LLMConfig {
   timeoutMs?: number;
   /** Priority for failover ordering (lower = higher priority, default: 10). */
   priority?: number;
+  /** Ollama keep-alive hint (for local or cloud Ollama providers). */
+  keepAlive?: string | number;
+  /** Ollama thinking mode (for local or cloud Ollama providers). */
+  think?: OllamaThinkConfig;
+  /** Native Ollama runtime options passed through to the SDK request. */
+  ollamaOptions?: OllamaOptionsConfig;
 }
 
 /** Configuration for an agent instance. */
@@ -168,8 +211,8 @@ export interface RoutingConfig {
   fallbackAgent?: string;
   /** Per-agent routing rules, keyed by agent ID. */
   rules?: Record<string, RoutingRuleConfig>;
-  /** Tier routing mode: auto scores complexity, local-only/external-only force a tier (default: 'auto'). */
-  tierMode?: 'auto' | 'local-only' | 'external-only';
+  /** Tier routing mode: auto scores complexity, while the other modes force local, managed-cloud, or frontier routing (default: 'auto'). */
+  tierMode?: RoutingTierMode;
   /** Complexity threshold: score >= threshold routes to external (default: 0.5). */
   complexityThreshold?: number;
   /** Retry with the opposite tier when the primary tier agent fails (default: true). */
@@ -1361,9 +1404,11 @@ export interface AssistantToolsConfig {
   /** When true, tools are automatically routed between local and external providers based on task type.
    * When false, all tools use the default provider only. Default: true. */
   providerRoutingEnabled?: boolean;
-  /** Preferred provider profile for each locality when routing selects local or external execution. */
+  /** Preferred provider profile for each routed tier. `external` remains a legacy alias for older configs. */
   preferredProviders?: {
     local?: string;
+    managedCloud?: string;
+    frontier?: string;
     external?: string;
   };
 }

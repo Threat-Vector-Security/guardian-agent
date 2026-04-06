@@ -15,6 +15,12 @@ import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.
 import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { enforceSecurityBaseline, logSecurityBaselineEnforcement } from '../guardian/security-baseline.js';
 import { ProviderRegistry } from '../llm/provider-registry.js';
+import {
+  getProviderLocality,
+  getProviderTier,
+  isOllamaProviderType,
+  providerRequiresCredential,
+} from '../llm/provider-metadata.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
 import {
@@ -29,18 +35,8 @@ import {
 const SUPPORTED_LLM_PROVIDERS = new Set(new ProviderRegistry().listProviderNames());
 const SUPPORTED_LLM_PROVIDER_LIST = [...SUPPORTED_LLM_PROVIDERS].join(', ');
 
-function isLocalLLMConfig(provider: string | undefined, baseUrl: string | undefined): boolean {
-  if ((provider ?? '').trim().toLowerCase() === 'ollama') return true;
-  if (!baseUrl?.trim()) return false;
-  try {
-    const host = new URL(baseUrl).hostname.trim().toLowerCase();
-    return host === 'localhost'
-      || host === '127.0.0.1'
-      || host === '::1'
-      || host.endsWith('.local');
-  } catch {
-    return false;
-  }
+function isLocalLLMConfig(provider: string | undefined): boolean {
+  return getProviderLocality(provider) === 'local';
 }
 
 /** Default config file path. */
@@ -161,8 +157,25 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       errors.push(`llm.${name}.apiKey is not allowed in config. Use llm.${name}.credentialRef with assistant.credentials.refs instead.`);
     }
     assertCredentialRef(llm.credentialRef, `llm.${name}.credentialRef`);
-    if (llm.provider !== 'ollama' && !llm.credentialRef) {
+    if (providerRequiresCredential(llm.provider) && !llm.credentialRef) {
       errors.push(`llm.${name}.credentialRef is required for provider '${llm.provider}'`);
+    }
+    if (llm.keepAlive !== undefined && typeof llm.keepAlive !== 'string' && typeof llm.keepAlive !== 'number') {
+      errors.push(`llm.${name}.keepAlive must be a string or number`);
+    }
+    if (
+      llm.think !== undefined
+      && typeof llm.think !== 'boolean'
+      && !['low', 'medium', 'high'].includes(llm.think)
+    ) {
+      errors.push(`llm.${name}.think must be true, false, low, medium, or high`);
+    }
+    if (llm.ollamaOptions !== undefined) {
+      if (!isOllamaProviderType(llm.provider)) {
+        errors.push(`llm.${name}.ollamaOptions is only valid for Ollama providers`);
+      } else if (typeof llm.ollamaOptions !== 'object' || llm.ollamaOptions === null || Array.isArray(llm.ollamaOptions)) {
+        errors.push(`llm.${name}.ollamaOptions must be an object`);
+      }
     }
     if (llm.baseUrl?.trim()) {
       try {
@@ -179,8 +192,26 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     const provider = config.llm[providerName];
     if (!provider) {
       errors.push(`assistant.tools.preferredProviders.local references unknown provider '${providerName}'`);
-    } else if (!isLocalLLMConfig(provider.provider, provider.baseUrl)) {
+    } else if (!isLocalLLMConfig(provider.provider)) {
       errors.push(`assistant.tools.preferredProviders.local must reference a local provider, got '${providerName}'`);
+    }
+  }
+  if (preferredProviders?.managedCloud?.trim()) {
+    const providerName = preferredProviders.managedCloud.trim();
+    const provider = config.llm[providerName];
+    if (!provider) {
+      errors.push(`assistant.tools.preferredProviders.managedCloud references unknown provider '${providerName}'`);
+    } else if (getProviderTier(provider.provider) !== 'managed_cloud') {
+      errors.push(`assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider, got '${providerName}'`);
+    }
+  }
+  if (preferredProviders?.frontier?.trim()) {
+    const providerName = preferredProviders.frontier.trim();
+    const provider = config.llm[providerName];
+    if (!provider) {
+      errors.push(`assistant.tools.preferredProviders.frontier references unknown provider '${providerName}'`);
+    } else if (getProviderTier(provider.provider) !== 'frontier') {
+      errors.push(`assistant.tools.preferredProviders.frontier must reference a frontier provider, got '${providerName}'`);
     }
   }
   if (preferredProviders?.external?.trim()) {
@@ -188,7 +219,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     const provider = config.llm[providerName];
     if (!provider) {
       errors.push(`assistant.tools.preferredProviders.external references unknown provider '${providerName}'`);
-    } else if (isLocalLLMConfig(provider.provider, provider.baseUrl)) {
+    } else if (isLocalLLMConfig(provider.provider)) {
       errors.push(`assistant.tools.preferredProviders.external must reference an external provider, got '${providerName}'`);
     }
   }

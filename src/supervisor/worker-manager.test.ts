@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -1183,8 +1184,18 @@ describe('WorkerManager', () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     workerMessageHandler = (params) => {
-      const message = (params.message ?? {}) as { content?: string };
-      if (typeof message.content === 'string' && message.content.includes('[User approved the pending tool action(s). Result:')) {
+      const message = (params.message ?? {}) as {
+        metadata?: Record<string, unknown>;
+      };
+      const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
+        | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
+        | undefined;
+      if (continuation?.type === 'approval_outcome') {
+        expect(continuation).toMatchObject({
+          approvalId: 'approval-outlook-1',
+          decision: 'approved',
+          resultMessage: 'Outlook draft created.',
+        });
         return { content: 'The Outlook draft is present in Drafts.' };
       }
       return {

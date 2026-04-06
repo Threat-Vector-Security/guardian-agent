@@ -109,4 +109,40 @@ describe('SyncService', () => {
     expect(service.getSyncCursorById('google:calendar')?.lastSyncAt).toBe(now());
     expect(service.getSyncCursorById('microsoft:contacts')?.lastSyncAt).toBe(now());
   });
+
+  it('preserves Microsoft event wall-clock time when Graph returns dateTime plus timeZone', async () => {
+    const { service, now } = createFixture();
+    const microsoftService = {
+      isAuthenticated: () => true,
+      isServiceEnabled: (svc: string) => svc === 'calendar',
+      async execute() {
+        return {
+          success: true,
+          data: {
+            value: [{
+              id: 'ms-evt-zone-1',
+              subject: 'Timezone Check',
+              start: { dateTime: '2026-04-07T13:00:00', timeZone: 'Pacific/Auckland' },
+              end: { dateTime: '2026-04-07T13:30:00', timeZone: 'Pacific/Auckland' },
+              location: { displayName: 'Outlook' },
+            }],
+          },
+        };
+      },
+    };
+
+    const syncService = new SyncService(service, {
+      now,
+      getMicrosoftService: () => microsoftService as any,
+    });
+
+    const summary = await syncService.syncMicrosoft365();
+    const event = service.listEvents({ includePast: true, fromTime: 0, limit: 10 })
+      .find((entry) => entry.title === 'Timezone Check');
+
+    expect(summary.eventsSynced).toBe(1);
+    expect(event).toBeDefined();
+    expect(new Date(event!.startsAt).toISOString()).toBe('2026-04-07T01:00:00.000Z');
+    expect(new Date(event!.endsAt ?? 0).toISOString()).toBe('2026-04-07T01:30:00.000Z');
+  });
 });

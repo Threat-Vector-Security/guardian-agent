@@ -81,7 +81,7 @@ function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispa
     ),
     readMessageSurfaceId: vi.fn(() => undefined),
     readCodeRequestMetadata: vi.fn(() => undefined),
-    normalizeTierModeForRouter: vi.fn((_router, mode) => mode ?? 'auto'),
+    normalizeTierModeForRouter: vi.fn((_router, _config, mode) => mode ?? 'auto'),
     summarizePendingActionForGateway: vi.fn(() => null),
     summarizeContinuityThreadForGateway: vi.fn(() => null),
     now: () => 1_700_000_000_000,

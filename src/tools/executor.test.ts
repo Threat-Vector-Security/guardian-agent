@@ -531,6 +531,7 @@ describe('ToolExecutor', () => {
           type: 'ollama',
           model: 'llama3.2',
           locality: 'local',
+          tier: 'local',
           connected: true,
           availableModels: ['llama3.2', 'gemma3:latest'],
           isDefault: true,
@@ -541,8 +542,9 @@ describe('ToolExecutor', () => {
           type: 'openai',
           model: 'gpt-4o',
           locality: 'external',
+          tier: 'frontier',
           connected: false,
-          isPreferredExternal: true,
+          isPreferredFrontier: true,
         },
       ],
     });
@@ -564,7 +566,7 @@ describe('ToolExecutor', () => {
         }),
         expect.objectContaining({
           name: 'openai',
-          isPreferredExternal: true,
+          isPreferredFrontier: true,
         }),
       ],
     });
@@ -585,6 +587,7 @@ describe('ToolExecutor', () => {
         type: 'ollama',
         model: 'llama3.2',
         locality: 'local',
+        tier: 'local',
         connected: true,
         availableModels: ['llama3.2', 'gemma3:latest'],
         isDefault: true,
@@ -4174,6 +4177,34 @@ describe('ToolExecutor', () => {
 
     const text = await readFile(join(root, 'note.txt'), 'utf-8');
     expect(text).toBe('hello');
+  });
+
+  it('returns the settled job result when an approved action is clicked again', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'note.txt', content: 'hello' },
+      origin: 'cli',
+    });
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const firstDecision = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(firstDecision.success).toBe(true);
+
+    const repeatedDecision = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(repeatedDecision.success).toBe(true);
+    expect(repeatedDecision.message).toContain('note.txt');
   });
 
   it('creates directories with fs_mkdir after approval', async () => {

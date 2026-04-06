@@ -6,14 +6,14 @@
  * - capability: domain heuristic matching only (no regex)
  * - explicit: always returns fallback agent
  *
- * Tier routing layer (auto/local-only/external-only) can use either raw-text
+ * Tier routing layer (auto/local-only/managed-cloud-only/frontier-only) can use either raw-text
  * complexity scoring or a structured IntentGateway decision to pick the right
  * tier, with optional fallback to the opposite tier.
  *
  * Pure synchronous router — no LLM calls.
  */
 
-import type { RoutingConfig, RoutingRuleConfig } from '../config/types.js';
+import type { RoutingConfig, RoutingRuleConfig, RoutingTierMode } from '../config/types.js';
 import type { IntentGatewayDecision, IntentGatewayRoute } from './intent-gateway.js';
 import { scoreAutomationOrchestration, scoreComplexity } from './complexity-scorer.js';
 
@@ -161,15 +161,16 @@ export class MessageRouter {
   /**
    * Route with tier-aware complexity scoring.
    *
-   * - 'local-only'    → force local agent when available
-   * - 'external-only' → force external agent when available
-   * - 'auto'          → score complexity, pick tier, set fallback to opposite
+   * - 'local-only'         → force local agent when available
+   * - 'managed-cloud-only' → force the external lane for managed-cloud routing
+   * - 'frontier-only'      → force the external lane for frontier routing
+   * - 'auto'               → score complexity, pick tier, set fallback to opposite
    *
    * High-confidence pattern matches override tier scoring.
    */
   routeWithTier(
     content: string,
-    tierMode: 'auto' | 'local-only' | 'external-only',
+    tierMode: RoutingTierMode,
     threshold = 0.5,
   ): RouteDecision {
     const localAgent = this.findAgentByRole('local');
@@ -198,19 +199,19 @@ export class MessageRouter {
       };
     }
 
-    if (tierMode === 'external-only') {
+    if (tierMode === 'managed-cloud-only' || tierMode === 'frontier-only') {
       if (externalAgent) {
         return {
           agentId: externalAgent.id,
           confidence: 'high',
-          reason: 'tier mode: external-only',
+          reason: `tier mode: ${tierMode}`,
           tier: 'external',
         };
       }
       return {
         agentId: localAgent!.id,
         confidence: 'medium',
-        reason: 'tier mode: external-only unavailable; only local tier available',
+        reason: `tier mode: ${tierMode} unavailable; only local tier available`,
         tier: 'local',
       };
     }
@@ -284,7 +285,7 @@ export class MessageRouter {
   routeWithTierFromIntent(
     decision: IntentGatewayDecision,
     content: string,
-    tierMode: 'auto' | 'local-only' | 'external-only',
+    tierMode: RoutingTierMode,
     threshold = 0.5,
   ): RouteDecision {
     const localAgent = this.findAgentByRole('local');
@@ -311,19 +312,19 @@ export class MessageRouter {
       };
     }
 
-    if (tierMode === 'external-only') {
+    if (tierMode === 'managed-cloud-only' || tierMode === 'frontier-only') {
       if (externalAgent) {
         return {
           agentId: externalAgent.id,
           confidence: 'high',
-          reason: 'tier mode: external-only',
+          reason: `tier mode: ${tierMode}`,
           tier: 'external',
         };
       }
       return {
         agentId: localAgent!.id,
         confidence: 'medium',
-        reason: 'tier mode: external-only unavailable; only local tier available',
+        reason: `tier mode: ${tierMode} unavailable; only local tier available`,
         tier: 'local',
       };
     }

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatResponse } from '../llm/types.js';
+import { buildApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
+import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 import { BrokeredWorkerSession } from './worker-session.js';
 
 const baseParams = {
@@ -150,6 +152,148 @@ describe('BrokeredWorkerSession automation control', () => {
       },
     });
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
+  });
+
+  it('resumes suspended approval-backed runs through structured continuation metadata without reclassifying the turn', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'search',
+            summary: 'Search the repo.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const lastMessage = _messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+        return {
+          content: 'The routing references are in src/config/types.ts and src/runtime/message-router.ts.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_search')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-search-1',
+            name: 'fs_search',
+            arguments: JSON.stringify({ path: '.', pattern: 'ollama_cloud' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat tool call ${firstTool ?? 'unknown'}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string }) => {
+      if (request.toolName !== 'fs_search') {
+        throw new Error(`Unexpected tool ${request.toolName}`);
+      }
+      return {
+        success: false,
+        status: 'pending_approval',
+        jobId: 'job-search-1',
+        approvalId: 'approval-search-1',
+        message: 'fs_search is awaiting approval.',
+        approvalSummary: {
+          toolName: 'fs_search',
+          argsPreview: '{"path":".","pattern":"ollama_cloud"}',
+          actionLabel: 'Search the repo for ollama_cloud',
+        },
+      };
+    });
+
+    const getApprovalResult = vi.fn(async (approvalId: string) => {
+      expect(approvalId).toBe('approval-search-1');
+      return {
+        success: true,
+        message: 'Search completed.',
+        output: {
+          matches: [
+            { path: 'src/config/types.ts' },
+            { path: 'src/runtime/message-router.ts' },
+          ],
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_search',
+        description: 'Search files for a pattern.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            pattern: { type: 'string' },
+          },
+          required: ['path', 'pattern'],
+        },
+      }],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult,
+    } as never);
+
+    const initial = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-approval-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Search the repo for ollama_cloud routing references.',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(initial.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          approvalSummaries: [
+            {
+              id: 'approval-search-1',
+              toolName: 'fs_search',
+            },
+          ],
+        },
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-approval-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-search-1',
+          decision: 'approved',
+          resultMessage: 'Search completed.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toContain('src/config/types.ts');
+    expect(resumed.content).toContain('src/runtime/message-router.ts');
+    expect(getApprovalResult).toHaveBeenCalledWith('approval-search-1');
+    expect(
+      llmChat.mock.calls.filter(([, options]) => options?.tools?.[0]?.name === 'route_intent'),
+    ).toHaveLength(1);
   });
 
   it('answers tool-report questions only after the gateway classifies the turn as general assistant', async () => {
@@ -566,6 +710,111 @@ describe('BrokeredWorkerSession automation control', () => {
       },
     });
 
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.content).toBe('Stayed on the local calendar path.');
+  });
+
+  it('reuses pre-routed local calendar intent in brokered sessions so degraded worker classification cannot drift to provider calendar writes', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'unknown',
+            confidence: 'low',
+            operation: 'unknown',
+            summary: 'Worker classifier degraded.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === 'tool') {
+        expect(lastMessage.content).toContain('local Second Brain calendar');
+        return {
+          content: 'Stayed on the local calendar path.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'anthropic',
+        } as ChatResponse;
+      }
+      expect(systemPrompt).toContain('[routed-intent]');
+      expect(systemPrompt).toContain('route: personal_assistant_task');
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'tool-m365-calendar',
+          name: 'm365',
+          arguments: JSON.stringify({
+            service: 'calendar',
+            resource: 'me/events',
+            method: 'create',
+            json: {
+              subject: 'Extended Toilet Break',
+              start: { dateTime: '2026-04-07T13:00:00', timeZone: 'Pacific/Auckland' },
+              end: { dateTime: '2026-04-07T13:30:00', timeZone: 'Pacific/Auckland' },
+            },
+          }),
+        }],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const callTool = vi.fn();
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'm365',
+        description: 'Microsoft 365 integration.',
+        parameters: { type: 'object', properties: {} },
+        risk: 'high',
+      }],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-pre-routed-local-calendar',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Okay let’s add another appointment tomorrow at 1:00 p.m.',
+        timestamp: new Date(2026, 3, 6, 10, 0, 0, 0).getTime(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 12,
+          decision: {
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create a local calendar event.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            entities: {
+              personalItemType: 'calendar',
+              calendarTarget: 'local',
+            },
+          },
+        }),
+      },
+    });
+
+    expect(llmChat.mock.calls.some((call) => call[1]?.tools?.[0]?.name === 'route_intent')).toBe(false);
     expect(callTool).not.toHaveBeenCalled();
     expect(result.content).toBe('Stayed on the local calendar path.');
   });
