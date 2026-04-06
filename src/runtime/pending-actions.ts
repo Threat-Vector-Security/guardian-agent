@@ -524,6 +524,17 @@ export class PendingActionStore {
     `);
   }
 
+  close(): void {
+    this.db?.close();
+    this.db = null;
+    this.securityMonitor = null;
+    this.insertOrReplaceStmt = null;
+    this.rowByIdStmt = null;
+    this.scopeRowsStmt = null;
+    this.userRowsStmt = null;
+    this.memory.records.clear();
+  }
+
   private listAllRecords(nowMs: number): PendingActionRecord[] {
     const rows = this.mode === 'sqlite' && this.db && this.db.prepare
       ? this.db.prepare(`

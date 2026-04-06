@@ -2,6 +2,8 @@
  * Helpers for detecting direct filesystem search requests in free-form chat.
  */
 
+import { posix as posixPath, win32 as win32Path } from 'node:path';
+
 import type { ToolPolicySnapshot } from '../tools/types.js';
 
 export interface DirectFileSearchIntent {
@@ -9,8 +11,18 @@ export interface DirectFileSearchIntent {
   query: string;
 }
 
+export interface DirectFilesystemSaveIntent {
+  path: string;
+  source: 'last_assistant_output';
+}
+
 interface DirectFileSearchIntentOptions {
   fallbackPath?: string;
+}
+
+interface DirectFilesystemSaveIntentOptions {
+  fallbackDirectory?: string;
+  pathHint?: string;
 }
 
 export function isDirectBrowserAutomationIntent(content: string): boolean {
@@ -105,6 +117,39 @@ export function parseDirectFileSearchIntent(
   return null;
 }
 
+export function parseDirectFilesystemSaveIntent(
+  content: string,
+  options: DirectFilesystemSaveIntentOptions = {},
+): DirectFilesystemSaveIntent | null {
+  const text = content.trim();
+  if (!text) return null;
+  if (!/\b(save|write|export|store|put)\b/i.test(text)) return null;
+  if (!/\b(last|previous)\s+(?:assistant\s+)?(?:output|response|reply|answer|message)\b/i.test(text)
+    && !/\b(?:save|write|export|store|put)\s+that\b/i.test(text)) {
+    return null;
+  }
+
+  const explicitPath = sanitizePathHint(options.pathHint) ?? extractPathHint(text);
+  const fileName = extractFilesystemSaveFileName(text);
+  if (explicitPath) {
+    return {
+      path: shouldAppendFilesystemSaveFileName(explicitPath, fileName)
+        ? joinFilesystemSavePath(explicitPath, fileName!)
+        : explicitPath,
+      source: 'last_assistant_output',
+    };
+  }
+
+  if (fileName && options.fallbackDirectory) {
+    return {
+      path: joinFilesystemSavePath(options.fallbackDirectory, fileName),
+      source: 'last_assistant_output',
+    };
+  }
+
+  return null;
+}
+
 export function extractSearchQuery(text: string): string | null {
   const quoted = text.match(/["']([^"']{2,120})["']/);
   if (quoted?.[1]) return quoted[1].trim();
@@ -138,4 +183,47 @@ export function sanitizePathHint(value: string | undefined): string | null {
   let cleaned = value.trim().replace(/[.,;:!?]+$/, '');
   cleaned = cleaned.replace(/\s+\b(?:for|with|where)\b$/i, '').trim();
   return cleaned.length >= 3 ? cleaned : null;
+}
+
+function extractFilesystemSaveFileName(text: string): string | null {
+  const patterns = [
+    /\b(?:file|document|text file)\s+(?:called|named)\s+["']?([^"'`\\/\n\r]+?)["']?(?=\s+\b(?:in|inside|within|under|at|on)\b|$)/i,
+    /\bas\s+["']?([^"'`\\/\n\r]+?)["']?(?=\s+\b(?:in|inside|within|under|at|on)\b|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const normalized = normalizeFilesystemSaveFileName(match?.[1]);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function normalizeFilesystemSaveFileName(value: string | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value.trim().replace(/[.,;:!?]+$/, '');
+  if (!cleaned) return null;
+  if (cleaned.includes('/') || cleaned.includes('\\')) return null;
+  return cleaned;
+}
+
+function getPathModule(value: string): typeof win32Path | typeof posixPath {
+  return /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\')
+    ? win32Path
+    : posixPath;
+}
+
+function shouldAppendFilesystemSaveFileName(pathValue: string, fileName: string | null): fileName is string {
+  if (!fileName) return false;
+  const pathApi = getPathModule(pathValue);
+  const normalized = pathValue.trim();
+  if (!normalized) return false;
+  if (normalized.endsWith('/') || normalized.endsWith('\\')) return true;
+  if (pathApi.basename(normalized) === fileName) return false;
+  if (pathApi.extname(normalized)) return false;
+  return true;
+}
+
+function joinFilesystemSavePath(basePath: string, fileName: string): string {
+  const pathApi = getPathModule(basePath);
+  return pathApi.normalize(pathApi.join(basePath, fileName));
 }

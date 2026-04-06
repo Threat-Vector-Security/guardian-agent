@@ -119,6 +119,24 @@ describe('ConversationService', () => {
     });
     service.close();
   });
+
+  it('stores full message content in session history while truncating context views', () => {
+    const service = makeService({
+      maxMessageChars: 20,
+      maxContextChars: 200,
+    });
+    const key = { agentId: 'assistant', userId: 'u1', channel: 'web' };
+    const longReply = '0123456789ABCDEFGHIJ-extra-tail';
+
+    service.recordTurn(key, 'hello', longReply);
+
+    const history = service.getSessionHistory(key);
+    expect(history.at(-1)?.content).toBe(longReply);
+
+    const context = service.getHistoryForContext(key);
+    expect(context.at(-1)?.content).toBe('0123456789ABCDEFGHIJ [truncated]');
+    service.close();
+  });
 });
 
 describe('ConversationService FTS5 Search', () => {
