@@ -4,6 +4,7 @@ import {
   extractSearchQuery,
   isDirectBrowserAutomationIntent,
   parseDirectFileSearchIntent,
+  parseDirectFilesystemSaveIntent,
   parseWebSearchIntent,
 } from './search-intent.js';
 import type { ToolPolicySnapshot } from '../tools/types.js';
@@ -61,6 +62,26 @@ describe('search-intent parser', () => {
     expect(intent).toEqual({
       path: 'S:\\Development\\GuardianAgent',
       query: 'ollama_cloud',
+    });
+  });
+
+  it('parses direct save requests for the last assistant output into a named file under a directory', () => {
+    const text = 'Can you save that last output to a file called test5 in S:\\Development';
+    const intent = parseDirectFilesystemSaveIntent(text);
+    expect(intent).toEqual({
+      path: 'S:\\Development\\test5',
+      source: 'last_assistant_output',
+    });
+  });
+
+  it('uses the fallback directory when the user names the output file but not the full path', () => {
+    const text = 'Save the previous output as routing-review.txt';
+    const intent = parseDirectFilesystemSaveIntent(text, {
+      fallbackDirectory: 'S:\\Development\\GuardianAgent',
+    });
+    expect(intent).toEqual({
+      path: 'S:\\Development\\GuardianAgent\\routing-review.txt',
+      source: 'last_assistant_output',
     });
   });
 

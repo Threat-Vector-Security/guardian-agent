@@ -383,6 +383,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'If you click a web approval button and then switch panels, the clicked approval state should persist instead of resetting back to fresh buttons.',
                   'Ordinary clarification answers like `Use Gmail` or `Codex` should stay in normal chat flow and not be mistaken for approval commands.',
                   'Other blockers such as `Use Outlook`, `switch to Test Tactical Game App`, or `connect Google Workspace first` should resume the original request instead of starting a new unrelated one.',
+                  'If you ask Guardian to save or export the previous assistant output to a path that is not currently allowed, Guardian should hold the exact output snapshot, request approval for the path change, and then continue the save instead of substituting a different file or truncating the saved content.',
                   'When a coding request is blocked on a workspace switch and the chat is then attached to the required Coding Workspace, Guardian should resume the stored coding request automatically instead of making you repeat it.',
                   'Use the managed package-install path for public package-manager installs when you want Guardian to review the request before it executes.',
                   'Inside code sessions, safe repo-local reads and edits stay low-friction, while repo execution and persistence actions only auto-approve after the workspace trust state reaches `trusted`.',

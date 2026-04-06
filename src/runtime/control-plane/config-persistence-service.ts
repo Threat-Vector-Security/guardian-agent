@@ -14,6 +14,7 @@ import type { LocalSecretStore } from '../../runtime/secret-store.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import { hashObjectSha256Hex } from '../../util/crypto-guardrails.js';
 import { writeSecureFileSync } from '../../util/secure-fs.js';
+import { syncLiveToolPolicyFromConfig } from './tool-policy-runtime-sync.js';
 
 export interface ConfigPersistenceMeta {
   changedBy?: string;
@@ -74,16 +75,7 @@ export function createConfigPersistenceService(options: ConfigPersistenceService
       options.bindSecurityTriageProvider(options.runtime, nextConfig);
       options.identity.update(nextConfig.assistant.identity);
       options.connectors.updateConfig(nextConfig.assistant.connectors);
-      options.toolExecutor.updatePolicy({
-        mode: nextConfig.assistant.tools.policyMode,
-        toolPolicies: nextConfig.assistant.tools.toolPolicies,
-        sandbox: {
-          allowedPaths: nextConfig.assistant.tools.allowedPaths,
-          allowedCommands: nextConfig.assistant.tools.allowedCommands,
-          allowedDomains: nextConfig.assistant.tools.allowedDomains,
-        },
-      });
-      options.runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
+      syncLiveToolPolicyFromConfig(options.toolExecutor, options.runtime, nextConfig.assistant.tools);
       options.toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
       options.threatIntelWebSearchConfigRef.current = resolvedNextCredentials.resolvedWebSearch ?? {};
       options.toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);

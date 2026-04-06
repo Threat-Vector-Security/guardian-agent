@@ -169,6 +169,15 @@ For brokered worker approvals, the resume handoff should use structured continua
 
 Approval-backed execution must not depend only on transient in-memory executor context. The supervisor/runtime must retain a durable or reconstructable execution envelope until the approved action finishes, is denied, or expires; otherwise stale approval controls devolve into misleading missing-context errors.
 
+Clarification-backed resume follows the same rule:
+- if Guardian asks a targeted clarification and offers a concrete stored fallback such as `save it inside the current workspace instead`, that fallback must be represented as pending-action state
+- a generic continuation reply such as `yes` or `okay` must resume the stored clarified request directly
+- Guardian must not force the Intent Gateway to rebuild the clarified action from bounded transcript history alone
+
+For direct filesystem export/save flows, the runtime must capture the exact assistant output snapshot that is being written. Approval or clarification continuation must reuse that stored snapshot rather than re-reading truncated conversation context after the blocked turn has already changed the transcript.
+
+If the approved prerequisite mutates live tool policy, for example `update_tool_policy add_path`, `add_domain`, or `add_command`, the runtime must apply that policy change to the live executor/runtime before resuming the stored pending action. Resume must not race a stale in-memory allowlist.
+
 ## Channel Behavior
 
 ### Web
@@ -184,6 +193,7 @@ Web requirements:
 - live activity and tooling progress must be request-scoped; a new request in the same coding session must not reuse timeline/status events from an older run
 - page, panel, or route changes must not silently drop the visible in-flight / pending-action state for the current Guardian chat surface
 - switching the focused coding workspace must not swap the visible Guardian chat transcript; pending actions remain surface-scoped and continue inside the same transcript
+- approval buttons for prerequisite policy changes such as `add_path` must be able to continue the same shared pending action after approval instead of stopping at the policy update and leaving the user to restate the original save/export request
 
 ### CLI
 
@@ -216,6 +226,7 @@ Tool approvals still execute immediately inside `ToolExecutor`, but chat-orchest
 This means:
 - approval buttons/prompts are driven from one canonical blocked-work object
 - approval follow-ups can reuse the original request summary
+- approval follow-ups for prerequisite policy changes can also reuse a stored direct-route resume payload, for example `add_path` followed by `fs_write`
 - channels no longer need a separate approval-only orchestration model
 - if a surface is attached to a coding workspace, approval submission may still need surface-specific routing, but the pending-action model remains the canonical blocked-work contract
 - unrelated turns can proceed normally while the approval-backed slot remains durable in shared state

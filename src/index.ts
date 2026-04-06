@@ -177,6 +177,7 @@ import { createPerformanceDashboardCallbacks } from './runtime/control-plane/per
 import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
 import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
+import { syncLiveToolPolicyFromConfig } from './runtime/control-plane/tool-policy-runtime-sync.js';
 import {
   createCloudConnectionTesters,
   createGwsCliProbe,
@@ -1649,6 +1650,7 @@ function buildDashboardCallbacks(
     surfaceId?: string;
     reason?: string;
   }) => {
+    const pendingActionForApproval = pendingActionStore.findActiveByApprovalId(input.approvalId);
     const result = await toolExecutor.decideApproval(
       input.approvalId,
       input.decision,
@@ -1676,6 +1678,7 @@ function buildDashboardCallbacks(
           }
         : undefined
     )))
+      || !!pendingActionForApproval?.resume
       || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
     const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
       || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
@@ -1687,6 +1690,19 @@ function buildDashboardCallbacks(
       if (!continuedResponse) {
         for (const agent of chatAgents.values()) {
           const followUp = await agent.continueAutomationAfterApproval(input.approvalId, input.decision);
+          if (followUp) {
+            continuedResponse = followUp;
+            break;
+          }
+        }
+      }
+      if (!continuedResponse && pendingActionForApproval) {
+        for (const agent of chatAgents.values()) {
+          const followUp = await agent.continueDirectRouteAfterApproval(
+            pendingActionForApproval,
+            input.approvalId,
+            input.decision,
+          );
           if (followUp) {
             continuedResponse = followUp;
             break;
@@ -4593,6 +4609,12 @@ async function main(): Promise<void> {
           integrity: controlPlaneIntegrity,
           adoptUntrackedIntegrity: true,
         });
+        syncLiveToolPolicyFromConfig(toolExecutor, runtime, configRef.current.assistant.tools);
+        if (meta?.browserAllowedDomains) {
+          void applyBrowserRuntimeConfig(configRef.current.assistant.tools.browser).catch((err) => {
+            log.warn({ err }, 'Failed to apply browser allowlist update live after policy approval');
+          });
+        }
       } catch (err) {
         log.warn({ err }, 'Failed to persist policy update to config file');
       }

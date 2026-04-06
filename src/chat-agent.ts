@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { posix as posixPath, win32 as win32Path } from 'node:path';
 
 import type { Logger } from 'pino';
 
@@ -111,11 +112,12 @@ import {
   type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
 import {
+  parseDirectFilesystemSaveIntent,
   parseDirectFileSearchIntent,
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
 import type { ToolExecutor } from './tools/executor.js';
-import type { ToolExecutionRequest } from './tools/types.js';
+import type { PrincipalRole, ToolExecutionRequest } from './tools/types.js';
 import { buildToolResultPayloadFromJob } from './tools/job-results.js';
 import {
   PendingActionStore,
@@ -198,6 +200,21 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|switch|replace|switch it|switch to (?:that|the new one|the new request)|replace it|do that instead)\b/i;
 const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
+const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
+
+interface FilesystemSaveOutputResumePayload {
+  type: typeof DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT;
+  targetPath: string;
+  content: string;
+  originalUserContent: string;
+  allowPathRemediation: boolean;
+  principalId?: string;
+  principalRole?: string;
+  codeContext?: {
+    workspaceRoot: string;
+    sessionId?: string;
+  };
+}
 
 interface DirectAutomationClarificationMetadata {
   blockerKind: PendingActionBlocker['kind'];
@@ -303,6 +320,11 @@ export interface ChatAgentPublicApi extends BaseAgent {
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null;
   hasSuspendedApproval(approvalId: string, scope?: ApprovalContinuationScope): boolean;
   hasAutomationApprovalContinuation(approvalId: string): boolean;
+  continueDirectRouteAfterApproval(
+    pendingAction: PendingActionRecord | null,
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
   continueAutomationAfterApproval(
     approvalId: string,
     decision: 'approved' | 'denied',
@@ -1705,16 +1727,19 @@ type DirectIntentShadowCandidate =
             });
           }
           case 'filesystem': {
-            const directSearch = await this.tryDirectFilesystemSearch(
+            const directFilesystem = await this.tryDirectFilesystemIntent(
               routedScopedMessage,
               ctx,
               pendingActionUserKey,
+              conversationKey,
               effectiveCodeContext,
+              message.content,
+              directIntent?.decision,
             );
-            if (!directSearch) break;
+            if (!directFilesystem) break;
             return this.buildDirectIntentResponse({
               candidate,
-              result: directSearch,
+              result: directFilesystem,
               message,
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
@@ -3963,8 +3988,14 @@ type DirectIntentShadowCandidate =
     currentCodeSessionId?: string,
   ): string | null {
     if (!pendingAction) return null;
-    if (!isGenericPendingActionContinuationRequest(stripLeadingContextPrefix(content))) {
+    const normalized = stripLeadingContextPrefix(content);
+    const genericContinuation = isGenericPendingActionContinuationRequest(normalized);
+    const affirmativeContinuation = isAffirmativeContinuation(normalized);
+    if (!genericContinuation && !affirmativeContinuation) {
       return null;
+    }
+    if (pendingAction.blocker.kind === 'clarification' && pendingAction.intent.resolvedContent?.trim()) {
+      return pendingAction.intent.resolvedContent.trim();
     }
     if (isWorkspaceSwitchPendingActionSatisfied(pendingAction, currentCodeSessionId)) {
       return pendingAction.intent.originalUserContent;
@@ -4945,8 +4976,11 @@ type DirectIntentShadowCandidate =
       || lower.includes('manually update')
       || lower.includes('edit the configuration file')
       || lower.includes('update your guardian agent config')
-      || lower.includes('you will need to manually');
-    const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains)/.test(`${latestUser}\n${lower}`);
+      || lower.includes('you will need to manually')
+      || lower.includes('i can, however, save it to')
+      || lower.includes('i can however save it to')
+      || lower.includes('instead save it to');
+    const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains|outside allowed paths|outside the authorized workspace root|outside the authorized workspace)/.test(`${latestUser}\n${lower}`);
 
     return isPolicyScoped && (claimsToolMissing || pushesManualConfig);
   }
@@ -5211,6 +5245,22 @@ type DirectIntentShadowCandidate =
         ].filter(Boolean).join('\n\n'),
         metadata: nextActionResult.action ? { pendingAction: toPendingActionClientMetadata(nextActionResult.action) } : undefined,
       };
+    }
+    if (decision === 'approved' && pendingAction?.resume?.kind === 'direct_route') {
+      const directRouteResponse = await this.resumeStoredDirectRoutePendingAction(pendingAction);
+      if (directRouteResponse) {
+        results.push('');
+        results.push(directRouteResponse.content);
+        return {
+          content: results.join('\n'),
+          metadata: this.withCurrentPendingActionMetadata(
+            directRouteResponse.metadata,
+            message.userId,
+            message.channel,
+            message.surfaceId,
+          ),
+        };
+      }
     }
     if (pendingAction) {
       this.completePendingAction(pendingAction.id);
@@ -5796,6 +5846,7 @@ type DirectIntentShadowCandidate =
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      resolvedContent?: string;
       entities?: Record<string, unknown>;
       codeSessionId?: string;
       currentSessionId?: string;
@@ -5829,6 +5880,7 @@ type DirectIntentShadowCandidate =
         ...(input.resolution ? { resolution: input.resolution } : {}),
         ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
         originalUserContent: input.originalUserContent,
+        ...(input.resolvedContent?.trim() ? { resolvedContent: input.resolvedContent.trim() } : {}),
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
       ...(input.resume ? { resume: input.resume } : {}),
@@ -5911,6 +5963,18 @@ type DirectIntentShadowCandidate =
       }
     }
     return false;
+  }
+
+  async continueDirectRouteAfterApproval(
+    pendingAction: PendingActionRecord | null,
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!pendingAction || decision !== 'approved') return null;
+    if (pendingAction.scope.agentId !== this.stateAgentId) return null;
+    const remainingApprovalIds = (pendingAction.blocker.approvalIds ?? []).filter((id) => id !== approvalId.trim());
+    if (remainingApprovalIds.length > 0) return null;
+    return this.resumeStoredDirectRoutePendingAction(pendingAction, { pendingActionAlreadyCleared: true });
   }
 
   async continueAutomationAfterApproval(
@@ -7491,6 +7555,76 @@ type DirectIntentShadowCandidate =
     return lines.join('\n');
   }
 
+  private async tryDirectFilesystemIntent(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    conversationKey: ConversationKey,
+    codeContext?: { workspaceRoot: string; sessionId?: string },
+    originalUserContent?: string,
+    gatewayDecision?: IntentGatewayDecision,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    const directSave = await this.tryDirectFilesystemSave(
+      message,
+      ctx,
+      userKey,
+      conversationKey,
+      codeContext,
+      originalUserContent,
+      gatewayDecision,
+    );
+    if (directSave) return directSave;
+    return this.tryDirectFilesystemSearch(
+      message,
+      ctx,
+      userKey,
+      codeContext,
+    );
+  }
+
+  private async tryDirectFilesystemSave(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    conversationKey: ConversationKey,
+    codeContext?: { workspaceRoot: string; sessionId?: string },
+    originalUserContent?: string,
+    gatewayDecision?: IntentGatewayDecision,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled() || !this.conversationService) return null;
+
+    const pathHint = toString(gatewayDecision?.entities.path).trim() || undefined;
+    const intent = parseDirectFilesystemSaveIntent(stripLeadingContextPrefix(message.content), {
+      fallbackDirectory: codeContext?.workspaceRoot,
+      pathHint,
+    }) ?? parseDirectFilesystemSaveIntent(stripLeadingContextPrefix(originalUserContent ?? ''), {
+      fallbackDirectory: codeContext?.workspaceRoot,
+      pathHint,
+    });
+    if (!intent) return null;
+
+    const lastAssistantOutput = this.readLatestAssistantOutput(conversationKey);
+    if (!lastAssistantOutput) {
+      return 'I could not find a previous assistant output to save yet.';
+    }
+
+    return this.executeStoredFilesystemSave({
+      targetPath: intent.path,
+      content: lastAssistantOutput,
+      originalUserContent: message.content,
+      userKey,
+      userId: message.userId,
+      channel: message.channel,
+      surfaceId: message.surfaceId,
+      principalId: message.principalId ?? message.userId,
+      principalRole: this.normalizeFilesystemResumePrincipalRole(message.principalRole) ?? 'owner',
+      requestId: message.id,
+      agentCheckAction: ctx.checkAction,
+      codeContext,
+      allowPathRemediation: true,
+    });
+  }
+
   private async tryDirectFilesystemSearch(
     message: UserMessage,
     ctx: AgentContext,
@@ -7585,6 +7719,305 @@ type DirectIntentShadowCandidate =
       truncated,
       matches,
     });
+  }
+
+  private readLatestAssistantOutput(conversationKey: ConversationKey): string {
+    if (!this.conversationService) return '';
+    const history = this.conversationService.getSessionHistory(conversationKey, { limit: 40 });
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const entry = history[index];
+      if (entry?.role !== 'assistant') continue;
+      const content = entry.content.trim();
+      if (content) return content;
+    }
+    return '';
+  }
+
+  private async resumeStoredDirectRoutePendingAction(
+    pendingAction: PendingActionRecord,
+    options?: { pendingActionAlreadyCleared?: boolean },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const resume = this.readFilesystemSaveOutputResumePayload(pendingAction.resume?.payload);
+    if (!resume) return null;
+    if (!options?.pendingActionAlreadyCleared) {
+      this.completePendingAction(pendingAction.id);
+    }
+    const result = await this.executeStoredFilesystemSave({
+      targetPath: resume.targetPath,
+      content: resume.content,
+      originalUserContent: resume.originalUserContent,
+      userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
+      userId: pendingAction.scope.userId,
+      channel: pendingAction.scope.channel,
+      surfaceId: pendingAction.scope.surfaceId,
+      principalId: resume.principalId ?? pendingAction.scope.userId,
+      principalRole: this.normalizeFilesystemResumePrincipalRole(resume.principalRole) ?? 'owner',
+      requestId: randomUUID(),
+      codeContext: resume.codeContext,
+      allowPathRemediation: resume.allowPathRemediation,
+    });
+    return typeof result === 'string' ? { content: result } : result;
+  }
+
+  private async executeStoredFilesystemSave(input: {
+    targetPath: string;
+    content: string;
+    originalUserContent: string;
+    userKey: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    principalId?: string;
+    principalRole?: PrincipalRole;
+    requestId: string;
+    agentCheckAction?: AgentContext['checkAction'];
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+    allowPathRemediation: boolean;
+  }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
+    if (!this.tools?.isEnabled()) {
+      return `I couldn't save the previous assistant output to "${input.targetPath}" because filesystem tools are unavailable.`;
+    }
+
+    const request = this.buildDirectFilesystemToolRequest(input);
+    const writeResult = await this.tools.executeModelTool(
+      'fs_write',
+      {
+        path: input.targetPath,
+        content: input.content,
+        append: false,
+      },
+      request,
+    );
+
+    if (toBoolean(writeResult.success)) {
+      return `I saved the previous assistant output to \`${input.targetPath}\`.`;
+    }
+
+    const writeStatus = toString(writeResult.status);
+    if (writeStatus === 'pending_approval') {
+      return this.buildPendingFilesystemWriteApprovalResponse(input, toString(writeResult.approvalId));
+    }
+
+    const writeMessage = toString(writeResult.message) || toString(writeResult.error) || 'Save failed.';
+    if (!input.allowPathRemediation || !this.isFilesystemPathPolicyError(writeMessage)) {
+      return `I couldn't save the previous assistant output to "${input.targetPath}": ${writeMessage}`;
+    }
+
+    const policyPath = this.getFilesystemPolicyRoot(input.targetPath);
+    const policyResult = await this.tools.executeModelTool(
+      'update_tool_policy',
+      {
+        action: 'add_path',
+        value: policyPath,
+      },
+      request,
+    );
+
+    if (toBoolean(policyResult.success)) {
+      const resumedResult = await this.executeStoredFilesystemSave({
+        ...input,
+        allowPathRemediation: false,
+      });
+      return resumedResult;
+    }
+
+    const policyStatus = toString(policyResult.status);
+    if (policyStatus === 'pending_approval') {
+      return this.buildPendingFilesystemPathApprovalResponse(input, policyPath, toString(policyResult.approvalId));
+    }
+
+    const policyMessage = toString(policyResult.message) || toString(policyResult.error) || 'Path approval failed.';
+    return `I couldn't prepare access to "${input.targetPath}" for saving the previous assistant output: ${policyMessage}`;
+  }
+
+  private buildDirectFilesystemToolRequest(input: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    principalId?: string;
+    principalRole?: PrincipalRole;
+    requestId: string;
+    agentCheckAction?: AgentContext['checkAction'];
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+  }): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
+    return {
+      origin: 'assistant',
+      agentId: this.id,
+      userId: input.userId,
+      channel: input.channel,
+      surfaceId: input.surfaceId,
+      principalId: input.principalId,
+      principalRole: input.principalRole,
+      requestId: input.requestId,
+      ...(input.agentCheckAction ? { agentContext: { checkAction: input.agentCheckAction } } : {}),
+      ...(input.codeContext ? { codeContext: input.codeContext } : {}),
+    };
+  }
+
+  private buildPendingFilesystemWriteApprovalResponse(input: {
+    targetPath: string;
+    content: string;
+    originalUserContent: string;
+    userKey: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+  }, approvalId: string): string | { content: string; metadata?: Record<string, unknown> } {
+    const existingIds = this.getPendingApprovals(input.userKey, input.surfaceId)?.ids ?? [];
+    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
+    if (approvalId) {
+      this.setApprovalFollowUp(approvalId, {
+        approved: `I saved the previous assistant output to \`${input.targetPath}\`.`,
+        denied: `I did not save the previous assistant output to \`${input.targetPath}\`.`,
+      });
+    }
+    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+    const pendingActionResult = this.setPendingApprovalActionForRequest(
+      input.userKey,
+      input.surfaceId,
+      {
+        prompt,
+        approvalIds: pendingIds,
+        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+        originalUserContent: input.originalUserContent,
+        route: 'filesystem_task',
+        operation: 'save',
+        summary: 'Writes the previous assistant output to a file.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        ...(input.codeContext?.sessionId ? { codeSessionId: input.codeContext.sessionId } : {}),
+      },
+    );
+    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+      `I prepared a file save for "${input.targetPath}" but it needs approval first.`,
+      prompt,
+    ].filter(Boolean).join('\n\n'));
+  }
+
+  private buildPendingFilesystemPathApprovalResponse(input: {
+    targetPath: string;
+    content: string;
+    originalUserContent: string;
+    userKey: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    principalId?: string;
+    principalRole?: PrincipalRole;
+    requestId: string;
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+  }, policyPath: string, approvalId: string): string | { content: string; metadata?: Record<string, unknown> } {
+    const existingIds = this.getPendingApprovals(input.userKey, input.surfaceId)?.ids ?? [];
+    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
+    if (approvalId) {
+      this.setApprovalFollowUp(approvalId, {
+        approved: `I added \`${policyPath}\` to the allowed paths.`,
+        denied: `I did not add \`${policyPath}\` to the allowed paths.`,
+      });
+    }
+    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+    const pendingActionResult = this.setPendingApprovalActionForRequest(
+      input.userKey,
+      input.surfaceId,
+      {
+        prompt,
+        approvalIds: pendingIds,
+        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+        originalUserContent: input.originalUserContent,
+        route: 'filesystem_task',
+        operation: 'save',
+        summary: 'Adds an allowed path so Guardian can save the previous assistant output, then resumes the save.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        resume: {
+          kind: 'direct_route',
+          payload: {
+            type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
+            targetPath: input.targetPath,
+            content: input.content,
+            originalUserContent: input.originalUserContent,
+            allowPathRemediation: false,
+            ...(input.principalId ? { principalId: input.principalId } : {}),
+            ...(input.principalRole ? { principalRole: input.principalRole } : {}),
+            ...(input.codeContext ? { codeContext: { ...input.codeContext } } : {}),
+          },
+        },
+        ...(input.codeContext?.sessionId ? { codeSessionId: input.codeContext.sessionId } : {}),
+      },
+    );
+    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+      `I need approval to add "${policyPath}" to the allowed paths before I can save the previous assistant output to "${input.targetPath}".`,
+      prompt,
+    ].filter(Boolean).join('\n\n'));
+  }
+
+  private readFilesystemSaveOutputResumePayload(
+    payload: Record<string, unknown> | undefined,
+  ): FilesystemSaveOutputResumePayload | null {
+    if (!isRecord(payload)) return null;
+    if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
+    const targetPath = toString(payload.targetPath).trim();
+    const content = toString(payload.content);
+    const originalUserContent = toString(payload.originalUserContent).trim();
+    if (!targetPath || !originalUserContent) return null;
+    const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
+      ? {
+          workspaceRoot: toString(payload.codeContext.workspaceRoot).trim(),
+          ...(toString(payload.codeContext.sessionId).trim()
+            ? { sessionId: toString(payload.codeContext.sessionId).trim() }
+            : {}),
+        }
+      : undefined;
+    return {
+      type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
+      targetPath,
+      content,
+      originalUserContent,
+      allowPathRemediation: payload.allowPathRemediation === true,
+      ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
+      ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
+      ...(codeContext ? { codeContext } : {}),
+    };
+  }
+
+  private isFilesystemPathPolicyError(message: string): boolean {
+    const lower = message.trim().toLowerCase();
+    if (!lower) return false;
+    return lower.includes('outside allowed paths')
+      || lower.includes('outside the authorized workspace root')
+      || lower.includes('outside the authorized workspace');
+  }
+
+  private getFilesystemPolicyRoot(targetPath: string): string {
+    const trimmed = targetPath.trim();
+    if (!trimmed) return trimmed;
+    const pathApi = this.getFilesystemPathApi(trimmed);
+    if (trimmed.endsWith('/') || trimmed.endsWith('\\')) {
+      return trimmed.replace(/[\\/]+$/, '');
+    }
+    const parent = pathApi.dirname(trimmed);
+    return parent && parent !== '.' ? parent : trimmed;
+  }
+
+  private getFilesystemPathApi(targetPath: string): typeof win32Path | typeof posixPath {
+    return /^[a-zA-Z]:[\\/]/.test(targetPath) || targetPath.includes('\\')
+      ? win32Path
+      : posixPath;
+  }
+
+  private normalizeFilesystemResumePrincipalRole(value: string | undefined): PrincipalRole | undefined {
+    switch (value) {
+      case 'owner':
+      case 'operator':
+      case 'approver':
+      case 'viewer':
+        return value;
+      default:
+        return undefined;
+    }
   }
 }
 

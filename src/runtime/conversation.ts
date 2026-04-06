@@ -645,7 +645,7 @@ export class ConversationService {
         key.channel,
         sessionId,
         'user',
-        this.sanitizeContent(userContent),
+        userContent,
         timestamp,
         null,
       );
@@ -655,7 +655,7 @@ export class ConversationService {
         key.channel,
         sessionId,
         'assistant',
-        this.sanitizeContent(assistantContent),
+        assistantContent,
         timestamp,
         this.serializeResponseSource(assistantResponseSource),
       );
@@ -669,12 +669,12 @@ export class ConversationService {
     const existing = this.memory.conversations.get(mapKey) ?? [];
     existing.push({
       role: 'user',
-      content: this.sanitizeContent(userContent),
+      content: userContent,
       timestamp,
     });
     existing.push({
       role: 'assistant',
-      content: this.sanitizeContent(assistantContent),
+      content: assistantContent,
       timestamp,
       ...(assistantResponseSource ? { responseSource: assistantResponseSource } : {}),
     });
@@ -935,13 +935,17 @@ export class ConversationService {
 
     if (history.length === 0) return [];
 
-    const trimmed = trimContextHistory(history, this.options.maxContextChars, options);
+    const contextHistory = history.map((entry) => ({
+      ...entry,
+      content: this.truncateContentForContext(entry.content),
+    }));
+    const trimmed = trimContextHistory(contextHistory, this.options.maxContextChars, options);
 
     if (canFlushHistory(trimmed) && this.options.onMemoryFlush) {
       const totalDroppedCount = totalDroppedForFlush(trimmed);
       const contextKey = this.toMapKey(key, sessionId);
       const flushedCount = Math.min(this.flushedMessageCounts.get(contextKey) ?? 0, totalDroppedCount);
-      const dropped = droppedHistoryForFlush(history, trimmed, flushedCount);
+      const dropped = droppedHistoryForFlush(contextHistory, trimmed, flushedCount);
       if (shouldFlushDroppedMessages(dropped)) {
         try {
           this.options.onMemoryFlush(key, {
@@ -1267,7 +1271,7 @@ export class ConversationService {
     `);
   }
 
-  private sanitizeContent(content: string): string {
+  private truncateContentForContext(content: string): string {
     if (content.length <= this.options.maxMessageChars) return content;
     return content.slice(0, this.options.maxMessageChars) + ' [truncated]';
   }
