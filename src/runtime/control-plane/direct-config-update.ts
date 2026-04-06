@@ -236,6 +236,33 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
               if (trimmed) llmSection[name].baseUrl = trimmed;
               else delete llmSection[name].baseUrl;
             }
+            if (providerUpdates.maxTokens !== undefined) {
+              llmSection[name].maxTokens = providerUpdates.maxTokens;
+            }
+            if (providerUpdates.temperature !== undefined) {
+              llmSection[name].temperature = providerUpdates.temperature;
+            }
+            if (providerUpdates.timeoutMs !== undefined) {
+              llmSection[name].timeoutMs = providerUpdates.timeoutMs;
+            }
+            if (providerUpdates.keepAlive !== undefined) {
+              llmSection[name].keepAlive = providerUpdates.keepAlive;
+            }
+            if (providerUpdates.think !== undefined) {
+              llmSection[name].think = providerUpdates.think;
+            }
+            if (providerUpdates.ollamaOptions !== undefined) {
+              if (
+                typeof providerUpdates.ollamaOptions === 'object'
+                && providerUpdates.ollamaOptions !== null
+                && !Array.isArray(providerUpdates.ollamaOptions)
+                && Object.keys(providerUpdates.ollamaOptions).length > 0
+              ) {
+                llmSection[name].ollamaOptions = providerUpdates.ollamaOptions;
+              } else {
+                delete llmSection[name].ollamaOptions;
+              }
+            }
           }
           rawConfig.llm = llmSection;
         }
@@ -446,6 +473,16 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             const trimmed = preferredProviderUpdates.local.trim();
             if (trimmed) rawPreferredProviders.local = trimmed;
             else delete rawPreferredProviders.local;
+          }
+          if (preferredProviderUpdates.managedCloud !== undefined) {
+            const trimmed = preferredProviderUpdates.managedCloud.trim();
+            if (trimmed) rawPreferredProviders.managedCloud = trimmed;
+            else delete rawPreferredProviders.managedCloud;
+          }
+          if (preferredProviderUpdates.frontier !== undefined) {
+            const trimmed = preferredProviderUpdates.frontier.trim();
+            if (trimmed) rawPreferredProviders.frontier = trimmed;
+            else delete rawPreferredProviders.frontier;
           }
           if (preferredProviderUpdates.external !== undefined) {
             const trimmed = preferredProviderUpdates.external.trim();

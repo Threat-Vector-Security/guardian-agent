@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { GuardianAgentConfig } from '../config/types.js';
+import type { GuardianAgentConfig, RoutingTierMode } from '../config/types.js';
 import { stripLeadingContextPrefix } from '../chat-agent-helpers.js';
 import { SHARED_TIER_AGENT_STATE_ID } from './agent-state-context.js';
 import type { CodeSessionStore } from './code-sessions.js';
@@ -76,8 +76,9 @@ export function createIncomingDispatchPreparer(args: {
   readCodeRequestMetadata: (metadata: unknown) => ParsedCodeRequestMetadata | undefined;
   normalizeTierModeForRouter: (
     router: MessageRouter,
-    mode: 'auto' | 'local-only' | 'external-only' | undefined,
-  ) => 'auto' | 'local-only' | 'external-only';
+    config: GuardianAgentConfig,
+    mode: RoutingTierMode | undefined,
+  ) => RoutingTierMode;
   summarizePendingActionForGateway: (
     value: ReturnType<PendingActionStore['resolveActiveForSurface']>,
   ) => IntentGatewayInput['pendingAction'];
@@ -284,7 +285,7 @@ export function createIncomingDispatchPreparer(args: {
         ? null
         : await classifyIntentForRouting(msg, stateAgentId);
       const routingCfg = args.configRef.current.routing;
-      const tierMode = args.normalizeTierModeForRouter(args.router, routingCfg?.tierMode);
+      const tierMode = args.normalizeTierModeForRouter(args.router, args.configRef.current, routingCfg?.tierMode);
       const threshold = routingCfg?.complexityThreshold ?? 0.5;
       const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
       const decision = channelDefault
@@ -331,7 +332,7 @@ export function createIncomingDispatchPreparer(args: {
       };
     }
     const routingCfg = args.configRef.current.routing;
-    const tierMode = args.normalizeTierModeForRouter(args.router, routingCfg?.tierMode);
+    const tierMode = args.normalizeTierModeForRouter(args.router, args.configRef.current, routingCfg?.tierMode);
     const threshold = routingCfg?.complexityThreshold ?? 0.5;
     const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
     const stateAgentId = resolveRoutingStateAgentId(channelDefault);

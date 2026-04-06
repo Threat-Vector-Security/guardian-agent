@@ -53,6 +53,17 @@ describe('search-intent parser', () => {
     });
   });
 
+  it('parses quoted repo searches that ask for routing-defining files', () => {
+    const text = 'Search the repo for "ollama_cloud" and tell me which files define its routing.';
+    const intent = parseDirectFileSearchIntent(text, policy, {
+      fallbackPath: 'S:\\Development\\GuardianAgent',
+    });
+    expect(intent).toEqual({
+      path: 'S:\\Development\\GuardianAgent',
+      query: 'ollama_cloud',
+    });
+  });
+
   it('detects explicit browser URL automation requests', () => {
     expect(isDirectBrowserAutomationIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBe(true);
     expect(isDirectBrowserAutomationIntent('Go to https://example.com and click the More information link.')).toBe(true);

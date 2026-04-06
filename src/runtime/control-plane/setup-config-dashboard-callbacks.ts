@@ -3,6 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { DashboardCallbacks, DashboardProviderInfo } from '../../channels/web-types.js';
 import { deepMerge, validateConfig } from '../../config/loader.js';
 import type { CredentialRefConfig, GuardianAgentConfig } from '../../config/types.js';
+import {
+  getDefaultBaseUrlForProviderType,
+  getProviderPreferenceBucket,
+  providerRequiresCredential,
+} from '../../llm/provider-metadata.js';
 import type { AssistantJobTracker } from '../assistant-jobs.js';
 import { applyCredentialRefInput } from '../credential-ref-input.js';
 import { evaluateSetupStatus } from '../setup.js';
@@ -31,13 +36,17 @@ interface SetupConfigDashboardCallbackOptions {
     description: string,
   ) => string;
   isLocalProviderEndpoint: (baseUrl: string | undefined, providerType: string | undefined) => boolean;
-  getProviderLocality: (llmCfg: { provider?: string; baseUrl?: string } | undefined) => 'local' | 'external';
+  getProviderLocality: (llmCfg: { provider?: string; baseUrl?: string } | undefined) => 'local' | 'external' | undefined;
   trackSystemAnalytics: (type: string, metadata?: Record<string, unknown>) => void;
 }
 
 export function createSetupConfigDashboardCallbacks(
   options: SetupConfigDashboardCallbackOptions,
 ): SetupConfigDashboardCallbacks {
+  const resolvePreferredProviderKey = (providerType: string, providerLocality: 'local' | 'external' | undefined) => (
+    getProviderPreferenceBucket(providerType) ?? (providerLocality === 'local' ? 'local' : 'frontier')
+  );
+
   const applyWebSearchSettings = (
     rawConfig: Record<string, unknown>,
     input: {
@@ -193,13 +202,22 @@ export function createSetupConfigDashboardCallbacks(
             providerType,
           );
           const providerLocality: 'local' | 'external' = localProviderEndpoint ? 'local' : 'external';
-          if (providerType !== 'ollama' && !localProviderEndpoint && !providerCredentialRef) {
+          const preferredProviderKey = resolvePreferredProviderKey(providerType, providerLocality);
+          if (providerRequiresCredential(providerType) && !providerCredentialRef) {
             return { success: false, message: 'apiKey or credentialRef is required for external providers' };
           }
 
-          const explicitPreferredProvider = options.configRef.current.assistant.tools.preferredProviders?.[providerLocality]?.trim();
+          const explicitPreferredProvider = options.configRef.current.assistant.tools.preferredProviders?.[preferredProviderKey]?.trim()
+            || (
+              preferredProviderKey !== 'local'
+                ? options.configRef.current.assistant.tools.preferredProviders?.external?.trim()
+                : ''
+            );
           const shouldSetPreferredProvider = !explicitPreferredProvider
-            || options.getProviderLocality(options.configRef.current.llm[explicitPreferredProvider]) !== providerLocality;
+            || resolvePreferredProviderKey(
+              options.configRef.current.llm[explicitPreferredProvider]?.provider ?? '',
+              options.getProviderLocality(options.configRef.current.llm[explicitPreferredProvider]),
+            ) !== preferredProviderKey;
 
           let telegramCredentialRef = options.configRef.current.channels.telegram?.botTokenCredentialRef?.trim() || undefined;
           if (input.telegramBotToken?.trim()) {
@@ -242,7 +260,13 @@ export function createSetupConfigDashboardCallbacks(
                 provider: providerType,
                 model,
                 credentialRef: providerCredentialRef,
-                baseUrl: input.baseUrl?.trim() || (providerType === 'ollama' ? 'http://127.0.0.1:11434' : undefined),
+                baseUrl: input.baseUrl?.trim() || getDefaultBaseUrlForProviderType(providerType),
+                maxTokens: input.maxTokens,
+                temperature: input.temperature,
+                timeoutMs: input.timeoutMs,
+                keepAlive: input.keepAlive,
+                think: input.think,
+                ollamaOptions: input.ollamaOptions,
               },
             } as GuardianAgentConfig['llm'],
             assistant: {
@@ -263,7 +287,7 @@ export function createSetupConfigDashboardCallbacks(
                 ...options.configRef.current.assistant.tools,
                 preferredProviders: {
                   ...options.configRef.current.assistant.tools.preferredProviders,
-                  [providerLocality]: providerName,
+                  [preferredProviderKey]: providerName,
                 },
               },
             };
@@ -315,15 +339,28 @@ export function createSetupConfigDashboardCallbacks(
             provider: providerType,
             model,
           };
-          if (input.baseUrl?.trim()) rawLLM[providerName].baseUrl = input.baseUrl.trim();
-          if (providerType === 'ollama' && !rawLLM[providerName].baseUrl) {
-            rawLLM[providerName].baseUrl = 'http://127.0.0.1:11434';
-          }
+          const baseUrl = input.baseUrl?.trim() || getDefaultBaseUrlForProviderType(providerType);
+          if (baseUrl) rawLLM[providerName].baseUrl = baseUrl;
           delete rawLLM[providerName].apiKey;
           if (providerCredentialRef !== undefined) {
             const trimmed = providerCredentialRef.trim();
             if (trimmed) rawLLM[providerName].credentialRef = trimmed;
             else delete rawLLM[providerName].credentialRef;
+          }
+          if (input.maxTokens !== undefined) rawLLM[providerName].maxTokens = input.maxTokens;
+          else delete rawLLM[providerName].maxTokens;
+          if (input.temperature !== undefined) rawLLM[providerName].temperature = input.temperature;
+          else delete rawLLM[providerName].temperature;
+          if (input.timeoutMs !== undefined) rawLLM[providerName].timeoutMs = input.timeoutMs;
+          else delete rawLLM[providerName].timeoutMs;
+          if (input.keepAlive !== undefined) rawLLM[providerName].keepAlive = input.keepAlive;
+          else delete rawLLM[providerName].keepAlive;
+          if (input.think !== undefined) rawLLM[providerName].think = input.think;
+          else delete rawLLM[providerName].think;
+          if (input.ollamaOptions && Object.keys(input.ollamaOptions).length > 0) {
+            rawLLM[providerName].ollamaOptions = input.ollamaOptions;
+          } else {
+            delete rawLLM[providerName].ollamaOptions;
           }
 
           if (input.setDefaultProvider !== false) {
@@ -337,7 +374,7 @@ export function createSetupConfigDashboardCallbacks(
             const rawTools = rawAssistantObj.tools as Record<string, unknown>;
             rawTools.preferredProviders = {
               ...((rawTools.preferredProviders as Record<string, unknown> | undefined) ?? {}),
-              [providerLocality]: providerName,
+              [preferredProviderKey]: providerName,
             };
           }
 

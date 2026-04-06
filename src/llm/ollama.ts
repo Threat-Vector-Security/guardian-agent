@@ -1,10 +1,19 @@
 /**
  * Ollama LLM provider.
  *
- * Uses OpenAI-compatible API at localhost:11434/v1 for chat,
- * native /api/* endpoints for model discovery.
+ * Uses the official Ollama SDK for both local Ollama and direct Ollama Cloud
+ * access so both paths share the same native API contract.
  */
 
+import { Ollama } from 'ollama';
+import type {
+  ChatRequest as OllamaChatRequest,
+  ChatResponse as OllamaSdkChatResponse,
+  Message as OllamaMessage,
+  Options as OllamaOptions,
+  Tool as OllamaTool,
+  ToolCall as OllamaSdkToolCall,
+} from 'ollama';
 import type {
   LLMProvider,
   ChatMessage,
@@ -14,272 +23,316 @@ import type {
   ModelInfo,
   ToolCall,
 } from './types.js';
-import type { LLMConfig } from '../config/types.js';
+import type { LLMConfig, OllamaOptionsConfig } from '../config/types.js';
+import { normalizeOllamaHost } from './provider-metadata.js';
 import { createLogger } from '../util/logging.js';
 
 const log = createLogger('llm:ollama');
 
-interface OllamaTagsResponse {
-  models: Array<{
-    name: string;
-    size: number;
-    details?: { parameter_size?: string; family?: string };
-  }>;
-}
-
-interface OpenAIChatResponse {
-  id: string;
-  model: string;
-  choices: Array<{
-    message: {
-      role: string;
-      content: string | null;
-      tool_calls?: Array<{
-        id: string;
-        type: string;
-        function: { name: string; arguments: string };
-      }>;
-    };
-    finish_reason: string;
-  }>;
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-}
-
-interface OpenAIStreamChunk {
-  choices: Array<{
-    delta: { content?: string; role?: string };
-    finish_reason: string | null;
-  }>;
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-}
-
 export class OllamaProvider implements LLMProvider {
-  readonly name = 'ollama';
-  private baseUrl: string;
-  private model: string;
-  private maxTokens: number;
-  private temperature: number;
-  private timeoutMs: number;
+  readonly name: string;
+  private readonly host: string;
+  private readonly model: string;
+  private readonly apiKey?: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number;
+  private readonly timeoutMs: number;
+  private readonly keepAlive?: string | number;
+  private readonly think?: LLMConfig['think'];
+  private readonly ollamaOptions?: OllamaOptionsConfig;
 
-  constructor(config: LLMConfig) {
-    this.baseUrl = (config.baseUrl ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
+  constructor(config: LLMConfig, providerType: 'ollama' | 'ollama_cloud' = 'ollama') {
+    this.name = providerType;
+    this.host = normalizeOllamaHost(config.baseUrl, providerType);
     this.model = config.model;
+    this.apiKey = config.apiKey?.trim() || undefined;
     this.maxTokens = config.maxTokens ?? 2048;
     this.temperature = config.temperature ?? 0.7;
     this.timeoutMs = config.timeoutMs ?? 120_000;
+    this.keepAlive = config.keepAlive;
+    this.think = config.think;
+    this.ollamaOptions = config.ollamaOptions;
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    const model = options?.model ?? this.model;
-    const body: Record<string, unknown> = {
-      model,
-      messages: messages.map(toOllamaMessage),
-      max_tokens: options?.maxTokens ?? this.maxTokens,
-      temperature: options?.temperature ?? this.temperature,
-      stream: false,
-    };
-
-    if (options?.tools?.length) {
-      body.tools = options.tools.map(t => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.parameters },
-      }));
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    const signal = options?.signal
-      ? anySignal([options.signal, controller.signal])
-      : controller.signal;
+    const request = this.buildChatRequest(messages, options, false);
+    const { client, cleanup } = this.createClient(options?.signal);
 
     try {
-      let res: Response;
-      try {
-        res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal,
-        });
-      } catch (err) {
-        throw toOllamaConnectivityError(err, this.baseUrl);
-      }
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Ollama API error ${res.status}: ${text}`);
-      }
-
-      const data = (await res.json()) as OpenAIChatResponse;
-      const choice = data.choices[0];
-      const toolCalls = choice?.message.tool_calls?.map(
-        (tc): ToolCall => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: tc.function.arguments,
-        }),
-      );
-
-      return {
-        content: choice?.message.content ?? '',
-        toolCalls,
-        usage: data.usage
-          ? {
-              promptTokens: data.usage.prompt_tokens,
-              completionTokens: data.usage.completion_tokens,
-              totalTokens: data.usage.total_tokens,
-            }
-          : undefined,
-        model: data.model,
-        finishReason: mapFinishReason(choice?.finish_reason),
-      };
+      const response = await client.chat(request);
+      return toUnifiedChatResponse(response);
+    } catch (err) {
+      throw toOllamaError(err, this.name, this.host, request.model);
     } finally {
-      clearTimeout(timeout);
+      cleanup();
     }
   }
 
   async *stream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<ChatChunk> {
-    const model = options?.model ?? this.model;
-    const body = {
-      model,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: options?.maxTokens ?? this.maxTokens,
-      temperature: options?.temperature ?? this.temperature,
-      stream: true,
-    };
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    const signal = options?.signal
-      ? anySignal([options.signal, controller.signal])
-      : controller.signal;
+    const request = this.buildChatRequest(messages, options, true);
+    const { client, cleanup } = this.createClient(options?.signal);
 
     try {
-      let res: Response;
-      try {
-        res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal,
-        });
-      } catch (err) {
-        throw toOllamaConnectivityError(err, this.baseUrl);
+      const stream = await client.chat(request);
+      for await (const part of stream) {
+        yield {
+          content: part.message?.content ?? '',
+          done: part.done === true,
+          usage: part.done ? toUsage(part) : undefined,
+        };
       }
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Ollama API error ${res.status}: ${text}`);
-      }
-
-      if (!res.body) {
-        throw new Error('No response body for streaming');
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') {
-            yield { content: '', done: true };
-            return;
-          }
-
-          const chunk = JSON.parse(data) as OpenAIStreamChunk;
-          const delta = chunk.choices[0]?.delta;
-          const isLast = chunk.choices[0]?.finish_reason !== null;
-
-          yield {
-            content: delta?.content ?? '',
-            done: isLast,
-            usage: chunk.usage
-              ? {
-                  promptTokens: chunk.usage.prompt_tokens,
-                  completionTokens: chunk.usage.completion_tokens,
-                  totalTokens: chunk.usage.total_tokens,
-                }
-              : undefined,
-          };
-
-          if (isLast) return;
-        }
-      }
+    } catch (err) {
+      throw toOllamaError(err, this.name, this.host, request.model);
     } finally {
-      clearTimeout(timeout);
+      cleanup();
     }
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    const { client, cleanup } = this.createClient();
     try {
-      const res = await fetch(`${this.baseUrl}/api/tags`);
-      if (!res.ok) {
-        log.warn({ status: res.status }, 'Failed to list Ollama models');
-        return [];
-      }
-
-      const data = (await res.json()) as OllamaTagsResponse;
-      return data.models.map(m => ({
-        id: m.name,
-        name: m.name,
-        provider: 'ollama',
+      const list = await client.list();
+      return list.models.map((model) => ({
+        id: model.name,
+        name: model.name,
+        provider: this.name,
       }));
     } catch (err) {
-      log.warn({ err }, 'Failed to connect to Ollama');
+      log.warn({ err, provider: this.name, host: this.host }, 'Failed to list Ollama models');
       return [];
+    } finally {
+      cleanup();
     }
   }
-}
 
-/** Map unified ChatMessage to OpenAI-compatible format (tool calls + tool results). */
-function toOllamaMessage(msg: ChatMessage): Record<string, unknown> {
-  if (msg.role === 'tool') {
+  private createClient(signal?: AbortSignal): { client: Ollama; cleanup: () => void } {
+    const timeoutController = new AbortController();
+    const timeout = setTimeout(() => timeoutController.abort(), this.timeoutMs);
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+    const requestSignal = signal
+      ? anySignal([signal, timeoutController.signal])
+      : timeoutController.signal;
+
     return {
-      role: 'tool',
-      content: msg.content,
-      tool_call_id: msg.toolCallId ?? '',
+      client: new Ollama({
+        host: this.host,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        fetch: (input, init) => {
+          const upstreamSignal = init?.signal;
+          const mergedSignal = upstreamSignal
+            ? anySignal([upstreamSignal, requestSignal])
+            : requestSignal;
+          return fetch(input, { ...init, signal: mergedSignal });
+        },
+      }),
+      cleanup: () => clearTimeout(timeout),
     };
   }
-  if (msg.role === 'assistant' && msg.toolCalls?.length) {
+
+  private buildChatRequest(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: true,
+  ): OllamaChatRequest & { stream: true };
+  private buildChatRequest(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: false,
+  ): OllamaChatRequest & { stream?: false };
+  private buildChatRequest(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: boolean,
+  ): OllamaChatRequest {
+    const requestOptions: Partial<OllamaOptions> = {
+      ...(this.ollamaOptions ?? {}),
+    };
+
+    const maxTokens = options?.maxTokens ?? this.maxTokens;
+    const temperature = options?.temperature ?? this.temperature;
+
+    if (requestOptions.num_predict === undefined) {
+      requestOptions.num_predict = maxTokens;
+    }
+    if (requestOptions.temperature === undefined) {
+      requestOptions.temperature = temperature;
+    }
+
     return {
-      role: 'assistant',
-      content: msg.content || null,
-      tool_calls: msg.toolCalls.map(tc => ({
-        id: tc.id,
-        type: 'function',
-        function: { name: tc.name, arguments: tc.arguments },
-      })),
+      model: options?.model ?? this.model,
+      messages: toOllamaMessages(messages),
+      stream,
+      ...(options?.tools?.length
+        ? {
+            tools: options.tools.map(toOllamaTool),
+          }
+        : {}),
+      ...(this.keepAlive !== undefined ? { keep_alive: this.keepAlive } : {}),
+      ...(this.think !== undefined ? { think: this.think } : {}),
+      ...(Object.keys(requestOptions).length > 0 ? { options: requestOptions } : {}),
     };
   }
-  return { role: msg.role, content: msg.content };
 }
 
-function mapFinishReason(reason?: string): ChatResponse['finishReason'] {
+function toOllamaTool(tool: NonNullable<ChatOptions['tools']>[number]): OllamaTool {
+  return {
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters as OllamaTool['function']['parameters'],
+    },
+  };
+}
+
+function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] {
+  const toolCallNames = new Map<string, string>();
+
+  return messages.map((message): OllamaMessage => {
+    if (message.role === 'assistant' && message.toolCalls?.length) {
+      for (const toolCall of message.toolCalls) {
+        toolCallNames.set(toolCall.id, toolCall.name);
+      }
+      return {
+        role: 'assistant',
+        content: message.content || '',
+        tool_calls: message.toolCalls.map((toolCall) => ({
+          function: {
+            name: toolCall.name,
+            arguments: parseToolArguments(toolCall.arguments),
+          },
+        })),
+      };
+    }
+
+    if (message.role === 'tool') {
+      const toolName = message.toolCallId ? toolCallNames.get(message.toolCallId) : undefined;
+      return {
+        role: 'tool',
+        content: message.content,
+        ...(toolName ? { tool_name: toolName } : {}),
+      };
+    }
+
+    return {
+      role: message.role,
+      content: message.content,
+    };
+  });
+}
+
+function parseToolArguments(input: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return { value: parsed };
+  } catch {
+    return { __raw: input };
+  }
+}
+
+function toUnifiedChatResponse(response: OllamaSdkChatResponse): ChatResponse {
+  const toolCalls = toUnifiedToolCalls(response.message?.tool_calls);
+  return {
+    content: response.message?.content ?? '',
+    toolCalls,
+    usage: toUsage(response),
+    model: response.model,
+    finishReason: mapFinishReason(response.done_reason, toolCalls),
+  };
+}
+
+function toUnifiedToolCalls(toolCalls: OllamaSdkToolCall[] | undefined): ToolCall[] | undefined {
+  if (!toolCalls?.length) return undefined;
+  return toolCalls.map((toolCall, index) => ({
+    id: `${toolCall.function.name}-${index + 1}`,
+    name: toolCall.function.name,
+    arguments: JSON.stringify(toolCall.function.arguments ?? {}),
+  }));
+}
+
+function toUsage(
+  response: Pick<OllamaSdkChatResponse, 'prompt_eval_count' | 'eval_count'>,
+): ChatResponse['usage'] {
+  const promptTokens = response.prompt_eval_count ?? 0;
+  const completionTokens = response.eval_count ?? 0;
+  const totalTokens = promptTokens + completionTokens;
+  if (totalTokens === 0) return undefined;
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+  };
+}
+
+function mapFinishReason(reason: string | undefined, toolCalls: ToolCall[] | undefined): ChatResponse['finishReason'] {
+  if (toolCalls?.length) return 'tool_calls';
   switch (reason) {
-    case 'stop': return 'stop';
-    case 'tool_calls': return 'tool_calls';
-    case 'length': return 'length';
-    default: return 'stop';
+    case 'stop':
+      return 'stop';
+    case 'length':
+      return 'length';
+    default:
+      return 'stop';
   }
 }
 
-function toOllamaConnectivityError(err: unknown, baseUrl: string): Error {
+function toOllamaError(
+  err: unknown,
+  providerType: string,
+  host: string,
+  model: string,
+): Error {
   if (err instanceof Error && err.name === 'AbortError') {
     return err;
   }
-  const detail = err instanceof Error ? err.message : String(err ?? 'unknown error');
-  return new Error(`Could not reach Ollama at ${baseUrl}. Check that the local Ollama server is running. (${detail})`);
+
+  const status = (err as { status_code?: number })?.status_code ?? 0;
+  const raw = err instanceof Error ? err.message : String(err ?? 'unknown error');
+  const cloud = providerType === 'ollama_cloud';
+  const providerLabel = cloud ? 'Ollama Cloud' : 'Ollama';
+
+  if (status === 401) {
+    return Object.assign(
+      new Error(`${providerLabel} API key is invalid or expired. Update it in Configuration > Providers.`),
+      { status },
+    );
+  }
+  if (status === 403) {
+    return Object.assign(
+      new Error(`Access denied for model "${model}" on ${providerLabel}. Check your account or model entitlement.`),
+      { status },
+    );
+  }
+  if (status === 404 || raw.includes('not found')) {
+    return Object.assign(
+      new Error(`Model "${model}" is not available on ${providerLabel}. Choose a different model in Configuration > Providers.`),
+      { status },
+    );
+  }
+  if (status === 429) {
+    return Object.assign(
+      new Error(`${providerLabel} rate limit exceeded or quota depleted. Please try again shortly.`),
+      { status },
+    );
+  }
+  if (status > 0) {
+    return Object.assign(
+      new Error(`${providerLabel} API error ${status}: ${raw}`),
+      { status },
+    );
+  }
+
+  return new Error(
+    cloud
+      ? `Could not reach Ollama Cloud at ${host}. Check your network connection and API key. (${raw})`
+      : `Could not reach Ollama at ${host}. Check that the local Ollama server is running. (${raw})`,
+  );
 }
 
 /** Combine multiple AbortSignals into one. */

@@ -102,6 +102,7 @@ describe('ProviderRegistry', () => {
   it('listProviderNames returns all registered providers', () => {
     const names = registry.listProviderNames();
     expect(names).toContain('ollama');
+    expect(names).toContain('ollama_cloud');
     expect(names).toContain('anthropic');
     expect(names).toContain('openai');
     expect(names).toContain('groq');
@@ -110,7 +111,7 @@ describe('ProviderRegistry', () => {
     expect(names).toContain('together');
     expect(names).toContain('xai');
     expect(names).toContain('google');
-    expect(names.length).toBe(9);
+    expect(names.length).toBe(10);
   });
 
   it('listProviderTypes returns metadata for all providers', () => {
@@ -119,6 +120,13 @@ describe('ProviderRegistry', () => {
     const ollama = types.find(t => t.name === 'ollama');
     expect(ollama?.displayName).toBe('Ollama');
     expect(ollama?.compatible).toBe(false);
+    expect(ollama?.tier).toBe('local');
+
+    const ollamaCloud = types.find(t => t.name === 'ollama_cloud');
+    expect(ollamaCloud?.displayName).toBe('Ollama Cloud');
+    expect(ollamaCloud?.compatible).toBe(false);
+    expect(ollamaCloud?.tier).toBe('managed_cloud');
+    expect(ollamaCloud?.requiresCredential).toBe(true);
 
     const groq = types.find(t => t.name === 'groq');
     expect(groq?.displayName).toBe('Groq');

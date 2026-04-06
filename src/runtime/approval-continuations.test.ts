@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY,
   buildApprovalContinuationScopeKey,
+  buildApprovalOutcomeContinuationMetadata,
   findSuspendedApprovalState,
   normalizeApprovalContinuationScope,
+  readApprovalOutcomeContinuationMetadata,
   selectSuspendedOriginalMessage,
 } from './approval-continuations.js';
 
@@ -61,5 +64,21 @@ describe('approval continuations', () => {
       existing: 'older request',
       current: 'new request',
     })).toBe('new request');
+  });
+
+  it('round-trips structured approval outcome continuation metadata', () => {
+    const metadata = buildApprovalOutcomeContinuationMetadata({
+      approvalId: 'approval-1',
+      decision: 'approved',
+      resultMessage: 'Search completed.',
+    });
+
+    expect(metadata).toHaveProperty(APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY);
+    expect(readApprovalOutcomeContinuationMetadata(metadata)).toEqual({
+      type: 'approval_outcome',
+      approvalId: 'approval-1',
+      decision: 'approved',
+      resultMessage: 'Search completed.',
+    });
   });
 });

@@ -7,7 +7,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
 
 import { chromium } from 'playwright';
-import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+import {
+  createOllamaHarnessChatResponse,
+  getHarnessProviderConfig,
+  readHarnessOllamaEnvOptions,
+  resolveRealOllamaProvider,
+} from './ollama-harness-provider.mjs';
 
 function printHelp() {
   console.log([
@@ -25,6 +31,7 @@ function printHelp() {
     '  HARNESS_USE_REAL_OLLAMA=1',
     '  HARNESS_KEEP_TMP=1',
     `  HARNESS_OLLAMA_BASE_URL, HARNESS_OLLAMA_MODEL (default ${DEFAULT_HARNESS_OLLAMA_MODEL}), HARNESS_WSL_HOST_IP`,
+    '  HARNESS_OLLAMA_API_KEY or OLLAMA_API_KEY for Ollama Cloud,',
     '  HARNESS_OLLAMA_BIN, HARNESS_AUTOSTART_LOCAL_OLLAMA,',
     '  HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD',
   ].join('\n'));
@@ -36,15 +43,11 @@ function parseHarnessOptions() {
     printHelp();
     process.exit(0);
   }
+  const ollamaEnv = readHarnessOllamaEnvOptions();
   return {
     useRealOllama: args.has('--use-ollama') || process.env.HARNESS_USE_REAL_OLLAMA === '1',
     keepTmp: args.has('--keep-tmp') || process.env.HARNESS_KEEP_TMP === '1',
-    ollamaBaseUrl: process.env.HARNESS_OLLAMA_BASE_URL?.trim() || '',
-    ollamaModel: process.env.HARNESS_OLLAMA_MODEL?.trim() || '',
-    wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
-    ollamaBin: process.env.HARNESS_OLLAMA_BIN?.trim() || '',
-    autostartLocalOllama: process.env.HARNESS_AUTOSTART_LOCAL_OLLAMA !== '0',
-    bypassLocalModelComplexityGuard: process.env.HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD !== '0',
+    ...ollamaEnv,
   };
 }
 
@@ -101,18 +104,6 @@ async function requestJson(baseUrl, token, method, pathname, body) {
   return text ? JSON.parse(text) : {};
 }
 
-async function requestJsonNoAuth(url, timeoutMs = 2_500) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    const text = await response.text();
-    return text ? JSON.parse(text) : {};
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function createChatCompletionResponse({ model, content = '' }) {
   return {
     id: `chatcmpl-${Date.now()}`,
@@ -138,6 +129,7 @@ function createChatCompletionResponse({ model, content = '' }) {
 async function startFakeProvider() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
 
     if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -145,12 +137,19 @@ async function startFakeProvider() {
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    if (isOllamaNativeChat || (req.method === 'POST' && url.pathname === '/v1/chat/completions')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(createChatCompletionResponse({
-        model: 'second-brain-ui-harness-model',
-        content: 'Second Brain UI harness provider response.',
-      })));
+      res.end(JSON.stringify(
+        isOllamaNativeChat
+          ? createOllamaHarnessChatResponse({
+              model: 'second-brain-ui-harness-model',
+              content: 'Second Brain UI harness provider response.',
+            })
+          : createChatCompletionResponse({
+              model: 'second-brain-ui-harness-model',
+              content: 'Second Brain UI harness provider response.',
+            }),
+      ));
       return;
     }
 
@@ -172,174 +171,11 @@ async function startFakeProvider() {
   };
 }
 
-function collectOllamaBaseUrlCandidates(options) {
-  const candidates = [];
-  const push = (value) => {
-    const trimmed = value?.trim();
-    if (!trimmed || candidates.includes(trimmed)) return;
-    candidates.push(trimmed.replace(/\/$/, ''));
-  };
-
-  push(options.ollamaBaseUrl);
-  push('http://127.0.0.1:11434');
-  push('http://localhost:11434');
-  push(options.wslHostIp ? `http://${options.wslHostIp}:11434` : '');
-
-  try {
-    const resolv = fs.readFileSync('/etc/resolv.conf', 'utf-8');
-    const match = resolv.match(/^nameserver\s+([0-9.]+)\s*$/m);
-    if (match?.[1]) {
-      push(`http://${match[1]}:11434`);
-    }
-  } catch {
-    // Ignore.
-  }
-
-  return candidates;
-}
-
-function isLoopbackOllamaUrl(candidate) {
-  try {
-    const parsed = new URL(candidate);
-    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
-  } catch {
-    return false;
-  }
-}
-
-async function canReachOllama(candidate) {
-  const result = await requestJsonNoAuth(`${candidate}/api/tags`);
-  return Array.isArray(result?.models) ? result.models : [];
-}
-
-async function maybeStartLocalOllama(options, candidate) {
-  if (!options.autostartLocalOllama || !isLoopbackOllamaUrl(candidate)) {
-    return null;
-  }
-
-  const homeDir = os.homedir();
-  const binCandidates = [
-    options.ollamaBin,
-    path.join(homeDir, '.local', 'bin', 'ollama'),
-    'ollama',
-  ].filter(Boolean);
-
-  let ollamaBin = '';
-  for (const candidateBin of binCandidates) {
-    try {
-      const processHandle = spawn(candidateBin, ['--version'], { stdio: 'ignore' });
-      const exitCode = await new Promise((resolve) => {
-        processHandle.on('exit', resolve);
-        processHandle.on('error', () => resolve(-1));
-      });
-      if (exitCode === 0) {
-        ollamaBin = candidateBin;
-        break;
-      }
-    } catch {
-      // Try next candidate.
-    }
-  }
-
-  if (!ollamaBin) {
-    return null;
-  }
-
-  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-second-brain-ollama-'));
-  const logPath = path.join(logDir, 'ollama.log');
-  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-  const processHandle = spawn(ollamaBin, ['serve'], {
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      NO_COLOR: '1',
-    },
-  });
-  processHandle.stdout.pipe(logStream);
-  processHandle.stderr.pipe(logStream);
-
-  const shutdown = async () => {
-    if (!processHandle.killed) {
-      if (process.platform === 'win32') {
-        processHandle.kill('SIGTERM');
-      } else if (processHandle.pid) {
-        process.kill(-processHandle.pid, 'SIGTERM');
-      }
-    }
-    logStream.end();
-  };
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      await canReachOllama(candidate);
-      return { close: shutdown, logPath };
-    } catch {
-      if (processHandle.exitCode !== null) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  await shutdown();
-  throw new Error(`Failed to autostart local Ollama at ${candidate}. See ${logPath}`);
-}
-
 async function resolveHarnessProvider(options) {
   if (!options.useRealOllama) {
     return startFakeProvider();
   }
-
-  const candidates = collectOllamaBaseUrlCandidates(options);
-  const errors = [];
-  let localOllama = null;
-  for (const candidate of candidates) {
-    try {
-      let models;
-      try {
-        models = await canReachOllama(candidate);
-      } catch (error) {
-        if (!localOllama) {
-          localOllama = await maybeStartLocalOllama(options, candidate);
-          if (localOllama) {
-            models = await canReachOllama(candidate);
-          } else {
-            throw error;
-          }
-        } else {
-          throw error;
-        }
-      }
-      const resolvedModel = resolveHarnessOllamaModel(options.ollamaModel, models);
-      if (!resolvedModel) {
-        throw new Error(
-          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
-        );
-      }
-      return {
-        baseUrl: candidate,
-        model: resolvedModel,
-        mode: 'real_ollama',
-        async close() {
-          if (localOllama) {
-            await localOllama.close();
-          }
-        },
-      };
-    } catch (error) {
-      errors.push(`${candidate} -> ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  throw new Error(
-    [
-      'Real Ollama mode was requested, but no reachable Ollama endpoint was found.',
-      'Set HARNESS_OLLAMA_BASE_URL to a reachable endpoint or install Ollama locally in WSL so the harness can autostart it on 127.0.0.1:11434.',
-      'If you intend to reach Windows-hosted Ollama from WSL, expose it on the Windows host IP and allow it through the firewall.',
-      `Tried: ${errors.join(' | ')}`,
-    ].join(' '),
-  );
+  return resolveRealOllamaProvider(options, { logPrefix: 'guardian-second-brain-ollama-' });
 }
 
 function resolveBrowserExecutable() {
@@ -412,13 +248,15 @@ async function runHarness() {
   fs.writeFileSync(linkPath, 'Harness reference file\n');
 
   const provider = await resolveHarnessProvider(options);
+  const providerConfig = getHarnessProviderConfig(provider);
   const config = `
 llm:
-  local:
-    provider: ollama
+  ${providerConfig.profileName}:
+    provider: ${providerConfig.llmEntry.provider}
     baseUrl: ${provider.baseUrl}
     model: ${provider.model}
-defaultProvider: local
+${providerConfig.credentialRef ? `    credentialRef: ${providerConfig.credentialRef}
+` : ''}defaultProvider: ${providerConfig.profileName}
 channels:
   cli:
     enabled: false
@@ -428,7 +266,12 @@ channels:
     port: ${harnessPort}
     authToken: "${authToken}"
 assistant:
-  identity:
+${providerConfig.credentialRef ? `  credentials:
+    refs:
+      ${providerConfig.credentialRef}:
+        source: env
+        env: ${providerConfig.credentialEnv}
+` : ''}  identity:
     mode: single_user
     primaryUserId: harness
   setup:

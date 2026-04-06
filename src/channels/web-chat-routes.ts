@@ -120,6 +120,7 @@ export async function handleWebChatRoutes(context: WebChatRoutesContext): Promis
         content?: unknown;
         userId?: string;
         agentId?: unknown;
+        requestId?: unknown;
         surfaceId?: unknown;
         channel?: string;
         metadata?: Record<string, unknown>;
@@ -127,6 +128,7 @@ export async function handleWebChatRoutes(context: WebChatRoutesContext): Promis
 
       const content = asNonEmptyString(parsed.content);
       const agentId = trimOptionalString(parsed.agentId);
+      const requestId = trimOptionalString(parsed.requestId);
       if (!content) {
         sendJSON(res, 400, { error: 'content is required' });
         return true;
@@ -143,7 +145,7 @@ export async function handleWebChatRoutes(context: WebChatRoutesContext): Promis
             principalRole: principal.principalRole,
             channel: parsed.channel ?? 'web',
             metadata: asRecord(parsed.metadata),
-          });
+          }, undefined, requestId ? { requestId } : undefined);
           sendJSON(res, 200, response);
         } catch (err) {
           const requestError = context.getRequestErrorDetails(err);

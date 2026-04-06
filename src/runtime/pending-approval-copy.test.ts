@@ -107,6 +107,48 @@ describe('pending approval copy', () => {
     expect(message).not.toMatch(/\b\d{12,}\b/);
   });
 
+  it('formats Microsoft 365 calendar approvals without raw tool JSON', () => {
+    const expectedDate = new Date(Date.UTC(2026, 3, 7, 12, 0, 0, 0)).toLocaleDateString(undefined, {
+      timeZone: 'UTC',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    const expectedStartTime = new Date(Date.UTC(2000, 0, 1, 13, 0, 0, 0)).toLocaleTimeString(undefined, {
+      timeZone: 'UTC',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    const expectedEndTime = new Date(Date.UTC(2000, 0, 1, 13, 30, 0, 0)).toLocaleTimeString(undefined, {
+      timeZone: 'UTC',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    const message = formatPendingApprovalMessage([
+      {
+        toolName: 'm365',
+        argsPreview: JSON.stringify({
+          service: 'calendar',
+          resource: 'me/events',
+          method: 'create',
+          json: {
+            subject: 'Extended Toilet Break',
+            showAs: 'oof',
+            start: { dateTime: '2026-04-07T13:00:00', timeZone: 'Pacific/Auckland' },
+            end: { dateTime: '2026-04-07T13:30:00', timeZone: 'Pacific/Auckland' },
+          },
+        }),
+      },
+    ]);
+
+    expect(message).toBe(
+      `Waiting for approval to create Microsoft 365 calendar event "Extended Toilet Break" on ${expectedDate} from ${expectedStartTime} to ${expectedEndTime} (Pacific/Auckland).`,
+    );
+    expect(message).not.toContain('"service":"calendar"');
+  });
+
   it('formats coding backend approvals without raw JSON', () => {
     expect(formatPendingApprovalMessage([
       {

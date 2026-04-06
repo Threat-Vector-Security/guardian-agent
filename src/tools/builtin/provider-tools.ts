@@ -7,11 +7,13 @@ export interface ProviderToolInventoryItem {
   model: string;
   baseUrl?: string;
   locality: 'local' | 'external';
+  tier: 'local' | 'managed_cloud' | 'frontier';
   connected: boolean;
   availableModels?: string[];
   isDefault?: boolean;
   isPreferredLocal?: boolean;
-  isPreferredExternal?: boolean;
+  isPreferredManagedCloud?: boolean;
+  isPreferredFrontier?: boolean;
 }
 
 interface ProviderToolRegistrarContext {
@@ -37,10 +39,12 @@ function buildProviderSummary(provider: ProviderToolInventoryItem | undefined): 
     type: provider.type,
     model: provider.model,
     locality: provider.locality,
+    tier: provider.tier,
     connected: provider.connected,
     isDefault: !!provider.isDefault,
     isPreferredLocal: !!provider.isPreferredLocal,
-    isPreferredExternal: !!provider.isPreferredExternal,
+    isPreferredManagedCloud: !!provider.isPreferredManagedCloud,
+    isPreferredFrontier: !!provider.isPreferredFrontier,
     ...(provider.availableModels?.length ? { availableModels: provider.availableModels } : {}),
   };
 }
@@ -49,7 +53,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
   context.registry.register(
     {
       name: 'llm_provider_list',
-      description: 'List configured LLM provider profiles, including provider type, active model, locality, connectivity, default/preferred routing flags, and any discovered available models.',
+      description: 'List configured LLM provider profiles, including provider type, tier, active model, locality, connectivity, default/preferred routing flags, and any discovered available models.',
       shortDescription: 'List configured LLM providers and their active models.',
       risk: 'read_only',
       category: 'system',
@@ -140,7 +144,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
   context.registry.register(
     {
       name: 'llm_provider_update',
-      description: 'Update configured LLM provider settings. Supports switching the active model on an existing provider profile, changing the default provider, or choosing the preferred local/external provider profile used by smart routing. Always requires user approval.',
+      description: 'Update configured LLM provider settings. Supports switching the active model on an existing provider profile, changing the default provider, or choosing the preferred local/managed-cloud/frontier provider profile used by smart routing. Always requires user approval.',
       shortDescription: 'Switch models or preferred/default LLM providers.',
       risk: 'external_post',
       category: 'system',
@@ -162,7 +166,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
           },
           locality: {
             type: 'string',
-            description: 'Required when action=set_preferred. Must be local or external.',
+            description: 'Required when action=set_preferred. Must be local, managed-cloud, or frontier.',
           },
         },
         required: ['action', 'provider'],
@@ -171,6 +175,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
         { input: { action: 'set_model', provider: 'ollama', model: 'gemma3:latest' }, description: 'Switch a configured provider profile to another available model' },
         { input: { action: 'set_default', provider: 'openai' }, description: 'Set the default provider profile' },
         { input: { action: 'set_preferred', provider: 'ollama', locality: 'local' }, description: 'Set the preferred local provider profile' },
+        { input: { action: 'set_preferred', provider: 'ollama-cloud', locality: 'managed-cloud' }, description: 'Set the preferred managed-cloud provider profile' },
       ],
     },
     async (args) => {
@@ -239,16 +244,32 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
         }
         case 'set_preferred': {
           const locality = context.requireString(args.locality, 'locality').trim().toLowerCase();
-          if (locality !== 'local' && locality !== 'external') {
-            return { success: false, error: `Invalid locality '${locality}'. Use local or external.` };
+          const preferredKey = locality === 'local'
+            ? 'local'
+            : locality === 'managed-cloud' || locality === 'managed_cloud'
+              ? 'managedCloud'
+              : locality === 'frontier'
+                ? 'frontier'
+                : null;
+          if (!preferredKey) {
+            return { success: false, error: `Invalid locality '${locality}'. Use local, managed-cloud, or frontier.` };
           }
-          if (provider.locality !== locality) {
+          const providerMatchesPreference = preferredKey === 'local'
+            ? provider.locality === 'local'
+            : preferredKey === 'managedCloud'
+              ? provider.tier === 'managed_cloud'
+              : provider.tier === 'frontier';
+          if (!providerMatchesPreference) {
             return {
               success: false,
-              error: `Provider '${providerName}' is ${provider.locality}, so it cannot be set as the preferred ${locality} provider.`,
+              error: `Provider '${providerName}' is ${provider.tier}, so it cannot be set as the preferred ${locality} provider.`,
             };
           }
-          const alreadyPreferred = locality === 'local' ? provider.isPreferredLocal : provider.isPreferredExternal;
+          const alreadyPreferred = preferredKey === 'local'
+            ? provider.isPreferredLocal
+            : preferredKey === 'managedCloud'
+              ? provider.isPreferredManagedCloud
+              : provider.isPreferredFrontier;
           if (alreadyPreferred) {
             return {
               success: true,
@@ -262,7 +283,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
             assistant: {
               tools: {
                 preferredProviders: {
-                  [locality]: providerName,
+                  [preferredKey]: providerName,
                 },
               },
             },

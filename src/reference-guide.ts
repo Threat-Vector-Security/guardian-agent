@@ -348,7 +348,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `/assistant jobs all` when you want the raw recent job feed instead of the filtered operator view.',
                   'Use `/assistant jobs followup <jobId> <replay|keep_held|dismiss>` when a delegated result is waiting for operator review.',
                   'Use `/tools` to inspect tool policy and pending approvals, and `/approve` or `/deny` as fallback commands if native prompts are not suitable.',
-                  'Use `/mode` to switch between auto, local-only, and external-only routing without changing agent definitions.',
+                  'Use `/mode` to switch between auto, local, managed cloud, and frontier routing without changing agent definitions.',
                   'Guardian chat can also explain the CLI command surface in normal language. Ask things like "How do I attach a coding workspace from the CLI?" and it should answer from the built-in command guide, then point you to `/help <command>` for exact syntax.',
                   'Auto mode chooses the best available AI path for the request. If only one AI path is available, Guardian uses it automatically.',
                   'Blocked work such as approvals, clarifications, and workspace switches can be resumed cleanly across the supported operator surfaces.',
@@ -430,6 +430,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian keeps one shared current coding session across web chat, CLI, and Telegram for the same user by default. Switching or attaching from one of those surfaces updates the default workspace the others see as current too.',
                   'In the web UI, the Coding Workspace session cards control which coding session is current for Guardian chat. Click a session card to make it current. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
                   'Guardian chat can also switch, list, inspect, and detach Coding Workspace sessions directly from normal language requests such as "List the coding sessions", "What coding workspace is this chat attached to?", "Switch this chat to the coding workspace for TestApp", and "Detach this chat from the current coding workspace."',
+                  'Repo-scoped search requests in an attached coding workspace, such as `Search the repo for "ollama_cloud"`, should route through guarded filesystem search inside that workspace rather than falling back to ad hoc shell search commands.',
                 ],
               },
               {
@@ -504,7 +505,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'ollama-local',
             title: 'Connect Ollama (Local)',
-            summary: 'Configure a local model for private, low-latency operation.',
+            summary: 'Configure a local model for private, low-latency operation, including advanced Ollama runtime options when needed.',
             sections: [
               {
                 title: 'Local Provider Setup',
@@ -512,8 +513,17 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Install and run Ollama locally before configuring Guardian Agent.',
                   'Pull at least one model first, for example `ollama pull llama3.2`.',
                   'In Configuration > AI Providers choose the local provider path, then set a profile name and model.',
+                  'Set the local routed default if you want this profile to be the model Guardian uses whenever routing stays on the local tier.',
                   'CLI equivalent: `/config add ollama ollama llama3.2` followed by `/config set default ollama`.',
                   'With approval, Guardian can also inspect configured provider profiles and switch between already-available models through the normal chat/tool path.',
+                ],
+              },
+              {
+                title: 'Advanced Settings',
+                items: [
+                  'Local Ollama and Ollama Cloud both use the same native Ollama request controls inside Guardian.',
+                  'Use the advanced section when you need to tune local Ollama behavior such as max tokens, temperature, timeout, keep-alive, think mode, or native Ollama options JSON.',
+                  'Leave advanced settings empty unless you have a concrete reason to override the defaults.',
                 ],
               },
               {
@@ -526,30 +536,64 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'ollama-cloud',
+            title: 'Connect Ollama Cloud',
+            summary: 'Configure Ollama Cloud as the managed-cloud middle tier when you want Ollama-native remote access without jumping straight to other frontier providers.',
+            sections: [
+              {
+                title: 'Managed-Cloud Setup',
+                items: [
+                  'In Configuration > AI Providers use the dedicated Ollama Cloud editor in the managed-cloud section.',
+                  'Set a profile name, the remote model, and an Ollama Cloud API key or credential ref.',
+                  'Guardian treats Ollama Cloud as a distinct managed-cloud tier between local Ollama and other frontier hosted providers.',
+                  'Set the managed-cloud routed default if you want Guardian to prefer Ollama Cloud whenever routing leaves the local tier but should stay below frontier providers.',
+                ],
+              },
+              {
+                title: 'Advanced Settings',
+                items: [
+                  'The advanced section supports the same Ollama-native controls as local Ollama, including keep-alive, think mode, and native options JSON.',
+                  'Use the default Ollama Cloud base URL unless you have a deliberate reason to point Guardian at a different Ollama-compatible managed endpoint.',
+                ],
+              },
+              {
+                title: 'Validation',
+                items: [
+                  'Use Configuration > AI Providers or CLI `/providers` to confirm model discovery and connectivity.',
+                  'If model loading fails, verify the API key first and then confirm the model exists for your Ollama Cloud account.',
+                ],
+              },
+            ],
+          },
+          {
             id: 'cloud-providers',
             title: 'Connect Hosted AI Providers',
-            summary: 'Add external models from OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini for quality fallback, smart routing, or explicit hosted-model use.',
+            summary: 'Add frontier hosted models from OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini for quality fallback, smart routing, or explicit hosted-model use.',
             sections: [
               {
                 title: 'External Provider Setup',
                 items: [
-                  'In Configuration > AI Providers choose External Providers, then select the service, model, and credentials.',
+                  'In Configuration > AI Providers choose the Frontier Providers section, then select the service, model, and credentials.',
                   'CLI equivalent: `/config add <name> <provider> <model> <apiKey>`.',
                   'Set the default provider from Configuration > AI Providers or with `/config set default <name>`.',
+                  'Set the frontier routed default if you want Guardian to use a specific frontier profile whenever routing explicitly targets the frontier tier.',
                 ],
               },
               {
                 title: 'Built-In Provider Families',
                 items: [
-                  'Guardian supports both local and hosted AI providers.',
-                  'Use a hosted provider when you want higher-quality responses or a fallback path beyond your local model.',
+                  'Guardian supports local, managed-cloud, and frontier hosted AI provider tiers.',
+                  'Use Ollama Cloud when you want Ollama-native managed access without moving all the way to a different frontier provider family.',
+                  'Use a frontier hosted provider when you want higher-quality responses or a fallback path beyond local and managed-cloud Ollama.',
                   'Use the web picker to choose from the built-in supported services.',
                 ],
               },
               {
                 title: 'Usage Notes',
                 items: [
-                  'You can choose whether Guardian should prefer local AI, hosted AI, or auto-select between them.',
+                  'Guardian keeps one global default provider plus routed defaults for local, managed-cloud, and frontier tiers.',
+                  'You can choose whether Guardian should prefer local AI, managed-cloud Ollama, frontier providers, or auto-select between them.',
+                  'When Guardian auto-selects a non-local path, it prefers the managed-cloud tier before the frontier tier when both are configured.',
                   'Provider changes propagate to the running web UI immediately.',
                 ],
               },
@@ -939,7 +983,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Duplicate-safe memory writes are built in: exact repeats are skipped, matching curated pages are updated instead of duplicated, and stale system-managed flush material can be consolidated automatically.',
                   'Idle-time automated maintenance is configurable under `assistant.maintenance` and can sweep global memory plus idle code-session scopes without creating hidden assistant turns.',
                   'Derived memory pages and hygiene findings are inspectable but remain read-only and refreshable by design.',
-                  'Switching between `auto`, `local-only`, and `external-only` changes who answers, but it does not create a separate conversation by itself.',
+                  'Switching between `auto`, `local-only`, `managed-cloud-only`, and `frontier-only` changes who answers, but it does not create a separate conversation by itself.',
                   'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
                   'If context looks stale, review memory, analytics, and search-oriented history together.',
                 ],

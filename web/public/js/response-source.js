@@ -4,11 +4,29 @@ function normalizeLocality(locality) {
     : null;
 }
 
+function normalizeProviderTier(tier) {
+  return tier === 'local' || tier === 'managed_cloud' || tier === 'frontier'
+    ? tier
+    : null;
+}
+
+function formatTierLabel(tier, locality) {
+  if (tier === 'managed_cloud') return 'managed cloud';
+  if (tier === 'frontier') return 'frontier';
+  if (tier === 'local') return 'local';
+  return locality;
+}
+
+function formatProviderName(providerName) {
+  return providerName.replaceAll('_', ' ');
+}
+
 export function describeResponseSource(value) {
   const locality = normalizeLocality(value?.locality) || 'system';
   const providerName = typeof value?.providerName === 'string' && value.providerName.trim()
     ? value.providerName.trim()
     : '';
+  const providerTier = normalizeProviderTier(value?.providerTier);
   const tier = value?.tier === 'local' || value?.tier === 'external'
     ? value.tier
     : '';
@@ -16,9 +34,9 @@ export function describeResponseSource(value) {
   const notice = typeof value?.notice === 'string' && value.notice.trim()
     ? value.notice.trim()
     : '';
-  const labelParts = [locality];
+  const labelParts = [formatTierLabel(providerTier, locality)];
   if (providerName) {
-    labelParts.push(providerName);
+    labelParts.push(formatProviderName(providerName));
   }
   if (usedFallback) {
     labelParts.push('fallback');
@@ -31,6 +49,7 @@ export function describeResponseSource(value) {
   return {
     locality,
     providerName,
+    providerTier,
     tier,
     usedFallback,
     notice,

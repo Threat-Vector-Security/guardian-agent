@@ -23,6 +23,7 @@ import {
 } from '../runtime/assistant-jobs.js';
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import { buildApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
 import type {
   PromptAssemblyAdditionalSection,
   PromptAssemblyContinuity,
@@ -1142,7 +1143,12 @@ export class WorkerManager {
         principalId: state.principalId,
         principalRole: state.principalRole,
         channel: state.channel,
-        content: `[User approved the pending tool action(s). Result: ${resultMessage?.trim() || 'Approved and executed.'}] Please continue with the current request only. Do not resume older unrelated pending tasks.`,
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId,
+          decision,
+          resultMessage,
+        }),
         timestamp: Date.now(),
       },
       systemPrompt: '',

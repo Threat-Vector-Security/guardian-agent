@@ -213,7 +213,7 @@ describe('CLIChannel', () => {
     expect(text).not.toContain('Queued chat');
     expect(text).not.toContain('Started chat');
     expect(text.match(/\[progress\] Inspecting workspace — fs_list/g)?.length ?? 0).toBe(1);
-    expect(text).toContain('[external] Completed.');
+    expect(text).toContain('[frontier] Completed.');
 
     await cli.stop();
   });
@@ -4407,12 +4407,12 @@ describe('WebChannel', () => {
       expect(res2.status).toBe(200);
     });
 
-    it('POST /api/message with agentId should use onDispatch', async () => {
-      const dispatched: Array<{ agentId: string; content: string }> = [];
+    it('POST /api/message with agentId should use onDispatch and forward requestId', async () => {
+      const dispatched: Array<{ agentId: string; content: string; requestId?: string }> = [];
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,
-        onDispatch: async (agentId, msg) => {
-          dispatched.push({ agentId, content: msg.content });
+        onDispatch: async (agentId, msg, _routeDecision, options) => {
+          dispatched.push({ agentId, content: msg.content, requestId: options?.requestId });
           return { content: `Reply from ${agentId}` };
         },
       };
@@ -4423,7 +4423,7 @@ describe('WebChannel', () => {
       const res = await fetch('http://localhost:18951/api/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ content: 'Hello', agentId: 'agent-1' }),
+        body: JSON.stringify({ content: 'Hello', agentId: 'agent-1', requestId: 'req-message-1' }),
       });
 
       expect(res.status).toBe(200);
@@ -4431,6 +4431,7 @@ describe('WebChannel', () => {
       expect(body.content).toBe('Reply from agent-1');
       expect(dispatched.length).toBe(1);
       expect(dispatched[0].agentId).toBe('agent-1');
+      expect(dispatched[0].requestId).toBe('req-message-1');
     });
 
     it('POST /api/tools/run forwards surfaceId to onToolsRun', async () => {

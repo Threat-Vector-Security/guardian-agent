@@ -1,6 +1,7 @@
 import type { DashboardProviderInfo } from '../../channels/web-types.js';
 import type { GuardianAgentConfig } from '../../config/types.js';
 import type { LLMProvider } from '../../llm/types.js';
+import { getDefaultBaseUrlForProviderType, getProviderTier } from '../../llm/provider-metadata.js';
 import { resolveRuntimeCredentialView } from '../credentials.js';
 import type { LocalSecretStore } from '../secret-store.js';
 
@@ -21,6 +22,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
       model: llmConfig?.model ?? 'unknown',
       baseUrl: llmConfig?.baseUrl,
       locality: isLocal ? 'local' : 'external',
+      tier: getProviderTier(provider.name) ?? (isLocal ? 'local' : 'frontier'),
       connected: false,
     };
   };
@@ -68,6 +70,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
   const getDefaultModelForProviderType = (providerType: string): string => {
     switch (providerType.trim().toLowerCase()) {
       case 'ollama': return 'llama3.2';
+      case 'ollama_cloud': return 'gpt-oss:120b';
       case 'anthropic': return 'claude-sonnet-4-6';
       case 'openai': return 'gpt-4o';
       case 'groq': return 'llama-3.3-70b-versatile';
@@ -97,6 +100,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
     getProviderInfoSnapshot,
     buildProviderInfo,
     getDefaultModelForProviderType,
+    getDefaultBaseUrlForProviderType,
     resolveCredentialForProviderInput,
   };
 }

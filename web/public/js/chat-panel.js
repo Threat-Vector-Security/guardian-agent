@@ -16,6 +16,7 @@ import {
 } from './approval-ui-state.js';
 import { decideChatApproval } from './chat-approval.js';
 import { resolveChatHistoryKey } from './chat-history.js';
+import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
@@ -145,24 +146,33 @@ export async function initChatPanel(container) {
     modeSelect = document.createElement('select');
     modeSelect.id = 'chat-mode-select';
     modeSelect.style.cssText = 'font-size:0.7rem;';
-    modeSelect.innerHTML = getRoutingModeOptions(chatAgents).map((option) => (
+    modeSelect.innerHTML = getRoutingModeOptions(chatAgents, routingMode).map((option) => (
       `<option value="${esc(option.value)}">${esc(option.label)}</option>`
     )).join('');
 
     const currentMode = normalizeRoutingMode(
       routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto',
       chatAgents,
+      routingMode,
     );
     modeSelect.value = currentMode;
     sessionStorage.setItem(TIER_MODE_KEY, currentMode);
 
     modeSelect.addEventListener('change', async () => {
       const mode = modeSelect.value;
-      sessionStorage.setItem(TIER_MODE_KEY, mode);
       try {
-        await api.setRoutingMode(mode);
+        const result = await api.setRoutingMode(mode);
+        const nextRoutingState = result && typeof result === 'object' ? result : { tierMode: mode };
+        routingMode = nextRoutingState;
+        modeSelect.innerHTML = getRoutingModeOptions(chatAgents, nextRoutingState).map((option) => (
+          `<option value="${esc(option.value)}">${esc(option.label)}</option>`
+        )).join('');
+        const normalizedMode = normalizeRoutingMode(nextRoutingState.tierMode ?? mode, chatAgents, nextRoutingState);
+        modeSelect.value = normalizedMode;
+        sessionStorage.setItem(TIER_MODE_KEY, normalizedMode);
       } catch (err) {
         console.error('Failed to set routing mode', err);
+        sessionStorage.setItem(TIER_MODE_KEY, normalizeRoutingMode(mode, chatAgents, routingMode));
       }
     });
 
@@ -330,7 +340,7 @@ export async function initChatPanel(container) {
     input.focus();
   };
 
-  const beginApprovalProgress = (sessionId) => {
+  const beginApprovalProgress = (sessionId, requestId) => {
     if (!history) {
       return {
         setLabel: () => {},
@@ -353,19 +363,19 @@ export async function initChatPanel(container) {
     history.scrollTop = history.scrollHeight;
 
     const onRunTimeline = (data) => {
-      if (!sessionId || data?.summary?.codeSessionId !== sessionId) return;
+      if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: sessionId })) return;
       updateActiveChatIndicatorTimeline(data);
       history.scrollTop = history.scrollHeight;
     };
 
-    if (sessionId) {
+    if (sessionId || requestId) {
       onSSE('run.timeline', onRunTimeline);
     }
 
     return {
       setLabel: (label) => updateActiveChatIndicatorLabel(label),
       finish: () => {
-        if (sessionId) {
+        if (sessionId || requestId) {
           offSSE('run.timeline', onRunTimeline);
         }
         clearActiveChatIndicator();
@@ -383,7 +393,8 @@ export async function initChatPanel(container) {
     const historyKey = getHistoryKey();
     const chatHistory = getHistory(historyKey);
     const focusedSessionId = currentCodeSessionId;
-    const progress = decision === 'approved' ? beginApprovalProgress(focusedSessionId) : null;
+    const continuationRequestId = decision === 'approved' ? createClientRequestId() : '';
+    const progress = decision === 'approved' ? beginApprovalProgress(focusedSessionId, continuationRequestId) : null;
 
     try {
       const results = [];
@@ -444,6 +455,7 @@ export async function initChatPanel(container) {
             'web',
             undefined,
             GUARDIAN_CHAT_SURFACE_ID,
+            continuationRequestId,
           );
           if (allSucceeded) {
             markApprovalUiResolved(approvalIds, decision);
@@ -625,9 +637,7 @@ export async function initChatPanel(container) {
       };
 
       const onRunTimeline = (data) => {
-        if (focusedSessionId) {
-          if (data?.summary?.codeSessionId !== focusedSessionId) return;
-        } else if (data?.summary?.runId !== requestId) {
+        if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: focusedSessionId })) {
           return;
         }
         updateActiveChatIndicatorTimeline(data);
@@ -673,6 +683,7 @@ export async function initChatPanel(container) {
           'web',
           undefined,
           GUARDIAN_CHAT_SURFACE_ID,
+          requestId,
         );
         clearActiveChatIndicator();
         addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
@@ -778,24 +789,41 @@ function hasTierRoutingAgents(agents) {
   return !!(local || external);
 }
 
-function getRoutingModeOptions(agents) {
+function getRoutingModeLabel(mode) {
+  if (mode === 'local-only') return 'Local';
+  if (mode === 'managed-cloud-only') return 'Managed Cloud';
+  if (mode === 'frontier-only') return 'Frontier';
+  return 'Auto';
+}
+
+function getAvailableRoutingModes(agents, routingState) {
+  if (Array.isArray(routingState?.availableModes) && routingState.availableModes.length > 0) {
+    return routingState.availableModes;
+  }
   const { local, external } = getRoutingLaneAgents(agents);
   return [
-    { value: 'auto', label: 'Auto' },
-    ...(local ? [{ value: 'local-only', label: 'Local' }] : []),
-    ...(external ? [{ value: 'external-only', label: 'External' }] : []),
+    'auto',
+    ...(local ? ['local-only'] : []),
+    ...(external ? ['managed-cloud-only', 'frontier-only'] : []),
   ];
 }
 
-function normalizeRoutingMode(mode, agents) {
-  const availableModes = new Set(getRoutingModeOptions(agents).map((option) => option.value));
+function getRoutingModeOptions(agents, routingState) {
+  return getAvailableRoutingModes(agents, routingState).map((value) => ({
+    value,
+    label: getRoutingModeLabel(value),
+  }));
+}
+
+function normalizeRoutingMode(mode, agents, routingState) {
+  const availableModes = new Set(getAvailableRoutingModes(agents, routingState));
   return availableModes.has(mode) ? mode : 'auto';
 }
 
 function getRoutingModeAgentId(agents, mode) {
   const { local, external } = getRoutingLaneAgents(agents);
   if (mode === 'local-only') return local?.id;
-  if (mode === 'external-only') return external?.id;
+  if (mode === 'managed-cloud-only' || mode === 'frontier-only') return external?.id;
   return undefined;
 }
 

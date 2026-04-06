@@ -152,26 +152,32 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
 
   afterEach(async () => {
     await runtime?.stop();
+    vi.unstubAllGlobals();
   });
 
   it('should dispatch UserMessage, call LLM, and return response', async () => {
-    // Mock fetch for Ollama
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes('/v1/chat/completions')) {
-        return {
-          ok: true,
-          json: async () => ({
-            id: 'test',
-            model: 'llama3.2',
-            choices: [{
-              message: { role: 'assistant', content: 'The capital of France is Paris.' },
-              finish_reason: 'stop',
-            }],
-            usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-          }),
-        };
+      if (url.includes('/api/chat')) {
+        return new Response(JSON.stringify({
+          model: 'llama3.2',
+          created_at: new Date().toISOString(),
+          message: { role: 'assistant', content: 'The capital of France is Paris.' },
+          done: true,
+          done_reason: 'stop',
+          total_duration: 1,
+          load_duration: 1,
+          prompt_eval_count: 10,
+          prompt_eval_duration: 1,
+          eval_count: 8,
+          eval_duration: 1,
+        }), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+          },
+        });
       }
-      return { ok: false, status: 404, text: async () => 'Not found' };
+      return new Response('Not found', { status: 404 });
     }));
 
     runtime = new Runtime();
@@ -189,27 +195,31 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
     });
 
     expect(response.content).toBe('The capital of France is Paris.');
-
-    vi.unstubAllGlobals();
   });
 
   it('should redact secrets from LLM response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes('/v1/chat/completions')) {
-        return {
-          ok: true,
-          json: async () => ({
-            id: 'test',
-            model: 'llama3.2',
-            choices: [{
-              message: { role: 'assistant', content: 'Your AWS key is AKIAIOSFODNN7EXAMPLE, have fun!' },
-              finish_reason: 'stop',
-            }],
-            usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-          }),
-        };
+      if (url.includes('/api/chat')) {
+        return new Response(JSON.stringify({
+          model: 'llama3.2',
+          created_at: new Date().toISOString(),
+          message: { role: 'assistant', content: 'Your AWS key is AKIAIOSFODNN7EXAMPLE, have fun!' },
+          done: true,
+          done_reason: 'stop',
+          total_duration: 1,
+          load_duration: 1,
+          prompt_eval_count: 10,
+          prompt_eval_duration: 1,
+          eval_count: 8,
+          eval_duration: 1,
+        }), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+          },
+        });
       }
-      return { ok: false, status: 404, text: async () => 'Not found' };
+      return new Response('Not found', { status: 404 });
     }));
 
     runtime = new Runtime();
@@ -234,8 +244,6 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
     const secretDetected = runtime.auditLog.query({ type: 'secret_detected' });
     const outputRedacted = runtime.auditLog.query({ type: 'output_redacted' });
     expect(secretDetected.length + outputRedacted.length).toBeGreaterThanOrEqual(1);
-
-    vi.unstubAllGlobals();
   });
 });
 

@@ -8,6 +8,7 @@ import type {
 } from './channels/web-types.js';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
+import { getProviderLocality } from './llm/provider-metadata.js';
 import type { ChatMessage } from './llm/types.js';
 import {
   formatCodeSessionFileReferencesForPrompt,
@@ -38,37 +39,8 @@ const MAX_TOOL_RESULT_STRING_CHARS = 600;
 const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
 const MAX_TOOL_RESULT_OBJECT_KEYS = 20;
 
-function isLoopbackOrPrivateHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  if (!normalized) return false;
-  if (
-    normalized === 'localhost'
-    || normalized === '127.0.0.1'
-    || normalized === '::1'
-    || normalized === '0.0.0.0'
-    || normalized === 'host.docker.internal'
-  ) {
-    return true;
-  }
-  if (/^10\.\d+\.\d+\.\d+$/.test(normalized)) return true;
-  if (/^192\.168\.\d+\.\d+$/.test(normalized)) return true;
-  const private172 = normalized.match(/^172\.(\d+)\.\d+\.\d+$/);
-  if (private172) {
-    const secondOctet = Number(private172[1]);
-    if (secondOctet >= 16 && secondOctet <= 31) return true;
-  }
-  return false;
-}
-
-function isLocalProviderEndpoint(baseUrl: string | undefined, providerType: string | undefined): boolean {
-  if ((providerType ?? '').trim().toLowerCase() === 'ollama') return true;
-  if (!baseUrl) return false;
-  try {
-    const parsed = new URL(baseUrl);
-    return isLoopbackOrPrivateHost(parsed.hostname);
-  } catch {
-    return /localhost|127\.0\.0\.1|::1|0\.0\.0\.0|host\.docker\.internal/.test(baseUrl);
-  }
+function isLocalProviderEndpoint(_baseUrl: string | undefined, providerType: string | undefined): boolean {
+  return getProviderLocality(providerType) === 'local';
 }
 
 function stripLeadingContextPrefix(input: string): string {
@@ -583,6 +555,20 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
   if (output && typeof output === 'object') {
     const obj = output as Record<string, unknown>;
 
+    if ((toolName === 'fs_search' || toolName === 'code_symbol_search') && Array.isArray(obj.matches)) {
+      const matches = obj.matches as unknown[];
+      return {
+        root: truncateText(toString(obj.root), 240) || undefined,
+        query: truncateText(toString(obj.query), 200) || undefined,
+        mode: truncateText(toString(obj.mode), 40) || undefined,
+        scannedDirs: toNumber(obj.scannedDirs) ?? undefined,
+        scannedFiles: toNumber(obj.scannedFiles) ?? undefined,
+        truncated: toBoolean(obj.truncated),
+        matches: matches.slice(0, 20).map((match) => compactFilesystemSearchMatchForLLM(match)),
+        ...(matches.length > 20 ? { moreMatches: matches.length - 20 } : {}),
+      };
+    }
+
     if (toolName === 'fs_read' && typeof obj.content === 'string') {
       const content = obj.content as string;
       const lines = content.split('\n');
@@ -625,6 +611,23 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
   }
 
   return compactValueForLLM(output);
+}
+
+function compactFilesystemSearchMatchForLLM(match: unknown): Record<string, unknown> {
+  if (!match || typeof match !== 'object') {
+    return { value: compactValueForLLM(match) };
+  }
+
+  const value = match as Record<string, unknown>;
+  const relativePath = truncateText(toString(value.relativePath) || toString(value.path), 240) || undefined;
+  const matchType = truncateText(toString(value.matchType), 24) || undefined;
+  const snippet = truncateText(toString(value.snippet), 240) || undefined;
+
+  return {
+    relativePath,
+    matchType,
+    ...(snippet ? { snippet } : {}),
+  };
 }
 
 function compactGwsOutputForLLM(output: unknown): unknown {
@@ -1136,13 +1139,30 @@ const DEFAULT_CODING_BACKENDS_CONFIG: NonNullable<GuardianAgentConfig['assistant
 };
 
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
-  const llm: Record<string, { provider: string; model: string; baseUrl?: string; credentialRef?: string }> = {};
+  const llm: Record<string, {
+    provider: string;
+    model: string;
+    baseUrl?: string;
+    credentialRef?: string;
+    maxTokens?: number;
+    temperature?: number;
+    timeoutMs?: number;
+    keepAlive?: string | number;
+    think?: import('./config/types.js').OllamaThinkConfig;
+    ollamaOptions?: import('./config/types.js').OllamaOptionsConfig;
+  }> = {};
   for (const [name, cfg] of Object.entries(config.llm)) {
     llm[name] = {
       provider: cfg.provider,
       model: cfg.model,
       baseUrl: cfg.baseUrl,
       credentialRef: cfg.credentialRef,
+      maxTokens: cfg.maxTokens,
+      temperature: cfg.temperature,
+      timeoutMs: cfg.timeoutMs,
+      keepAlive: cfg.keepAlive,
+      think: cfg.think,
+      ollamaOptions: cfg.ollamaOptions,
     };
   }
   const searchConfig = config.assistant.tools.search;

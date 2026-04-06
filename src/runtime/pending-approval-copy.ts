@@ -27,6 +27,10 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function tryParsePreview(preview: string): Record<string, unknown> | null {
   const normalized = normalizePreview(preview);
   if (!normalized.startsWith('{') || !normalized.endsWith('}')) return null;
@@ -63,6 +67,65 @@ function quote(value: string): string {
   return `"${value}"`;
 }
 
+interface CalendarDateParts {
+  year: number;
+  month: number;
+  day: number;
+}
+
+interface CalendarTimeParts {
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+interface CalendarDateTimeParts extends CalendarDateParts, CalendarTimeParts {}
+
+function parseDateParts(value: string): CalendarDateParts | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return {
+    year: Number.parseInt(match[1], 10),
+    month: Number.parseInt(match[2], 10),
+    day: Number.parseInt(match[3], 10),
+  };
+}
+
+function parseDateTimeParts(value: string): CalendarDateTimeParts | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return {
+    year: Number.parseInt(match[1], 10),
+    month: Number.parseInt(match[2], 10),
+    day: Number.parseInt(match[3], 10),
+    hour: Number.parseInt(match[4], 10),
+    minute: Number.parseInt(match[5], 10),
+    second: Number.parseInt(match[6] ?? '0', 10),
+  };
+}
+
+function sameDateParts(a: CalendarDateParts, b: CalendarDateParts): boolean {
+  return a.year === b.year && a.month === b.month && a.day === b.day;
+}
+
+function formatCalendarDateParts(parts: CalendarDateParts): string {
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0, 0)).toLocaleDateString(undefined, {
+    timeZone: 'UTC',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
+
+function formatCalendarTimeParts(parts: CalendarTimeParts): string {
+  return new Date(Date.UTC(2000, 0, 1, parts.hour, parts.minute, parts.second, 0)).toLocaleTimeString(undefined, {
+    timeZone: 'UTC',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, {
     weekday: 'long',
@@ -94,6 +157,39 @@ function formatTimeRange(startAt: number | null, endAt: number | null): string |
     return `on ${startDate} from ${formatTime(startAt)} to ${formatTime(endAt)}`;
   }
   return `from ${formatDateTime(startAt)} to ${formatDateTime(endAt)}`;
+}
+
+function formatProviderCalendarRange(
+  startRecord: Record<string, unknown> | null,
+  endRecord: Record<string, unknown> | null,
+): string | null {
+  const startDateTime = parseDateTimeParts(startRecord ? asString(startRecord.dateTime) : '');
+  const endDateTime = parseDateTimeParts(endRecord ? asString(endRecord.dateTime) : '');
+  const timeZone = (startRecord ? asString(startRecord.timeZone) : '')
+    || (endRecord ? asString(endRecord.timeZone) : '');
+  const zoneSuffix = timeZone ? ` (${timeZone})` : '';
+
+  if (startDateTime) {
+    const startDateLabel = formatCalendarDateParts(startDateTime);
+    const startTimeLabel = formatCalendarTimeParts(startDateTime);
+    if (!endDateTime) {
+      return `on ${startDateLabel} at ${startTimeLabel}${zoneSuffix}`;
+    }
+    const endTimeLabel = formatCalendarTimeParts(endDateTime);
+    if (sameDateParts(startDateTime, endDateTime)) {
+      return `on ${startDateLabel} from ${startTimeLabel} to ${endTimeLabel}${zoneSuffix}`;
+    }
+    return `from ${startDateLabel} at ${startTimeLabel} to ${formatCalendarDateParts(endDateTime)} at ${endTimeLabel}${zoneSuffix}`;
+  }
+
+  const startDate = parseDateParts(startRecord ? asString(startRecord.date) : '');
+  const endDate = parseDateParts(endRecord ? asString(endRecord.date) : '');
+  if (!startDate) return null;
+  const startDateLabel = formatCalendarDateParts(startDate);
+  if (!endDate || sameDateParts(startDate, endDate)) {
+    return `on ${startDateLabel}${zoneSuffix}`;
+  }
+  return `from ${startDateLabel} to ${formatCalendarDateParts(endDate)}${zoneSuffix}`;
 }
 
 function formatMaybeTimestamp(key: string, value: unknown): string | null {
@@ -284,10 +380,45 @@ function describeSecondBrainRoutineAction(toolName: string, preview: string): st
 function describeProviderEventAction(providerLabel: string, preview: string): string | null {
   const parsed = tryParsePreview(preview);
   if (!parsed) return null;
-  const method = asString(parsed.method);
-  const title = asString(parsed.title) || asString(parsed.subject);
-  const location = asString(parsed.location);
-  const when = formatTimeRange(finiteNumber(parsed.startsAt), finiteNumber(parsed.endsAt));
+  const method = asString(parsed.method).toLowerCase();
+  const service = asString(parsed.service).toLowerCase();
+  const resource = asString(parsed.resource).toLowerCase();
+  const body = isRecord(parsed.json) ? parsed.json : parsed;
+  const title = asString(body.title)
+    || asString(body.summary)
+    || asString(body.subject)
+    || asString(parsed.title)
+    || asString(parsed.summary)
+    || asString(parsed.subject);
+  const location = isRecord(body.location)
+    ? asString(body.location.displayName) || asString(body.location.name)
+    : asString(body.location) || asString(parsed.location);
+  const when = (
+    (isRecord(body.start) || isRecord(body.end))
+      ? formatProviderCalendarRange(
+        isRecord(body.start) ? body.start : null,
+        isRecord(body.end) ? body.end : null,
+      )
+      : null
+  ) ?? formatTimeRange(finiteNumber(parsed.startsAt), finiteNumber(parsed.endsAt));
+  const isCalendarAction = service === 'calendar'
+    || resource === 'events'
+    || resource.endsWith('/events')
+    || resource.includes('calendar');
+  if (isCalendarAction && ['create', 'update', 'patch', 'delete'].includes(method)) {
+    const verb = method === 'delete'
+      ? 'delete'
+      : method === 'create'
+        ? 'create'
+        : 'update';
+    const parts = [
+      `${verb} ${providerLabel} calendar event`,
+      title ? quote(title) : '',
+      when ?? '',
+      location ? `at ${location}` : '',
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(' ') : null;
+  }
   const parts = [
     method ? `run ${providerLabel} action ${quote(method)}` : `run ${providerLabel} action`,
     title ? `for ${quote(title)}` : '',

@@ -100,6 +100,7 @@ import {
   type DirectIntentRoutingCandidate,
 } from './runtime/direct-intent-routing.js';
 import {
+  attachPreRoutedIntentGatewayMetadata,
   IntentGateway,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
@@ -155,6 +156,7 @@ import {
 } from './runtime/pending-action-resume.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
+import { getProviderLocality, getProviderTier } from './llm/provider-metadata.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
 import { SkillRegistry } from './skills/registry.js';
 import { buildSkillPromptMaterial, createSkillPromptMaterialCache } from './skills/prompt.js';
@@ -1442,6 +1444,7 @@ type DirectIntentShadowCandidate =
     }): ResponseSourceMetadata => ({
       locality: input.locality,
       providerName: input.providerName,
+      ...(getProviderTier(input.providerName) ? { providerTier: getProviderTier(input.providerName) } : {}),
       ...(input.response.model?.trim() ? { model: input.response.model.trim() } : {}),
       usedFallback: input.usedFallback,
       ...(input.notice ? { notice: input.notice } : {}),
@@ -1984,8 +1987,14 @@ type DirectIntentShadowCandidate =
         const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
         // Attach codeContext to the message metadata so the worker can forward it
         // through the broker to the tool executor for auto-approve decisions.
-        const workerMessage = effectiveCodeContext
-          ? { ...routedScopedMessage, metadata: { ...routedScopedMessage.metadata, codeContext: effectiveCodeContext } }
+        const workerMetadata = attachPreRoutedIntentGatewayMetadata(
+          effectiveCodeContext
+            ? { ...routedScopedMessage.metadata, codeContext: effectiveCodeContext }
+            : routedScopedMessage.metadata,
+          shouldReusePreRoutedIntentGateway(earlyGateway) ? earlyGateway : null,
+        );
+        const workerMessage = workerMetadata
+          ? { ...routedScopedMessage, metadata: workerMetadata }
           : routedScopedMessage;
         const result = await workerManager.handleMessage({
           sessionId: `${conversationUserId}:${conversationChannel}`,
@@ -4032,9 +4041,23 @@ type DirectIntentShadowCandidate =
     activeSkills: ResolvedSkill[];
     conversationKey: ConversationKey;
   }): Promise<AgentResponse> {
-    const normalized = typeof input.result === 'string'
+    const normalizedBase = typeof input.result === 'string'
       ? { content: input.result }
       : input.result;
+    const normalized = readResponseSourceMetadata(normalizedBase.metadata) || !input.ctx.llm?.name?.trim()
+      ? normalizedBase
+      : {
+          ...normalizedBase,
+          metadata: {
+            ...(normalizedBase.metadata ?? {}),
+            responseSource: {
+              locality: getProviderLocalityFromName(input.ctx.llm.name),
+              providerName: input.ctx.llm.name.trim(),
+              ...(getProviderTier(input.ctx.llm.name) ? { providerTier: getProviderTier(input.ctx.llm.name) } : {}),
+              usedFallback: false,
+            } satisfies ResponseSourceMetadata,
+          },
+        };
     if (this.conversationService) {
       this.conversationService.recordTurn(
         input.conversationKey,
@@ -4888,8 +4911,8 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     overrideProvider?: LLMProvider,
   ): 'local' | 'external' {
-    const providerName = (overrideProvider?.name ?? ctx.llm?.name ?? '').trim().toLowerCase();
-    return providerName === 'ollama' ? 'local' : 'external';
+    const providerType = (overrideProvider?.name ?? ctx.llm?.name ?? '').trim().toLowerCase();
+    return getProviderLocality(providerType) ?? 'external';
   }
 
   private sanitizeToolResultForLlm(

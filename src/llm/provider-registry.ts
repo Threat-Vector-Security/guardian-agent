@@ -13,51 +13,64 @@ import type { LLMConfig } from '../config/types.js';
 import { OllamaProvider } from './ollama.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAIProvider } from './openai.js';
-/** Default base URLs for OpenAI-compatible providers. */
-const COMPATIBLE_DEFAULTS: Record<string, { baseUrl: string; displayName: string }> = {
-  groq:     { baseUrl: 'https://api.groq.com/openai/v1',                                    displayName: 'Groq' },
-  mistral:  { baseUrl: 'https://api.mistral.ai/v1',                                         displayName: 'Mistral AI' },
-  deepseek: { baseUrl: 'https://api.deepseek.com',                                          displayName: 'DeepSeek' },
-  together: { baseUrl: 'https://api.together.xyz/v1',                                       displayName: 'Together AI' },
-  xai:      { baseUrl: 'https://api.x.ai/v1',                                               displayName: 'xAI (Grok)' },
-  google:   { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',            displayName: 'Google Gemini' },
-};
+import {
+  getDefaultBaseUrlForProviderType,
+  listProviderTypeMetadata,
+  providerRequiresCredential,
+  type ProviderLocality,
+  type ProviderTier,
+} from './provider-metadata.js';
 
 export interface ProviderTypeInfo {
   name: string;
   displayName: string;
   compatible: boolean;
+  locality: ProviderLocality;
+  tier: ProviderTier;
+  requiresCredential: boolean;
 }
 
 type ProviderFactory = (config: LLMConfig) => LLMProvider;
 
 export class ProviderRegistry {
   private factories = new Map<string, ProviderFactory>();
-  private displayNames = new Map<string, string>();
+  private typeInfo = new Map<string, ProviderTypeInfo>();
 
   constructor() {
     // Core providers
-    this.register('ollama', (config) => new OllamaProvider(config), 'Ollama');
+    this.register('ollama', (config) => new OllamaProvider(config, 'ollama'));
+    this.register('ollama_cloud', (config) => new OllamaProvider(config, 'ollama_cloud'));
     this.register('anthropic', (config) => new AnthropicProvider(config), 'Anthropic');
     this.register('openai', (config) => new OpenAIProvider(config), 'OpenAI');
 
     // OpenAI-compatible providers — same SDK, different base URL
-    for (const [name, defaults] of Object.entries(COMPATIBLE_DEFAULTS)) {
+    for (const type of listProviderTypeMetadata().filter((entry) => entry.compatible)) {
       this.register(
-        name,
+        type.name,
         (config) => new OpenAIProvider(
-          { ...config, baseUrl: config.baseUrl ?? defaults.baseUrl },
-          name,
+          { ...config, baseUrl: config.baseUrl ?? getDefaultBaseUrlForProviderType(type.name) },
+          type.name,
         ),
-        defaults.displayName,
+        type.displayName,
       );
     }
   }
 
   /** Register a provider factory. */
-  private register(name: string, factory: ProviderFactory, displayName: string): void {
+  private register(name: string, factory: ProviderFactory, displayName?: string): void {
     this.factories.set(name, factory);
-    this.displayNames.set(name, displayName);
+    const metadata = listProviderTypeMetadata().find((type) => type.name === name);
+    if (!metadata) {
+      throw new Error(`No provider metadata registered for '${name}'`);
+    }
+    this.typeInfo.set(name, {
+      name,
+      displayName: displayName ?? metadata.displayName,
+      compatible: metadata.compatible,
+      locality: metadata.locality,
+      tier: metadata.tier,
+      requiresCredential: metadata.requiresCredential,
+    });
   }
 
   /** Create a provider from config. */
@@ -75,8 +88,7 @@ export class ProviderRegistry {
   createProviders(configs: Record<string, LLMConfig>): Map<string, LLMProvider> {
     const providers = new Map<string, LLMProvider>();
     for (const [name, config] of Object.entries(configs)) {
-      // Skip non-Ollama providers with no API key — they'll start disconnected.
-      if (config.provider !== 'ollama' && !config.apiKey) {
+      if (providerRequiresCredential(config.provider) && !config.apiKey) {
         continue;
       }
       try {
@@ -100,10 +112,13 @@ export class ProviderRegistry {
 
   /** List all registered provider types with metadata. */
   listProviderTypes(): ProviderTypeInfo[] {
-    return [...this.factories.keys()].map(name => ({
-      name,
-      displayName: this.displayNames.get(name) ?? name,
-      compatible: name in COMPATIBLE_DEFAULTS,
+    return listProviderTypeMetadata().map((type) => ({
+      name: type.name,
+      displayName: this.typeInfo.get(type.name)?.displayName ?? type.displayName,
+      compatible: type.compatible,
+      locality: type.locality,
+      tier: type.tier,
+      requiresCredential: type.requiresCredential,
     }));
   }
 }

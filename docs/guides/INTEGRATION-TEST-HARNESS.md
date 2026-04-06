@@ -142,6 +142,7 @@ Recommended Coding Assistant regression loop:
 node scripts/test-coding-assistant.mjs
 node scripts/test-code-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-coding-assistant.mjs --use-ollama
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_BASE_URL=https://ollama.com/api HARNESS_OLLAMA_MODEL=qwen3-coder-next node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
 Recommended Second Brain regression loop:
@@ -152,6 +153,7 @@ node scripts/test-second-brain-routines.mjs
 node scripts/test-second-brain-budgeting.mjs
 node scripts/test-second-brain-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-second-brain-ui-smoke.mjs --use-ollama
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_BASE_URL=https://ollama.com/api HARNESS_OLLAMA_MODEL=qwen3-coder-next node scripts/test-second-brain-ui-smoke.mjs --use-ollama
 ```
 
 Known gap to fix later: `scripts/test-second-brain-chat-crud.mjs` is not part of the required green loop yet. In the current harness path, chat-driven Second Brain mutations can still land in approval-gated pending actions instead of completing end to end, so the approval/continuation or live policy behavior needs follow-up work before this becomes a required passing lane.
@@ -179,6 +181,37 @@ node scripts/inspect-latest-coding-harness.mjs --file guardian.log --lines 120
 
 If you are using the WSL-local real-Ollama lane and `ollama list` cannot reach a local server, start it first in WSL with `ollama serve` before running the smoke commands.
 
+Managed-cloud Ollama lane:
+
+- use this when you want a stable remote-Ollama smoke lane from WSL without depending on a local `ollama serve` process
+- export `OLLAMA_API_KEY` in the interactive WSL shell that will launch the harness, or persist it in `~/.bashrc` and start a new interactive WSL shell
+- set `HARNESS_OLLAMA_BASE_URL=https://ollama.com/api`
+- set `HARNESS_OLLAMA_MODEL` to a cloud-visible model such as `qwen3-coder-next`, `minimax-m2.7`, or `gpt-oss:120b`
+- preferred first managed-cloud validation tool: `scripts/test-coding-assistant.mjs`
+- preferred browser-managed-cloud validation tool: `scripts/test-second-brain-ui-smoke.mjs`
+
+Managed-cloud preflight from WSL:
+
+```bash
+curl -sS -L --max-time 30 -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/tags
+```
+
+Managed-cloud smoke examples:
+
+```bash
+HARNESS_USE_REAL_OLLAMA=1 \
+HARNESS_OLLAMA_BASE_URL=https://ollama.com/api \
+HARNESS_OLLAMA_MODEL=qwen3-coder-next \
+node scripts/test-coding-assistant.mjs --use-ollama
+```
+
+```bash
+HARNESS_USE_REAL_OLLAMA=1 \
+HARNESS_OLLAMA_BASE_URL=https://ollama.com/api \
+HARNESS_OLLAMA_MODEL=qwen3-coder-next \
+node scripts/test-second-brain-ui-smoke.mjs --use-ollama
+```
+
 For real-Ollama smoke runs, the harness sets `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1` by default so local-model tool-call formatting failures surface as the original Ollama error instead of the friendly “too complicated” shortcut. Set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce production-style guard behavior exactly.
 
 The Second Brain UI smoke harness follows the same pattern:
@@ -186,11 +219,13 @@ The Second Brain UI smoke harness follows the same pattern:
 - default lane: deterministic browser CRUD against the local Second Brain UI with an embedded fake provider
 - real-Ollama lane: the same UI CRUD plus a real `POST /api/message` Second Brain retrieval/planning smoke against a WSL-local or otherwise reachable Ollama endpoint
 - WSL-local Ollama support: when the chosen endpoint is loopback and Ollama is installed in WSL, the harness can autostart `ollama serve`; otherwise point `HARNESS_OLLAMA_BASE_URL` at a reachable Windows-hosted or remote endpoint
+- managed-cloud Ollama support: point `HARNESS_OLLAMA_BASE_URL` at `https://ollama.com/api`, export `OLLAMA_API_KEY`, and pick a cloud-visible model
 
 The Second Brain chat CRUD harness complements the browser lane:
 
 - default lane: deterministic assistant CRUD across notes, tasks, the local Guardian calendar, contacts, library items, briefs, and routines using the real intent gateway plus the actual Second Brain tools
 - real-Ollama lane: the same chat prompts against a reachable Ollama model, with state assertions proving whether the local model can actually create, update, and delete the current Second Brain entities through chat
+- managed-cloud lane: use the same `--use-ollama` path with `HARNESS_OLLAMA_BASE_URL=https://ollama.com/api` and `OLLAMA_API_KEY` when you want remote-Ollama coverage instead of a local daemon
 - known gap: mutating `second_brain_*` chat flows can still fall into approval-gated pending actions in this harness path, so treat this as an investigative lane until the shared approval/continuation behavior is fixed
 
 For skill-routing or skill-trigger regressions, also run:
@@ -332,6 +367,7 @@ Useful environment variables:
 | `LLMMAP_MAX_PROMPTS` | `8` | Maximum prompt count after filtering |
 | `HARNESS_OLLAMA_BASE_URL` | auto-detect | Reachable Ollama endpoint |
 | `HARNESS_OLLAMA_MODEL` | `gemma4:26b` if installed, otherwise first available model | Model shared by GuardianAgent and `LLMMap` |
+| `OLLAMA_API_KEY` | unset | Required for managed-cloud-capable Ollama harness lanes that point at `https://ollama.com/api` |
 | `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
 | `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when WSL-local autostart is needed |
 
@@ -343,8 +379,9 @@ Useful environment variables:
 | `HARNESS_TOKEN` | auto-generated | Bearer auth token |
 | `HARNESS_USE_REAL_OLLAMA` | `0` | When `1`, use a real reachable Ollama endpoint instead of the embedded fake provider |
 | `HARNESS_AGENT_ISOLATION` | `0` | When `1`, run the harness with brokered worker isolation enabled so automation compiler routing is exercised in the worker path |
-| `HARNESS_OLLAMA_BASE_URL` | auto-detect | Base URL for a reachable Ollama instance, for example `http://192.168.x.x:11434` |
+| `HARNESS_OLLAMA_BASE_URL` | auto-detect | Base URL for a reachable Ollama instance, for example `http://192.168.x.x:11434` or `https://ollama.com/api` for Ollama Cloud |
 | `HARNESS_OLLAMA_MODEL` | `gemma4:26b` if installed, otherwise first available model | Specific Ollama model name to use for the real-model harness lane |
+| `OLLAMA_API_KEY` | unset | Required when a managed-cloud-capable harness lane points `HARNESS_OLLAMA_BASE_URL` at Ollama Cloud (`https://ollama.com/api`) |
 | `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
 | `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when using WSL-local autostart |
 | `HARNESS_AUTOSTART_LOCAL_OLLAMA` | `1` | When `1`, the harness may start and stop a WSL-local `ollama serve` process for loopback real-model runs |

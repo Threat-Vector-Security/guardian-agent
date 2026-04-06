@@ -21,6 +21,7 @@ import {
 import {
   IntentGateway,
   readPreRoutedIntentGatewayMetadata,
+  shouldReusePreRoutedIntentGateway,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRecord,
@@ -37,6 +38,7 @@ import {
   buildRoutedIntentAdditionalSection,
   prepareToolExecutionForIntent,
 } from '../runtime/routed-tool-execution.js';
+import { readApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
@@ -252,7 +254,12 @@ export class BrokeredWorkerSession {
       this.client.llmChat(msgs, opts);
 
     if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
-      return this.resumeSuspendedSession(params.message, chatFn, toolExecutor, params);
+      return this.resumeSuspendedSessionAfterApproval(chatFn, toolExecutor, params);
+    }
+
+    const approvalContinuation = readApprovalOutcomeContinuationMetadata(params.message.metadata);
+    if (approvalContinuation && this.suspendedSession) {
+      return this.resumeSuspendedSessionAfterApproval(chatFn, toolExecutor, params);
     }
 
     const approvalResponse = await this.tryHandleApprovalMessage(params.message, chatFn, toolExecutor, params);
@@ -379,7 +386,7 @@ export class BrokeredWorkerSession {
     }
 
     if (decision === 'approved' && approvedAny && this.suspendedSession) {
-      return this.resumeSuspendedSession(message, chatFn, toolExecutor, params);
+      return this.resumeSuspendedSessionAfterApproval(chatFn, toolExecutor, params);
     }
 
     this.consumePendingApprovals(targetIds);
@@ -414,8 +421,7 @@ export class BrokeredWorkerSession {
     return { content: results.join('\n') };
   }
 
-  private async resumeSuspendedSession(
-    message: UserMessage,
+  private async resumeSuspendedSessionAfterApproval(
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
     toolExecutor: BrokeredToolExecutor,
     params: WorkerMessageHandleParams,
@@ -442,12 +448,10 @@ export class BrokeredWorkerSession {
         content: JSON.stringify(toolPayload),
       });
     }
-    resumedMessages.push({ role: 'user', content: message.content });
-
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
-    return this.executeLoop(message, resumedMessages, chatFn, toolExecutor, params);
+    return this.executeLoop(params.message, resumedMessages, chatFn, toolExecutor, params);
   }
 
   private async tryDirectAutomationAuthoring(
@@ -604,7 +608,7 @@ export class BrokeredWorkerSession {
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
-    if (preRouted) {
+    if (shouldReusePreRoutedIntentGateway(preRouted)) {
       return preRouted;
     }
     return this.intentGateway.classify(

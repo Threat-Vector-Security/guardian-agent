@@ -165,6 +165,10 @@ When a blocker is satisfied and the original request is still valid, Guardian re
 
 The canonical design is direct resume from the stored pending action rather than trying to reconstruct blocked work from transcript heuristics.
 
+For brokered worker approvals, the resume handoff should use structured continuation metadata rather than a synthetic user-like message such as `[User approved ...]`. Approval-backed resume should replay the suspended execution state directly.
+
+Approval-backed execution must not depend only on transient in-memory executor context. The supervisor/runtime must retain a durable or reconstructable execution envelope until the approved action finishes, is denied, or expires; otherwise stale approval controls devolve into misleading missing-context errors.
+
 ## Channel Behavior
 
 ### Web
@@ -177,6 +181,7 @@ Web requirements:
 - the transcript should only inline blocker UI when the current response carries `response.metadata.pendingAction`
 - `/api/chat/pending-action` is the canonical recovery/status fallback when streamed response metadata is missing, delayed, or the page reconnects
 - the fallback lookup must use the canonical user id and the current chat surface id
+- live activity and tooling progress must be request-scoped; a new request in the same coding session must not reuse timeline/status events from an older run
 - page, panel, or route changes must not silently drop the visible in-flight / pending-action state for the current Guardian chat surface
 - switching the focused coding workspace must not swap the visible Guardian chat transcript; pending actions remain surface-scoped and continue inside the same transcript
 

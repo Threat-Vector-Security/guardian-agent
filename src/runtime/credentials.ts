@@ -13,6 +13,7 @@ import type {
   LLMConfig,
   WebSearchConfig,
 } from '../config/types.js';
+import { providerRequiresCredential } from '../llm/provider-metadata.js';
 import type { SecretResolver } from './secret-store.js';
 import { createLogger } from '../util/logging.js';
 
@@ -96,7 +97,7 @@ export function resolveLLMCredentialConfig(
   return Object.fromEntries(
     Object.entries(configs).map(([name, cfg]) => {
       const resolved: LLMConfig = { ...cfg };
-      if (cfg.provider !== 'ollama') {
+      if (providerRequiresCredential(cfg.provider)) {
         resolved.apiKey = resolveCredentialValue(
           cfg.apiKey,
           cfg.credentialRef,

@@ -23,6 +23,9 @@ The worker process owns:
 - pending-approval continuation state
 - post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
 
+Brokered approval continuation should use structured supervisor-owned metadata over the broker boundary. The worker should resume suspended approval-backed execution from stored tool/approval state rather than reclassifying a synthetic user-like continuation prompt.
+The supervisor-side approval executor must also retain a durable or reconstructable execution envelope for approved actions; brokered isolation should not force approvals to depend on a fragile in-memory callback map that can vanish before execution.
+
 The shared prompt/context contract for both supervisor-provided state and worker-side assembly is defined in:
 - `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
 
@@ -197,6 +200,7 @@ Implemented and accurate:
 - supervisor audit can correlate brokered tool actions via `broker_action`
 - `memory_save` suppression enforced both in the worker loop and at the broker level
 - partial approval continuation: mixed approval/success tool rounds handled correctly
+- brokered approval continuation uses structured control-plane metadata instead of synthetic `[User approved ...]` text shims
 - context budget compaction applied in the worker loop
 - quality-based fallback to external provider via broker-proxied `llm.chat`
 - degraded hosts use `workspace-write` profile (not `full-access`)

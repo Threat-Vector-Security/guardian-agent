@@ -95,19 +95,21 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
   {
     aliases: ['mode'],
     title: '/mode',
-    summary: 'Control whether chat routes automatically, local-only, or external-only.',
+    summary: 'Control whether chat routes automatically, locally, through managed cloud, or through frontier providers.',
     usage: [
       '/mode',
       '/mode auto',
       '/mode local',
-      '/mode external',
+      '/mode managed-cloud',
+      '/mode frontier',
     ],
     examples: [
       '/mode local',
+      '/mode managed-cloud',
       '/mode auto',
     ],
     notes: [
-      'auto uses Guardian routing logic; local and external force the tier.',
+      'auto uses Guardian routing logic; local, managed-cloud, and frontier force the tier.',
       'Switching back to auto clears any explicit tier pin so routing can decide again.',
     ],
   },

@@ -3,6 +3,7 @@
  */
 
 import type { GuardianAgentConfig } from '../config/types.js';
+import type { OllamaOptionsConfig, OllamaThinkConfig } from '../config/types.js';
 import type { DashboardProviderInfo } from '../channels/web-types.js';
 import type { SandboxHealth } from '../sandbox/types.js';
 import {
@@ -33,6 +34,12 @@ export interface SetupApplyInput {
   apiKey?: string;
   credentialRef?: string;
   baseUrl?: string;
+  maxTokens?: number;
+  temperature?: number;
+  timeoutMs?: number;
+  keepAlive?: string | number;
+  think?: OllamaThinkConfig;
+  ollamaOptions?: OllamaOptionsConfig;
   setDefaultProvider?: boolean;
   telegramEnabled?: boolean;
   telegramBotToken?: string;
