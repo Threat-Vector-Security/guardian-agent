@@ -2168,23 +2168,17 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
-  it('/config set default <provider> should update config', async () => {
-    const updates: unknown[] = [];
+  it('/config set default <provider> should explain that the primary provider is derived', async () => {
     const { input, output, cli } = makeCli({
-      onConfigUpdate: async (u) => {
-        updates.push(u);
-        return { success: true, message: 'Config saved.' };
-      },
+      onConfigUpdate: async () => ({ success: true, message: 'Config saved.' }),
     });
     await cli.start(async () => ({ content: 'ok' }));
 
     await sendCommand(input, '/config set default claude');
     const text = readOutput(output);
 
-    expect(text).toContain('OK');
-    expect(text).toContain('Config saved');
-    expect(updates.length).toBe(1);
-    expect((updates[0] as { defaultProvider: string }).defaultProvider).toBe('claude');
+    expect(text).toContain('derived automatically');
+    expect(text).toContain('managed-cloud, local, or frontier defaults');
 
     await cli.stop();
   });
@@ -3092,7 +3086,7 @@ describe('WebChannel', () => {
     web = new WebChannel({ port: 18972, authToken: TEST_TOKEN });
     await web.start(async () => ({ content: 'ok' }));
 
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 24; i += 1) {
       const res = await fetch('http://localhost:18972/api/auth/ticket', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
@@ -3107,6 +3101,27 @@ describe('WebChannel', () => {
       body: JSON.stringify({ action: 'killswitch' }),
     });
     expect(limited.status).toBe(429);
+  });
+
+  it('scopes privileged ticket minting limits per action', async () => {
+    web = new WebChannel({ port: 18976, authToken: TEST_TOKEN });
+    await web.start(async () => ({ content: 'ok' }));
+
+    for (let i = 0; i < 24; i += 1) {
+      const res = await fetch('http://localhost:18976/api/auth/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ action: 'search.pick-path' }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    const differentAction = await fetch('http://localhost:18976/api/auth/ticket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ action: 'tools.policy' }),
+    });
+    expect(differentAction.status).toBe(200);
   });
 
   it('requires a privileged ticket for killswitch', async () => {

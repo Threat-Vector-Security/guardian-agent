@@ -1040,7 +1040,6 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config                                View full config (redacted)\n');
     this.write('  /config provider <name>                View specific provider\n');
     this.write('  /config telegram ...                   Configure Telegram channel (status/on/off/token/chatids)\n');
-    this.write('  /config set default <provider>         Change default provider\n');
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
@@ -2016,14 +2015,13 @@ export class CLIChannel implements ChannelAdapter {
 
     if (args.length < 2) {
       this.write('\nUsage:\n');
-      this.write('  /config set default <provider>\n');
       this.write('  /config set <provider> model|baseUrl|apiKey|credentialRef <value>\n\n');
       return;
     }
 
     if (args[0] === 'default') {
-      const result = await this.dashboard.onConfigUpdate({ defaultProvider: args[1] });
-      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      this.write('\nPrimary provider selection is derived automatically from the routed provider defaults.\n');
+      this.write('Update the managed-cloud, local, or frontier defaults instead of setting a global default manually.\n\n');
       return;
     }
 
@@ -5024,7 +5022,6 @@ export class CLIChannel implements ChannelAdapter {
         providerType: 'anthropic',
         model,
         apiKey,
-        setDefaultProvider: true,
         setupCompleted: true,
       };
     } else if (choice === '3') {
@@ -5042,7 +5039,6 @@ export class CLIChannel implements ChannelAdapter {
         providerType: 'openai',
         model,
         apiKey,
-        setDefaultProvider: true,
         setupCompleted: true,
       };
     } else {
@@ -5055,7 +5051,6 @@ export class CLIChannel implements ChannelAdapter {
         providerType: 'ollama',
         model,
         baseUrl,
-        setDefaultProvider: true,
         setupCompleted: true,
       };
     }

@@ -68,7 +68,7 @@ Input fields:
 
 ## Runtime Behavior
 - Config writes persist to config YAML via backend callbacks
-- LLM/default provider updates apply live through `runtime.applyLLMConfiguration()`
+- LLM/derived primary-provider updates apply live through `runtime.applyLLMConfiguration()`
 - Web search config changes apply immediately — `ToolExecutor.updateWebSearchConfig()` is called from `persistAndApplyConfig`, also clearing the search result cache so the new provider takes effect without restart
 - Coding assistant backend config changes apply immediately through the runtime coding-backend service; a restart is not required for enablement, default-backend, concurrency, or update-setting changes
 - Telegram channel structural updates still require restart
@@ -93,6 +93,8 @@ Recommended setup path:
 - External providers require API key unless one already exists
 - Updated config must pass `validateConfig()`
 - Provider saves must include explicit `providerType` — missing type with no existing provider returns an error
+- `assistant.tools.modelSelection.managedCloudRouting.roleBindings.*` must reference configured managed-cloud providers when set
+- Provider deletion must remove the LLM profile and clear any now-invalid derived primary-provider fallback, routed defaults, or managed-cloud role bindings before persistence
 
 ## Document Search Source Management
 
@@ -118,12 +120,25 @@ Per-tool and per-category LLM provider routing, controlling which model synthesi
 - `POST /api/tools/provider-routing` — Update routing map and/or toggle (body: `{ routing?: { "key": "local" | "external" }, enabled?: boolean }`)
   - Keys are tool names (e.g. `fs_write`) or category names (e.g. `workspace`)
   - `enabled` controls the `providerRoutingEnabled` master toggle
-  - Only entries differing from the default provider locality are persisted
+  - Only entries differing from the derived primary-provider locality are persisted
   - Validated server-side; invalid values return 400
-- `POST /api/providers/default` — Set the default LLM provider (body: `{ name: string }`)
 
 **Smart defaults:** When `providerRoutingEnabled` is `true` (default) and both local and external providers exist, categories are auto-routed: local categories (filesystem, shell, network, system, memory) use the local model; external categories (web, browser, workspace, email, contacts, forum, intel, search, automation) use the external model. Explicit `providerRouting` entries always override smart defaults. When only one provider type exists, smart routing is a no-op.
 
-Web UI: Configuration > Tools tab — "LLM" column on both Tool Categories and Tool Catalog tables with Local/External dropdowns. "Smart LLM Routing" checkbox toggles `providerRoutingEnabled`. Category changes cascade to all tools in that category. Providers tab includes a "Set as Default" button per provider row. Changes save immediately and take effect on the next tool execution (hot-reloadable, no restart needed).
+Web UI: Configuration > Tools tab — "LLM" column on both Tool Categories and Tool Catalog tables with Local/External dropdowns. "Smart LLM Routing" checkbox toggles `providerRoutingEnabled`. Category changes cascade to all tools in that category. Changes save immediately and take effect on the next tool execution (hot-reloadable, no restart needed).
 
 Config: `assistant.tools.providerRoutingEnabled` (boolean, default `true`), `assistant.tools.providerRouting` — `Record<string, 'local' | 'external'>`
+
+## Managed-Cloud Role Routing
+
+Configuration > AI Providers also owns the managed-cloud role-routing editor.
+
+- Managed-cloud role routing binds named Ollama Cloud profiles to Guardian workload roles inside the managed-cloud tier.
+- Current roles are:
+  - `general`
+  - `direct answers`
+  - `tool loops / provider CRUD`
+  - `managed-cloud coding`
+- These bindings only apply after normal tier selection has already decided that the request should run on the managed-cloud tier.
+- If a managed-cloud role binding is not set, Guardian should use the explicit `general` binding first when one exists for non-general work, otherwise it should infer a matching profile from the managed-cloud provider name and then fall back to the routed managed-cloud default.
+- Guardian does not mirror Ollama Cloud plan concurrency limits in this config surface; upstream concurrency and queueing remain enforced by Ollama Cloud.

@@ -247,6 +247,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Chat-driven local calendar, task due-date, and contact last-contact updates resolve phrases like `tomorrow at 12 pm`, `move it to Friday`, or `I talked to her yesterday` in Guardian\'s local timezone before the change is saved.',
                   'Simple chat questions such as `What do I have today?` or `Show my tasks` can be answered directly from your saved Guardian data.',
                   'The assistant can create, update, and delete local Second Brain notes, tasks, calendar events, people, library items, briefs, and configured routines.',
+                  'Follow-up local Second Brain edits such as `update that note`, `mark that task as done`, or `move that event to tomorrow at 5 pm` should bind to the last focused local record in the current chat instead of drifting into unrelated brief or provider actions.',
                   'Saved briefs can be generated, reviewed, edited, regenerated, and deleted from the same saved data.',
                   'Event descriptions, task details, note content, people notes, and library summaries are part of the stored records, so they are available to the assistant logic that reads those records.',
                 ],
@@ -519,7 +520,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Pull at least one model first, for example `ollama pull llama3.2`.',
                   'In Configuration > AI Providers choose the local provider path, then set a profile name and model.',
                   'Set the local routed default if you want this profile to be the model Guardian uses whenever routing stays on the local tier.',
-                  'CLI equivalent: `/config add ollama ollama llama3.2` followed by `/config set default ollama`.',
+                  'CLI equivalent: `/config add ollama ollama llama3.2`.',
                   'With approval, Guardian can also inspect configured provider profiles and switch between already-available models through the normal chat/tool path.',
                 ],
               },
@@ -550,8 +551,14 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'In Configuration > AI Providers use the dedicated Ollama Cloud editor in the managed-cloud section.',
                   'Set a profile name, the remote model, and an Ollama Cloud API key or credential ref.',
+                  'While creating a new Ollama Cloud profile, Guardian suggests a starting model from the profile name, but you can still change it before saving.',
                   'Guardian treats Ollama Cloud as a distinct managed-cloud tier between local Ollama and other frontier hosted providers.',
                   'Set the managed-cloud routed default if you want Guardian to prefer Ollama Cloud whenever routing leaves the local tier but should stay below frontier providers.',
+                  'You can save multiple named Ollama Cloud profiles, for example a general profile plus separate direct, tool-loop, and coding profiles.',
+                  'In Configuration > AI Providers > Model Auto Selection Policy use Managed-Cloud Profile Routing to bind those named profiles to Guardian workload roles instead of treating managed cloud as a single undifferentiated slot.',
+                  'When a specific managed-cloud role is left unset, Guardian uses the explicit `general` managed-cloud profile first when one is set, otherwise it can infer a matching profile from the provider name before falling back to the managed-cloud routed default.',
+                  'If you leave managed-cloud role bindings unset entirely, Guardian can still infer a likely profile from the provider name, for example `general`, `direct`, `tool`, or `coding`, before falling back to the routed default.',
+                  'You can delete saved provider profiles from the AI Providers editor; Guardian automatically clears managed-cloud role bindings and routed defaults that pointed at the deleted profile.',
                 ],
               },
               {
@@ -562,10 +569,19 @@ export function getReferenceGuide(): ReferenceGuide {
                 ],
               },
               {
+                title: 'Current Recommended Role Models',
+                items: [
+                  'Treat these as current operator recommendations, not hardcoded product rules: `general` -> `gpt-oss:120b`, `direct` -> `minimax-m2.1`, `toolLoop` -> `glm-4.7`, `coding` -> `qwen3-coder:480b`.',
+                  'If you only want three managed-cloud profiles, merge `direct` into `general` first and keep `toolLoop` plus `coding` separate.',
+                  'Use the direct Ollama Cloud API model names that appear in Ollama model discovery and `/api/tags`, not the `-cloud` local-launch suffix names shown in some Ollama examples.',
+                ],
+              },
+              {
                 title: 'Validation',
                 items: [
                   'Use Configuration > AI Providers or CLI `/providers` to confirm model discovery and connectivity.',
                   'If model loading fails, verify the API key first and then confirm the model exists for your Ollama Cloud account.',
+                  'Guardian does not hardcode Ollama Cloud plan concurrency in its config. Save the profiles you want, then let Ollama Cloud enforce its own plan-level concurrency and queueing upstream.',
                 ],
               },
             ],
@@ -580,7 +596,6 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'In Configuration > AI Providers choose the Frontier Providers section, then select the service, model, and credentials.',
                   'CLI equivalent: `/config add <name> <provider> <model> <apiKey>`.',
-                  'Set the default provider from Configuration > AI Providers or with `/config set default <name>`.',
                   'Set the frontier routed default if you want Guardian to use a specific frontier profile whenever routing explicitly targets the frontier tier.',
                 ],
               },
@@ -596,10 +611,10 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Usage Notes',
                 items: [
-                  'Guardian keeps one global default provider plus routed defaults for local, managed-cloud, and frontier tiers.',
+                  'Guardian derives one primary provider internally from the routed provider defaults, with managed cloud preferred as the default middle tier when it is configured.',
                   'Use chat mode or `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
                   'Auto mode now uses a deterministic selection policy after intent routing instead of treating every non-local request the same way.',
-                  'In Configuration > AI Providers > Auto Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
+                  'In Configuration > AI Providers > Model Auto Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
                   'The managed-cloud and frontier routed defaults still decide which concrete provider Auto uses after it picks a tier.',
                   'Balanced Auto can keep lighter external work on managed-cloud Ollama while escalating heavier repo-grounded or security-heavy work to the frontier default.',
                   'Provider changes propagate to the running web UI immediately.',

@@ -1848,11 +1848,18 @@ tr:hover td {
   flex-wrap: wrap;
 }
 
+.config-provider-actions-cell {
+  width: 1%;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .config-provider-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  min-height: 2rem;
 }
 
 .config-provider-actions .btn {
@@ -1903,6 +1910,10 @@ tr:hover td {
   font-weight: 600;
 }
 
+.cfg-provider-summary .section-heading {
+  flex: 1 1 auto;
+}
+
 .cfg-provider-summary::-webkit-details-marker { display: none; }
 .cfg-provider-summary::marker { content: ''; }
 
@@ -1922,6 +1933,27 @@ tr:hover td {
 
 .cfg-provider-accordion[open] > .cfg-provider-summary {
   border-bottom: 1px solid var(--border);
+}
+
+.cfg-selection-policy-body {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.cfg-provider-number {
+  padding-right: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cfg-provider-number::-webkit-outer-spin-button,
+.cfg-provider-number::-webkit-inner-spin-button {
+  opacity: 1;
+  margin: 0;
+  cursor: pointer;
+}
+
+.cfg-provider-number::-webkit-inner-spin-button {
+  min-height: 1.9rem;
 }
 
 .cloud-profile-browser {

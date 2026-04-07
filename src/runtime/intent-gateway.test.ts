@@ -505,6 +505,9 @@ describe('IntentGateway', () => {
     expect(primaryPrompt).toContain('Create an automation that checks WHM disk quota every day.');
     expect(primaryPrompt).toContain('Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar');
     expect(primaryPrompt).toContain('Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task');
+    expect(primaryPrompt).toContain('Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.');
+    expect(primaryPrompt).toContain('Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.');
+    expect(primaryPrompt).toContain('Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.');
     expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('SharePoint');
     expect(fallbackPrompt).toContain('workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces');
@@ -513,6 +516,9 @@ describe('IntentGateway', () => {
     expect(fallbackPrompt).toContain('Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".');
     expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365", mailboxReadMode="unread".');
     expect(fallbackPrompt).toContain('Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".');
+    expect(fallbackPrompt).toContain('Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".');
+    expect(fallbackPrompt).toContain('Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".');
+    expect(fallbackPrompt).toContain('Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {

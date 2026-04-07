@@ -705,8 +705,18 @@ Users should be able to tell immediately that this page is for product setup and
 Owns:
 
 - AI providers
-- default provider
+- model auto selection policy
+- managed-cloud profile routing
 - shared credential refs
+
+The AI Providers surface must support:
+
+- multiple named managed-cloud profiles under Ollama Cloud
+- deletion of existing provider profiles with cleanup of invalidated defaults and managed-cloud role bindings
+- a suggested starting model for new managed-cloud profiles based on the profile name, without locking the operator out of changing the model before save
+- an explicit managed-cloud role-routing editor for `general`, `direct answers`, `tool loops / provider CRUD`, and `managed-cloud coding`
+- guidance that unset managed-cloud role bindings use the explicit `general` profile first when set, otherwise can still be inferred from profile names before falling back to the routed managed-cloud default
+- guidance that managed-cloud role routing is about provider selection inside the managed-cloud tier, not about rearranging page layout or bypassing the shared broker/orchestration path
 
 ### `Search Providers`
 

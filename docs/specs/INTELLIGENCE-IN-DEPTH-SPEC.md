@@ -39,10 +39,15 @@ Current practical state:
   - Ollama Cloud
   - frontier providers
 - Provider defaults are now split explicitly across:
-  - global default provider
+  - derived primary provider
   - local routed default
   - managed-cloud routed default
   - frontier routed default
+- The managed-cloud tier can now route to different named Ollama Cloud profiles for:
+  - general fallback
+  - direct answers
+  - tool loops / provider CRUD
+  - managed-cloud coding
 - Chat mode selection now exposes:
   - auto
   - local
@@ -57,6 +62,7 @@ What this implementation phase added:
 - tier-aware routing and provider badging
 - auto fallback ordering that prefers managed-cloud before frontier when escalating beyond local
 - advanced native Ollama request settings for both local Ollama and Ollama Cloud
+- managed-cloud role routing so multiple named Ollama Cloud profiles can serve different workload classes inside Layer 4
 
 What remains future work:
 
@@ -77,12 +83,34 @@ What is now implemented:
 - tier-aware routing, fallback, and response-source badging for local vs managed-cloud vs frontier
 - tier-specific routed defaults for local, managed-cloud, and frontier provider selection
 - explicit chat-mode forcing for local, managed-cloud, and frontier paths
+- multiple named managed-cloud provider profiles under the Ollama Cloud provider family
+- deterministic managed-cloud role routing for direct answers, tool loops, managed-cloud coding, and general fallback
 
 Remaining limitations worth recording honestly:
 
 - Layer 4 currently starts and ends with Ollama Cloud; the wider managed-cloud family listed later in this spec is still future work
 - Layer 1 and Layer 2 are still not implemented
 - higher-order routing refinement across all future layers remains unfinished
+- Guardian does not hardcode vendor concurrency-plan limits for Ollama Cloud; upstream concurrency and queueing remain owned by Ollama Cloud itself
+- Guardian does not yet expose a true multimodal request path through the shared LLM abstraction, so Layer 4 role routing is currently text-first even when a managed-cloud model supports image input
+
+## As-Built Gap: Multimodal Managed-Cloud Routing
+
+Current external research matters here:
+
+- Ollama's chat API supports image input on message objects through an `images` field, using the same base API shape for local and cloud execution.
+- Ollama's current cloud-accessible model catalog includes multimodal models such as `gemma4:31b`, which Ollama currently presents as `Text, Image` with a 256K context window.
+- `gpt-oss:120b` remains an excellent text-first general managed-cloud default, but it is not the best future anchor for a dedicated multimodal lane because the current Ollama presentation is text-only.
+
+What this means for Guardian:
+
+- multimodal-aware provider selection is a real future Layer 4 requirement
+- the current four managed-cloud roles (`general`, `direct`, `toolLoop`, `coding`) are not enough once the app can send screenshots, photos, or other image-bearing prompts through the shared chat path
+- the first likely Layer 4 multimodal candidate is currently **Gemma 4 31B** on Ollama Cloud, not because the spec should hardcode one vendor forever, but because the current Ollama catalog and API make it the clearest practical entry point
+
+Current architectural blocker:
+
+- Guardian's shared `ChatMessage` abstraction is still text-only in the shipped repo baseline, so modality-aware routing would be premature until the shared message schema, channel ingestion, and provider adapters can carry images end to end
 
 ## Core Idea
 
@@ -392,6 +420,7 @@ interface LLMProviderCapabilities {
   supportsTools: boolean;
   supportsJsonSchema: boolean;
   supportsStreaming: boolean;
+  inputModalities: Array<'text' | 'image'>;
   intendedUses: Array<
     | 'general_chat'
     | 'tool_calling'
@@ -408,6 +437,7 @@ This is required so the runtime can stop doing things like:
 - treating `providerName === 'ollama'` as the definition of local
 - treating all cloud providers as one undifferentiated `external` bucket
 - assuming all local OpenAI-compatible endpoints are interchangeable
+- assuming every provider that can answer text is equally suitable once screenshots or image-bearing prompts enter the system
 
 ## Safe Implementation Strategy
 
@@ -589,6 +619,23 @@ Primary changes required:
 
 - refine Layer 3, Layer 4, and Layer 5 routing rules
 - add optional `ONNX Runtime GenAI` backend later if Windows acceleration becomes a priority
+
+### Phase 5: Modality-aware managed-cloud routing
+
+- extend the shared LLM abstraction so chat requests can carry multimodal inputs rather than only text
+- add provider capability metadata for input modality support, not just tier and locality
+- add an optional Layer 4 managed-cloud multimodal role that is selected only when the request actually contains image-bearing input
+- keep the current text-first role-routing model as the fallback for ordinary turns
+- initial practical candidate for the first managed-cloud multimodal profile is `gemma4:31b` on Ollama Cloud, because current Ollama documentation and catalog data expose it as a text-and-image cloud model with long context
+- fallback order for future multimodal turns should be:
+  - explicit multimodal managed-cloud role
+  - managed-cloud `general`
+  - managed-cloud routed default
+  - frontier multimodal-capable provider if policy allows
+
+Important guardrail:
+
+- do not expose a multimodal role in the operator UI until the shared chat/message path, provider adapters, and channel surfaces can actually submit multimodal prompts end to end
 
 ## Decision
 

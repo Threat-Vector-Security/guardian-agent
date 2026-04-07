@@ -89,7 +89,7 @@ function paint(container) {
 
   container.innerHTML = state.flash
     ? `
-      <section class="sb-shell sb-shell--compact">
+      <section class="sb-shell sb-shell--compact" data-sb-flash-shell>
         ${renderFlash(state.flash)}
       </section>
     `
@@ -121,6 +121,25 @@ function paint(container) {
   tabs.switchTo(state.activeTab);
 
   bindInteractions(container);
+}
+
+function syncFlashBanner() {
+  if (!currentContainer) return;
+  const existing = currentContainer.querySelector('[data-sb-flash-shell]');
+  if (!state.flash) {
+    existing?.remove();
+    return;
+  }
+  const markup = `
+    <section class="sb-shell sb-shell--compact" data-sb-flash-shell>
+      ${renderFlash(state.flash)}
+    </section>
+  `;
+  if (existing) {
+    existing.outerHTML = markup;
+    return;
+  }
+  currentContainer.insertAdjacentHTML('afterbegin', markup);
 }
 
 async function loadSecondBrainData() {
@@ -946,6 +965,8 @@ function renderNotes(panel, data) {
           <h3>Notes and ideas</h3>
           <p class="sb-section__copy">Search, pin, archive, and edit full notes in one place.</p>
         </div>
+      </div>
+      <div class="sb-section__header">
         <button class="btn btn-primary btn-sm" type="button" data-note-new="true">New note</button>
       </div>
       <div class="sb-split">
@@ -1225,7 +1246,7 @@ function renderLinkEditor(link) {
       <label class="sb-form__label" for="link-summary">Why this matters</label>
       <textarea id="link-summary" name="summary" rows="10" placeholder="Why this matters later">${esc(link?.summary ?? '')}</textarea>
       ${renderFormActions(
-        link ? 'Save item' : 'Add item',
+        'Save item',
         link
           ? `<button class="btn btn-danger" type="button" data-link-delete="${escAttr(link.id)}" data-label="${escAttr(link.title)}">Delete item</button>`
           : '',
@@ -1887,12 +1908,21 @@ function bindInteractions(container) {
 
     const linkPickFile = target.closest('[data-link-pick-file]');
     if (linkPickFile?.dataset.linkPickFile) {
+      event.preventDefault();
+      event.stopPropagation();
       try {
         const result = await api.pickSearchPath('file');
-        if (result && result.path) {
-          const urlInput = document.getElementById('link-url');
-          if (urlInput) urlInput.value = result.path;
+        if (result?.canceled) {
+          setFlash('error', result.message || 'File selection cancelled.');
+          return;
         }
+        if (!result?.success || !result?.path) {
+          setFlash('error', result?.message || 'Failed to pick file.');
+          return;
+        }
+        const urlInput = currentContainer.querySelector('#link-url');
+        if (urlInput) urlInput.value = result.path;
+        setFlash('success', result.message || 'File selected.');
       } catch (err) {
         setFlash('error', 'Failed to pick file: ' + (err instanceof Error ? err.message : String(err)));
       }
@@ -2386,6 +2416,7 @@ async function rerenderLocal() {
 
 function setFlash(kind, message, sticky = false) {
   state.flash = { kind, message };
+  syncFlashBanner();
   if (flashTimer) {
     window.clearTimeout(flashTimer);
     flashTimer = null;
@@ -2393,9 +2424,7 @@ function setFlash(kind, message, sticky = false) {
   if (sticky) return;
   flashTimer = window.setTimeout(() => {
     state.flash = null;
-    if (currentContainer) {
-      void rerenderLocal();
-    }
+    syncFlashBanner();
   }, 4500);
 }
 

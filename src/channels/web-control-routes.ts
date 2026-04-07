@@ -24,7 +24,7 @@ interface WebControlRoutesContext {
     presented?: string,
   ) => boolean;
   isPrivilegedTicketAction: (value: string) => boolean;
-  recordPrivilegedTicketMint: (req: IncomingMessage) => number;
+  recordPrivilegedTicketMint: (req: IncomingMessage, action: string) => number;
   sendPrivilegedTicketRateLimited: (res: ServerResponse, retryAfterMs: number) => void;
   mintPrivilegedTicket: (action: string) => string;
   privilegedTicketTtlSeconds: number;
@@ -75,7 +75,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
         sendJSON(res, 400, { error: 'Invalid privileged action' });
         return true;
       }
-      const retryAfterMs = context.recordPrivilegedTicketMint(req);
+      const retryAfterMs = context.recordPrivilegedTicketMint(req, action);
       if (retryAfterMs > 0) {
         context.sendPrivilegedTicketRateLimited(res, retryAfterMs);
         return true;

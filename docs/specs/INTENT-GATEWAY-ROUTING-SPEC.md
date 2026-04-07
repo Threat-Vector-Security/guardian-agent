@@ -275,6 +275,7 @@ IntentGateway decision
        - configured providers
        - configured routed defaults
        - operator auto-selection policy
+       - managed-cloud role bindings, when Layer 4 is selected
        - gateway workload metadata
   -> request-scoped provider/model fallback order
   -> dispatch
@@ -285,6 +286,7 @@ Rules:
 - provider/model-profile choice is deterministic server-side policy, not an LLM self-selection task
 - forced chat modes remain hard overrides for `local`, `managed cloud`, and `frontier`
 - in `auto`, Guardian may choose `frontier` as the first execution profile for harder repo-grounded or security-heavy work instead of always trying managed cloud first
+- when `managed cloud` is selected, provider choice inside that tier may use operator-managed role bindings for direct answers, tool loops, managed-cloud coding, and general fallback
 - request-scoped execution-profile metadata is attached to the routed message and reused by runtime dispatch and brokered workers
 
 Current trace stages for this slice:

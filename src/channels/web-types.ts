@@ -625,6 +625,21 @@ export interface RedactedConfig {
         frontier?: string;
         external?: string;
       };
+      modelSelection?: {
+        autoPolicy: 'balanced' | 'quality_first';
+        preferManagedCloudForLowPressureExternal: boolean;
+        preferFrontierForRepoGrounded: boolean;
+        preferFrontierForSecurity: boolean;
+        managedCloudRouting?: {
+          enabled: boolean;
+          roleBindings?: {
+            general?: string;
+            direct?: string;
+            toolLoop?: string;
+            coding?: string;
+          };
+        };
+      };
       webSearch?: {
         provider: string;
         perplexityConfigured: boolean;
@@ -708,7 +723,7 @@ export interface DashboardToolsState {
   disabledCategories?: ToolCategory[];
   /** Per-tool/per-category LLM provider routing preferences (user overrides only). */
   providerRouting?: Record<string, 'local' | 'external' | 'default'>;
-  /** Whether smart provider routing is enabled (default: true). When false, all tools use the default provider. */
+  /** Whether smart provider routing is enabled (default: true). When false, all tools use the derived primary provider. */
   providerRoutingEnabled?: boolean;
   /** Locality of the default LLM provider ('local' for Ollama, 'external' for cloud). */
   defaultProviderLocality?: 'local' | 'external';
@@ -1782,8 +1797,8 @@ export interface GwsConnectionStatus {
 
 /** Fields that can be updated via POST /api/config. */
 export interface ConfigUpdate {
-  defaultProvider?: string;
   llm?: Record<string, {
+    remove?: boolean;
     provider?: string;
     model?: string;
     apiKey?: string;
@@ -1892,6 +1907,21 @@ export interface ConfigUpdate {
         managedCloud?: string;
         frontier?: string;
         external?: string;
+      };
+      modelSelection?: {
+        autoPolicy?: 'balanced' | 'quality_first';
+        preferManagedCloudForLowPressureExternal?: boolean;
+        preferFrontierForRepoGrounded?: boolean;
+        preferFrontierForSecurity?: boolean;
+        managedCloudRouting?: {
+          enabled?: boolean;
+          roleBindings?: {
+            general?: string;
+            direct?: string;
+            toolLoop?: string;
+            coding?: string;
+          };
+        };
       };
       codingBackends?: {
         enabled?: boolean;

@@ -20,9 +20,9 @@ import type {
 export interface GuardianAgentConfig {
   /** LLM provider configurations. */
   llm: Record<string, LLMConfig>;
-  /** Default LLM provider name (key in llm map). */
+  /** Derived primary LLM provider name (key in llm map). */
   defaultProvider: string;
-  /** Fallback provider names tried when the default provider fails (keys in llm map). */
+  /** Fallback provider names tried when the primary provider fails (keys in llm map). */
   fallbacks?: string[];
   /** Agent configurations. */
   agents: AgentConfig[];
@@ -106,6 +106,7 @@ export type OllamaThinkConfig = boolean | 'high' | 'medium' | 'low';
 export type RoutingTierMode = 'auto' | 'local-only' | 'managed-cloud-only' | 'frontier-only';
 export type PreferredProviderKey = 'local' | 'managedCloud' | 'frontier' | 'external';
 export type AutoModelSelectionPolicy = 'balanced' | 'quality_first';
+export type ManagedCloudRoutingRole = 'general' | 'direct' | 'toolLoop' | 'coding';
 
 export interface OllamaOptionsConfig {
   numa?: boolean;
@@ -147,6 +148,23 @@ export interface AssistantCredentialsConfig {
 }
 
 /** High-level routing policy above concrete provider defaults. */
+export interface ManagedCloudRoutingConfig {
+  /** Whether managed-cloud role routing is enabled. Default: true. */
+  enabled: boolean;
+  /** Optional managed-cloud provider overrides for specific Guardian workload shapes. */
+  roleBindings?: {
+    /** Fallback managed-cloud profile used when no more specific role binding matches. */
+    general?: string;
+    /** Preferred managed-cloud profile for low-pressure direct-answer external work. */
+    direct?: string;
+    /** Preferred managed-cloud profile for tool-loop and provider-CRUD external work. */
+    toolLoop?: string;
+    /** Preferred managed-cloud profile for managed-cloud coding and repo-grounded work. */
+    coding?: string;
+  };
+}
+
+/** High-level routing policy above concrete provider defaults. */
 export interface AssistantModelSelectionConfig {
   /**
    * Auto-routing posture when multiple suitable providers are configured.
@@ -170,6 +188,12 @@ export interface AssistantModelSelectionConfig {
    * Default: true.
    */
   preferFrontierForSecurity: boolean;
+  /**
+   * Optional managed-cloud role routing inside the managed-cloud tier.
+   * When enabled, Guardian can map direct answers, tool loops, and managed-cloud coding work
+   * to different named managed-cloud provider profiles.
+   */
+  managedCloudRouting?: ManagedCloudRoutingConfig;
 }
 
 /** Configuration for a single LLM provider. */
@@ -1035,7 +1059,7 @@ export interface AssistantMCPConfig {
       exposeSkills?: boolean;
       /** Reserved for future multi-account support; validated but not yet implemented. */
       accountMode?: 'single_user' | 'multi_account';
-      /** LLM provider name to use for workspace tool-calling (e.g. 'anthropic', 'openai'). Falls back to default provider. */
+      /** LLM provider name to use for workspace tool-calling (e.g. 'anthropic', 'openai'). Falls back to the derived primary provider. */
       model?: string;
     };
   };
@@ -1429,7 +1453,7 @@ export interface AssistantToolsConfig {
    * Values: 'local' (force local/Ollama), 'external' (force external/cloud), 'default' (no override). */
   providerRouting?: Record<string, 'local' | 'external' | 'default'>;
   /** When true, tools are automatically routed between local and external providers based on task type.
-   * When false, all tools use the default provider only. Default: true. */
+   * When false, all tools use the derived primary provider only. Default: true. */
   providerRoutingEnabled?: boolean;
   /** Preferred provider profile for each routed tier. `external` remains a legacy alias for older configs. */
   preferredProviders?: {
@@ -1982,6 +2006,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         preferManagedCloudForLowPressureExternal: true,
         preferFrontierForRepoGrounded: true,
         preferFrontierForSecurity: true,
+        managedCloudRouting: {
+          enabled: true,
+          roleBindings: {},
+        },
       },
       codingBackends: {
         enabled: false,

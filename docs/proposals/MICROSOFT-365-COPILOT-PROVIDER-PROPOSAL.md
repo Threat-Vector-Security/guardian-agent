@@ -235,9 +235,9 @@ A second-step option is to add `m365-copilot` as a **limited LLM provider family
 
 This would let GuardianAgent route some grounded explanation or summarization turns through Microsoft 365 Copilot without pretending it is equivalent to OpenAI / Anthropic for agentic orchestration.
 
-### Not recommended: full default provider
+### Not recommended: derived primary provider
 
-Making Microsoft 365 Copilot a normal default provider for GuardianAgent's main loop is not recommended unless Microsoft later offers clear, stable support for:
+Making Microsoft 365 Copilot the derived primary provider for GuardianAgent's main loop is not recommended unless Microsoft later offers clear, stable support for:
 
 - tool/function calling
 - provider-level operational maturity beyond preview
@@ -423,4 +423,3 @@ If work is scheduled here later, the proposal should be accepted with this decis
 - **Do not market Microsoft 365 Copilot as a drop-in general LLM provider**
 - **If implemented, build a separate `m365_copilot` integration**
 - **Ship it first as a managed enterprise advisory integration, not as Guardian's default tool-calling backend**
-

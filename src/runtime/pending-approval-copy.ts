@@ -497,8 +497,6 @@ function describeProviderUpdate(preview: string): string | null {
   switch (action) {
     case 'set_model':
       return provider && model ? `switch ${provider} to model ${model}` : null;
-    case 'set_default':
-      return provider ? `set default provider to ${provider}` : null;
     case 'set_preferred':
       return provider && locality ? `set preferred ${locality} provider to ${provider}` : null;
     default:

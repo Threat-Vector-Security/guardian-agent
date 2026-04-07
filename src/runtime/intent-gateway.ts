@@ -83,6 +83,7 @@ export interface IntentGatewayEntities {
   emailProvider?: 'gws' | 'm365';
   mailboxReadMode?: 'unread' | 'latest';
   calendarTarget?: 'local' | 'gws' | 'm365';
+  calendarWindowDays?: number;
   personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
   codingBackendRequested?: boolean;
@@ -275,6 +276,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
         enum: ['local', 'gws', 'm365'],
       },
+      calendarWindowDays: {
+        type: 'number',
+      },
       personalItemType: {
         type: 'string',
         enum: ['overview', 'note', 'task', 'calendar', 'person', 'library', 'routine', 'brief', 'unknown'],
@@ -388,6 +392,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Inspect docs/plans/... and src/skills/prompt.ts. Write an implementation plan for this change." -> route=coding_task, operation=inspect.',
   'Example: "What do I have due today?" -> route=personal_assistant_task, operation=inspect, personalItemType=overview.',
   'Example: "Show my tasks." -> route=personal_assistant_task, operation=read, personalItemType=task.',
+  'Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.',
+  'Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.',
+  'Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.',
   'Example: "Save a note that the Q3 offsite venue is River House." -> route=personal_assistant_task, operation=save, personalItemType=note.',
   'Example: "Create the Pre-Meeting Brief routine in Second Brain." -> route=personal_assistant_task, operation=create, personalItemType=routine.',
   'Example: "Create a task to send the follow-up deck tomorrow." -> route=personal_assistant_task, operation=create, personalItemType=task.',
@@ -457,6 +464,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'If the user names a coding session or workspace to switch to, set sessionTarget.',
   'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
   'If the user names Google Calendar, set calendarTarget to gws. If the user names Outlook Calendar or Microsoft 365 calendar, set calendarTarget to m365. If the user is just talking about their calendar inside Guardian without naming a provider, set calendarTarget to local.',
+  'For calendar reads like "today", "this week", or "next 7 days", set calendarWindowDays when the user gives a bounded day window explicitly or implicitly.',
   'If the user clearly refers to notes, tasks, calendar planning, routines, briefs, people, or the overall Today view, set personalItemType when possible.',
   'If the user names a cloud-hosting profile id such as profileId social or refers to a known hosting profile by id, set profileId when possible.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
@@ -466,6 +474,9 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "List the coding sessions." -> route="coding_session_control", operation="navigate".',
   'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
   'Examples: "Show my tasks." -> route="personal_assistant_task", operation="read", personalItemType="task".',
+  'Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".',
+  'Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".',
+  'Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", personalItemType="overview".',
   'Examples: "Create the Pre-Meeting Brief routine in Second Brain." -> route="personal_assistant_task", operation="create", personalItemType="routine".',
   'Examples: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route="personal_assistant_task", operation="create", personalItemType="calendar", calendarTarget="local".',
@@ -919,6 +930,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
+  const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays);
   const codingBackend = normalizeCodingBackend(parsed.codingBackend);
   const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
     ? parsed.codingBackendRequested
@@ -962,6 +974,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(emailProvider ? { emailProvider } : {}),
       ...(mailboxReadMode ? { mailboxReadMode } : {}),
       ...(calendarTarget ? { calendarTarget } : {}),
+      ...(typeof calendarWindowDays === 'number' ? { calendarWindowDays } : {}),
       ...(personalItemType ? { personalItemType } : {}),
       ...(codingBackend ? { codingBackend } : {}),
       ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
@@ -1431,6 +1444,13 @@ function normalizeCalendarTarget(
     default:
       return undefined;
   }
+}
+
+function normalizeCalendarWindowDays(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const normalized = Math.trunc(value);
+  if (normalized < 1 || normalized > 366) return undefined;
+  return normalized;
 }
 
 function normalizePersonalItemType(

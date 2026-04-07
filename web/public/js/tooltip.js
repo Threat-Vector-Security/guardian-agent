@@ -17,7 +17,7 @@ const DEFAULT_TOOLTIPS = {
   '#cfg-model': 'Exact model ID sent to the provider. Use the live selector when available; only type manually when you know the provider accepts that model name.',
   '#cfg-base-url': 'Override the provider endpoint only for self-hosted gateways, proxies, or OpenAI-compatible custom endpoints. Leave blank for the vendor default.',
   '#cfg-api-key': 'Paste a provider key once to store it securely outside config.yaml. Leave blank when keeping the current secret or when using a credential ref instead.',
-  '#cfg-local-name': 'Name for this local model endpoint. You will use this profile name when setting the default provider or fallback order.',
+  '#cfg-local-name': 'Name for this local model endpoint. You will use this profile name when setting routed defaults, role bindings, or fallback order.',
   '#cfg-ext-name': 'Name for this hosted provider profile. Pick something operators can recognize quickly, such as openai-main or groq-fast.',
   '#cfg-local-type': 'Local provider family. This usually stays as Ollama unless another local runtime is added to the registry.',
   '#cfg-ext-type': 'Hosted provider family. Selecting one refreshes the expected model list and determines how the API request is shaped.',

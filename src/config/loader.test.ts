@@ -462,6 +462,45 @@ describe('validateConfig', () => {
     );
   });
 
+  it('should reject managed-cloud role bindings that point at non-managed-cloud providers', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        ollamaCloud: { provider: 'ollama_cloud', model: 'gpt-oss:120b', credentialRef: 'llm.ollama_cloud.primary' },
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.ollama_cloud.primary': { source: 'env', env: 'OLLAMA_API_KEY' },
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            managedCloud: 'ollamaCloud',
+          },
+          modelSelection: {
+            ...DEFAULT_CONFIG.assistant.tools.modelSelection,
+            managedCloudRouting: {
+              enabled: true,
+              roleBindings: {
+                direct: 'claude',
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain(
+      "assistant.tools.modelSelection.managedCloudRouting.roleBindings.direct must reference a managed-cloud provider, got 'claude'",
+    );
+  });
+
   it('should tolerate a credentialRef that points to an unknown ref (auto-managed local refs may not be in config)', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

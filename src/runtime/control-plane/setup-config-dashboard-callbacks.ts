@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { DashboardCallbacks, DashboardProviderInfo } from '../../channels/web-types.js';
 import { deepMerge, validateConfig } from '../../config/loader.js';
+import { applyDerivedDefaultProvider } from '../../config/default-provider-resolution.js';
 import type { CredentialRefConfig, GuardianAgentConfig } from '../../config/types.js';
 import {
   getDefaultBaseUrlForProviderType,
@@ -293,10 +294,6 @@ export function createSetupConfigDashboardCallbacks(
             };
           }
 
-          if (input.setDefaultProvider !== false) {
-            patch.defaultProvider = providerName;
-          }
-
           if (input.telegramEnabled !== undefined) {
             patch.channels = {
               ...options.configRef.current.channels,
@@ -311,6 +308,7 @@ export function createSetupConfigDashboardCallbacks(
           }
 
           const nextConfig = deepMerge(options.configRef.current, patch);
+          applyDerivedDefaultProvider(nextConfig);
           const errors = validateConfig(nextConfig);
           if (errors.length > 0) {
             options.trackSystemAnalytics('setup_apply_failed', { errors });
@@ -363,9 +361,7 @@ export function createSetupConfigDashboardCallbacks(
             delete rawLLM[providerName].ollamaOptions;
           }
 
-          if (input.setDefaultProvider !== false) {
-            rawConfig.defaultProvider = providerName;
-          }
+          rawConfig.defaultProvider = nextConfig.defaultProvider;
 
           if (shouldSetPreferredProvider) {
             rawConfig.assistant = rawConfig.assistant ?? {};

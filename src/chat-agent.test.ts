@@ -565,4 +565,448 @@ describe('LLMChatAgent direct intent metadata', () => {
       expect.anything(),
     );
   });
+
+  it('formats direct Second Brain library reads as library items instead of falling back to overview', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listLinks: vi.fn(() => [{
+        id: 'link-1',
+        title: 'Example Reference',
+        kind: 'reference',
+        url: 'https://example.com/',
+        summary: 'Library smoke test URL',
+      }]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-library',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my library items.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads Second Brain library items.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'library' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Library items:');
+    expect(content).toContain('Example Reference [reference] - https://example.com/');
+    expect(content).not.toContain('Second Brain overview:');
+  });
+
+  it('honors a gateway-provided calendar day window for direct Second Brain calendar reads', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const listEvents = vi.fn(() => [{
+      id: 'event-1',
+      title: 'Team Check-in',
+      startsAt: Date.UTC(2026, 3, 10, 9, 30, 0),
+      endsAt: null,
+      location: 'Brisbane office',
+      description: 'Team check-in at the Brisbane office.',
+      source: 'local',
+      createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+    }]);
+    (agent as any).secondBrainService = { listEvents };
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 3, 7, 8, 0, 0));
+
+    try {
+      const result = await (agent as any).tryDirectSecondBrainRead(
+        {
+          id: 'msg-calendar',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Show my calendar events for the next 7 days.',
+          timestamp: Date.now(),
+        },
+        {
+          route: 'personal_assistant_task',
+          operation: 'read',
+          confidence: 'high',
+          summary: 'Reads calendar events for the next seven days.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { personalItemType: 'calendar', calendarWindowDays: 7 },
+        },
+      );
+
+      const content = typeof result === 'string' ? result : result?.content ?? '';
+      expect(content).toContain('Calendar events for the next 7 days:');
+      expect(listEvents).toHaveBeenCalledWith(expect.objectContaining({
+        includePast: false,
+        fromTime: Date.UTC(2026, 3, 7, 8, 0, 0),
+        toTime: Date.UTC(2026, 3, 14, 8, 0, 0),
+      }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('updates the focused Second Brain note directly instead of falling through to briefs', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_note_upsert');
+        expect(args).toMatchObject({
+          id: 'note-2',
+          title: 'Smoke Test Note',
+          content: 'Second Brain write smoke test note updated.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'note-2',
+            title: 'Smoke Test Note',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-note-update',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that note to say: "Second Brain write smoke test note updated."',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a local note.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'note' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'note',
+            focusId: 'note-2',
+            items: [
+              { id: 'note-1', label: 'Test' },
+              { id: 'note-2', label: 'Smoke Test Note' },
+            ],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Note updated: Smoke Test Note');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toEqual({
+      kind: 'second_brain_focus',
+      payload: {
+        itemType: 'note',
+        focusId: 'note-2',
+        items: [{ id: 'note-2', label: 'Smoke Test Note' }],
+      },
+    });
+  });
+
+  it('preserves the focused Second Brain note across note list reads', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listNotes: vi.fn(() => [
+        {
+          id: 'note-1',
+          title: 'Test',
+          content: 'Testicles',
+        },
+        {
+          id: 'note-2',
+          title: 'Smoke Test Note',
+          content: 'Second Brain write smoke test note.',
+        },
+      ]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-notes',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my notes.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads recent notes.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'note' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'note',
+            focusId: 'note-2',
+            items: [{ id: 'note-2', label: 'Smoke Test Note' }],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toContain('Recent notes:');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toEqual({
+      kind: 'second_brain_focus',
+      payload: {
+        itemType: 'note',
+        focusId: 'note-2',
+        items: [
+          { id: 'note-1', label: 'Test' },
+          { id: 'note-2', label: 'Smoke Test Note' },
+        ],
+      },
+    });
+  });
+
+  it('marks the focused Second Brain task done directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
+        expect(args).toMatchObject({
+          id: 'task-1',
+          title: 'Second Brain task smoke test',
+          status: 'done',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'task-1',
+            title: 'Second Brain task smoke test',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getTaskById: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Second Brain task smoke test',
+        details: undefined,
+        priority: 'medium',
+        dueAt: Date.UTC(2026, 3, 8, 15, 0, 0),
+        status: 'todo',
+      })),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-task-done',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Mark that task as done.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Completes a local task.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'task' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'task',
+            focusId: 'task-1',
+            items: [{ id: 'task-1', label: 'Second Brain task smoke test' }],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Task completed: Second Brain task smoke test');
+  });
+
+  it('moves the focused local calendar event directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 3, 7, 8, 0, 0));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
+        expect(args.id).toBe('event-1');
+        expect(args.title).toBe('Second Brain calendar smoke test');
+        expect(args.startsAt).toBe(Date.UTC(2026, 3, 8, 7, 0, 0));
+        return {
+          success: true,
+          output: {
+            id: 'event-1',
+            title: 'Second Brain calendar smoke test',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getEventById: vi.fn(() => ({
+        id: 'event-1',
+        title: 'Second Brain calendar smoke test',
+        startsAt: Date.UTC(2026, 3, 8, 16, 0, 0),
+        endsAt: Date.UTC(2026, 3, 8, 17, 0, 0),
+        source: 'local',
+        createdAt: Date.UTC(2026, 3, 7, 8, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 8, 0, 0),
+      })),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    try {
+      const result = await (agent as any).tryDirectSecondBrainWrite(
+        {
+          id: 'msg-event-move',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Move that event to tomorrow at 5:00 PM.',
+          timestamp: Date.now(),
+        },
+        ctx,
+        'owner:web',
+        {
+          route: 'personal_assistant_task',
+          operation: 'update',
+          confidence: 'high',
+          summary: 'Moves a local event.',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { personalItemType: 'calendar', calendarTarget: 'local' },
+        },
+        {
+          continuityKey: 'chat:owner',
+          scope: { assistantId: 'chat', userId: 'owner' },
+          linkedSurfaces: [],
+          continuationState: {
+            kind: 'second_brain_focus',
+            payload: {
+              itemType: 'calendar',
+              focusId: 'event-1',
+              items: [{ id: 'event-1', label: 'Second Brain calendar smoke test' }],
+            },
+          },
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        },
+      );
+
+      expect((result as { content: string }).content).toBe('Calendar event updated: Second Brain calendar smoke test');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });

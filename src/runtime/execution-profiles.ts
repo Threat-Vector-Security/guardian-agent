@@ -1,6 +1,7 @@
 import type {
   AssistantModelSelectionConfig,
   GuardianAgentConfig,
+  ManagedCloudRoutingRole,
   PreferredProviderKey,
   RoutingTierMode,
 } from '../config/types.js';
@@ -49,6 +50,10 @@ const DEFAULT_MODEL_SELECTION_POLICY: AssistantModelSelectionConfig = {
   preferManagedCloudForLowPressureExternal: true,
   preferFrontierForRepoGrounded: true,
   preferFrontierForSecurity: true,
+  managedCloudRouting: {
+    enabled: true,
+    roleBindings: {},
+  },
 };
 
 function normalizeModelSelectionPolicy(
@@ -144,6 +149,105 @@ function listProvidersForTier(
     .sort((left, right) => left.localeCompare(right));
   const ordered = preferred ? [preferred, ...names.filter((name) => name !== preferred)] : names;
   return [...new Set(ordered)];
+}
+
+function getManagedCloudRoutingRole(input: {
+  decision: IntentGatewayDecision | null | undefined;
+  preferredAnswerPath: IntentGatewayPreferredAnswerPath;
+}): ManagedCloudRoutingRole {
+  if (
+    input.decision?.route === 'coding_task'
+    || input.decision?.executionClass === 'repo_grounded'
+    || input.decision?.requiresRepoGrounding === true
+  ) {
+    return 'coding';
+  }
+  if (input.preferredAnswerPath === 'tool_loop') {
+    return 'toolLoop';
+  }
+  if (input.preferredAnswerPath === 'direct') {
+    return 'direct';
+  }
+  return 'general';
+}
+
+function inferManagedCloudRoleFromProviderName(providerName: string): ManagedCloudRoutingRole {
+  const normalized = providerName.trim().toLowerCase();
+  if (!normalized) return 'general';
+  if (/(coding|coder|code|repo|dev|swe)/.test(normalized)) return 'coding';
+  if (/(tool|tools|loop|crud|ops|agent)/.test(normalized)) return 'toolLoop';
+  if (/(direct|chat|answer|fast)/.test(normalized)) return 'direct';
+  return 'general';
+}
+
+function findManagedCloudProviderByHeuristic(
+  config: GuardianAgentConfig,
+  desiredRole: ManagedCloudRoutingRole,
+): string | null {
+  const managedCloudProviders = Object.entries(config.llm)
+    .filter(([, llmCfg]) => providerMatchesTier(llmCfg, 'managed_cloud'))
+    .map(([name]) => name)
+    .sort((left, right) => left.localeCompare(right));
+  const specific = managedCloudProviders.find((providerName) => inferManagedCloudRoleFromProviderName(providerName) === desiredRole);
+  if (specific) return specific;
+  if (desiredRole === 'general') return null;
+  return managedCloudProviders.find((providerName) => inferManagedCloudRoleFromProviderName(providerName) === 'general') ?? null;
+}
+
+function getManagedCloudProviderSelection(input: {
+  config: GuardianAgentConfig;
+  decision: IntentGatewayDecision | null | undefined;
+  preferredAnswerPath: IntentGatewayPreferredAnswerPath;
+}): { providerName: string; reasonSuffix?: string } | null {
+  const preferred = findProviderByTier(input.config, 'managed_cloud');
+  if (!preferred) return null;
+
+  const managedCloudRouting = input.config.assistant.tools.modelSelection?.managedCloudRouting;
+  if (managedCloudRouting?.enabled === false) {
+    return { providerName: preferred };
+  }
+
+  const desiredRole = getManagedCloudRoutingRole({
+    decision: input.decision,
+    preferredAnswerPath: input.preferredAnswerPath,
+  });
+  const roleBindings = managedCloudRouting?.roleBindings;
+  const validateManagedCloudProvider = (providerName: string | undefined): string | null => {
+    const trimmed = providerName?.trim();
+    if (!trimmed) return null;
+    return providerMatchesTier(input.config.llm[trimmed], 'managed_cloud') ? trimmed : null;
+  };
+
+  const specific = validateManagedCloudProvider(roleBindings?.[desiredRole]);
+  if (specific) {
+    return {
+      providerName: specific,
+      reasonSuffix: `managed-cloud role '${desiredRole}' selected provider '${specific}'`,
+    };
+  }
+
+  const general = desiredRole !== 'general'
+    ? validateManagedCloudProvider(roleBindings?.general)
+    : null;
+  if (general) {
+    return {
+      providerName: general,
+      reasonSuffix: `managed-cloud role '${desiredRole}' fell back to general provider '${general}'`,
+    };
+  }
+
+  const inferred = findManagedCloudProviderByHeuristic(input.config, desiredRole);
+  if (inferred) {
+    const inferredRole = inferManagedCloudRoleFromProviderName(inferred);
+    return {
+      providerName: inferred,
+      reasonSuffix: inferredRole === desiredRole
+        ? `managed-cloud role '${desiredRole}' inferred provider '${inferred}' from profile name`
+        : `managed-cloud role '${desiredRole}' inferred general provider '${inferred}' from profile name`,
+    };
+  }
+
+  return { providerName: preferred };
 }
 
 function buildFallbackTierOrder(
@@ -426,6 +530,14 @@ export function selectExecutionProfile(input: {
   const preferredAnswerPath = isPreferredAnswerPath(input.gatewayDecision?.preferredAnswerPath)
     ? input.gatewayDecision.preferredAnswerPath
     : 'tool_loop';
+  const providerSelection = tierSelection.tier === 'managed_cloud'
+    ? getManagedCloudProviderSelection({
+      config: input.config,
+      decision: input.gatewayDecision,
+      preferredAnswerPath,
+    })
+    : null;
+  const effectiveProviderName = providerSelection?.providerName ?? providerName;
   const shape = buildProfileShape({
     tier: tierSelection.tier,
     expectedContextPressure,
@@ -439,8 +551,8 @@ export function selectExecutionProfile(input: {
   });
   return {
     id: shape.id,
-    providerName,
-    providerLocality: getProviderLocality(providerName) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
+    providerName: effectiveProviderName,
+    providerLocality: getProviderLocality(effectiveProviderName) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
     providerTier: tierSelection.tier,
     requestedTier: tierSelection.requestedTier,
     preferredAnswerPath,
@@ -449,8 +561,15 @@ export function selectExecutionProfile(input: {
     toolContextMode: shape.toolContextMode,
     maxAdditionalSections: shape.maxAdditionalSections,
     maxRuntimeNotices: shape.maxRuntimeNotices,
-    fallbackProviderOrder: buildFallbackProviderOrder(input.config, providerName, tierSelection.tier, policy),
-    reason: tierSelection.reason,
+    fallbackProviderOrder: buildFallbackProviderOrder(
+      input.config,
+      effectiveProviderName,
+      tierSelection.tier,
+      policy,
+    ),
+    reason: providerSelection?.reasonSuffix
+      ? `${tierSelection.reason}; ${providerSelection.reasonSuffix}`
+      : tierSelection.reason,
   };
 }
 

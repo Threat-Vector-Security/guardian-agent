@@ -219,20 +219,19 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
       '/config',
       '/config provider <name>',
       '/config telegram status|on|off|token|chatids ...',
-      '/config set default <provider>',
       '/config set <provider> model|baseUrl|apiKey|credentialRef <value>',
       '/config add <name> <type> <model> [apiKey]',
       '/config test [provider]',
     ],
     examples: [
       '/config provider ollama',
-      '/config set default ollama',
       '/config set ollama model llama3.3',
       '/config add myollama ollama mistral',
     ],
     notes: [
       'The CLI add path currently accepts provider types: ollama, anthropic, and openai.',
       'Use /config telegram ... to manage the Telegram channel from the terminal.',
+      'The primary provider is derived automatically from the routed provider defaults, so there is no separate global default command.',
     ],
   },
   {

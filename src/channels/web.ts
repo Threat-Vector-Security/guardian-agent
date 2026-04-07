@@ -42,8 +42,8 @@ const log = createLogger('channel:web');
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const PRIVILEGED_TICKET_TTL_SECONDS = 300;
 const PRIVILEGED_TICKET_MAX_REPLAY_TRACK = 2048;
-const PRIVILEGED_TICKET_ISSUE_WINDOW_MS = 5 * 60_000;
-const PRIVILEGED_TICKET_ISSUE_LIMIT = 3;
+const PRIVILEGED_TICKET_ISSUE_WINDOW_MS = 60_000;
+const PRIVILEGED_TICKET_ISSUE_LIMIT = 24;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 const AUTH_FAILURE_LIMIT = 8;
 const AUTH_BLOCK_DURATION_MS = 5 * 60_000;
@@ -560,8 +560,9 @@ export class WebChannel implements ChannelAdapter {
     return false;
   }
 
-  private recordPrivilegedTicketMint(req: IncomingMessage): number {
-    const key = this.getClientAddress(req);
+  private recordPrivilegedTicketMint(req: IncomingMessage, action: PrivilegedTicketAction): number {
+    const principal = this.resolveRequestPrincipal(req);
+    const key = `${principal.principalId}:${action}`;
     const now = Date.now();
     const existing = this.ticketMintAttempts.get(key);
     let next: TicketMintState;
@@ -966,7 +967,8 @@ export class WebChannel implements ChannelAdapter {
         requirePrivilegedTicket: (request, response, requestUrl, action, presented) =>
           this.requirePrivilegedTicket(request, response, requestUrl, action as PrivilegedTicketAction, presented),
         isPrivilegedTicketAction: (value) => this.isPrivilegedTicketAction(value),
-        recordPrivilegedTicketMint: (request) => this.recordPrivilegedTicketMint(request),
+        recordPrivilegedTicketMint: (request, action) =>
+          this.recordPrivilegedTicketMint(request, action as PrivilegedTicketAction),
         sendPrivilegedTicketRateLimited: (response, retryAfterMs) => this.sendPrivilegedTicketRateLimited(response, retryAfterMs),
         mintPrivilegedTicket: (action) => this.mintPrivilegedTicket(action as PrivilegedTicketAction),
         privilegedTicketTtlSeconds: PRIVILEGED_TICKET_TTL_SECONDS,

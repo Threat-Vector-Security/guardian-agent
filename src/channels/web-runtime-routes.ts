@@ -1252,27 +1252,6 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/providers/default') {
-    if (!dashboard.onConfigUpdate) {
-      sendJSON(res, 404, { error: 'Not available' });
-      return true;
-    }
-    try {
-      const parsed = await readJsonBody<{ name?: string }>(req, context.maxBodyBytes);
-      if (!parsed.name || typeof parsed.name !== 'string') {
-        sendJSON(res, 400, { error: 'Missing provider name' });
-        return true;
-      }
-      const result = await dashboard.onConfigUpdate({ defaultProvider: parsed.name });
-      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
-      context.maybeEmitUIInvalidation(result, ['config', 'providers'], 'providers.default.updated', url.pathname);
-      return true;
-    } catch (err) {
-      sendBadRequestError(res, err);
-      return true;
-    }
-  }
-
   if (req.method === 'GET' && url.pathname === '/api/assistant/state') {
     if (!dashboard.onAssistantState) {
       sendJSON(res, 404, { error: 'Not available' });

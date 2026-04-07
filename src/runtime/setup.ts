@@ -40,7 +40,6 @@ export interface SetupApplyInput {
   keepAlive?: string | number;
   think?: OllamaThinkConfig;
   ollamaOptions?: OllamaOptionsConfig;
-  setDefaultProvider?: boolean;
   telegramEnabled?: boolean;
   telegramBotToken?: string;
   telegramAllowedChatIds?: number[];
@@ -90,8 +89,8 @@ export function evaluateSetupStatus(
     title: 'LLM Provider Configured',
     status: providerConfigured ? 'complete' : 'incomplete',
     detail: providerConfigured
-      ? `Default provider is '${defaultProvider}'.`
-      : 'No valid default provider is configured.',
+      ? `Primary provider currently resolves to '${defaultProvider}'.`
+      : 'No valid primary provider can be derived from the current routing configuration.',
   });
 
   steps.push({
@@ -100,7 +99,7 @@ export function evaluateSetupStatus(
     status: providerOnline ? 'complete' : (providerConfigured ? 'warning' : 'incomplete'),
     detail: providerConfigured
       ? `${defaultProvider} is ${providerOnline ? 'reachable' : 'not reachable from runtime'}.`
-      : 'Configure a provider first.',
+      : 'Configure at least one provider first.',
   });
 
   const telegram = config.channels.telegram;
