@@ -203,6 +203,66 @@ describe('GoogleService', () => {
     }
   });
 
+  it('accepts generic id as an alias for Gmail messageId path params', async () => {
+    let capturedUrl = '';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text: async () => '{"id":"msg123"}',
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const svc = new GoogleService(mockAuth());
+      await svc.execute({
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'get',
+        params: { userId: 'me', id: 'msg123', format: 'metadata' },
+      });
+
+      expect(capturedUrl).toContain('/gmail/v1/users/me/messages/msg123');
+      expect(capturedUrl).toContain('format=metadata');
+      expect(capturedUrl).not.toContain('id=msg123');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('repeats Gmail metadataHeaders query params instead of collapsing them into one value', async () => {
+    let capturedUrl = '';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text: async () => '{"id":"msg123","payload":{"headers":[]}}',
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const svc = new GoogleService(mockAuth());
+      await svc.execute({
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'get',
+        params: {
+          userId: 'me',
+          messageId: 'msg123',
+          format: 'metadata',
+          metadataHeaders: ['From', 'Subject', 'Date'],
+        },
+      });
+
+      const url = new URL(capturedUrl);
+      expect(url.searchParams.getAll('metadataHeaders')).toEqual(['From', 'Subject', 'Date']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('builds correct custom method URL for Gmail send', async () => {
     let capturedUrl = '';
     const originalFetch = globalThis.fetch;
