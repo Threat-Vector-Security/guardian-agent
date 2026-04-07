@@ -7474,7 +7474,7 @@ type DirectIntentShadowCandidate =
           method: 'get',
           params: {
             userId: 'me',
-            id,
+            messageId: id,
             format: 'metadata',
             metadataHeaders: ['From', 'Subject', 'Date'],
           },
@@ -7991,7 +7991,7 @@ type DirectIntentShadowCandidate =
         method: 'get',
         params: {
           userId: 'me',
-          id,
+          messageId: id,
           format: 'metadata',
           metadataHeaders: ['From', 'Subject'],
         },

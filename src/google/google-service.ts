@@ -45,6 +45,17 @@ const RESOURCE_PATH_PARAM_MAP: Record<string, string> = {
   connections: 'resourceName',
 };
 
+const RESOURCE_PATH_PARAM_ALIASES: Partial<Record<keyof typeof RESOURCE_PATH_PARAM_MAP, string[]>> = {
+  messages: ['id'],
+  threads: ['id'],
+  labels: ['id'],
+  drafts: ['id'],
+  events: ['id'],
+  files: ['id'],
+  documents: ['id'],
+  spreadsheets: ['id'],
+};
+
 /**
  * Some Google APIs nest resources under a parent that the LLM omits.
  * For example, Calendar "events" actually lives at /calendars/{calendarId}/events.
@@ -277,9 +288,9 @@ export class GoogleService {
       pathParts.push(segment);
       // Check if this segment expects a path param after it.
       const paramKey = RESOURCE_PATH_PARAM_MAP[segment];
-      if (paramKey && params?.[paramKey] != null) {
-        pathParts.push(encodeURIComponent(String(params[paramKey])));
-        consumedParams.add(paramKey);
+      const paramValue = paramKey ? this.resolvePathParamValue(segment, paramKey, params, consumedParams) : undefined;
+      if (paramValue != null) {
+        pathParts.push(encodeURIComponent(String(paramValue)));
       }
     }
 
@@ -304,13 +315,41 @@ export class GoogleService {
       for (const [key, value] of Object.entries(params)) {
         if (value === undefined || value === null) continue;
         if (consumedParams.has(key)) continue;
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            if (entry === undefined || entry === null) continue;
+            urlParams.append(key, String(entry));
+          }
+          continue;
+        }
         urlParams.set(key, String(value));
       }
     }
 
     const url = new URL(`${endpoint.base}${path}`);
-    urlParams.forEach((value, key) => url.searchParams.set(key, value));
+    urlParams.forEach((value, key) => url.searchParams.append(key, value));
     return url;
+  }
+
+  private resolvePathParamValue(
+    segment: string,
+    paramKey: string,
+    params: Record<string, unknown> | undefined,
+    consumedParams: Set<string>,
+  ): unknown {
+    if (!params) return undefined;
+    if (params[paramKey] != null) {
+      consumedParams.add(paramKey);
+      return params[paramKey];
+    }
+    const aliases = RESOURCE_PATH_PARAM_ALIASES[segment as keyof typeof RESOURCE_PATH_PARAM_ALIASES] ?? [];
+    for (const alias of aliases) {
+      if (params[alias] != null) {
+        consumedParams.add(alias);
+        return params[alias];
+      }
+    }
+    return undefined;
   }
 
   private inferHttpMethod(method: string, json?: Record<string, unknown>): string {

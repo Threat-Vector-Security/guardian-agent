@@ -296,7 +296,8 @@ describe('LLMChatAgent direct intent metadata', () => {
           };
         }
         if (args.method === 'get') {
-          const id = String((args.params as Record<string, unknown>).id);
+          const params = args.params as Record<string, unknown>;
+          const id = String(params.messageId ?? params.id);
           const ordinal = Number(id.split('-').pop() ?? '0');
           return {
             success: true,
@@ -486,7 +487,8 @@ describe('LLMChatAgent direct intent metadata', () => {
           };
         }
         if (args.method === 'get') {
-          const id = String((args.params as Record<string, unknown>).id);
+          const params = args.params as Record<string, unknown>;
+          const id = String(params.messageId ?? params.id);
           const ordinal = Number(id.split('-').pop() ?? '0');
           return {
             success: true,
@@ -551,6 +553,14 @@ describe('LLMChatAgent direct intent metadata', () => {
       expect.objectContaining({
         method: 'list',
         params: expect.not.objectContaining({ q: 'is:unread' }),
+      }),
+      expect.anything(),
+    );
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'gws',
+      expect.objectContaining({
+        method: 'get',
+        params: expect.objectContaining({ messageId: 'gmail-latest-1' }),
       }),
       expect.anything(),
     );
