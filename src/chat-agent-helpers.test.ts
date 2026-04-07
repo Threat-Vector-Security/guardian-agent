@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  redactConfig,
   formatDirectFilesystemSearchResponse,
   formatToolResultForLLM,
   parseDirectGoogleWorkspaceIntent,
 } from './chat-agent-helpers.js';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from './config/types.js';
 
 describe('formatToolResultForLLM', () => {
   it('keeps filesystem search results path-oriented instead of collapsing matches into opaque objects', () => {
@@ -171,5 +173,50 @@ describe('parseDirectGoogleWorkspaceIntent', () => {
     expect(parseDirectGoogleWorkspaceIntent(
       'Show me my Outlook calendar events for tomorrow.',
     )).toBeNull();
+  });
+});
+
+describe('redactConfig', () => {
+  it('preserves model auto selection policy and managed-cloud role bindings in GET /api/config responses', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm['ollama-cloud-general'] = {
+      provider: 'ollama_cloud',
+      model: 'gpt-oss:120b',
+      credentialRef: 'llm.ollama_cloud.general',
+    };
+    config.llm['ollama-cloud-coding'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder:480b',
+      credentialRef: 'llm.ollama_cloud.coding',
+    };
+    config.assistant.tools.modelSelection = {
+      autoPolicy: 'quality_first',
+      preferManagedCloudForLowPressureExternal: true,
+      preferFrontierForRepoGrounded: false,
+      preferFrontierForSecurity: true,
+      managedCloudRouting: {
+        enabled: true,
+        roleBindings: {
+          general: 'ollama-cloud-general',
+          coding: 'ollama-cloud-coding',
+        },
+      },
+    };
+
+    const redacted = redactConfig(config);
+
+    expect(redacted.assistant.tools.modelSelection).toEqual({
+      autoPolicy: 'quality_first',
+      preferManagedCloudForLowPressureExternal: true,
+      preferFrontierForRepoGrounded: false,
+      preferFrontierForSecurity: true,
+      managedCloudRouting: {
+        enabled: true,
+        roleBindings: {
+          general: 'ollama-cloud-general',
+          coding: 'ollama-cloud-coding',
+        },
+      },
+    });
   });
 });

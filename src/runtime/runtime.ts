@@ -576,7 +576,7 @@ export class Runtime {
     return this.providers.get(name);
   }
 
-  /** Get the default provider name. */
+  /** Get the derived primary provider name. */
   get defaultProviderName(): string {
     return this.config.defaultProvider;
   }
@@ -586,7 +586,7 @@ export class Runtime {
     return [...this.providers.keys()];
   }
 
-  /** Get the default provider. */
+  /** Get the derived primary provider. */
   getDefaultProvider(): LLMProvider | undefined {
     return this.providers.get(this.config.defaultProvider);
   }

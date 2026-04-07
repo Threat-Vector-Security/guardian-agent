@@ -269,7 +269,7 @@ Likely UI/control-plane direction:
   - whether lighter external tasks prefer managed cloud
 - advanced view:
   - explicit provider entries
-  - per-tier default provider
+  - per-tier routed defaults
   - model-profile and context-budget overrides
   - escalation/fallback policy
 

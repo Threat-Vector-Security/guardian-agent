@@ -629,7 +629,7 @@ describe('Runtime', () => {
   });
 
   describe('provider management', () => {
-    it('should create default provider', () => {
+    it('should create the derived primary provider', () => {
       const provider = runtime.getDefaultProvider();
       expect(provider).toBeDefined();
       expect(provider!.name).toBe('ollama');

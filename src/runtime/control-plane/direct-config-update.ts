@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { deepMerge, validateConfig } from '../../config/loader.js';
+import { applyDerivedDefaultProvider } from '../../config/default-provider-resolution.js';
 import { normalizeOptionalHttpUrlInput } from '../../config/input-normalization.js';
 import type { CredentialRefConfig, GuardianAgentConfig } from '../../config/types.js';
 import type { ConfigUpdate, DashboardMutationResult } from '../../channels/web-types.js';
@@ -70,6 +71,116 @@ interface DirectConfigUpdateHandlerOptions {
   sanitizeNormalizedUrlRecord: (value: unknown) => Record<string, string> | undefined;
 }
 
+type LlmConfigUpdate = NonNullable<ConfigUpdate['llm']>[string];
+
+function buildNextLlmConfig(
+  currentLlm: GuardianAgentConfig['llm'],
+  llmPatch: Record<string, LlmConfigUpdate>,
+): GuardianAgentConfig['llm'] {
+  const nextLlm: GuardianAgentConfig['llm'] = { ...currentLlm };
+
+  for (const [name, providerUpdates] of Object.entries(llmPatch)) {
+    if (providerUpdates.remove === true) {
+      delete nextLlm[name];
+      continue;
+    }
+
+    const currentProvider = nextLlm[name] ?? ({} as GuardianAgentConfig['llm'][string]);
+    nextLlm[name] = {
+      ...currentProvider,
+      ...(providerUpdates.provider !== undefined ? { provider: providerUpdates.provider } : {}),
+      ...(providerUpdates.model !== undefined ? { model: providerUpdates.model } : {}),
+      ...(providerUpdates.credentialRef !== undefined ? { credentialRef: providerUpdates.credentialRef } : {}),
+      ...(providerUpdates.baseUrl !== undefined ? { baseUrl: providerUpdates.baseUrl } : {}),
+      ...(providerUpdates.maxTokens !== undefined ? { maxTokens: providerUpdates.maxTokens } : {}),
+      ...(providerUpdates.temperature !== undefined ? { temperature: providerUpdates.temperature } : {}),
+      ...(providerUpdates.timeoutMs !== undefined ? { timeoutMs: providerUpdates.timeoutMs } : {}),
+      ...(providerUpdates.keepAlive !== undefined ? { keepAlive: providerUpdates.keepAlive } : {}),
+      ...(providerUpdates.think !== undefined ? { think: providerUpdates.think } : {}),
+      ...(providerUpdates.ollamaOptions !== undefined ? { ollamaOptions: providerUpdates.ollamaOptions } : {}),
+    };
+  }
+
+  return nextLlm;
+}
+
+function pruneDeletedProviderReferences(
+  config: GuardianAgentConfig,
+  removedProviderNames: Set<string>,
+): void {
+  if (removedProviderNames.size === 0) return;
+
+  if (Array.isArray(config.fallbacks)) {
+    config.fallbacks = config.fallbacks.filter((name) => !removedProviderNames.has(name) && name !== config.defaultProvider);
+  }
+
+  const preferredProviders = config.assistant.tools?.preferredProviders;
+  if (preferredProviders) {
+    for (const key of ['local', 'managedCloud', 'frontier', 'external'] as const) {
+      if (preferredProviders[key] && removedProviderNames.has(preferredProviders[key])) {
+        delete preferredProviders[key];
+      }
+    }
+  }
+
+  const roleBindings = config.assistant.tools?.modelSelection?.managedCloudRouting?.roleBindings;
+  if (roleBindings) {
+    for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+      if (roleBindings[role] && removedProviderNames.has(roleBindings[role])) {
+        delete roleBindings[role];
+      }
+    }
+    if (Object.keys(roleBindings).length === 0) {
+      delete config.assistant.tools.modelSelection!.managedCloudRouting!.roleBindings;
+    }
+  }
+}
+
+function pruneDeletedProviderReferencesFromRawConfig(
+  rawConfig: Record<string, unknown>,
+  removedProviderNames: Set<string>,
+  defaultProvider: string,
+): void {
+  if (removedProviderNames.size === 0) return;
+
+  const rawFallbacks = Array.isArray(rawConfig.fallbacks) ? rawConfig.fallbacks : undefined;
+  if (rawFallbacks) {
+    rawConfig.fallbacks = rawFallbacks.filter((name) => (
+      typeof name === 'string'
+      && !removedProviderNames.has(name)
+      && name !== defaultProvider
+    ));
+  }
+
+  const rawAssistant = rawConfig.assistant as Record<string, unknown> | undefined;
+  const rawTools = rawAssistant?.tools as Record<string, unknown> | undefined;
+  const rawPreferredProviders = rawTools?.preferredProviders as Record<string, unknown> | undefined;
+  if (rawPreferredProviders) {
+    for (const key of ['local', 'managedCloud', 'frontier', 'external'] as const) {
+      const value = rawPreferredProviders[key];
+      if (typeof value === 'string' && removedProviderNames.has(value)) {
+        delete rawPreferredProviders[key];
+      }
+    }
+  }
+
+  const rawManagedCloudRouting = rawTools?.modelSelection && typeof rawTools.modelSelection === 'object'
+    ? (rawTools.modelSelection as Record<string, unknown>).managedCloudRouting as Record<string, unknown> | undefined
+    : undefined;
+  const rawRoleBindings = rawManagedCloudRouting?.roleBindings as Record<string, unknown> | undefined;
+  if (rawRoleBindings) {
+    for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+      const value = rawRoleBindings[role];
+      if (typeof value === 'string' && removedProviderNames.has(value)) {
+        delete rawRoleBindings[role];
+      }
+    }
+    if (rawManagedCloudRouting && Object.keys(rawRoleBindings).length === 0) {
+      delete rawManagedCloudRouting.roleBindings;
+    }
+  }
+}
+
 export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandlerOptions) {
   return async function applyDirectConfigUpdate(updates: ConfigUpdate): Promise<DashboardMutationResult> {
     return options.jobTracker.run(
@@ -77,9 +188,17 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         type: 'config.update',
         source: 'manual',
         detail: 'Direct config update',
-        metadata: { defaultProvider: updates.defaultProvider },
+        metadata: {},
       },
       async () => {
+        const updatesWithLegacyDefault = updates as ConfigUpdate & { defaultProvider?: string };
+        if (updatesWithLegacyDefault.defaultProvider !== undefined) {
+          return {
+            success: false,
+            message: 'Primary provider is derived automatically from the routed provider configuration. Update the managed-cloud, local, or frontier defaults instead.',
+            statusCode: 400,
+          };
+        }
         const currentConfig = options.configRef.current;
         let credentialRefsChanged = !!updates.assistant?.credentials?.refs;
         const diskRefsForBase = (() => {
@@ -94,8 +213,13 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         const nextCredentialRefs = updates.assistant?.credentials?.refs
           ? options.normalizeCredentialRefUpdates(updates.assistant.credentials.refs)
           : { ...diskRefsForBase, ...(currentConfig.assistant.credentials.refs ?? {}) };
-        const llmPatch = updates.llm
+        const removedProviderNames = new Set<string>();
+        const llmPatch: Record<string, LlmConfigUpdate> | undefined = updates.llm
           ? Object.fromEntries(Object.entries(updates.llm).map(([name, providerUpdates]) => {
+            if (providerUpdates.remove === true) {
+              removedProviderNames.add(name);
+              return [name, { remove: true }];
+            }
             let credentialRef = providerUpdates.credentialRef;
             if (providerUpdates.apiKey?.trim()) {
               const refName = providerUpdates.credentialRef?.trim()
@@ -116,10 +240,11 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             }
             return [name, {
               ...providerUpdates,
+              remove: undefined,
               apiKey: undefined,
               credentialRef,
             }];
-          }))
+          })) as Record<string, LlmConfigUpdate>
           : undefined;
         const telegramUpdates = updates.channels?.telegram
           ? { ...updates.channels.telegram }
@@ -183,7 +308,6 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           : undefined;
 
         const patch = {
-          defaultProvider: updates.defaultProvider,
           llm: llmPatch as unknown as GuardianAgentConfig['llm'] | undefined,
           channels: updates.channels
             ? {
@@ -194,6 +318,13 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           assistant: assistantPatch as unknown as GuardianAgentConfig['assistant'] | undefined,
         } as Partial<GuardianAgentConfig>;
         const nextConfig = deepMerge(currentConfig, patch);
+        if (llmPatch) {
+          nextConfig.llm = buildNextLlmConfig(currentConfig.llm, llmPatch);
+        }
+        if (removedProviderNames.size > 0) {
+          pruneDeletedProviderReferences(nextConfig, removedProviderNames);
+        }
+        applyDerivedDefaultProvider(nextConfig);
         const baselineViolations = options.previewSecurityBaselineViolations(nextConfig, 'web_api');
         if (baselineViolations.length > 0) {
           return options.buildSecurityBaselineRejection(
@@ -213,13 +344,13 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
 
         const rawConfig = options.loadRawConfig();
 
-        if (updates.defaultProvider) {
-          rawConfig.defaultProvider = updates.defaultProvider;
-        }
-
         if (llmPatch) {
           const llmSection = (rawConfig.llm ?? {}) as Record<string, Record<string, unknown>>;
-          for (const [name, providerUpdates] of Object.entries(llmPatch)) {
+          for (const [name, providerUpdates] of Object.entries(llmPatch) as Array<[string, LlmConfigUpdate]>) {
+            if (providerUpdates.remove === true) {
+              delete llmSection[name];
+              continue;
+            }
             if (!llmSection[name]) {
               llmSection[name] = {};
             }
@@ -265,6 +396,11 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             }
           }
           rawConfig.llm = llmSection;
+        }
+
+        rawConfig.defaultProvider = nextConfig.defaultProvider;
+        if (removedProviderNames.size > 0) {
+          pruneDeletedProviderReferencesFromRawConfig(rawConfig, removedProviderNames, nextConfig.defaultProvider);
         }
 
         if (telegramUpdates) {
@@ -571,6 +707,63 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         }
 
         const preferredProviderUpdates = updates.assistant?.tools?.preferredProviders;
+        const modelSelectionUpdates = updates.assistant?.tools?.modelSelection;
+        if (modelSelectionUpdates && typeof modelSelectionUpdates === 'object') {
+          rawConfig.assistant = rawConfig.assistant ?? {};
+          const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+          rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+          const rawTools = rawAssistant.tools as Record<string, unknown>;
+          rawTools.modelSelection = {
+            ...((rawTools.modelSelection as Record<string, unknown> | undefined) ?? {}),
+          };
+          const rawModelSelection = rawTools.modelSelection as Record<string, unknown>;
+
+          if (modelSelectionUpdates.autoPolicy === 'balanced' || modelSelectionUpdates.autoPolicy === 'quality_first') {
+            rawModelSelection.autoPolicy = modelSelectionUpdates.autoPolicy;
+          }
+          if (typeof modelSelectionUpdates.preferManagedCloudForLowPressureExternal === 'boolean') {
+            rawModelSelection.preferManagedCloudForLowPressureExternal = modelSelectionUpdates.preferManagedCloudForLowPressureExternal;
+          }
+          if (typeof modelSelectionUpdates.preferFrontierForRepoGrounded === 'boolean') {
+            rawModelSelection.preferFrontierForRepoGrounded = modelSelectionUpdates.preferFrontierForRepoGrounded;
+          }
+          if (typeof modelSelectionUpdates.preferFrontierForSecurity === 'boolean') {
+            rawModelSelection.preferFrontierForSecurity = modelSelectionUpdates.preferFrontierForSecurity;
+          }
+
+          const managedCloudRoutingUpdates = modelSelectionUpdates.managedCloudRouting;
+          if (managedCloudRoutingUpdates && typeof managedCloudRoutingUpdates === 'object') {
+            rawModelSelection.managedCloudRouting = {
+              ...((rawModelSelection.managedCloudRouting as Record<string, unknown> | undefined) ?? {}),
+            };
+            const rawManagedCloudRouting = rawModelSelection.managedCloudRouting as Record<string, unknown>;
+            if (typeof managedCloudRoutingUpdates.enabled === 'boolean') {
+              rawManagedCloudRouting.enabled = managedCloudRoutingUpdates.enabled;
+            }
+
+            const roleBindingsUpdates = managedCloudRoutingUpdates.roleBindings;
+            if (roleBindingsUpdates && typeof roleBindingsUpdates === 'object') {
+              rawManagedCloudRouting.roleBindings = {
+                ...((rawManagedCloudRouting.roleBindings as Record<string, unknown> | undefined) ?? {}),
+              };
+              const rawRoleBindings = rawManagedCloudRouting.roleBindings as Record<string, unknown>;
+              for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+                if (roleBindingsUpdates[role] === undefined) continue;
+                const trimmed = roleBindingsUpdates[role]?.trim();
+                if (trimmed) rawRoleBindings[role] = trimmed;
+                else delete rawRoleBindings[role];
+              }
+              if (Object.keys(rawRoleBindings).length === 0) {
+                delete rawManagedCloudRouting.roleBindings;
+              }
+            }
+
+            if (Object.keys(rawManagedCloudRouting).length === 0) {
+              delete rawModelSelection.managedCloudRouting;
+            }
+          }
+        }
+
         if (preferredProviderUpdates && typeof preferredProviderUpdates === 'object') {
           rawConfig.assistant = rawConfig.assistant ?? {};
           const rawAssistant = rawConfig.assistant as Record<string, unknown>;

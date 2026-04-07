@@ -261,7 +261,7 @@ Google Workspace operations require structured tool calls (function calling). Lo
 The `resolveGwsProvider` closure (`src/index.ts`) re-evaluates at each request so providers added via the web UI (hot reload) are picked up without restart. Resolution order:
 
 1. **Explicit model** — if `managedProviders.gws.model` is set and the named provider exists, use it
-2. **Auto-detect** — if the default provider is Ollama, scan `config.llm` for the first non-Ollama provider and use it
+2. **Auto-detect** — if the derived primary provider is Ollama, scan `config.llm` for the first non-Ollama provider and use it
 3. **Default provider** — if the default is already an external LLM (OpenAI/Anthropic), use it directly
 
 If no external provider is found (only Ollama configured), the resolver returns `undefined` and the request goes through `chatWithFallback()` with its full fallback chain instead.

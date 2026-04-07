@@ -1586,6 +1586,22 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         allowedDomainsCount: config.assistant.tools.allowedDomains.length,
         allowedDomains: [...config.assistant.tools.allowedDomains],
         preferredProviders: config.assistant.tools.preferredProviders,
+        modelSelection: config.assistant.tools.modelSelection
+          ? {
+            autoPolicy: config.assistant.tools.modelSelection.autoPolicy,
+            preferManagedCloudForLowPressureExternal: config.assistant.tools.modelSelection.preferManagedCloudForLowPressureExternal,
+            preferFrontierForRepoGrounded: config.assistant.tools.modelSelection.preferFrontierForRepoGrounded,
+            preferFrontierForSecurity: config.assistant.tools.modelSelection.preferFrontierForSecurity,
+            managedCloudRouting: config.assistant.tools.modelSelection.managedCloudRouting
+              ? {
+                enabled: config.assistant.tools.modelSelection.managedCloudRouting.enabled,
+                roleBindings: config.assistant.tools.modelSelection.managedCloudRouting.roleBindings
+                  ? { ...config.assistant.tools.modelSelection.managedCloudRouting.roleBindings }
+                  : undefined,
+              }
+              : undefined,
+          }
+          : undefined,
         webSearch: {
           provider: config.assistant.tools.webSearch?.provider ?? 'auto',
           perplexityConfigured: !!(config.assistant.tools.webSearch?.perplexityApiKey || config.assistant.tools.webSearch?.perplexityCredentialRef),

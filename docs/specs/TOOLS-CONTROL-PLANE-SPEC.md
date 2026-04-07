@@ -80,9 +80,9 @@ The next uplift wave should improve discovery quality without breaking deferred 
 3. If a routing preference is found, `chatFn` is swapped to the preferred provider for the next LLM call
 4. Tool definitions are re-mapped for the new provider's locality (full descriptions for local, short for external)
 
-Resolution order: tool-name match > category match > smart category default > default provider. When multiple tools execute in one round with conflicting preferences, `external` wins (higher-quality synthesis).
+Resolution order: tool-name match > category match > smart category default > derived primary provider. When multiple tools execute in one round with conflicting preferences, `external` wins (higher-quality synthesis).
 
-If the routed provider is unavailable (e.g., no external provider configured), the routing is silently skipped and the default provider is used. The routed provider also falls back to the default chain on error.
+If the routed provider is unavailable (e.g., no external provider configured), the routing is silently skipped and the derived primary provider is used. The routed provider also falls back to the default chain on error.
 
 **Smart category defaults:** When both local and external providers are configured and `providerRoutingEnabled` is `true` (the default), tools are automatically routed based on their category's natural locality:
 - **Local categories** (filesystem, shell, network, system, memory) route to the local model — these are fast, low-complexity operations where local LLMs perform well.
@@ -90,7 +90,7 @@ If the routed provider is unavailable (e.g., no external provider configured), t
 - When only one provider type exists (e.g., only Ollama or only Anthropic), smart routing is a no-op and everything uses that provider.
 - Explicit `providerRouting` entries always override smart defaults.
 
-**`providerRoutingEnabled` toggle:** Master switch for smart LLM routing (`assistant.tools.providerRoutingEnabled`, default: `true`). When disabled, all tools use the default provider regardless of category. Exposed in the web UI (Configuration > Tools tab) as a "Smart LLM Routing" checkbox with tooltip.
+**`providerRoutingEnabled` toggle:** Master switch for smart LLM routing (`assistant.tools.providerRoutingEnabled`, default: `true`). When disabled, all tools use the derived primary provider regardless of category. Exposed in the web UI (Configuration > Tools tab) as a "Smart LLM Routing" checkbox with tooltip.
 
 **Configuration:**
 ```yaml
@@ -106,14 +106,13 @@ assistant:
       filesystem: external
       # Per-tool: overrides category default
       fs_list: local        # reads are fine on local
-      # Omitted tools/categories use smart defaults (if enabled) or the default provider
+      # Omitted tools/categories use smart defaults (if enabled) or the derived primary provider
 ```
 
 **Web UI:** Configuration > Tools tab shows an "LLM" column on both the Tool Categories and Tool Catalog tables. Each row has a Local/External dropdown. Changing a category dropdown cascades to all tools in that category. A "Smart LLM Routing" checkbox toggles `providerRoutingEnabled`. Changes are saved immediately via `POST /api/tools/provider-routing` and persisted to the user's config YAML. The Providers tab includes a "Set as Default" button per provider row.
 
 **API:**
-- `POST /api/tools/provider-routing` with body `{ routing?: { "tool_or_category": "local" | "external" }, enabled?: boolean }`. The `enabled` field controls `providerRoutingEnabled`. The routing map is also returned in `GET /api/tools` as `providerRouting`. Only entries that differ from the default provider locality are persisted.
-- `POST /api/providers/default` with body `{ name: string }` — sets the default LLM provider.
+- `POST /api/tools/provider-routing` with body `{ routing?: { "tool_or_category": "local" | "external" }, enabled?: boolean }`. The `enabled` field controls `providerRoutingEnabled`. The routing map is also returned in `GET /api/tools` as `providerRouting`. Only entries that differ from the derived primary-provider locality are persisted.
 
 ## Tool Definition Fields
 

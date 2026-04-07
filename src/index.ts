@@ -11,8 +11,6 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { DEFAULT_CONFIG_PATH, loadConfig } from './config/loader.js';
 import { createBootstrapRuntimeContext } from './bootstrap/runtime-factory.js';
 import { startBootstrapChannels, type BootstrapWebChannel } from './bootstrap/channel-startup.js';
@@ -83,6 +81,7 @@ import { getQuickActions } from './quick-actions.js';
 import { AiSecurityService, createAiSecuritySessionSnapshot } from './runtime/ai-security.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
+import { pickNativeSearchPath } from './runtime/native-path-picker.js';
 import {
   ConnectorPlaybookService,
   type ConnectorPlaybookRunInput,
@@ -539,90 +538,8 @@ function buildManagedMCPServers(_config: GuardianAgentConfig): Array<MCPServerEn
   return [];
 }
 
-const execFileAsync = promisify(execFileCb);
 const probeGwsCli = createGwsCliProbe(log);
 const cloudConnectionTesters = createCloudConnectionTesters();
-
-async function pickNativeSearchPath(kind: 'directory' | 'file'): Promise<{
-  success: boolean;
-  path?: string;
-  canceled?: boolean;
-  message: string;
-}> {
-  if (process.platform !== 'win32') {
-    return {
-      success: false,
-      canceled: false,
-      message: 'Native path picker is currently available on Windows only.',
-    };
-  }
-
-  const script = kind === 'file'
-    ? `
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = 'Select a file to index'
-$dialog.CheckFileExists = $true
-$dialog.Multiselect = $false
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.FileName) {
-  @{ success = $true; canceled = $false; path = $dialog.FileName; message = 'File selected.' } | ConvertTo-Json -Compress
-} else {
-  @{ success = $false; canceled = $true; message = 'Selection cancelled.' } | ConvertTo-Json -Compress
-}
-`
-    : `
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Select a directory to index'
-$dialog.ShowNewFolderButton = $false
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
-  @{ success = $true; canceled = $false; path = $dialog.SelectedPath; message = 'Directory selected.' } | ConvertTo-Json -Compress
-} else {
-  @{ success = $false; canceled = $true; message = 'Selection cancelled.' } | ConvertTo-Json -Compress
-}
-`;
-
-  try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-STA', '-Command', script],
-      { timeout: 300_000, windowsHide: false, maxBuffer: 1024 * 1024 },
-    );
-    const trimmed = stdout.trim();
-    if (!trimmed) {
-      return {
-        success: false,
-        canceled: true,
-        message: 'Selection cancelled.',
-      };
-    }
-    const parsed = JSON.parse(trimmed) as {
-      success?: boolean;
-      path?: string;
-      canceled?: boolean;
-      message?: string;
-    };
-    return {
-      success: parsed.success === true,
-      path: typeof parsed.path === 'string' ? parsed.path : undefined,
-      canceled: parsed.canceled === true,
-      message: typeof parsed.message === 'string'
-        ? parsed.message
-        : (parsed.success ? 'Path selected.' : 'Selection cancelled.'),
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      success: false,
-      canceled: false,
-      message: `Failed to open native ${kind} picker: ${message}`,
-    };
-  }
-}
 
 function resolveTelegramBotToken(config: GuardianAgentConfig, secretStore: LocalSecretStore): string | undefined {
   const runtimeCredentials = resolveRuntimeCredentialView(config, secretStore);
@@ -5345,7 +5262,7 @@ async function main(): Promise<void> {
   // Per-tool provider routing: resolves tool names → routed LLM provider.
   // Reads configRef.current at call time so hot-reloaded routing config takes effect immediately.
   // Uses computed category defaults (based on available providers) as fallback.
-  // Disabled when providerRoutingEnabled is false — all tools use the default provider.
+  // Disabled when providerRoutingEnabled is false — all tools use the derived primary provider.
   const resolveRoutedProviderForTools = (
     tools: Array<{ name: string; category?: string }>,
   ): { provider: LLMProvider; locality: 'local' | 'external' } | undefined => {

@@ -2,6 +2,16 @@
 
 Automated black-box testing against a running GuardianAgent instance via its REST API.
 
+## Always-On Debug Traces
+
+Before assuming a harness failure needs more verbose runtime logging, inspect Guardian's durable trace files first.
+
+- The low-level routing/debug trace is persisted by default through `routing.intentTrace` and usually lives at `~/.guardianagent/routing/intent-routing.jsonl`.
+- On Windows-hosted runs, that routing trace path is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`.
+- The persistent audit log is separate and usually lives at `~/.guardianagent/audit/audit.jsonl`.
+- These traces are always-on runtime artifacts and are more useful for agent debugging than the normal console log level.
+- This is distinct from harness temp logs such as `guardian.log` and `guardian.log.err`, and distinct from `runtime.logLevel`, which may still be set to `warn` on Windows-oriented dev flows.
+
 ## Overview
 
 Most general chat harnesses send messages through the Web channel's `POST /api/message` endpoint. Code-session harnesses use the dedicated `/api/code/sessions/:id/*` routes. Together they validate functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).

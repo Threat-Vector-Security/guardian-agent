@@ -144,8 +144,8 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
   context.registry.register(
     {
       name: 'llm_provider_update',
-      description: 'Update configured LLM provider settings. Supports switching the active model on an existing provider profile, changing the default provider, or choosing the preferred local/managed-cloud/frontier provider profile used by smart routing. Always requires user approval.',
-      shortDescription: 'Switch models or preferred/default LLM providers.',
+      description: 'Update configured LLM provider settings. Supports switching the active model on an existing provider profile or choosing the preferred local/managed-cloud/frontier provider profile used by smart routing. Always requires user approval.',
+      shortDescription: 'Switch models or preferred routed LLM providers.',
       risk: 'external_post',
       category: 'system',
       deferLoading: true,
@@ -154,7 +154,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
         properties: {
           action: {
             type: 'string',
-            description: 'Update action: set_model, set_default, or set_preferred.',
+            description: 'Update action: set_model or set_preferred.',
           },
           provider: {
             type: 'string',
@@ -173,7 +173,6 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
       },
       examples: [
         { input: { action: 'set_model', provider: 'ollama', model: 'gemma3:latest' }, description: 'Switch a configured provider profile to another available model' },
-        { input: { action: 'set_default', provider: 'openai' }, description: 'Set the default provider profile' },
         { input: { action: 'set_preferred', provider: 'ollama', locality: 'local' }, description: 'Set the preferred local provider profile' },
         { input: { action: 'set_preferred', provider: 'ollama-cloud', locality: 'managed-cloud' }, description: 'Set the preferred managed-cloud provider profile' },
       ],
@@ -228,20 +227,6 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
           successMessage = `Updated provider '${providerName}' to model '${model}'.`;
           break;
         }
-        case 'set_default': {
-          if (provider.isDefault) {
-            return {
-              success: true,
-              output: {
-                message: `Provider '${providerName}' is already the default provider.`,
-                provider: buildProviderSummary(provider),
-              },
-            };
-          }
-          patch = { defaultProvider: providerName };
-          successMessage = `Set default provider to '${providerName}'.`;
-          break;
-        }
         case 'set_preferred': {
           const locality = context.requireString(args.locality, 'locality').trim().toLowerCase();
           const preferredKey = locality === 'local'
@@ -292,7 +277,7 @@ export function registerBuiltinProviderTools(context: ProviderToolRegistrarConte
           break;
         }
         default:
-          return { success: false, error: `Unknown action '${action}'. Use set_model, set_default, or set_preferred.` };
+          return { success: false, error: `Unknown action '${action}'. Use set_model or set_preferred.` };
       }
 
       const updateResult = await context.updateConfig(patch);

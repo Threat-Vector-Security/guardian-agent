@@ -39,6 +39,11 @@ const configUiState = {
     cloud: null,
     external: null,
   },
+  providerEditor: {
+    side: null,
+    mode: null,
+    name: null,
+  },
 };
 const FALLBACK_PROVIDER_TYPES = [
   { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false },
@@ -56,9 +61,9 @@ const CONFIG_HELP = {
   aiSearch: {
     'AI Provider Configuration': {
       whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud Ollama Cloud, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
-      whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test/save actions.',
-      whatCanDo: 'Add a new provider, edit an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profile exists for routing and fallback.',
-      howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here.',
+      whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, alphabetized model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test, save, and delete actions.',
+      whatCanDo: 'Add a new provider, edit or delete an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profiles exist for routing and fallback.',
+      howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here, while the Model Auto Selection Policy below decides how Guardian prefers between those profiles at runtime.',
     },
     'Configured Providers': {
       whatItIs: 'This section is the runtime-facing inventory of provider profiles that Guardian currently knows about and can attempt to use.',
@@ -305,8 +310,8 @@ function renderAiProvidersTab(panel) {
     kicker: 'AI Providers',
     compact: true,
     whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama profiles and hosted provider APIs.',
-    whatSeeing: 'You are seeing provider editors, configured provider status, and shared credential-reference management.',
-    whatCanDo: 'Add local or hosted providers, test connectivity, choose models, and manage the credential refs those providers can use.',
+    whatSeeing: 'You are seeing provider editors, configured provider status, model auto-selection controls, and shared credential-reference management.',
+    whatCanDo: 'Add local or hosted providers, test connectivity, choose models, manage provider defaults and managed-cloud role routing, and manage the credential refs those providers can use.',
     howLinks: 'These provider profiles drive the model paths used across the rest of the product.',
   }));
 
@@ -527,6 +532,9 @@ function createProviderPanel(config, providers, panel) {
   section.className = 'table-container';
   const providerTypes = getProviderTypeCatalog();
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
+  const managedCloudRoleRouting = config?.assistant?.tools?.modelSelection?.managedCloudRouting || {};
+  const managedCloudRoleBindings = managedCloudRoleRouting.roleBindings || {};
+  const managedCloudRoleRoutingEnabled = managedCloudRoleRouting.enabled !== false;
   const credentialRefOptions = renderCredentialRefOptions(
     config?.assistant?.credentials?.refs || {},
     (meta) => meta?.source === 'env',
@@ -573,27 +581,42 @@ function createProviderPanel(config, providers, panel) {
   };
   const defaultProviderEntry = config.defaultProvider ? providerMap[config.defaultProvider] : null;
   const activeProviderSelection = (() => {
+    const editorState = configUiState.providerEditor || {};
+    if (editorState.mode === 'new' && providerSides.includes(editorState.side || '')) {
+      return { side: editorState.side, name: null, mode: 'new' };
+    }
+    if (editorState.mode === 'existing' && editorState.name) {
+      const editorEntry = providerMap[editorState.name];
+      if (editorEntry) {
+        return {
+          side: getProviderEditorSide(editorEntry),
+          name: editorState.name,
+          mode: 'existing',
+        };
+      }
+    }
     const localSelected = configUiState.selectedProviderProfiles.local;
     if (localSelected && providerMap[localSelected]?.locality === 'local') {
-      return { side: 'local', name: localSelected };
+      return { side: 'local', name: localSelected, mode: 'existing' };
     }
     const cloudSelected = configUiState.selectedProviderProfiles.cloud;
     if (cloudSelected && providerMap[cloudSelected]?.tier === 'managed_cloud') {
-      return { side: 'cloud', name: cloudSelected };
+      return { side: 'cloud', name: cloudSelected, mode: 'existing' };
     }
     const externalSelected = configUiState.selectedProviderProfiles.external;
     if (externalSelected && getProviderEditorSide(providerMap[externalSelected]) === 'external') {
-      return { side: 'external', name: externalSelected };
+      return { side: 'external', name: externalSelected, mode: 'existing' };
     }
     if (defaultProviderEntry) {
       return {
         side: getProviderEditorSide(defaultProviderEntry),
         name: config.defaultProvider,
+        mode: 'existing',
       };
     }
-    if (localNames[0]) return { side: 'local', name: localNames[0] };
-    if (cloudNames[0]) return { side: 'cloud', name: cloudNames[0] };
-    if (externalNames[0]) return { side: 'external', name: externalNames[0] };
+    if (localNames[0]) return { side: 'local', name: localNames[0], mode: 'existing' };
+    if (cloudNames[0]) return { side: 'cloud', name: cloudNames[0], mode: 'existing' };
+    if (externalNames[0]) return { side: 'external', name: externalNames[0], mode: 'existing' };
     return null;
   })();
   const localProviderTypeOptions = providerTypes
@@ -612,7 +635,7 @@ function createProviderPanel(config, providers, panel) {
   section.innerHTML = `
     <details class="cfg-provider-accordion" id="cfg-provider-panel" open>
       <summary class="cfg-provider-summary">
-        <span class="cfg-provider-summary-title">AI Provider Configuration</span>
+        <h3 class="section-header cfg-provider-summary-title" style="margin:0;font-size:0.92rem;">AI Provider Configuration</h3>
         <span class="cfg-provider-summary-note">Provider configuration is split into local Ollama, managed-cloud Ollama Cloud, and frontier hosted providers. Managed-cloud and frontier profiles both support direct stored credentials or env-backed credential refs.</span>
       </summary>
       <div class="cfg-center-body">
@@ -675,9 +698,9 @@ function createProviderPanel(config, providers, panel) {
               <details id="cfg-local-advanced-wrap" style="margin-top:1rem;">
                 <summary style="cursor:pointer;font-weight:600;">Advanced Ollama Settings</summary>
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
-                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-local-max-tokens" type="number" min="1" placeholder="2048"></div>
-                  <div class="cfg-field"><label>Temperature</label><input id="cfg-local-temperature" type="number" step="0.1" placeholder="0.7"></div>
-                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-local-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-local-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-local-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-local-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-local-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-local-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                 </div>
@@ -691,6 +714,7 @@ function createProviderPanel(config, providers, panel) {
               </details>
               <div class="cfg-actions" style="margin-top: 1.5rem;">
                 <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
+                <button class="btn btn-danger" id="cfg-local-delete" type="button" style="display:none;">Delete Provider</button>
                 <button class="btn btn-primary" id="cfg-local-save" type="button">Save Config</button>
                 <span id="cfg-local-status" class="cfg-save-status"></span>
               </div>
@@ -716,9 +740,9 @@ function createProviderPanel(config, providers, panel) {
               <details id="cfg-mcloud-advanced-wrap" style="margin-top:1rem;">
                 <summary style="cursor:pointer;font-weight:600;">Advanced Ollama Cloud Settings</summary>
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
-                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-mcloud-max-tokens" type="number" min="1" placeholder="2048"></div>
-                  <div class="cfg-field"><label>Temperature</label><input id="cfg-mcloud-temperature" type="number" step="0.1" placeholder="0.7"></div>
-                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-mcloud-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-mcloud-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-mcloud-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-mcloud-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-mcloud-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-mcloud-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                 </div>
@@ -733,6 +757,7 @@ function createProviderPanel(config, providers, panel) {
               <div id="cfg-mcloud-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-actions" style="margin-top: 1.5rem;">
                 <button class="btn btn-secondary" id="cfg-mcloud-test" type="button">Test Connection</button>
+                <button class="btn btn-danger" id="cfg-mcloud-delete" type="button" style="display:none;">Delete Provider</button>
                 <button class="btn btn-primary" id="cfg-mcloud-save" type="button">Save Config</button>
                 <span id="cfg-mcloud-status" class="cfg-save-status"></span>
               </div>
@@ -758,9 +783,9 @@ function createProviderPanel(config, providers, panel) {
               <details id="cfg-ext-advanced-wrap" style="margin-top:1rem;display:none;">
                 <summary style="cursor:pointer;font-weight:600;">Advanced Hosted Settings</summary>
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
-                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-ext-max-tokens" type="number" min="1" placeholder="2048"></div>
-                  <div class="cfg-field"><label>Temperature</label><input id="cfg-ext-temperature" type="number" step="0.1" placeholder="0.7"></div>
-                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-ext-timeout" type="number" min="1" placeholder="120000"></div>
+                  <div class="cfg-field"><label>Max Tokens</label><input id="cfg-ext-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
+                  <div class="cfg-field"><label>Temperature</label><input id="cfg-ext-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
+                  <div class="cfg-field"><label>Timeout (ms)</label><input id="cfg-ext-timeout" class="cfg-provider-number" type="number" min="1" placeholder="120000"></div>
                   <div class="cfg-field"><label>Keep Alive</label><input id="cfg-ext-keep-alive" type="text" placeholder="5m or 300"></div>
                   <div class="cfg-field"><label>Think Mode</label><select id="cfg-ext-think"><option value="">Default</option><option value="false">Off</option><option value="true">On</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
                 </div>
@@ -775,6 +800,7 @@ function createProviderPanel(config, providers, panel) {
               <div id="cfg-ext-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-actions" style="margin-top: 1.5rem;">
                 <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
+                <button class="btn btn-danger" id="cfg-ext-delete" type="button" style="display:none;">Delete Provider</button>
                 <button class="btn btn-primary" id="cfg-ext-save" type="button">Save Config</button>
                 <span id="cfg-ext-status" class="cfg-save-status"></span>
               </div>
@@ -798,10 +824,25 @@ function createProviderPanel(config, providers, panel) {
     return `${base}${i}`;
   }
 
-  function getDefaultModel(side, type) {
+  function inferManagedCloudRoleFromProfileName(profileName) {
+    const normalized = String(profileName || '').trim().toLowerCase();
+    if (!normalized) return 'general';
+    if (/(coding|coder|code|repo|dev|swe)/.test(normalized)) return 'coding';
+    if (/(tool|tools|loop|crud|ops|agent)/.test(normalized)) return 'toolLoop';
+    if (/(direct|chat|answer|fast)/.test(normalized)) return 'direct';
+    return 'general';
+  }
+
+  function getDefaultModel(side, type, providerName = '') {
     const normalizedType = String(type || '').trim().toLowerCase();
     if (normalizedType === 'ollama') return 'llama3.2';
-    if (normalizedType === 'ollama_cloud') return 'gpt-oss:120b';
+    if (normalizedType === 'ollama_cloud') {
+      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
+      if (inferredRole === 'coding') return 'qwen3-coder:480b';
+      if (inferredRole === 'toolLoop') return 'glm-4.7';
+      if (inferredRole === 'direct') return 'minimax-m2.1';
+      return 'gpt-oss:120b';
+    }
     if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
     if (normalizedType === 'openai') return 'gpt-4o';
     if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
@@ -842,6 +883,7 @@ function createProviderPanel(config, providers, panel) {
     const urlEl = section.querySelector(`#${prefix}-url`);
     const statusEl = section.querySelector(`#${prefix}-status`);
     const typeEl = section.querySelector(`#${prefix}-type`);
+    const deleteBtnEl = section.querySelector(`#${prefix}-delete`);
     const keyEl = isLocal ? null : section.querySelector(`#${prefix}-key`);
     const credentialRefEl = isLocal ? null : section.querySelector(`#${prefix}-credential-ref`);
     const credentialRefCheckbox = isLocal ? null : section.querySelector(`#${prefix}-credential-ref-enabled`);
@@ -861,12 +903,53 @@ function createProviderPanel(config, providers, panel) {
     let selectedProfile = activeProviderSelection?.side === side && names.includes(activeProviderSelection.name)
       ? activeProviderSelection.name
       : null;
+    const shouldOpenNewDraft = activeProviderSelection?.side === side && activeProviderSelection.mode === 'new';
+    let liveModelsRequestId = 0;
 
     // Model accessor — reads from whichever element is visible
     const modelEl = {
       get value() { return modelSelectEl.style.display !== 'none' ? modelSelectEl.value : modelInputEl.value; },
       set value(v) { modelInputEl.value = v; if (modelSelectEl.style.display !== 'none') modelSelectEl.value = v; },
     };
+
+    function setProviderEditorState(mode, name = null) {
+      configUiState.providerEditor = {
+        side,
+        mode,
+        name,
+      };
+    }
+
+    function cancelPendingLiveModels() {
+      liveModelsRequestId += 1;
+    }
+
+    function markModelEdited(edited) {
+      const value = edited ? 'true' : 'false';
+      modelInputEl.dataset.userEdited = value;
+      modelSelectEl.dataset.userEdited = value;
+    }
+
+    function wasModelEdited() {
+      return modelInputEl.dataset.userEdited === 'true' || modelSelectEl.dataset.userEdited === 'true';
+    }
+
+    function refreshSuggestedModel(providerType = typeEl?.value, providerName = nameEl?.value, force = false) {
+      const suggestedModel = getDefaultModel(side, providerType, providerName);
+      const lastSuggestedModel = nameEl?.dataset.lastSuggestedModel || '';
+      const currentModel = modelEl.value.trim();
+      if (force || !currentModel || !wasModelEdited() || currentModel === lastSuggestedModel) {
+        modelEl.value = suggestedModel;
+        markModelEdited(false);
+      }
+      if (nameEl) {
+        nameEl.dataset.lastSuggestedModel = suggestedModel;
+      }
+      if (modelInputEl) {
+        modelInputEl.placeholder = suggestedModel;
+      }
+      return suggestedModel;
+    }
 
     function toggleAdvancedVisibility(providerType = typeEl?.value) {
       if (!advancedWrapEl) return;
@@ -900,10 +983,13 @@ function createProviderPanel(config, providers, panel) {
 
     /** Show a <select> dropdown if models are available, otherwise fall back to text input. */
     function updateModelSelector(models, currentModel) {
-      if (models && models.length > 0) {
-        const customOpt = currentModel && !models.includes(currentModel)
+      const sortedModels = Array.isArray(models)
+        ? [...new Set(models.filter(Boolean))].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
+        : [];
+      if (sortedModels.length > 0) {
+        const customOpt = currentModel && !sortedModels.includes(currentModel)
           ? `<option value="${esc(currentModel)}">${esc(currentModel)} (custom)</option>` : '';
-        modelSelectEl.innerHTML = customOpt + models.map(m =>
+        modelSelectEl.innerHTML = customOpt + sortedModels.map(m =>
           `<option value="${esc(m)}"${m === currentModel ? ' selected' : ''}>${esc(m)}</option>`
         ).join('');
         modelSelectEl.style.display = '';
@@ -976,8 +1062,10 @@ function createProviderPanel(config, providers, panel) {
 
     async function refreshLiveModels(options = {}) {
       const providerType = typeEl?.value.trim().toLowerCase() || getDefaultProviderTypeForSide(side);
-      const currentModel = options.currentModel || modelEl.value.trim() || getDefaultModel(side, providerType);
+      const currentModel = options.currentModel || modelEl.value.trim() || getDefaultModel(side, providerType, nameEl?.value);
+      const requestId = ++liveModelsRequestId;
       if (!providerType || !isKnownProviderType(side, providerType)) {
+        if (requestId !== liveModelsRequestId) return;
         updateModelSelector([], currentModel);
         if (!modelEl.value.trim()) modelEl.value = currentModel;
         return;
@@ -985,6 +1073,7 @@ function createProviderPanel(config, providers, panel) {
 
       const effectiveCredentialRef = getEffectiveCredentialRef(providerType);
       if (!isLocal && !keyEl?.value.trim() && !effectiveCredentialRef) {
+        if (requestId !== liveModelsRequestId) return;
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
         activeNoteEl.textContent = isCloud
@@ -1002,11 +1091,14 @@ function createProviderPanel(config, providers, panel) {
           credentialRef: effectiveCredentialRef,
           baseUrl: urlEl.value.trim() || undefined,
         });
+        if (requestId !== liveModelsRequestId) return;
         const models = Array.isArray(result?.models) ? result.models.filter(Boolean) : [];
         if (models.length > 0) {
+          const sortedModels = [...new Set(models)].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
           updateModelSelector(models, currentModel);
-          if (!currentModel || !models.includes(currentModel)) {
-            modelEl.value = models[0];
+          if (!currentModel) {
+            modelEl.value = sortedModels[0];
+            markModelEdited(false);
           }
           activeNoteEl.textContent = `${providerType} models loaded.`;
         } else {
@@ -1015,6 +1107,7 @@ function createProviderPanel(config, providers, panel) {
           activeNoteEl.textContent = `${providerType} did not return any models. You can still enter a model ID manually.`;
         }
       } catch (err) {
+        if (requestId !== liveModelsRequestId) return;
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
         const reason = err instanceof Error ? err.message : String(err);
@@ -1030,10 +1123,15 @@ function createProviderPanel(config, providers, panel) {
         const tierLabel = getProviderTierLabel(info.tier);
         const roleBadges = [];
         const preferredBucket = getPreferredProviderBucketForEntry(info);
-        if (name === config.defaultProvider) roleBadges.push('global');
         if (preferredBucket === 'local' && preferredLocal === name) roleBadges.push('local');
         if (preferredBucket === 'managedCloud' && preferredManagedCloud === name) roleBadges.push('managed cloud');
         if (preferredBucket === 'frontier' && preferredFrontier === name) roleBadges.push('frontier');
+        if (managedCloudRoleRoutingEnabled && info.tier === 'managed_cloud') {
+          if (managedCloudRoleBindings.general === name) roleBadges.push('general');
+          if (managedCloudRoleBindings.direct === name) roleBadges.push('direct');
+          if (managedCloudRoleBindings.toolLoop === name) roleBadges.push('tool loop');
+          if (managedCloudRoleBindings.coding === name) roleBadges.push('coding');
+        }
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
         return `
           <div
@@ -1069,6 +1167,7 @@ function createProviderPanel(config, providers, panel) {
 
           selectedProfile = btn.getAttribute('data-provider-profile');
           configUiState.selectedProviderProfiles[side] = selectedProfile;
+          setProviderEditorState('existing', selectedProfile);
           applyProfile(selectedProfile);
           renderProfiles();
         });
@@ -1076,6 +1175,7 @@ function createProviderPanel(config, providers, panel) {
     }
 
     function applyProfile(name) {
+      cancelPendingLiveModels();
       const placeholder = section.querySelector('#cfg-provider-placeholder');
       const localPanel = section.querySelector('#cfg-local-panel');
       const cloudPanel = section.querySelector('#cfg-mcloud-panel');
@@ -1105,20 +1205,22 @@ function createProviderPanel(config, providers, panel) {
         });
 
       if (!name) {
+        setProviderEditorState('new');
         if (titleEl) titleEl.textContent = side === 'local'
           ? 'Add New Local Provider'
           : side === 'cloud'
             ? 'Add New Ollama Cloud Provider'
             : 'Add New Frontier Provider';
         if (saveBtnEl) saveBtnEl.textContent = 'Create Provider';
+        if (deleteBtnEl) deleteBtnEl.style.display = 'none';
         if (typeEl) typeEl.disabled = false;
         if (nameEl) nameEl.disabled = false;
         const pt = getDefaultProviderTypeForSide(side);
         if (typeEl) typeEl.value = pt;
         nameEl.value = getSuggestedName(side, pt);
-        const defaultModel = getDefaultModel(side, pt);
+        markModelEdited(false);
+        const defaultModel = refreshSuggestedModel(pt, nameEl.value, true);
         updateModelSelector([], null);
-        modelInputEl.value = defaultModel;
         urlEl.value = getDefaultProviderBaseUrl(pt);
         if (keyEl) {
           keyEl.value = '';
@@ -1134,7 +1236,7 @@ function createProviderPanel(config, providers, panel) {
         activeNoteEl.textContent = isLocal
           ? 'Creating a new local provider. Choose the provider type from the dropdown, then set its name and model.'
           : isCloud
-            ? 'Creating a new Ollama Cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly.'
+            ? 'Creating a new Ollama Cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly. Common patterns are one general profile plus optional direct, tool-loop, and coding profiles.'
             : 'Creating a new frontier provider. All supported frontier provider families are listed in the Provider Type dropdown.';
         refreshSecretNote(pt);
         void refreshLiveModels({ currentModel: defaultModel });
@@ -1142,14 +1244,19 @@ function createProviderPanel(config, providers, panel) {
       }
       const entry = providerMap[name];
       if (!entry) return;
+      setProviderEditorState('existing', name);
       if (titleEl) titleEl.textContent = `Edit ${name}`;
       if (saveBtnEl) saveBtnEl.textContent = 'Save Config';
+      if (deleteBtnEl) deleteBtnEl.style.display = '';
       if (typeEl) typeEl.disabled = true;
       if (nameEl) nameEl.disabled = true;
       nameEl.value = name;
+      nameEl.dataset.lastSuggestedModel = '';
       if (typeEl) typeEl.value = entry.provider || '';
       updateModelSelector(entry.availableModels, entry.model || '');
       if (!entry.availableModels?.length) modelInputEl.value = entry.model || '';
+      modelInputEl.placeholder = getDefaultModel(side, entry.provider || '', name);
+      markModelEdited(false);
       urlEl.value = entry.baseUrl || '';
       if (keyEl) {
         keyEl.value = '';
@@ -1173,11 +1280,58 @@ function createProviderPanel(config, providers, panel) {
     newBtnEl?.addEventListener('click', () => {
       selectedProfile = null;
       configUiState.selectedProviderProfiles[side] = null;
+      setProviderEditorState('new');
       applyProfile(null);
       renderProfiles();
     });
 
+    deleteBtnEl?.addEventListener('click', async () => {
+      const providerName = selectedProfile || nameEl.value.trim();
+      if (!providerName) return;
+      const configuredProviderNames = Object.keys(sharedConfig?.llm || {});
+      if (configuredProviderNames.length <= 1) {
+        statusEl.textContent = 'Guardian needs at least one configured provider. Add another provider before deleting this one.';
+        statusEl.style.color = 'var(--warning)';
+        return;
+      }
+      const fallbackDefault = configuredProviderNames
+        .filter((candidate) => candidate !== providerName)
+        .sort((left, right) => left.localeCompare(right))[0];
+      const defaultChangeNote = sharedConfig?.defaultProvider === providerName && fallbackDefault
+        ? ` Guardian will re-derive the primary provider and likely switch it to ${fallbackDefault}.`
+        : '';
+      const confirmed = window.confirm(
+        `Delete provider '${providerName}'? This removes the saved profile and clears any managed-cloud role bindings or routed defaults that still point at it.${defaultChangeNote}`,
+      );
+      if (!confirmed) return;
+
+      deleteBtnEl.disabled = true;
+      deleteBtnEl.textContent = 'Deleting...';
+      statusEl.textContent = 'Deleting provider...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.updateConfig({
+          llm: {
+            [providerName]: { remove: true },
+          },
+        });
+        statusEl.textContent = result.message;
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        if (result.success) {
+          configUiState.selectedProviderProfiles[side] = null;
+          configUiState.providerEditor = { side: null, mode: null, name: null };
+          await updateConfig();
+        }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+      deleteBtnEl.disabled = false;
+      deleteBtnEl.textContent = 'Delete Provider';
+    });
+
     typeEl?.addEventListener('change', () => {
+      cancelPendingLiveModels();
       if (!isLocal && isProviderTypeChanged(typeEl.value)) {
         if (credentialRefEl) {
           credentialRefEl.value = '';
@@ -1192,9 +1346,8 @@ function createProviderPanel(config, providers, panel) {
         if (!nameEl.value.trim() || nameEl.value === lastSuggestedName) {
           nameEl.value = getSuggestedName(side, typeEl.value);
         }
-        if (!modelEl.value.trim()) {
-          modelEl.value = getDefaultModel(side, typeEl.value);
-        }
+        markModelEdited(false);
+        refreshSuggestedModel(typeEl.value, nameEl.value);
         if (!urlEl.value.trim()) {
           urlEl.value = getDefaultProviderBaseUrl(typeEl.value);
         }
@@ -1202,7 +1355,22 @@ function createProviderPanel(config, providers, panel) {
         nameEl.dataset.lastSuggestedName = nameEl.value;
       }
       refreshSecretNote(typeEl.value);
-      void refreshLiveModels({ currentModel: modelEl.value.trim() || getDefaultModel(side, typeEl.value) });
+      void refreshLiveModels({ currentModel: modelEl.value.trim() || getDefaultModel(side, typeEl.value, nameEl.value) });
+    });
+
+    nameEl?.addEventListener('input', () => {
+      if (selectedProfile) return;
+      cancelPendingLiveModels();
+      refreshSuggestedModel(typeEl?.value, nameEl.value);
+    });
+
+    modelInputEl?.addEventListener('input', () => {
+      cancelPendingLiveModels();
+      markModelEdited(true);
+    });
+    modelSelectEl?.addEventListener('change', () => {
+      cancelPendingLiveModels();
+      markModelEdited(true);
     });
 
     urlEl.addEventListener('change', () => {
@@ -1311,6 +1479,7 @@ function createProviderPanel(config, providers, panel) {
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
         if (result.success) {
           configUiState.selectedProviderProfiles[side] = providerName;
+          configUiState.providerEditor = { side, mode: 'existing', name: providerName };
           providerSides
             .filter((candidateSide) => candidateSide !== side)
             .forEach((candidateSide) => {
@@ -1324,6 +1493,8 @@ function createProviderPanel(config, providers, panel) {
     renderProfiles();
     if (selectedProfile) {
       applyProfile(selectedProfile);
+    } else if (shouldOpenNewDraft) {
+      applyProfile(null);
     }
   }
 
@@ -1377,6 +1548,25 @@ function getPreferredProviderBucketLabel(bucket) {
   if (bucket === 'local') return 'Local';
   if (bucket === 'managedCloud') return 'Managed Cloud';
   return 'Frontier';
+}
+
+function describeManagedCloudAutoFallback(role, bindings, managedCloudDefault) {
+  if (role !== 'general' && bindings.general) {
+    const steps = [`general profile (${bindings.general})`, 'auto-detect by profile name'];
+    if (managedCloudDefault) {
+      steps.push(`managed-cloud routed default (${managedCloudDefault})`);
+    } else {
+      steps.push('managed-cloud routed default');
+    }
+    return `Use ${steps.join(', then ')}`;
+  }
+  const steps = ['auto-detect by profile name'];
+  if (managedCloudDefault) {
+    steps.push(`managed-cloud routed default (${managedCloudDefault})`);
+  } else {
+    steps.push('managed-cloud routed default');
+  }
+  return `Use ${steps.join(', then ')}`;
 }
 
 function getDefaultProviderBaseUrl(providerType) {
@@ -1460,7 +1650,6 @@ function createCredentialRefsPanel(settingsPanel) {
   section.innerHTML = `
     <div class="table-header">
       <h3>Credential Refs</h3>
-      <span class="cfg-header-note">Manage how secrets are stored. Most users never need this page &mdash; pasting keys elsewhere handles everything.</span>
     </div>
     <div class="cfg-center-body">
 
@@ -1644,18 +1833,13 @@ function createProviderStatusTable(config, providers, panel) {
     const preferredBucketLabel = getPreferredProviderBucketLabel(preferredBucket);
     const statusBadge = '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
-    const isDefault = name === config.defaultProvider;
     const defaultBadges = [
-      isDefault ? ' <span class="badge badge-idle">global default</span>' : '',
       isPreferredBucket ? ` <span class="badge badge-running">${esc(preferredBucketLabel.toLowerCase())} default</span>` : '',
     ].join('');
-    const globalActionBtn = isDefault
-      ? '<span class="config-provider-current" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the tier-specific routed defaults.">Current default</span>'
-      : '<button class="btn btn-primary btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the local, managed-cloud, or frontier routed defaults.">Set Global Default</button>';
     const preferredActionBtn = isPreferredBucket
-      ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier. This does not change the global default provider.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
-      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier. This does not change the global default provider.') + '">Set ' + preferredBucketLabel + ' Default</button>';
-    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions">' + globalActionBtn + preferredActionBtn + '</td></tr>';
+      ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
+      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
+    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>';
   }).join('');
 
   section.innerHTML = `
@@ -1665,26 +1849,6 @@ function createProviderStatusTable(config, providers, panel) {
       <tbody>${rows || '<tr><td colspan="8">No providers configured</td></tr>'}</tbody>
     </table>
   `;
-
-  section.querySelectorAll('.set-default-provider-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const providerName = btn.dataset.provider;
-      btn.disabled = true;
-      btn.textContent = 'Saving...';
-      try {
-        const result = await api.setDefaultProvider(providerName);
-        if (result.success) {
-          sharedConfig.defaultProvider = providerName;
-          if (panel) renderProvidersTab(panel);
-        } else {
-          alert('Failed to set default provider: ' + (result.message || 'Unknown error'));
-        }
-      } catch (err) {
-        alert('Error: ' + err.message);
-      }
-      btn.disabled = false;
-    });
-  });
 
   section.querySelectorAll('.set-preferred-provider-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1714,7 +1878,7 @@ function createProviderStatusTable(config, providers, panel) {
           };
           if (panel) renderProvidersTab(panel);
         } else {
-          alert('Failed to set ' + bucketLabel.toLowerCase() + ' default provider: ' + (result.message || 'Unknown error'));
+          alert('Failed to set ' + bucketLabel.toLowerCase() + ' preferred provider: ' + (result.message || 'Unknown error'));
         }
       } catch (err) {
         alert('Error: ' + err.message);
@@ -1734,54 +1898,110 @@ function createProviderSelectionPolicyPanel(config, panel) {
   const preferManagedCloud = selection.preferManagedCloudForLowPressureExternal !== false;
   const preferFrontierForRepoGrounded = selection.preferFrontierForRepoGrounded !== false;
   const preferFrontierForSecurity = selection.preferFrontierForSecurity !== false;
+  const providerMap = Object.entries(config?.llm || {}).reduce((acc, [name, cfg]) => {
+    acc[name] = {
+      provider: cfg.provider,
+      locality: getProviderLocalityForType(cfg.provider),
+      tier: getProviderTypeMeta(cfg.provider)?.tier || 'frontier',
+    };
+    return acc;
+  }, {});
+  const managedCloudProviders = Object.keys(providerMap)
+    .filter((name) => providerMap[name].tier === 'managed_cloud')
+    .sort((left, right) => left.localeCompare(right));
+  const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
+  const managedCloudDefault = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap) || '';
+  const managedCloudRouting = selection.managedCloudRouting || {};
+  const managedCloudRoleBindings = managedCloudRouting.roleBindings || {};
+  const managedCloudRoutingEnabled = managedCloudRouting.enabled !== false;
+  const renderManagedCloudRoleOptions = (role, selectedValue) => {
+    const fallbackLabel = describeManagedCloudAutoFallback(role, managedCloudRoleBindings, managedCloudDefault);
+    const options = [
+      `<option value="">${esc(fallbackLabel)}</option>`,
+      ...managedCloudProviders.map((name) => `<option value="${escAttr(name)}"${selectedValue === name ? ' selected' : ''}>${esc(name)}</option>`),
+    ];
+    return options.join('');
+  };
 
   section.innerHTML = `
     <div class="table-header">
-      <h3>Auto Selection Policy</h3>
-      <span class="cfg-header-note">Controls how Auto mode picks between the managed-cloud and frontier tiers after intent routing has already chosen the external lane.</span>
+      <h3>Model Auto Selection Policy</h3>
     </div>
-    <div class="cfg-form-grid">
-      <div class="cfg-field">
-        <label>Auto Policy</label>
-        <select id="cfg-model-selection-policy">
-          <option value="balanced"${autoPolicy === 'balanced' ? ' selected' : ''}>Balanced</option>
-          <option value="quality_first"${autoPolicy === 'quality_first' ? ' selected' : ''}>Quality First</option>
-        </select>
+    <div class="cfg-center-body cfg-selection-policy-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Auto Policy</label>
+          <select id="cfg-model-selection-policy">
+            <option value="balanced"${autoPolicy === 'balanced' ? ' selected' : ''}>Balanced</option>
+            <option value="quality_first"${autoPolicy === 'quality_first' ? ' selected' : ''}>Quality First</option>
+          </select>
+        </div>
       </div>
-    </div>
-    <div class="cfg-field" style="margin-top:0.85rem;">
-      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
-        <input id="cfg-model-selection-managed-cloud" type="checkbox"${preferManagedCloud ? ' checked' : ''}>
-        <span>
-          <strong>Prefer managed cloud for lower-pressure external work</strong><br>
-          <span style="font-size:0.72rem;color:var(--text-muted);">Use Ollama Cloud first for lighter external requests when it is configured.</span>
-        </span>
-      </label>
-    </div>
-    <div class="cfg-field" style="margin-top:0.65rem;">
-      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
-        <input id="cfg-model-selection-repo" type="checkbox"${preferFrontierForRepoGrounded ? ' checked' : ''}>
-        <span>
-          <strong>Prefer frontier for heavier repo-grounded synthesis</strong><br>
-          <span style="font-size:0.72rem;color:var(--text-muted);">Escalate deeper repo review, regression analysis, and higher-pressure grounded coding requests to the frontier default when available.</span>
-        </span>
-      </label>
-    </div>
-    <div class="cfg-field" style="margin-top:0.65rem;">
-      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
-        <input id="cfg-model-selection-security" type="checkbox"${preferFrontierForSecurity ? ' checked' : ''}>
-        <span>
-          <strong>Prefer frontier for security analysis</strong><br>
-          <span style="font-size:0.72rem;color:var(--text-muted);">Bias high-risk security reasoning toward the frontier default instead of managed cloud when both are configured.</span>
-        </span>
-      </label>
-    </div>
-    <div style="margin-top:0.85rem;font-size:0.72rem;color:var(--text-muted);">
-      Global default and routed defaults still decide which provider is used for each tier. This policy only shapes how Auto mode chooses the execution profile inside the routed lane.
-    </div>
-    <div class="cfg-actions" style="margin-top: 1rem;">
-      <button class="btn btn-primary" id="cfg-model-selection-save" type="button">Save Auto Policy</button>
-      <span id="cfg-model-selection-status" class="cfg-save-status"></span>
+      <div class="cfg-field" style="margin-top:0.85rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+          <input id="cfg-model-selection-managed-cloud" type="checkbox"${preferManagedCloud ? ' checked' : ''}>
+          <span>
+            <strong>Prefer managed cloud for lower-pressure external work</strong><br>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Use Ollama Cloud first for lighter external requests when it is configured.</span>
+          </span>
+        </label>
+      </div>
+      <div class="cfg-field" style="margin-top:0.65rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+          <input id="cfg-model-selection-repo" type="checkbox"${preferFrontierForRepoGrounded ? ' checked' : ''}>
+          <span>
+            <strong>Prefer frontier for heavier repo-grounded synthesis</strong><br>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Escalate deeper repo review, regression analysis, and higher-pressure grounded coding requests to the frontier default when available.</span>
+          </span>
+        </label>
+      </div>
+      <div class="cfg-field" style="margin-top:0.65rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+          <input id="cfg-model-selection-security" type="checkbox"${preferFrontierForSecurity ? ' checked' : ''}>
+          <span>
+            <strong>Prefer frontier for security analysis</strong><br>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Bias high-risk security reasoning toward the frontier default instead of managed cloud when both are configured.</span>
+          </span>
+        </label>
+      </div>
+      <div class="cfg-divider"></div>
+      <div class="cfg-field" style="margin-top:0.85rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+          <input id="cfg-managed-cloud-role-routing-enabled" type="checkbox"${managedCloudRoutingEnabled ? ' checked' : ''}>
+          <span>
+            <strong>Enable managed-cloud profile routing</strong><br>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Route different managed-cloud Guardian workloads to different named Ollama Cloud profiles instead of treating the tier as one undifferentiated slot. If a role is left blank, Guardian uses the explicit general profile first when one is set, otherwise it can infer a likely profile from the provider name before falling back to the managed-cloud default.</span>
+          </span>
+        </label>
+      </div>
+      ${managedCloudProviders.length > 0 ? `
+      <div class="cfg-form-grid" style="margin-top:0.85rem;">
+        <div class="cfg-field">
+          <label>General Managed-Cloud Profile</label>
+          <select id="cfg-managed-cloud-role-general">${renderManagedCloudRoleOptions('general', managedCloudRoleBindings.general || '')}</select>
+        </div>
+        <div class="cfg-field">
+          <label>Direct Answers</label>
+          <select id="cfg-managed-cloud-role-direct">${renderManagedCloudRoleOptions('direct', managedCloudRoleBindings.direct || '')}</select>
+        </div>
+        <div class="cfg-field">
+          <label>Tool Loops / Provider CRUD</label>
+          <select id="cfg-managed-cloud-role-tool-loop">${renderManagedCloudRoleOptions('toolLoop', managedCloudRoleBindings.toolLoop || '')}</select>
+        </div>
+        <div class="cfg-field">
+          <label>Managed-Cloud Coding</label>
+          <select id="cfg-managed-cloud-role-coding">${renderManagedCloudRoleOptions('coding', managedCloudRoleBindings.coding || '')}</select>
+        </div>
+      </div>
+      ` : `
+      <div style="margin-top:0.85rem;font-size:0.72rem;color:var(--text-muted);">
+        Add one or more managed-cloud provider profiles in AI Provider Configuration before binding them to direct, tool-loop, or coding roles here.
+      </div>
+      `}
+      <div class="cfg-actions" style="margin-top: 1rem;">
+        <button class="btn btn-primary" id="cfg-model-selection-save" type="button">Save Model Policy</button>
+        <span id="cfg-model-selection-status" class="cfg-save-status"></span>
+      </div>
     </div>
   `;
 
@@ -1795,6 +2015,15 @@ function createProviderSelectionPolicyPanel(config, panel) {
       preferManagedCloudForLowPressureExternal: section.querySelector('#cfg-model-selection-managed-cloud')?.checked === true,
       preferFrontierForRepoGrounded: section.querySelector('#cfg-model-selection-repo')?.checked === true,
       preferFrontierForSecurity: section.querySelector('#cfg-model-selection-security')?.checked === true,
+      managedCloudRouting: {
+        enabled: section.querySelector('#cfg-managed-cloud-role-routing-enabled')?.checked === true,
+        roleBindings: {
+          general: section.querySelector('#cfg-managed-cloud-role-general')?.value || undefined,
+          direct: section.querySelector('#cfg-managed-cloud-role-direct')?.value || undefined,
+          toolLoop: section.querySelector('#cfg-managed-cloud-role-tool-loop')?.value || undefined,
+          coding: section.querySelector('#cfg-managed-cloud-role-coding')?.value || undefined,
+        },
+      },
     };
 
     if (saveBtn) {
@@ -1833,7 +2062,7 @@ function createProviderSelectionPolicyPanel(config, panel) {
 
     if (saveBtn) {
       saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Auto Policy';
+      saveBtn.textContent = 'Save Model Policy';
     }
   });
 
@@ -1858,7 +2087,7 @@ async function renderToolsTab(panel) {
     const routing = state.providerRouting || {};
     const defaultLocality = state.defaultProviderLocality || 'local';
     const categoryDefaults = state.categoryDefaults || {};
-    // Effective routing: user tool-level > user category-level > computed category default > default provider locality
+    // Effective routing: user tool-level > user category-level > computed category default > derived primary-provider locality
     const effectiveRoute = (key, category) => {
       if (routing[key]) return routing[key];
       if (category && routing[category]) return routing[category];
@@ -1955,7 +2184,7 @@ async function renderToolsTab(panel) {
               <input type="checkbox" id="provider-routing-toggle" ${state.providerRoutingEnabled !== false ? 'checked' : ''}>
               Smart LLM Routing
             </label>
-            <span style="font-size:0.72rem;color:var(--text-muted);" title="When enabled, tools are automatically routed between local and external LLM providers based on the task type. External operations (web, email, workspace) use the external model for better quality synthesis, while local operations (filesystem, shell, network) use the local model for speed. Disable to force all tools through your default provider only.">Automatically route tool results between local and external models based on task type. <span style="cursor:help;text-decoration:underline dotted;">(?)</span></span>
+            <span style="font-size:0.72rem;color:var(--text-muted);" title="When enabled, tools are automatically routed between local and external LLM providers based on the task type. External operations (web, email, workspace) use the external model for better quality synthesis, while local operations (filesystem, shell, network) use the local model for speed. Disable to force all tools through the derived primary provider only.">Automatically route tool results between local and external models based on task type. <span style="cursor:help;text-decoration:underline dotted;">(?)</span></span>
           </div>
         </div>
       </div>
@@ -3420,7 +3649,7 @@ function createOverview(config, providers, setupStatus) {
   const cloud = config.assistant?.tools?.cloud;
 
   cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
-  cards.appendChild(createMiniCard('Default Provider', config.defaultProvider || 'None', connectedText, connectedTone));
+  cards.appendChild(createMiniCard('Primary Provider', config.defaultProvider || 'None', 'Derived from routed defaults • ' + connectedText.toLowerCase(), connectedTone));
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
   cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Integrations', config.channels?.telegram?.enabled ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Cloud', cloud?.enabled ? 'Enabled' : 'Disabled', `${cloud?.profileCounts?.total || 0} profiles`, cloud?.enabled ? 'success' : 'warning'));
@@ -5398,21 +5627,36 @@ function createGenericHelpFactory(area) {
   const exact = {
     'Credential Refs': {
       whatItIs: 'This section is the registry for advanced environment-backed credential references used by providers, search, and integrations.',
-      whatSeeing: 'You are seeing the current ref list, the selected ref editor, and the environment-variable target each ref points at.',
-      whatCanDo: 'Create a new env-backed ref, review an existing one, or delete a ref that is no longer needed.',
+      whatSeeing: 'You are seeing app-managed local refs, environment-backed refs, where each ref is used, and the quick form for creating a new env-backed ref.',
+      whatCanDo: 'Create a new env-backed ref, review where an existing ref is used, or delete a ref that is no longer needed. Most users never need this page because pasting a key elsewhere creates the local secret entry automatically.',
       howLinks: 'These refs are consumed by provider, search, Telegram, and other config panels when you do not want to paste secrets directly into the UI.',
     },
     'Local Provider Settings': {
       whatItIs: 'This section is the editor for a local AI provider such as Ollama running on the same machine or network.',
-      whatSeeing: 'You are seeing the local provider name, provider type, model selection, base URL, and connection or save actions.',
-      whatCanDo: 'Configure a local model runtime, test whether Guardian can reach it, and save that provider into the available profile list.',
+      whatSeeing: 'You are seeing the local provider name, provider type, model selection, base URL, and connection, save, or delete actions.',
+      whatCanDo: 'Configure a local model runtime, test whether Guardian can reach it, and save or delete that provider from the available profile list.',
       howLinks: 'Local providers become selectable model paths for chat, workflows, and tool-routing decisions elsewhere in the product.',
     },
-    'External Provider Settings': {
+    'Ollama Cloud Settings': {
+      whatItIs: 'This section is the editor for a managed-cloud Ollama Cloud provider profile that sits between the local and frontier lanes.',
+      whatSeeing: 'You are seeing the managed-cloud provider name, model, credential mode, base URL, advanced Ollama-native options, and test, save, and delete actions.',
+      whatCanDo: 'Configure one or more named Ollama Cloud profiles, let Guardian suggest a starting model from the profile name, validate connectivity, and prepare those profiles for managed-cloud routed defaults or role-based routing.',
+      howLinks: 'These profiles back Guardian’s managed-cloud tier and can be bound to general, direct, tool-loop, or coding work in the Model Auto Selection Policy.',
+      whenToUse: 'Current recommended starting mapping: general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`.',
+      whereNext: 'Use the direct API model names Ollama returns in model discovery or `/api/tags`, not the `-cloud` local-launch suffix names.',
+    },
+    'Frontier Provider Settings': {
       whatItIs: 'This section is the editor for a hosted AI provider such as OpenAI, Anthropic, Groq, Google, or another external API family.',
       whatSeeing: 'You are seeing provider identity, model selection, credential inputs or refs, optional base URL override, and test or save actions.',
-      whatCanDo: 'Configure a hosted provider, validate connectivity, rotate credentials, and save that provider for chat, fallback, or routing use.',
+      whatCanDo: 'Configure a hosted provider, validate connectivity, rotate credentials, and save or delete that provider for chat, fallback, or routing use.',
       howLinks: 'External providers supply the hosted model paths used across assistant responses, automations, and failover behavior.',
+    },
+    'Model Auto Selection Policy': {
+      whatItIs: 'This section controls how Guardian chooses between managed-cloud and frontier provider tiers after routing has already decided the work should leave the local lane.',
+      whatSeeing: 'You are seeing the top-level auto-policy posture, bias toggles for managed-cloud versus frontier use, and the managed-cloud role-routing bindings for named Ollama Cloud profiles.',
+      whatCanDo: 'Keep Auto balanced, bias more aggressively toward frontier quality, and bind different managed-cloud profiles to general, direct-answer, tool-loop, or coding work.',
+      howLinks: 'These controls shape which configured providers Guardian prefers at runtime. Guardian derives its internal primary provider from these routed defaults, with managed cloud preferred when it is configured. When a specific managed-cloud role is unset, Guardian uses the explicit `general` profile first when one is set, otherwise it can infer a profile from the provider name before falling back to the managed-cloud routed default.',
+      whenToUse: 'A good current starting point is general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, and coding `qwen3-coder:480b`.',
     },
     'Cloud Configuration': {
       whatItIs: 'This section is the advanced raw-config editor for `assistant.tools.cloud` rather than the guided Cloud page workflow.',

@@ -362,10 +362,6 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  setDefaultProvider: (name) => request('/api/providers/default', {
-    method: 'POST',
-    body: JSON.stringify({ name }),
-  }),
   assistantState: () => request('/api/assistant/state'),
   assistantJobFollowUp: (payload) => request('/api/assistant/jobs/follow-up', {
     method: 'POST',

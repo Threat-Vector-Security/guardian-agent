@@ -140,7 +140,7 @@ Proposed flow:
 5. Operator selects an option.
 6. Guardian shows the exact mutation plan before any change happens:
    - create or update provider profile
-   - set default provider or not
+   - update routed provider defaults or not
    - start local runtime or not
    - download model or not
 7. If the plan includes mutating or networked actions, Guardian requests approval.
@@ -378,7 +378,7 @@ The following actions must be explicit and approval-gated:
 - stop or restart a managed local runtime
 - download a model
 - write or update provider profiles
-- change the default provider
+- change the routed provider defaults
 - alter runtime-managed local model directories
 
 ### Guardrails

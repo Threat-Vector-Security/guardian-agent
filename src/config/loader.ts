@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
+import { applyDerivedDefaultProvider } from './default-provider-resolution.js';
 import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
 import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { enforceSecurityBaseline, logSecurityBaselineEnforcement } from '../guardian/security-baseline.js';
@@ -236,6 +237,38 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
     if (typeof modelSelection.preferFrontierForSecurity !== 'boolean') {
       errors.push('assistant.tools.modelSelection.preferFrontierForSecurity must be a boolean');
+    }
+    const managedCloudRouting = modelSelection.managedCloudRouting;
+    if (managedCloudRouting !== undefined) {
+      if (typeof managedCloudRouting !== 'object' || managedCloudRouting === null || Array.isArray(managedCloudRouting)) {
+        errors.push('assistant.tools.modelSelection.managedCloudRouting must be an object');
+      } else {
+        if (typeof managedCloudRouting.enabled !== 'boolean') {
+          errors.push('assistant.tools.modelSelection.managedCloudRouting.enabled must be a boolean');
+        }
+        const roleBindings = managedCloudRouting.roleBindings;
+        if (roleBindings !== undefined) {
+          if (typeof roleBindings !== 'object' || roleBindings === null || Array.isArray(roleBindings)) {
+            errors.push('assistant.tools.modelSelection.managedCloudRouting.roleBindings must be an object');
+          } else {
+            for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+              const providerName = roleBindings[role];
+              if (providerName === undefined) continue;
+              const trimmed = providerName.trim();
+              if (!trimmed) {
+                errors.push(`assistant.tools.modelSelection.managedCloudRouting.roleBindings.${role} must be a non-empty string when provided`);
+                continue;
+              }
+              const provider = config.llm[trimmed];
+              if (!provider) {
+                errors.push(`assistant.tools.modelSelection.managedCloudRouting.roleBindings.${role} references unknown provider '${trimmed}'`);
+              } else if (getProviderTier(provider.provider) !== 'managed_cloud') {
+                errors.push(`assistant.tools.modelSelection.managedCloudRouting.roleBindings.${role} must reference a managed-cloud provider, got '${trimmed}'`);
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1288,6 +1321,7 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
   merged = resolveUnifiedOperatorControls(merged);
 
   merged = normalizeConfigInputs(merged);
+  merged = applyDerivedDefaultProvider(merged);
   logSecurityBaselineEnforcement(enforceSecurityBaseline(merged, 'config_file'));
 
   const errors = validateConfig(merged);
@@ -1385,6 +1419,7 @@ export function loadConfig(filePath?: string, options?: ConfigLoadOptions): Guar
   if (!existsSync(path)) {
     // No config file — return defaults
     const fallback = structuredClone(DEFAULT_CONFIG);
+    applyDerivedDefaultProvider(fallback);
     enforceSecurityBaseline(fallback, 'config_file');
     return fallback;
   }

@@ -1,0 +1,85 @@
+import { describe, expect, it } from 'vitest';
+
+import { resolveDerivedDefaultProvider } from './default-provider-resolution.js';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from './types.js';
+
+function createConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm['ollama-cloud-general'] = {
+    provider: 'ollama_cloud',
+    model: 'gpt-oss:120b',
+    credentialRef: 'llm.ollama-cloud.general',
+  };
+  config.llm['ollama-cloud-coding'] = {
+    provider: 'ollama_cloud',
+    model: 'qwen3-coder:480b',
+    credentialRef: 'llm.ollama-cloud.coding',
+  };
+  config.llm.anthropic = {
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    credentialRef: 'llm.anthropic.primary',
+  };
+  return config;
+}
+
+describe('resolveDerivedDefaultProvider', () => {
+  it('prefers the managed-cloud general binding when it exists', () => {
+    const config = createConfig();
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'ollama-cloud-coding',
+      frontier: 'anthropic',
+    };
+    config.assistant.tools.modelSelection = {
+      ...config.assistant.tools.modelSelection,
+      managedCloudRouting: {
+        enabled: true,
+        roleBindings: {
+          general: 'ollama-cloud-general',
+        },
+      },
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('ollama-cloud-general');
+  });
+
+  it('prefers the managed-cloud routed default when no general binding exists', () => {
+    const config = createConfig();
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'ollama-cloud-coding',
+      frontier: 'anthropic',
+    };
+    config.assistant.tools.modelSelection = {
+      ...config.assistant.tools.modelSelection,
+      managedCloudRouting: {
+        enabled: true,
+        roleBindings: {},
+      },
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('ollama-cloud-coding');
+  });
+
+  it('falls back to local and then frontier when managed cloud is unavailable', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm = {
+      ollama: config.llm.ollama,
+      anthropic: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        credentialRef: 'llm.anthropic.primary',
+      },
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      frontier: 'anthropic',
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('ollama');
+
+    delete config.llm.ollama;
+    expect(resolveDerivedDefaultProvider(config)).toBe('anthropic');
+  });
+});

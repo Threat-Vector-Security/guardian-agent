@@ -1308,7 +1308,7 @@ function renderLatencyTargetRow(target = {}) {
         <label>Source</label>
         <select data-latency-field="mode">
           <option value="custom-target"${mode === 'custom-target' ? ' selected' : ''}>Custom URL</option>
-          <option value="default-provider"${mode === 'default-provider' ? ' selected' : ''}>Default Provider</option>
+          <option value="default-provider"${mode === 'default-provider' ? ' selected' : ''}>Primary Provider</option>
         </select>
       </div>
       <div class="cfg-field">
@@ -1341,7 +1341,7 @@ function wireLatencyRow(row, latencyList) {
     const usesDefaultProvider = modeSelect.value === 'default-provider';
     targetInput.disabled = usesDefaultProvider;
     targetInput.placeholder = usesDefaultProvider
-      ? 'Uses the current default provider URL'
+      ? 'Uses the current primary provider URL'
       : isInternet
         ? 'https://1.1.1.1'
         : 'https://api.example.com/health';
@@ -1380,7 +1380,7 @@ function collectLatencyTargets(editorEl) {
     }
 
     if (!target) {
-      throw new Error(`Latency check '${id}' needs an endpoint URL or a default provider source.`);
+      throw new Error(`Latency check '${id}' needs an endpoint URL or a primary provider source.`);
     }
 
     return { kind, id, target };
