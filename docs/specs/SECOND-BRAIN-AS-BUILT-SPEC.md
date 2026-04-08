@@ -60,7 +60,7 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
 - `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
 - `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
-- `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses starter presets when the operator explicitly opens `Create routine`.
+- `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses bounded routine types when the operator explicitly opens `Create routine`.
 
 ### Briefs in the current UI
 
@@ -160,12 +160,12 @@ Not yet exposed as first-class runtime CRUD:
 - overview generation
 - create, update, and delete for notes, tasks, local calendar events, people, library items, briefs, and routines
 - provider-sync upsert for Google and Microsoft calendar events
-- starter routine catalog listing plus bounded routine creation, updates, and deletes
+- routine-type catalog listing plus bounded routine creation, updates, and deletes
 - brief persistence, lookup, generation, update, and delete
 - sync cursor persistence and lookup
 - usage record aggregation
 
-It also seeds the starter routine set at startup.
+It also seeds the default assistant routine set at startup.
 
 Current mutation behavior note:
 - chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
@@ -192,20 +192,24 @@ Planned ownership list:
 - Provider canonical with Guardian-derived context layered on top: email, Drive / Docs / Sheets, OneDrive / SharePoint, and other provider-native files
 - Explicit provider routes remain valid for provider administration, provider-only maintenance, and direct provider CRUD where the user intentionally targets that provider
 
-### Starter routines
+### Default routines and routine types
 
-Current starter routines are all seeded on first run:
-- `morning-brief`
-- `weekly-review`
-- `one-off-sync`
-- `next-24-hours-radar`
-- `pre-meeting-brief`
-- `follow-up-watch`
+Current default seeded routines on first run:
+- `morning-brief` (`Morning Brief`)
+- `weekly-review` (`Weekly Review`)
+- `one-off-sync` (`Sync Calendar and Contacts`)
+- `next-24-hours-radar` (`Daily Agenda Check`)
+- `pre-meeting-brief` (`Pre-Meeting Brief`)
+- `follow-up-watch` (`Follow-Up Draft`)
+
+Current additional routine type available through `Create routine`:
+- `topic-watch` (`Topic Watch`)
 
 Current behavior note:
 - `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
-- the Routines table shows only configured routines; `Create routine` is the explicit path for re-adding any deleted starter routine from the starter set.
-- deleting a seeded starter routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
+- the Routines table shows only configured routines; `Create routine` is the explicit path for adding another bounded routine type.
+- deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
+- `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
 
 ## Sync Model
 
@@ -248,6 +252,7 @@ Current limitations:
 
 Current supported brief kinds:
 - `morning`
+- `weekly_review`
 - `pre_meeting`
 - `follow_up`
 
@@ -256,6 +261,10 @@ Current supported brief kinds:
 `morning`
 - summarizes upcoming events, open tasks, recent notes, and enabled routines
 - persists the result under a day-stable brief id
+
+`weekly_review`
+- summarizes the next seven days of events plus current tasks, notes, people, and saved library references
+- persists the result under a day-stable weekly review id
 
 `pre_meeting`
 - requires `eventId`
@@ -266,6 +275,10 @@ Current supported brief kinds:
 - requires `eventId`
 - creates a draft-style follow-up packet from the event, open tasks, and recent notes
 - persists the result under an event-stable brief id
+
+`topic watch` output
+- is currently stored as a `manual` brief artifact tied back to the triggering routine id
+- summarizes newly matched tasks, notes, people, library items, events, and briefs for the configured topic
 
 Current limitations:
 - synthesis is deterministic string assembly, not open-ended agent drafting
@@ -288,8 +301,12 @@ At startup it ensures a scheduled tool exists with:
 Each scan:
 1. runs `SyncService.syncAll(...)`
 2. evaluates enabled routines
-3. generates briefs only when trigger conditions are met
+3. generates briefs and assistant outcomes only when trigger conditions are met
 4. records `lastRunAt` on triggered routines
+
+Current proactive delivery note:
+- user-facing routine outcomes now flow through shared runtime channels
+- Telegram is the default delivery channel for user-facing routine notifications, with web and CLI available as additional operator-facing delivery channels
 
 Current trigger behavior:
 - `morning-brief`: once per local day after 5:00
@@ -297,6 +314,7 @@ Current trigger behavior:
 - `weekly-review`: generated weekly to summarize your state
 - `pre-meeting-brief`: generates missing pre-meeting briefs for events within the configured lookahead window
 - `follow-up-watch`: generates missing follow-up drafts for recently ended events
+- `topic-watch`: generates a topic-watch brief when new matching context appears since the last run
 - `one-off-sync`: executed manually to sync context from external providers
 
 ## Tool Surface

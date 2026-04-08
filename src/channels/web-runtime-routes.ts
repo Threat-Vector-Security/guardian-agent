@@ -83,6 +83,14 @@ function parseSecondBrainRoutineTrigger(value: unknown): import('../runtime/seco
   };
 }
 
+function parseSecondBrainRoutineConfig(value: unknown): import('../runtime/second-brain/types.js').SecondBrainRoutineConfig | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const topicQuery = trimOptionalString(record.topicQuery);
+  if (!topicQuery) return undefined;
+  return { topicQuery };
+}
+
 export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): Promise<boolean> {
   const { req, res, url, dashboard } = context;
 
@@ -641,6 +649,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         name: trimOptionalString(parsed.name),
         enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
         trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
+        config: parseSecondBrainRoutineConfig(parsed.config),
         deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
           ? parsed.deliveryDefaults
             .map((value) => trimOptionalString(value))
@@ -670,6 +679,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         name: trimOptionalString(parsed.name),
         enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
         trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
+        config: parseSecondBrainRoutineConfig(parsed.config),
         deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
           ? parsed.deliveryDefaults
             .map((value) => trimOptionalString(value))

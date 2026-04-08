@@ -68,6 +68,7 @@ describe('HorizonScanner', () => {
 
   it('runs sync and triggers morning, pre-meeting, and follow-up routines deterministically', async () => {
     const { service, briefing, scheduledTaskService, now } = createFixture();
+    const outcomes: Array<{ text: string; channels: readonly string[] }> = [];
 
     service.upsertTask({
       title: 'Finalize board deck',
@@ -109,7 +110,12 @@ describe('HorizonScanner', () => {
       service,
       syncService as any,
       briefing,
-      { now },
+      {
+        now,
+        onOutcome: (outcome) => {
+          outcomes.push({ text: outcome.text, channels: outcome.channels });
+        },
+      },
     );
 
     const summary = await scanner.runScan('test');
@@ -123,6 +129,9 @@ describe('HorizonScanner', () => {
       'brief:pre_meeting:upcoming-1',
       'brief:follow_up:past-1',
     ]));
+    expect(outcomes.some((outcome) => outcome.text.includes('morning brief'))).toBe(true);
+    expect(outcomes.some((outcome) => outcome.text.includes('pre-meeting brief'))).toBe(true);
+    expect(outcomes.some((outcome) => outcome.text.includes('follow-up'))).toBe(true);
   });
 
   it('generates a weekly review brief when the weekly starter routine is due', async () => {
@@ -174,5 +183,59 @@ describe('HorizonScanner', () => {
     expect(summary.generatedBriefIds).toContain('brief:weekly_review:2026-04-06');
     expect(service.getBriefById('brief:weekly_review:2026-04-06')?.kind).toBe('weekly_review');
     store.close();
+  });
+
+  it('runs topic watch routines and emits a proactive outcome when new context appears', async () => {
+    const { store, service, briefing, scheduledTaskService, now } = createFixture();
+    const outcomes: Array<{ text: string; channels: readonly string[] }> = [];
+
+    const created = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Harbor launch' },
+      deliveryDefaults: ['telegram'],
+    });
+    const topicWatch = service.getRoutineById(created.id)!;
+    store.routines.upsertRoutine({
+      ...topicWatch,
+      lastRunAt: Date.parse('2026-04-03T07:00:00Z'),
+      updatedAt: Date.parse('2026-04-03T07:00:00Z'),
+    });
+    service.upsertNote({
+      title: 'Harbor launch review notes',
+      content: 'Need to confirm the Harbor launch owner handoff.',
+    });
+
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      {
+        now,
+        onOutcome: (outcome) => {
+          outcomes.push({ text: outcome.text, channels: outcome.channels });
+        },
+      },
+    );
+
+    const summary = await scanner.runScan('test');
+
+    expect(summary.triggeredRoutines).toContain(created.id);
+    expect(summary.generatedBriefIds.some((id) => id.startsWith(`brief:manual:topic_watch:${created.id}:`))).toBe(true);
+    expect(outcomes).toContainEqual(expect.objectContaining({
+      channels: ['telegram'],
+      text: expect.stringContaining('Harbor launch'),
+    }));
   });
 });

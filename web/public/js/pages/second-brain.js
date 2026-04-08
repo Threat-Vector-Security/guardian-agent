@@ -364,7 +364,10 @@ function synchronizeStateWithData() {
   state.selectedBriefId = preserveSelection(state.selectedBriefId, filteredBriefs(state.data));
   if (!state.creatingRoutine) {
     state.selectedRoutineId = preserveSelection(state.selectedRoutineId, state.data.routines);
-    state.selectedRoutineTemplateId = state.selectedRoutineId ?? preserveRoutineTemplateSelection(state.selectedRoutineTemplateId, state.data);
+    const selectedRoutine = findRecord(state.data.routines, state.selectedRoutineId);
+    state.selectedRoutineTemplateId = selectedRoutine?.templateId
+      || selectedRoutine?.id
+      || preserveRoutineTemplateSelection(state.selectedRoutineTemplateId, state.data);
   } else {
     state.selectedRoutineTemplateId = preserveRoutineTemplateSelection(state.selectedRoutineTemplateId, state.data);
   }
@@ -379,9 +382,7 @@ function preserveSelection(currentId, records) {
 }
 
 function preserveRoutineTemplateSelection(currentId, data) {
-  const catalog = state.creatingRoutine
-    ? availableRoutineCatalog(data)
-    : filteredRoutineCatalog(data);
+  const catalog = availableRoutineCatalog(data);
   if (!catalog.length) return null;
   if (currentId && catalog.some((entry) => entry.templateId === currentId)) {
     return currentId;
@@ -1354,71 +1355,38 @@ function renderBriefEditor(brief, data) {
 }
 
 function renderRoutines(panel, data) {
-  const catalog = filteredRoutineCatalog(data);
-  const configuredEntries = configuredRoutineCatalog(data);
-  const starterEntries = availableRoutineCatalog(data);
-  const selectedEntry = findRoutineCatalogEntry(data, state.selectedRoutineTemplateId);
+  const routines = filteredRoutineList(data);
+  const selectedRoutine = state.creatingRoutine
+    ? null
+    : (findRecord(routines, state.selectedRoutineId) ?? routines[0] ?? null);
+  const selectedEntry = findRoutineCatalogEntry(
+    data,
+    state.creatingRoutine
+      ? state.selectedRoutineTemplateId
+      : (selectedRoutine?.templateId || state.selectedRoutineTemplateId),
+  );
   const selectedCreateEntry = state.creatingRoutine
     ? resolveRoutineCreateEntry(selectedEntry, data)
     : null;
-  const selectedRoutine = state.creatingRoutine
-    ? null
-    : (findRecord(data.routines, state.selectedRoutineId)
-      ?? (selectedEntry?.configuredRoutineId ? findRecord(data.routines, selectedEntry.configuredRoutineId) : null));
-  const configuredCount = configuredEntries.length;
-  const enabledCount = data.routines.filter((routine) => routine.enabled).length;
-  const pausedCount = Math.max(0, configuredCount - enabledCount);
-  const starterCount = starterEntries.length;
   const actionPanel = state.creatingRoutine
     ? renderRoutineCreateForm(selectedCreateEntry, data)
     : selectedRoutine
       ? renderRoutineEditor(selectedRoutine, selectedEntry)
-      : '<div class="sb-empty">Select a routine to edit it, or open Create routine to add one from the starter set.</div>';
+      : '<div class="sb-empty">Select a routine to edit it, or create a new one from the left-hand panel.</div>';
 
   panel.innerHTML = `
     <section class="sb-section">
-      ${renderGuidancePanel({
-        kicker: 'Routine Guide',
-        title: 'Routine scheduling and bounded assistant upkeep',
-        whatItIs: 'Routines are Guardian’s deterministic Second Brain jobs for briefs, horizon checks, sync, and follow-up upkeep.',
-        whatSeeing: 'You are seeing your configured routines here. Create routine opens the starter presets without keeping deleted routines in the main list.',
-        whatCanDo: 'Create a routine from the starter set, edit its delivery and routing defaults, adjust supported trigger settings, and pause, resume, or delete it without leaving Second Brain.',
-        howLinks: 'Automations stays the home for general-purpose user-authored workflows. This tab owns the curated personal-assistant routine set.',
-      })}
-
-      <div class="intel-summary-grid">
-        <div class="status-card accent">
-          <div class="card-title">Configured</div>
-          <div class="card-value">${configuredCount}</div>
-          <div class="card-subtitle">${enabledCount} enabled right now</div>
-        </div>
-        <div class="status-card info">
-          <div class="card-title">Paused</div>
-          <div class="card-value">${pausedCount}</div>
-          <div class="card-subtitle">Configured routines currently paused</div>
-        </div>
-        <div class="status-card ${enabledCount > 0 ? 'success' : 'warning'}">
-          <div class="card-title">Live Routines</div>
-          <div class="card-value">${enabledCount}</div>
-          <div class="card-subtitle">Briefs and upkeep currently active</div>
-        </div>
-        <div class="status-card warning">
-          <div class="card-title">Starter Presets</div>
-          <div class="card-value">${starterCount}</div>
-          <div class="card-subtitle">Preset routines available in Create routine</div>
-        </div>
-      </div>
-
       <div class="sb-split sb-split--board sb-routines-layout">
         <aside class="sb-card sb-card--sidebar">
           <div class="sb-card__header">
             <div>
-              <div class="sb-card__eyebrow">${state.creatingRoutine ? 'Create routine' : 'Edit routine'}</div>
-              <h3>${esc(state.creatingRoutine ? (selectedCreateEntry?.name ?? 'Choose a routine template') : (selectedRoutine?.name ?? 'Select a routine'))}</h3>
+              <div class="sb-card__eyebrow">${state.creatingRoutine ? 'Routine Builder' : 'Routine Editor'}</div>
+              <h3>${esc(state.creatingRoutine ? (selectedCreateEntry?.name ?? 'Choose a routine type') : (selectedRoutine?.name ?? 'Select a routine'))}</h3>
             </div>
-            ${(state.creatingRoutine ? selectedCreateEntry?.category : selectedEntry?.category)
-              ? `<span class="badge badge-muted">${esc(categoryLabel((state.creatingRoutine ? selectedCreateEntry?.category : selectedEntry?.category) || ''))}</span>`
-              : ''}
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <button class="btn btn-primary" type="button" data-routine-create-toggle="true">${state.creatingRoutine ? 'Close creator' : 'Create routine'}</button>
+              <button class="btn btn-secondary" type="button" data-routine-refresh="true">Refresh</button>
+            </div>
           </div>
           ${actionPanel}
         </aside>
@@ -1426,26 +1394,23 @@ function renderRoutines(panel, data) {
         <section class="table-container sb-routine-catalog">
           <div class="table-header">
             <h3>Configured Routines</h3>
-            <div style="display:flex;gap:0.5rem;align-items:center;">
-              <button class="btn btn-primary" type="button" data-routine-create-toggle="true">${state.creatingRoutine ? 'Close Creator' : 'Create Routine'}</button>
-              <button class="btn btn-secondary" type="button" data-routine-refresh="true">Refresh</button>
-            </div>
+            <div class="sb-table-copy">${esc(`${data.routines.length} configured`)}</div>
           </div>
 
           <div class="wf-category-bar">
-            ${renderRoutineFilterChip('all', 'All', state.routineStatus === 'all', 'data-routine-status', configuredCount)}
-            ${renderRoutineFilterChip('enabled', 'Enabled', state.routineStatus === 'enabled', 'data-routine-status', enabledCount)}
-            ${renderRoutineFilterChip('paused', 'Paused', state.routineStatus === 'paused', 'data-routine-status', pausedCount)}
+            ${renderRoutineFilterChip('all', 'All', state.routineStatus === 'all', 'data-routine-status', data.routines.length)}
+            ${renderRoutineFilterChip('enabled', 'Enabled', state.routineStatus === 'enabled', 'data-routine-status', data.routines.filter((routine) => routine.enabled).length)}
+            ${renderRoutineFilterChip('paused', 'Paused', state.routineStatus === 'paused', 'data-routine-status', data.routines.filter((routine) => !routine.enabled).length)}
             <span class="sb-filter-divider" aria-hidden="true"></span>
             ${renderRoutineFilterChip('all', 'Any Category', state.routineCategory === 'all', 'data-routine-category')}
-            ${renderRoutineCategoryFilters(configuredEntries)}
+            ${renderRoutineCategoryFilters(data)}
           </div>
 
           <div style="padding:0.5rem 1rem;">
             <input
               type="text"
               id="sb-routine-search"
-              placeholder="Search routines, trigger types, budgets, or delivery channels..."
+              placeholder="Search routines, topics, timing, or delivery..."
               value="${escAttr(state.routineQuery)}"
               style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:0;color:var(--text-primary);font-size:0.8rem;"
             >
@@ -1455,18 +1420,17 @@ function renderRoutines(panel, data) {
             <thead>
               <tr>
                 <th>Routine</th>
-                <th>Category</th>
-                <th>Trigger</th>
-                <th>Policy</th>
+                <th>When</th>
                 <th>Delivery</th>
                 <th>Status</th>
+                <th>Last Run</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${catalog.length
-                ? catalog.map((entry) => renderRoutineCatalogRow(entry, data)).join('')
-                : '<tr><td colspan="7"><div class="sb-empty">No configured routines match the current filters.</div></td></tr>'}
+              ${routines.length
+                ? routines.map((routine) => renderRoutineListRow(routine, data)).join('')
+                : '<tr><td colspan="6"><div class="sb-empty">No configured routines match the current filters.</div></td></tr>'}
             </tbody>
           </table>
         </section>
@@ -1485,10 +1449,12 @@ function renderRoutineFilterChip(value, label, active, dataAttribute, count = nu
   `;
 }
 
-function renderRoutineCategoryFilters(catalog) {
+function renderRoutineCategoryFilters(data) {
   const counts = new Map();
-  for (const entry of catalog) {
-    counts.set(entry.category, (counts.get(entry.category) ?? 0) + 1);
+  for (const routine of Array.isArray(data?.routines) ? data.routines : []) {
+    const entry = findRoutineCatalogEntry(data, routine.templateId || routine.id);
+    const category = entry?.category || 'maintenance';
+    counts.set(category, (counts.get(category) ?? 0) + 1);
   }
   return [...counts.entries()]
     .sort((left, right) => String(left[0]).localeCompare(String(right[0])))
@@ -1496,47 +1462,35 @@ function renderRoutineCategoryFilters(catalog) {
     .join('');
 }
 
-function renderRoutineCatalogRow(entry, data) {
-  const routine = findConfiguredRoutine(entry, data);
-  const routineId = routine?.id || entry.templateId;
-  const routineLabel = routine?.name || entry.name;
-  const effective = routine
-    ? routine
-    : {
-      ...entry.manifest,
-      enabled: entry.manifest.enabledByDefault,
-      deliveryDefaults: entry.manifest.deliveryDefaults,
-      defaultRoutingBias: entry.manifest.defaultRoutingBias,
-      budgetProfileId: entry.manifest.budgetProfileId,
-      lastRunAt: null,
-    };
-  const isSelected = state.selectedRoutineTemplateId === entry.templateId;
+function renderRoutineListRow(routine, data) {
+  const entry = findRoutineCatalogEntry(data, routine.templateId || routine.id);
+  const typeLabel = entry?.name || routine.name;
+  const description = routine.templateId === 'topic-watch' && routine.config?.topicQuery
+    ? `Watching "${routine.config.topicQuery}".`
+    : (entry?.description || '');
+  const isSelected = state.selectedRoutineId === routine.id;
 
   return `
-    <tr class="auto-catalog-row sb-routine-row${isSelected ? ' is-selected' : ''}" data-routine-row="${escAttr(entry.templateId)}">
+    <tr class="auto-catalog-row sb-routine-row${isSelected ? ' is-selected' : ''}" data-routine-row="${escAttr(routine.id)}">
       <td>
         <div class="ops-task-title">
-          <strong>${esc(entry.name)}</strong>
-          <div class="wf-category-tag">${esc(categoryLabel(entry.category))}</div>
+          <strong>${esc(routine.name)}</strong>
+          <div class="wf-category-tag">${esc(typeLabel)}</div>
         </div>
-        <div class="sb-table-copy">${esc(entry.description)}</div>
+        ${description ? `<div class="sb-table-copy">${esc(description)}</div>` : ''}
       </td>
-      <td>${esc(categoryLabel(entry.category))}</td>
-      <td>${esc(describeRoutineTrigger(effective.trigger))}</td>
+      <td>${esc(describeRoutineTrigger(routine.trigger))}</td>
+      <td>${esc(routine.deliveryDefaults.join(', ') || 'None')}</td>
       <td>
-        <div>${esc(routingBiasLabel(effective.defaultRoutingBias))}</div>
-        <div class="sb-table-copy">${esc(effective.budgetProfileId)}</div>
+        <span class="badge ${routine.enabled ? 'badge-ok' : 'badge-muted'}">${esc(routine.enabled ? 'Enabled' : 'Paused')}</span>
       </td>
-      <td>${esc(effective.deliveryDefaults.join(', ') || 'None')}</td>
-      <td>
-        <span class="badge ${effective.enabled ? 'badge-ok' : 'badge-muted'}">${esc(effective.enabled ? 'Enabled' : 'Paused')}</span>
-      </td>
+      <td>${esc(routine.lastRunAt ? formatRelativeDate(routine.lastRunAt, Date.now()) : 'Never')}</td>
       <td>
         <div class="sb-task-card__actions">
-          <button class="btn btn-secondary btn-sm" type="button" data-routine-edit="${escAttr(entry.templateId)}">Edit</button>
-          <button class="btn btn-danger btn-sm" type="button" data-routine-delete="${escAttr(routineId)}" data-label="${escAttr(routineLabel)}">Delete</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-routine-edit="${escAttr(routine.id)}">Edit</button>
+          <button class="btn btn-danger btn-sm" type="button" data-routine-delete="${escAttr(routine.id)}" data-label="${escAttr(routine.name)}">Delete</button>
           <label class="sb-toggle">
-            <input type="checkbox" data-routine-quick-toggle="${escAttr(routineId)}" ${effective.enabled ? 'checked' : ''}>
+            <input type="checkbox" data-routine-quick-toggle="${escAttr(routine.id)}" ${routine.enabled ? 'checked' : ''}>
             <span>Live</span>
           </label>
         </div>
@@ -1548,31 +1502,33 @@ function renderRoutineCatalogRow(entry, data) {
 function renderRoutineCreateForm(entry, data) {
   const available = availableRoutineCatalog(data);
   if (!available.length) {
-    return '<div class="sb-empty">All starter routines are already configured. Pick one from the list to edit it instead.</div>';
+    return '<div class="sb-empty">All routine types are already configured. Select a routine on the right to edit it.</div>';
   }
 
-  const selectedEntry = entry && !entry.configured
+  const selectedEntry = entry && (entry.allowMultiple || !entry.configured)
     ? entry
     : available[0];
   const preview = {
     ...selectedEntry.manifest,
+    templateId: selectedEntry.templateId,
     enabled: selectedEntry.manifest.enabledByDefault,
+    config: selectedEntry.templateId === 'topic-watch' ? { topicQuery: '' } : undefined,
     lastRunAt: null,
   };
 
   return `
     <div class="sb-stack">
-      <p class="sb-section__copy">Create a routine from the starter set. Deleted starter routines stay out of the main list until you explicitly add them again here.</p>
+      <p class="sb-section__copy">Choose what Guardian should do, set the timing, and pick where updates should be delivered. Telegram is the default assistant channel.</p>
       <form class="sb-form" data-routine-create-form>
-        <label class="sb-form__label" for="routine-template-id">Starter routine</label>
+        <label class="sb-form__label" for="routine-template-id">Routine type</label>
         <select id="routine-template-id" name="templateId">
           ${available.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}</option>`).join('')}
         </select>
         <div class="sb-readout">
-          <strong>Preset summary</strong>
+          <strong>What it does</strong>
           <span>${esc(selectedEntry.description)}</span>
         </div>
-        ${renderRoutineFormFields(preview, { submitLabel: 'Create routine' })}
+        ${renderRoutineFormFields(preview, { submitLabel: 'Create routine', entry: selectedEntry })}
       </form>
     </div>
   `;
@@ -1584,8 +1540,10 @@ function renderRoutineEditor(routine, entry) {
       ${entry?.description ? `<p class="sb-section__copy">${esc(entry.description)}</p>` : ''}
       <form class="sb-form" data-routine-form>
         <input type="hidden" name="id" value="${escAttr(routine.id)}">
+        <input type="hidden" name="templateId" value="${escAttr(routine.templateId || routine.id)}">
         ${renderRoutineFormFields(routine, {
           submitLabel: 'Save routine',
+          entry,
           extraActions: `<button class="btn btn-danger" type="button" data-routine-delete="${escAttr(routine.id)}" data-label="${escAttr(routine.name)}">Delete routine</button>`,
         })}
       </form>
@@ -1596,22 +1554,41 @@ function renderRoutineEditor(routine, entry) {
 function renderRoutineFormFields(routine, options = {}) {
   const submitLabel = options.submitLabel || 'Save routine';
   const extraActions = options.extraActions || '';
+  const entry = options.entry || null;
+  const templateId = entry?.templateId || routine.templateId || routine.id;
   const editableCron = routine.category !== 'one_off' && (routine.trigger?.mode === 'cron' || routine.trigger?.mode === 'manual');
   const supportsLookahead = routine.trigger?.mode === 'event' || routine.trigger?.mode === 'horizon';
+  const lookaheadLabel = routine.trigger?.eventType === 'upcoming_event'
+    ? 'Generate this long before the meeting (minutes)'
+    : routine.trigger?.eventType === 'event_ended'
+      ? 'Include meetings that ended within the last (minutes)'
+      : 'Look this far ahead (minutes)';
   const cronPreview = routine.trigger?.cron?.trim()
     ? cronSummary(routine.trigger.cron)
     : 'Enter a five-field cron schedule to preview it in plain English.';
 
   return `
-    <label class="sb-form__label" for="routine-name">${esc(options.submitLabel === 'Create routine' ? 'Routine name' : 'Routine name')}</label>
+    <label class="sb-form__label" for="routine-name">Routine name</label>
     <input id="routine-name" name="name" type="text" placeholder="Routine name" value="${escAttr(routine.name || '')}">
     <label class="sb-check">
       <input name="enabled" type="checkbox" ${routine.enabled ? 'checked' : ''}>
       <span>Enabled</span>
     </label>
 
+    ${templateId === 'topic-watch' ? `
+      <label class="sb-form__label" for="routine-topic-query">What should Guardian watch for?</label>
+      <input
+        id="routine-topic-query"
+        name="topicQuery"
+        type="text"
+        placeholder="Harbor launch review"
+        value="${escAttr(routine.config?.topicQuery || '')}"
+      >
+      <div class="sb-table-copy">Guardian will scan matching tasks, notes, people, library items, briefs, and events, then message you when new matching context appears.</div>
+    ` : ''}
+
     ${editableCron ? `
-      <label class="sb-form__label" for="routine-trigger-mode">Trigger</label>
+      <label class="sb-form__label" for="routine-trigger-mode">When should Guardian run this?</label>
       <select id="routine-trigger-mode" name="triggerMode" data-routine-trigger-mode>
         ${renderSelectOptions([
           { value: 'cron', label: 'Scheduled' },
@@ -1631,13 +1608,13 @@ function renderRoutineFormFields(routine, options = {}) {
       <input type="hidden" name="triggerMode" value="${escAttr(routine.trigger?.mode || 'manual')}">
       ${routine.trigger?.eventType ? `<input type="hidden" name="eventType" value="${escAttr(routine.trigger.eventType)}">` : ''}
       <div class="sb-readout">
-        <strong>Trigger</strong>
-        <span>${esc(describeRoutineTrigger(routine.trigger))}</span>
+        <strong>When it runs</strong>
+        <span>${esc(routineTimingLabel(routine.trigger))}</span>
       </div>
     `}
 
     ${supportsLookahead ? `
-      <label class="sb-form__label" for="routine-lookahead-minutes">Lookahead window (minutes)</label>
+      <label class="sb-form__label" for="routine-lookahead-minutes">${esc(lookaheadLabel)}</label>
       <input
         id="routine-lookahead-minutes"
         name="lookaheadMinutes"
@@ -1646,26 +1623,10 @@ function renderRoutineFormFields(routine, options = {}) {
         step="5"
         value="${escAttr(String(routine.trigger?.lookaheadMinutes ?? ''))}"
       >
+      <div class="sb-table-copy">${esc(describeRoutineTrigger(routine.trigger))}</div>
     ` : ''}
 
-    <div class="sb-readout">
-      <strong>Workload</strong>
-      <span>${esc(`${routine.workloadClass} · ${routine.externalCommMode.replaceAll('_', ' ')}`)}</span>
-    </div>
-
-    <label class="sb-form__label" for="routine-routing-bias">Answer quality</label>
-    <select id="routine-routing-bias" name="defaultRoutingBias">
-      ${renderSelectOptions([
-        { value: 'local_first', label: 'Prefer faster local answers' },
-        { value: 'balanced', label: 'Balance speed and quality' },
-        { value: 'quality_first', label: 'Prefer higher-quality answers' },
-      ], routine.defaultRoutingBias)}
-    </select>
-
-    <label class="sb-form__label" for="routine-budget-profile">Budget profile ID</label>
-    <input id="routine-budget-profile" name="budgetProfileId" type="text" placeholder="Budget profile ID" value="${escAttr(routine.budgetProfileId)}">
-
-    <div class="sb-form__label">Show routine updates in</div>
+    <div class="sb-form__label">Send updates through</div>
     <div class="sb-check-grid">
       ${['web', 'cli', 'telegram'].map((channel) => `
         <label class="sb-check">
@@ -1674,6 +1635,7 @@ function renderRoutineFormFields(routine, options = {}) {
         </label>
       `).join('')}
     </div>
+    <div class="sb-table-copy">Telegram is the default assistant channel. Add web or CLI when you also want operator visibility.</div>
 
     ${renderFormActions(esc(submitLabel), extraActions)}
   `;
@@ -1993,14 +1955,10 @@ function bindInteractions(container) {
       && !(target.closest('button'))
       && !(target.closest('label'))
     ) {
-      const entry = findRoutineCatalogEntry(state.data, routineRow.dataset.routineRow);
-      state.selectedRoutineTemplateId = routineRow.dataset.routineRow;
-      if (entry?.configured) {
-        state.selectedRoutineId = entry.configuredRoutineId || entry.templateId;
-        state.creatingRoutine = false;
-      } else {
-        state.creatingRoutine = true;
-      }
+      const routine = findRecord(state.data?.routines || [], routineRow.dataset.routineRow);
+      state.selectedRoutineId = routineRow.dataset.routineRow;
+      state.selectedRoutineTemplateId = routine?.templateId || routine?.id || null;
+      state.creatingRoutine = false;
       void rerenderLocal();
       return;
     }
@@ -2024,8 +1982,9 @@ function bindInteractions(container) {
 
     const routineEdit = target.closest('[data-routine-edit]');
     if (routineEdit?.dataset.routineEdit) {
-      state.selectedRoutineTemplateId = routineEdit.dataset.routineEdit;
+      const routine = findRecord(state.data?.routines || [], routineEdit.dataset.routineEdit);
       state.selectedRoutineId = routineEdit.dataset.routineEdit;
+      state.selectedRoutineTemplateId = routine?.templateId || routine?.id || null;
       state.creatingRoutine = false;
       void rerenderLocal();
       return;
@@ -2058,7 +2017,7 @@ function bindInteractions(container) {
     const routineStatus = target.closest('[data-routine-status]');
     if (routineStatus?.dataset.routineStatus) {
       state.routineStatus = routineStatus.dataset.routineStatus;
-      state.selectedRoutineTemplateId = preserveRoutineTemplateSelection(null, state.data ?? { routineCatalog: [] });
+      state.selectedRoutineId = preserveSelection(state.selectedRoutineId, filteredRoutineList(state.data ?? { routines: [], routineCatalog: [] }));
       void rerenderLocal();
       return;
     }
@@ -2066,7 +2025,7 @@ function bindInteractions(container) {
     const routineCategory = target.closest('[data-routine-category]');
     if (routineCategory?.dataset.routineCategory) {
       state.routineCategory = routineCategory.dataset.routineCategory;
-      state.selectedRoutineTemplateId = preserveRoutineTemplateSelection(null, state.data ?? { routineCatalog: [] });
+      state.selectedRoutineId = preserveSelection(state.selectedRoutineId, filteredRoutineList(state.data ?? { routines: [], routineCatalog: [] }));
       void rerenderLocal();
       return;
     }
@@ -2118,7 +2077,7 @@ function bindInteractions(container) {
     }
     if (target.id === 'sb-routine-search') {
       state.routineQuery = target.value;
-      state.selectedRoutineTemplateId = preserveRoutineTemplateSelection(state.selectedRoutineTemplateId, state.data ?? { routineCatalog: [] });
+      state.selectedRoutineId = preserveSelection(state.selectedRoutineId, filteredRoutineList(state.data ?? { routines: [], routineCatalog: [] }));
       void rerenderLocal();
     }
   });
@@ -2246,13 +2205,13 @@ function bindInteractions(container) {
         name: readString(target, 'name') || undefined,
         enabled: readCheckbox(target, 'enabled'),
         trigger: readRoutineTriggerForm(target),
-        defaultRoutingBias: readString(target, 'defaultRoutingBias') || 'local_first',
-        budgetProfileId: readString(target, 'budgetProfileId') || undefined,
+        config: readRoutineConfigForm(target),
         deliveryDefaults: readCheckboxValues(target, 'deliveryDefaults'),
       }), (result) => {
         if (result?.details?.id) {
           state.selectedRoutineId = String(result.details.id);
-          state.selectedRoutineTemplateId = String(result.details.id);
+          const routine = findRecord(state.data?.routines || [], String(result.details.id));
+          state.selectedRoutineTemplateId = routine?.templateId || readString(target, 'templateId');
           state.creatingRoutine = false;
         }
       });
@@ -2266,13 +2225,12 @@ function bindInteractions(container) {
         name: readString(target, 'name') || undefined,
         enabled: readCheckbox(target, 'enabled'),
         trigger: readRoutineTriggerForm(target),
-        defaultRoutingBias: readString(target, 'defaultRoutingBias') || 'local_first',
-        budgetProfileId: readString(target, 'budgetProfileId') || undefined,
+        config: readRoutineConfigForm(target),
         deliveryDefaults: readCheckboxValues(target, 'deliveryDefaults'),
       }), (result) => {
         if (result?.details?.id) {
           state.selectedRoutineId = String(result.details.id);
-          state.selectedRoutineTemplateId = String(result.details.id);
+          state.selectedRoutineTemplateId = readString(target, 'templateId') || state.selectedRoutineTemplateId;
         }
       });
       return;
@@ -2596,48 +2554,39 @@ function renderFormActions(submitLabel, deleteButton = '', secondaryAction = '')
   `;
 }
 
-function filteredRoutineCatalog(data) {
-  const catalog = configuredRoutineCatalog(data);
+function filteredRoutineList(data) {
+  const routines = Array.isArray(data?.routines) ? data.routines : [];
   const query = state.routineQuery.trim().toLowerCase();
-  return catalog
-    .filter((entry) => {
-      const routine = findConfiguredRoutine(entry, data);
-      if (state.routineStatus === 'enabled' && !routine?.enabled) return false;
-      if (state.routineStatus === 'paused' && routine?.enabled) return false;
-      if (state.routineCategory !== 'all' && entry.category !== state.routineCategory) return false;
+  return routines
+    .filter((routine) => {
+      const entry = findRoutineCatalogEntry(data, routine.templateId || routine.id);
+      const category = entry?.category || 'maintenance';
+      if (state.routineStatus === 'enabled' && !routine.enabled) return false;
+      if (state.routineStatus === 'paused' && routine.enabled) return false;
+      if (state.routineCategory !== 'all' && category !== state.routineCategory) return false;
       if (!query) return true;
-      const effective = routine ?? {
-        ...entry.manifest,
-        deliveryDefaults: entry.manifest.deliveryDefaults,
-        defaultRoutingBias: entry.manifest.defaultRoutingBias,
-        budgetProfileId: entry.manifest.budgetProfileId,
-      };
       const haystack = [
-        entry.name,
-        entry.description,
-        entry.category,
-        describeRoutineTrigger(effective.trigger),
-        effective.budgetProfileId,
-        routingBiasLabel(effective.defaultRoutingBias),
-        effective.deliveryDefaults.join(' '),
+        routine.name,
+        entry?.name || '',
+        entry?.description || '',
+        category,
+        describeRoutineTrigger(routine.trigger),
+        routineTimingLabel(routine.trigger),
+        routine.config?.topicQuery || '',
+        routine.deliveryDefaults.join(' '),
       ].join(' ').toLowerCase();
       return haystack.includes(query);
     })
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function configuredRoutineCatalog(data) {
-  const catalog = Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
-  return catalog.filter((entry) => entry.configured);
-}
-
 function availableRoutineCatalog(data) {
   const catalog = Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
-  return catalog.filter((entry) => !entry.configured);
+  return catalog.filter((entry) => entry.allowMultiple || !entry.configured);
 }
 
 function resolveRoutineCreateEntry(entry, data) {
-  if (entry && !entry.configured) return entry;
+  if (entry && (entry.allowMultiple || !entry.configured)) return entry;
   return availableRoutineCatalog(data)[0] ?? null;
 }
 
@@ -2646,26 +2595,10 @@ function findRoutineCatalogEntry(data, templateId) {
   return (Array.isArray(data?.routineCatalog) ? data.routineCatalog : []).find((entry) => entry.templateId === templateId) ?? null;
 }
 
-function findConfiguredRoutine(entry, data) {
-  if (!entry?.configured) return null;
-  return findRecord(Array.isArray(data?.routines) ? data.routines : [], entry.configuredRoutineId || entry.templateId);
-}
-
 function categoryLabel(category) {
   return String(category || '')
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function routingBiasLabel(value) {
-  switch (value) {
-    case 'local_first':
-      return 'Local first';
-    case 'quality_first':
-      return 'Quality first';
-    default:
-      return 'Balanced';
-  }
 }
 
 function describeRoutineTrigger(trigger) {
@@ -2687,6 +2620,15 @@ function describeRoutineTrigger(trigger) {
   return trigger.mode === 'manual'
     ? 'Run on demand'
     : String(trigger.mode || 'manual');
+}
+
+function routineTimingLabel(trigger) {
+  if (!trigger || typeof trigger !== 'object') return 'Manual';
+  if (trigger.mode === 'cron') return 'Scheduled';
+  if (trigger.mode === 'event' && trigger.eventType === 'upcoming_event') return 'Before meetings';
+  if (trigger.mode === 'event' && trigger.eventType === 'event_ended') return 'After meetings';
+  if (trigger.mode === 'horizon') return 'Horizon check';
+  return 'Manual';
 }
 
 const CRON_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -3007,6 +2949,14 @@ function readRoutineTriggerForm(form) {
     };
   }
   return { mode: 'manual' };
+}
+
+function readRoutineConfigForm(form) {
+  const topicQuery = readString(form, 'topicQuery');
+  if (!topicQuery) {
+    return undefined;
+  }
+  return { topicQuery };
 }
 
 function parseTags(value) {

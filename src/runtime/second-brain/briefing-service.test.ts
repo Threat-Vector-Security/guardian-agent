@@ -130,4 +130,38 @@ describe('BriefingService', () => {
     expect(brief.content).toContain('Jordan Lee');
     expect(brief.content).toContain('Launch checklist');
   });
+
+  it('builds a topic watch brief from new matching records', async () => {
+    const { service, briefing, tick } = createFixture();
+
+    const routine = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Harbor launch' },
+    });
+    tick();
+    service.upsertTask({
+      title: 'Send Harbor launch review deck',
+      priority: 'high',
+    });
+    service.upsertNote({
+      title: 'Harbor launch review notes',
+      content: 'Need to confirm the Harbor launch owner handoff.',
+    });
+    service.upsertLink({
+      title: 'Harbor launch checklist',
+      url: 'https://example.test/harbor-launch',
+      kind: 'reference',
+      summary: 'Checklist for the Harbor launch review.',
+    });
+
+    const brief = await briefing.generateTopicWatchBrief(routine.id, {
+      onlySince: routine.createdAt,
+    });
+
+    expect(brief).toBeTruthy();
+    expect(brief?.title).toBe('Topic Watch: Harbor launch');
+    expect(brief?.content).toContain('Send Harbor launch review deck');
+    expect(brief?.content).toContain('Harbor launch review notes');
+    expect(brief?.content).toContain('Harbor launch checklist');
+  });
 });
