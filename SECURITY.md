@@ -35,6 +35,8 @@ For the shipped local defensive overlay on top of the runtime security model, se
 - [Agentic Defensive Security Suite - As-Built Spec](docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
 - [Contextual Security Uplift Spec](docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
 
+The as-built spec is the canonical current-state document for the defensive suite. The earlier implementation plan has been retired.
+
 ### Threats Addressed
 
 | Threat / failure mode | Implemented controls | Default posture | Current boundary |

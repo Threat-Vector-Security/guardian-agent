@@ -8,6 +8,7 @@ import {
   isDeploymentProfile,
   isSecurityOperatingMode,
 } from './security-controls.js';
+import { isLowConfidenceSecurityDetailType } from './security-signal-taxonomy.js';
 
 export type SecurityPostureSource = SecurityAlertSource;
 export type SecurityPostureSeverity = SecurityAlertSeverity;
@@ -18,6 +19,7 @@ export interface SecurityPostureAlert {
   type: string;
   severity: SecurityPostureSeverity;
   description: string;
+  evidence?: Record<string, unknown>;
   timestamp?: number;
   acknowledged?: boolean;
   status?: SecurityAlertStatus;
@@ -76,14 +78,6 @@ const IR_ASSIST_ALERT_TYPES = new Set<string>([
   'lateral_movement',
 ]);
 
-const LOW_CONFIDENCE_MEDIUM_ALERT_TYPES = new Set<string>([
-  'new_external_destination',
-  'new_listening_port',
-  'sensitive_path_change',
-  'firewall_change',
-  'defender_controlled_folder_access_disabled',
-]);
-
 const CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES = new Set<string>([
   'arp_conflict',
 ]);
@@ -115,7 +109,7 @@ export function assessSecurityPosture(input: SecurityPostureAssessmentInput): Se
   const criticalAlerts = activeAlerts.filter((alert) => alert.severity === 'critical');
   const highAlerts = activeAlerts.filter((alert) => alert.severity === 'high');
   const mediumAlerts = activeAlerts.filter((alert) => alert.severity === 'medium');
-  const actionableMediumAlerts = mediumAlerts.filter((alert) => !LOW_CONFIDENCE_MEDIUM_ALERT_TYPES.has(alert.type));
+  const actionableMediumAlerts = mediumAlerts.filter((alert) => !isLowConfidenceSecurityDetailType(alert.type));
   const postureOnlyCriticalAlerts = criticalAlerts.filter((alert) => isPostureOnlyAlert(alert));
   const corroborationRequiredCriticalAlerts = criticalAlerts.filter((alert) => CORROBORATION_REQUIRED_CRITICAL_ALERT_TYPES.has(alert.type));
   const incidentCriticalAlerts = criticalAlerts.filter((alert) => (
@@ -230,6 +224,15 @@ function buildSummary(input: {
 }
 
 function isPostureOnlyAlert(alert: SecurityPostureAlert): boolean {
+  const alertSemantics = typeof alert.evidence?.alertSemantics === 'string'
+    ? String(alert.evidence.alertSemantics)
+    : '';
+  if (alertSemantics === 'incident_candidate') {
+    return false;
+  }
+  if (alertSemantics === 'posture_only') {
+    return true;
+  }
   return alert.source === 'assistant'
     || alert.source === 'install'
     || alert.type.startsWith('assistant_security_')

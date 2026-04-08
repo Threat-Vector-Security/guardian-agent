@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AiSecurityService, type AiSecurityRuntimeSnapshot } from './ai-security.js';
+import { AiSecurityService, type AiSecurityFinding, type AiSecurityRuntimeSnapshot } from './ai-security.js';
 import type { PackageInstallTrustAlert } from './package-install-trust-service.js';
 import {
   acknowledgeUnifiedSecurityAlert,
@@ -62,6 +62,31 @@ function createRuntimeSnapshot(overrides?: Partial<AiSecurityRuntimeSnapshot>): 
   };
 }
 
+function createAssistantFinding(overrides: Partial<AiSecurityFinding>): AiSecurityFinding {
+  return {
+    id: 'assistant-finding',
+    dedupeKey: 'assistant:finding',
+    targetId: 'workspace:demo',
+    targetType: 'workspace',
+    targetLabel: 'Demo Workspace',
+    category: 'workspace',
+    severity: 'medium',
+    confidence: 0.8,
+    alertSemantics: 'posture_only',
+    status: 'new',
+    title: 'Assistant Security finding',
+    summary: 'Assistant Security summary',
+    firstSeenAt: 5_000,
+    lastSeenAt: 5_000,
+    occurrenceCount: 1,
+    evidence: [{
+      kind: 'workspace',
+      summary: 'workspace evidence',
+    }],
+    ...overrides,
+  };
+}
+
 async function createAssistantSecurityService() {
   const service = new AiSecurityService({
     enabled: true,
@@ -114,6 +139,44 @@ describe('security alert integration', () => {
     const acknowledged = withAcknowledged.find((alert) => alert.id === findingId);
     expect(acknowledged?.status).toBe('acknowledged');
     expect(acknowledged?.acknowledged).toBe(true);
+  });
+
+  it('can scope Assistant Security unified alerts to promoted incident candidates only', () => {
+    const assistantSecurity = {
+      listFindings: () => [
+        createAssistantFinding({
+          id: 'assistant-posture-critical',
+          severity: 'critical',
+          alertSemantics: 'posture_only',
+          title: 'Sandbox isolation is disabled',
+          category: 'sandbox',
+        }),
+        createAssistantFinding({
+          id: 'assistant-incident-high',
+          severity: 'high',
+          alertSemantics: 'incident_candidate',
+          title: 'Workspace contains prompt injection',
+          category: 'trust_boundary',
+        }),
+        createAssistantFinding({
+          id: 'assistant-incident-medium',
+          severity: 'medium',
+          alertSemantics: 'incident_candidate',
+          title: 'Workspace contains encoded exec',
+          category: 'trust_boundary',
+        }),
+      ],
+    };
+
+    const alerts = collectUnifiedSecurityAlerts({
+      assistantSecurity: assistantSecurity as any,
+      includeAcknowledged: false,
+      assistantVisibility: 'promoted_only',
+    });
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.id).toBe('assistant-incident-high');
+    expect(alerts[0]?.evidence?.alertSemantics).toBe('incident_candidate');
   });
 
   it('routes resolve and suppress actions through the unified alert state APIs', async () => {

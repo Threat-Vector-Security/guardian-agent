@@ -13,6 +13,7 @@ import type { SecurityActivityLogService } from '../security-activity-log.js';
 import {
   acknowledgeUnifiedSecurityAlert,
   availableSecurityAlertSources,
+  type AssistantSecurityAlertVisibility,
   collectUnifiedSecurityAlerts,
   matchesSecurityAlertQuery,
   normalizeSecurityAlertSeverity,
@@ -173,6 +174,7 @@ export function createOperationsDashboardCallbacks(
   const collectSecurityAlerts = (args?: {
     includeAcknowledged?: boolean;
     includeInactive?: boolean;
+    assistantVisibility?: AssistantSecurityAlertVisibility;
   }) => collectUnifiedSecurityAlerts({
     hostMonitor: options.hostMonitor,
     networkBaseline: options.networkBaseline,
@@ -182,6 +184,7 @@ export function createOperationsDashboardCallbacks(
     packageInstallTrust: options.packageInstallTrust,
     includeAcknowledged: !!args?.includeAcknowledged,
     includeInactive: !!args?.includeInactive,
+    assistantVisibility: args?.assistantVisibility,
   });
 
   const listAvailableSecuritySources = () => availableSecurityAlertSources({
@@ -324,7 +327,11 @@ export function createOperationsDashboardCallbacks(
         const typeFilter = typeof args?.type === 'string' ? args.type.trim().toLowerCase() : '';
         const selectedSources = normalizeSecurityAlertSources(args?.source, args?.sources);
 
-        let alerts = collectSecurityAlerts({ includeAcknowledged, includeInactive });
+        let alerts = collectSecurityAlerts({
+          includeAcknowledged,
+          includeInactive,
+          assistantVisibility: 'promoted_only',
+        });
         if (selectedSources.length > 0) {
           const allowed = new Set(selectedSources);
           alerts = alerts.filter((alert) => allowed.has(alert.source));

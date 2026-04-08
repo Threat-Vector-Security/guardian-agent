@@ -15,6 +15,7 @@ import type {
   SecurityOperatingMode,
   SecurityTriageLlmProvider,
 } from '../runtime/security-controls.js';
+import { DEFAULT_SUPPRESSED_SECURITY_NOTIFICATION_DETAIL_TYPES } from '../runtime/security-signal-taxonomy.js';
 
 /** Top-level configuration. */
 export interface GuardianAgentConfig {
@@ -1741,28 +1742,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'agent_error',
         'agent_stalled',
       ],
-      suppressedDetailTypes: [
-        'new_external_destination',
-        'new_listening_port',
-        'sensitive_path_change',
-        'firewall_change',
-        'defender_controlled_folder_access_disabled',
-        'degraded_backend_manual_terminals_disabled',
-        'strict_sandbox_lockdown',
-        'restrict_browser_mutation',
-        'pause_scheduled_mutations',
-        'restrict_outbound_mutation',
-        'restrict_command_execution',
-        'restrict_network_egress',
-        'restrict_mcp_tooling',
-        'freeze_mutating_tools',
-        'ir_assist_read_only',
-      ],
+      suppressedDetailTypes: [...DEFAULT_SUPPRESSED_SECURITY_NOTIFICATION_DETAIL_TYPES],
       cooldownMs: 60_000,
       deliveryMode: 'selected',
       destinations: {
         web: false,
-        cli: true,
+        cli: false,
         telegram: false,
       },
     },
@@ -1772,7 +1757,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         email: 'Draft a concise, professional email based on these details:\n{details}\n\nInclude: subject, greeting, body, and sign-off.',
         task: 'Turn this into a clear prioritized task list with owner/time suggestions:\n{details}',
         calendar: 'Create a calendar-ready event plan from these details:\n{details}\n\nInclude: title, agenda, time estimate, and follow-ups.',
-        security: 'Run an Assistant Security review using the built-in `assistant_security_scan` tool. Use the `quick` profile unless these details clearly call for `runtime-hardening` or `workspace-boundaries`. If the user names a specific workspace target, include that target when you scan.\n\nAfter running the scan, summarize the highest-risk findings, whether anything was promoted into Security Log, and the next actions.\n\nDetails:\n{details}',
+        security: 'Run an Assistant Security review using the built-in `assistant_security_scan` tool. Use the `quick` profile unless these details clearly call for `runtime-hardening` or `workspace-boundaries`. If the user names a specific workspace target, include that target when you scan.\n\nAfter running the scan, summarize the highest-risk findings, whether any incident-candidate finding was promoted into Security Log, and the next actions.\n\nDetails:\n{details}',
         spec: 'Write a PRD using the spec-driven-development skill covering objectives, commands, structure, code style, testing, and boundaries before any code based on these details:\n{details}',
         plan: 'Decompose the following spec into small, verifiable tasks with acceptance criteria and dependency ordering using the planning-and-task-breakdown skill:\n{details}',
         build: 'Implement the following task in thin vertical slices (Implement, Test, Verify, Commit) using the incremental-implementation and test-driven-development skills:\n{details}',

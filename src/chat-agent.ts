@@ -245,8 +245,8 @@ const ROUTINE_QUERY_STOP_WORDS = new Set([
   'which',
 ]);
 
-type SecondBrainFocusItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief';
-type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'brief';
+type SecondBrainFocusItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
+type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'brief' | 'routine';
 type DirectSecondBrainMutationAction = 'create' | 'update' | 'delete' | 'complete';
 type DirectSecondBrainMutationToolName =
   | 'second_brain_note_upsert'
@@ -258,7 +258,10 @@ type DirectSecondBrainMutationToolName =
   | 'second_brain_person_upsert'
   | 'second_brain_person_delete'
   | 'second_brain_brief_upsert'
-  | 'second_brain_brief_delete';
+  | 'second_brain_brief_delete'
+  | 'second_brain_routine_create'
+  | 'second_brain_routine_update'
+  | 'second_brain_routine_delete';
 
 interface SecondBrainFocusContinuationItem {
   id: string;
@@ -369,8 +372,20 @@ function normalizeRoutineQueryTokens(query: string | undefined): string[] {
     .filter((token) => token.length >= 2 && !ROUTINE_QUERY_STOP_WORDS.has(token));
 }
 
+function normalizeRoutineSearchTokens(value: string | undefined): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/g)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
 function buildRoutineSemanticHints(
   routine: {
+    id?: string;
+    name?: string;
     category?: string;
     externalCommMode?: string;
     trigger?: { mode?: string; eventType?: string };
@@ -385,6 +400,16 @@ function buildRoutineSemanticHints(
   }
   if (routine.trigger?.mode === 'event' && routine.trigger.eventType === 'event_ended') {
     hints.push('post meeting follow up');
+  }
+  if (routine.trigger?.mode === 'event' && routine.trigger.eventType === 'upcoming_event') {
+    hints.push('meeting prep preparation');
+  }
+  const normalizedIdentity = `${routine.id ?? ''} ${routine.name ?? ''}`.toLowerCase();
+  if (normalizedIdentity.includes('pre-meeting') || normalizedIdentity.includes('pre meeting')) {
+    hints.push('meeting prep');
+  }
+  if (normalizedIdentity.includes('follow-up') || normalizedIdentity.includes('follow up')) {
+    hints.push('follow up');
   }
   return hints;
 }
@@ -436,7 +461,8 @@ function isSecondBrainFocusItemType(value: string): value is SecondBrainFocusIte
     || value === 'calendar'
     || value === 'person'
     || value === 'library'
-    || value === 'brief';
+    || value === 'brief'
+    || value === 'routine';
 }
 
 function normalizeSecondBrainFocusContinuationItems(value: unknown): SecondBrainFocusContinuationItem[] {
@@ -666,9 +692,148 @@ function defaultSecondBrainItemLabel(itemType: DirectSecondBrainMutationItemType
       return 'Untitled person';
     case 'brief':
       return 'Untitled brief';
+    case 'routine':
+      return 'Untitled routine';
     default:
       return 'Untitled item';
   }
+}
+
+function normalizeRoutineNameForMatch(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function normalizeRoutineTemplateIdForMatch(value: string): string {
+  return value.trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function extractRoutineEnabledState(text: string): boolean | undefined {
+  if (/\b(?:disable|disabled|pause|paused|deactivate|turn\s+off|stop)\b/i.test(text)) {
+    return false;
+  }
+  if (/\b(?:enable|enabled|resume|resumed|activate|turn\s+on|start)\b/i.test(text)) {
+    return true;
+  }
+  return undefined;
+}
+
+function extractSecondBrainRoutingBias(
+  text: string,
+): 'local_first' | 'balanced' | 'quality_first' | undefined {
+  if (/\bquality[\s_-]*first\b/i.test(text)) {
+    return 'quality_first';
+  }
+  if (/\blocal[\s_-]*first\b/i.test(text)) {
+    return 'local_first';
+  }
+  if (/\bbalanced\b/i.test(text)) {
+    return 'balanced';
+  }
+  return undefined;
+}
+
+function extractRoutineDeliveryDefaults(
+  text: string,
+): Array<'web' | 'cli' | 'telegram'> | undefined {
+  if (!/\b(?:deliver|delivery|channel|channels|surface|surfaces|send)\b/i.test(text)) {
+    return undefined;
+  }
+  const channels: Array<'web' | 'cli' | 'telegram'> = [];
+  if (/\bweb\b/i.test(text)) channels.push('web');
+  if (/\bcli\b/i.test(text)) channels.push('cli');
+  if (/\btelegram\b/i.test(text)) channels.push('telegram');
+  return channels.length > 0 ? channels : undefined;
+}
+
+function extractRoutineLookaheadMinutes(text: string): number | undefined {
+  if (!/\blookahead\b|\bwindow\b/i.test(text)) {
+    return undefined;
+  }
+  const match = text.match(/\b(\d{1,5})\s*(?:minute|minutes|min)\b/i);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function normalizeRoutineTriggerModeForTool(
+  value: unknown,
+): 'cron' | 'event' | 'horizon' | 'manual' | undefined {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  switch (normalized) {
+    case 'cron':
+    case 'event':
+    case 'horizon':
+    case 'manual':
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeRoutineEventTypeForTool(
+  value: unknown,
+): 'upcoming_event' | 'event_ended' | 'task_due' | 'task_overdue' | undefined {
+  const normalized = typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    : '';
+  switch (normalized) {
+    case 'upcoming':
+    case 'upcoming_event':
+      return 'upcoming_event';
+    case 'ended':
+    case 'event_ended':
+      return 'event_ended';
+    case 'task_due':
+    case 'due':
+      return 'task_due';
+    case 'task_overdue':
+    case 'overdue':
+      return 'task_overdue';
+    default:
+      return undefined;
+  }
+}
+
+function buildToolSafeRoutineTrigger(
+  trigger: Record<string, unknown> | undefined,
+  fallbackTrigger?: Record<string, unknown> | null,
+): Record<string, unknown> | undefined {
+  const mode = normalizeRoutineTriggerModeForTool(trigger?.mode) ?? normalizeRoutineTriggerModeForTool(fallbackTrigger?.mode);
+  if (!mode) return undefined;
+
+  if (mode === 'manual') {
+    return { mode };
+  }
+
+  if (mode === 'cron') {
+    const cron = toString(trigger?.cron).trim() || toString(fallbackTrigger?.cron).trim();
+    return cron ? { mode, cron } : { mode };
+  }
+
+  if (mode === 'event') {
+    const eventType = normalizeRoutineEventTypeForTool(trigger?.eventType)
+      ?? normalizeRoutineEventTypeForTool(fallbackTrigger?.eventType);
+    const lookaheadMinutes = Number.isFinite(trigger?.lookaheadMinutes)
+      ? Number(trigger?.lookaheadMinutes)
+      : Number.isFinite(fallbackTrigger?.lookaheadMinutes)
+        ? Number(fallbackTrigger?.lookaheadMinutes)
+        : undefined;
+    return {
+      mode,
+      ...(eventType ? { eventType } : {}),
+      ...(lookaheadMinutes != null ? { lookaheadMinutes } : {}),
+    };
+  }
+
+  const lookaheadMinutes = Number.isFinite(trigger?.lookaheadMinutes)
+    ? Number(trigger?.lookaheadMinutes)
+    : Number.isFinite(fallbackTrigger?.lookaheadMinutes)
+      ? Number(fallbackTrigger?.lookaheadMinutes)
+      : undefined;
+  return {
+    mode,
+    ...(lookaheadMinutes != null ? { lookaheadMinutes } : {}),
+  };
 }
 
 function isRetryAfterFailureRequest(content: string): boolean {
@@ -3487,7 +3652,7 @@ type DirectIntentShadowCandidate =
     if (!this.tools?.isEnabled() || decision?.route !== 'personal_assistant_task') {
       return null;
     }
-    if (!['create', 'save', 'update', 'delete'].includes(decision.operation)) {
+    if (!['create', 'save', 'update', 'delete', 'toggle'].includes(decision.operation)) {
       return null;
     }
 
@@ -3502,6 +3667,8 @@ type DirectIntentShadowCandidate =
         return this.tryDirectSecondBrainPersonWrite(message, ctx, userKey, decision, continuityThread);
       case 'brief':
         return this.tryDirectSecondBrainBriefWrite(message, ctx, userKey, decision, continuityThread);
+      case 'routine':
+        return this.tryDirectSecondBrainRoutineWrite(message, ctx, userKey, decision, continuityThread);
       default:
         return null;
     }
@@ -3596,8 +3763,13 @@ type DirectIntentShadowCandidate =
       case 'routine': {
         const routines = this.secondBrainService.listRoutines();
         if (routines.length === 0) {
-          return 'Second Brain has no configured routines yet.';
+          return {
+            content: 'Second Brain has no configured routines yet.',
+            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'routine'),
+          };
         }
+        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
+        const priorRoutineFocus = getSecondBrainFocusEntry(priorFocus, 'routine');
         const routineCatalogById = new Map(
           this.secondBrainService.listRoutineCatalog().flatMap((entry) => {
             const entries: Array<[string, string]> = [];
@@ -3623,7 +3795,7 @@ type DirectIntentShadowCandidate =
             return true;
           }
           const description = routineCatalogById.get(routine.id)?.trim() ?? '';
-          const searchText = [
+          const searchTokens = new Set(normalizeRoutineSearchTokens([
             routine.name,
             routine.id,
             routine.category,
@@ -3636,9 +3808,8 @@ type DirectIntentShadowCandidate =
             ...buildRoutineSemanticHints(routine),
           ]
             .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-            .join(' ')
-            .toLowerCase();
-          return queryTokens.some((token) => searchText.includes(token));
+            .join(' ')));
+          return queryTokens.every((token) => searchTokens.has(token));
         });
         if (filteredRoutines.length === 0) {
           if (queryTokens.length > 0 && typeof enabledFilter === 'boolean') {
@@ -3653,27 +3824,35 @@ type DirectIntentShadowCandidate =
           if (enabledFilter === false) {
             return 'Second Brain has no disabled routines.';
           }
-          return 'Second Brain has no configured routines yet.';
+          return {
+            content: 'Second Brain has no configured routines yet.',
+            metadata: buildSecondBrainFocusRemovalMetadata(priorFocus, 'routine'),
+          };
         }
-        const lines = [
-          queryTokens.length > 0
-            ? typeof enabledFilter === 'boolean'
-              ? `${enabledFilter ? 'Enabled' : 'Disabled'} Second Brain routines related to "${queryTokens.join(' ')}":`
-              : `Second Brain routines related to "${queryTokens.join(' ')}":`
-            : enabledFilter === true
-              ? 'Enabled Second Brain routines:'
-              : enabledFilter === false
-                ? 'Disabled Second Brain routines:'
-                : 'Second Brain routines:',
-          ...filteredRoutines.map((routine) => {
-            const description = routineCatalogById.get(routine.id)?.trim() ?? '';
-            const descriptionSuffix = description
-              ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
-              : '';
-            return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${routine.category}, ${routine.defaultRoutingBias})${descriptionSuffix}`;
+        const items = filteredRoutines.map((routine) => ({ id: routine.id, label: routine.name }));
+        return {
+          content: [
+            queryTokens.length > 0
+              ? typeof enabledFilter === 'boolean'
+                ? `${enabledFilter ? 'Enabled' : 'Disabled'} Second Brain routines related to "${queryTokens.join(' ')}":`
+                : `Second Brain routines related to "${queryTokens.join(' ')}":`
+              : enabledFilter === true
+                ? 'Enabled Second Brain routines:'
+                : enabledFilter === false
+                  ? 'Disabled Second Brain routines:'
+                  : 'Second Brain routines:',
+            ...filteredRoutines.map((routine) => {
+              const description = routineCatalogById.get(routine.id)?.trim() ?? '';
+              const descriptionSuffix = description
+                ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
+                : '';
+              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${routine.category}, ${routine.defaultRoutingBias})${descriptionSuffix}`;
+            }),
+          ].join('\n'),
+          metadata: buildSecondBrainFocusMetadata(priorFocus, 'routine', items, {
+            preferredFocusId: priorRoutineFocus?.focusId,
           }),
-        ];
-        return lines.join('\n');
+        };
       }
       case 'calendar': {
         const calendarWindowDays = typeof decision.entities.calendarWindowDays === 'number'
@@ -4042,6 +4221,25 @@ type DirectIntentShadowCandidate =
         return {
           content: `Brief deleted: ${label}`,
           metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'brief'),
+        };
+      case 'routine:create':
+        return {
+          content: `Routine created: ${label}`,
+          metadata: id
+            ? buildSecondBrainFocusMetadata(focusState, 'routine', [{ id, label }], { preferredFocusId: id })
+            : undefined,
+        };
+      case 'routine:update':
+        return {
+          content: `Routine updated: ${label}`,
+          metadata: id
+            ? buildSecondBrainFocusMetadata(focusState, 'routine', [{ id, label }], { preferredFocusId: id })
+            : undefined,
+        };
+      case 'routine:delete':
+        return {
+          content: `Routine deleted: ${label}`,
+          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'routine'),
         };
       default:
         return { content: `${label}` };
@@ -4617,6 +4815,182 @@ type DirectIntentShadowCandidate =
             action: 'delete',
             fallbackId: focusItem.id,
             fallbackLabel: focusItem.label,
+          },
+          focusState: focused,
+        });
+      }
+      default:
+        return null;
+    }
+  }
+
+  private async tryDirectSecondBrainRoutineWrite(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    decision: IntentGatewayDecision,
+    continuityThread?: ContinuityThreadRecord | null,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.secondBrainService) return null;
+    const focused = readSecondBrainFocusContinuationState(continuityThread);
+    const routineFocus = getSecondBrainFocusEntry(focused, 'routine');
+    const focusItem = routineFocus
+      ? routineFocus.items.find((item) => item.id === routineFocus.focusId) ?? null
+      : null;
+    const routineCatalog = this.secondBrainService.listRoutineCatalog();
+    const configuredRoutines = this.secondBrainService.listRoutines();
+    const normalizedContent = normalizeRoutineNameForMatch(message.content);
+    const explicitRoutineTitle = extractExplicitNamedSecondBrainTitle(message.content);
+    const matchedCatalogEntry = routineCatalog
+      .filter((entry) => {
+        const normalizedName = normalizeRoutineNameForMatch(entry.name);
+        const normalizedTemplateId = normalizeRoutineTemplateIdForMatch(entry.templateId);
+        if (!normalizedName && !normalizedTemplateId) {
+          return false;
+        }
+        if (explicitRoutineTitle) {
+          const normalizedExplicit = normalizeRoutineNameForMatch(explicitRoutineTitle);
+          return normalizedExplicit === normalizedName || normalizedExplicit === normalizedTemplateId;
+        }
+        return normalizedContent.includes(normalizedName) || normalizedContent.includes(normalizedTemplateId);
+      })
+      .sort((left, right) => right.name.length - left.name.length)[0] ?? null;
+    const matchedRoutineId = matchedCatalogEntry?.configuredRoutineId
+      ?? matchedCatalogEntry?.templateId
+      ?? focusItem?.id;
+
+    switch (decision.operation) {
+      case 'create': {
+        if (!matchedCatalogEntry) {
+          return 'To create a Second Brain routine, tell me which built-in routine to create, such as Morning Brief or Pre-Meeting Brief.';
+        }
+        if (matchedCatalogEntry.configured && matchedCatalogEntry.configuredRoutineId?.trim()) {
+          const routineId = matchedCatalogEntry.configuredRoutineId.trim();
+          return {
+            content: `Routine already exists: ${matchedCatalogEntry.name}`,
+            metadata: buildSecondBrainFocusMetadata(
+              focused,
+              'routine',
+              [{ id: routineId, label: matchedCatalogEntry.name }],
+              { preferredFocusId: routineId },
+            ),
+          };
+        }
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_routine_create',
+          args: { templateId: matchedCatalogEntry.templateId },
+          summary: 'Creates a Second Brain routine.',
+          pendingIntro: 'I prepared a Second Brain routine create, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'routine',
+            action: 'create',
+            fallbackId: matchedCatalogEntry.templateId,
+            fallbackLabel: matchedCatalogEntry.name,
+          },
+          focusState: focused,
+        });
+      }
+      case 'update':
+      case 'toggle': {
+        if (!matchedRoutineId) {
+          return 'I need to know which Second Brain routine to update. Try "Show my routines." first.';
+        }
+        const existingRoutine = configuredRoutines.find((routine) => routine.id === matchedRoutineId)
+          ?? this.secondBrainService.getRoutineById(matchedRoutineId);
+        if (!existingRoutine) {
+          const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
+          return `Second Brain routine "${label}" is not configured yet.`;
+        }
+        const existingCatalogEntry = matchedCatalogEntry
+          ?? routineCatalog.find((entry) => entry.configuredRoutineId === existingRoutine.id || entry.templateId === existingRoutine.id)
+          ?? null;
+
+        const enabledFromDecision = typeof decision.entities.enabled === 'boolean'
+          ? decision.entities.enabled
+          : undefined;
+        const explicitEnabled = enabledFromDecision ?? extractRoutineEnabledState(message.content);
+        const explicitRoutingBias = extractSecondBrainRoutingBias(message.content);
+        const explicitDeliveryDefaults = extractRoutineDeliveryDefaults(message.content);
+        const explicitLookaheadMinutes = extractRoutineLookaheadMinutes(message.content);
+        const nextArgs: Record<string, unknown> = {
+          id: existingRoutine.id,
+          name: existingRoutine.name,
+          enabled: explicitEnabled ?? existingRoutine.enabled,
+          defaultRoutingBias: explicitRoutingBias ?? existingRoutine.defaultRoutingBias,
+          budgetProfileId: existingRoutine.budgetProfileId,
+          deliveryDefaults: explicitDeliveryDefaults ?? existingRoutine.deliveryDefaults,
+        };
+
+        if (explicitLookaheadMinutes != null) {
+          if (existingRoutine.trigger.mode !== 'event' && existingRoutine.trigger.mode !== 'horizon') {
+            return `${existingRoutine.name} does not use a lookahead window.`;
+          }
+          nextArgs.trigger = buildToolSafeRoutineTrigger(
+            {
+              ...existingRoutine.trigger,
+              lookaheadMinutes: explicitLookaheadMinutes,
+            },
+            existingCatalogEntry?.manifest.trigger as unknown as Record<string, unknown> | null | undefined,
+          );
+          if (!nextArgs.trigger) {
+            return `I couldn't determine a valid trigger shape for ${existingRoutine.name}.`;
+          }
+        }
+
+        const hasExplicitChange = explicitEnabled !== undefined
+          || explicitRoutingBias !== undefined
+          || explicitDeliveryDefaults !== undefined
+          || explicitLookaheadMinutes !== undefined;
+        if (!hasExplicitChange) {
+          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, adjust the routing bias, delivery channels, or lookahead window.';
+        }
+
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_routine_update',
+          args: nextArgs,
+          summary: 'Updates a Second Brain routine.',
+          pendingIntro: 'I prepared a Second Brain routine update, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'routine',
+            action: 'update',
+            fallbackId: existingRoutine.id,
+            fallbackLabel: existingRoutine.name,
+          },
+          focusState: focused,
+        });
+      }
+      case 'delete': {
+        if (!matchedRoutineId) {
+          return 'I need to know which Second Brain routine to delete. Try "Show my routines." first.';
+        }
+        const existingRoutine = configuredRoutines.find((routine) => routine.id === matchedRoutineId)
+          ?? this.secondBrainService.getRoutineById(matchedRoutineId);
+        if (!existingRoutine) {
+          const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
+          return `Second Brain routine "${label}" is not configured yet.`;
+        }
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_routine_delete',
+          args: { id: existingRoutine.id },
+          summary: 'Deletes a Second Brain routine.',
+          pendingIntro: 'I prepared a Second Brain routine delete, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'routine',
+            action: 'delete',
+            fallbackId: existingRoutine.id,
+            fallbackLabel: existingRoutine.name,
           },
           focusState: focused,
         });
@@ -10350,10 +10724,20 @@ type DirectIntentShadowCandidate =
       && toolName !== 'second_brain_person_delete'
       && toolName !== 'second_brain_brief_upsert'
       && toolName !== 'second_brain_brief_delete'
+      && toolName !== 'second_brain_routine_create'
+      && toolName !== 'second_brain_routine_update'
+      && toolName !== 'second_brain_routine_delete'
     ) {
       return null;
     }
-    if (itemType !== 'note' && itemType !== 'task' && itemType !== 'calendar' && itemType !== 'person' && itemType !== 'brief') {
+    if (
+      itemType !== 'note'
+      && itemType !== 'task'
+      && itemType !== 'calendar'
+      && itemType !== 'person'
+      && itemType !== 'brief'
+      && itemType !== 'routine'
+    ) {
       return null;
     }
     if (action !== 'create' && action !== 'update' && action !== 'delete' && action !== 'complete') {

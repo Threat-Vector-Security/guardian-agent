@@ -4,6 +4,10 @@ import type { AgentContext } from '../agent/types.js';
 import type { AuditLog, AuditSeverity } from '../guardian/audit-log.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import type { SecurityActivityLogService } from './security-activity-log.js';
+import {
+  isExpectedGuardrailSecurityDetailType,
+  isLowConfidenceSecurityDetailType,
+} from './security-signal-taxonomy.js';
 
 export const SECURITY_TRIAGE_AGENT_ID = 'security-triage';
 export const SECURITY_TRIAGE_DISPATCHER_AGENT_ID = 'security-triage-dispatcher';
@@ -14,27 +18,6 @@ export const DEFAULT_SECURITY_TRIAGE_SYSTEM_PROMPT = [
   'Do not acknowledge, resolve, suppress, or mutate security state unless a human explicitly asks.',
   'Your job is to distinguish real incidents from benign noise, corroborate signals across sources, and recommend the right operating mode and next action.',
 ].join(' ');
-
-const LOW_CONFIDENCE_DETAIL_TYPES = new Set([
-  'new_external_destination',
-  'new_listening_port',
-  'sensitive_path_change',
-  'firewall_change',
-  'defender_controlled_folder_access_disabled',
-]);
-
-const EXPECTED_GUARDRAIL_DETAIL_TYPES = new Set([
-  'degraded_backend_manual_terminals_disabled',
-  'strict_sandbox_lockdown',
-  'restrict_browser_mutation',
-  'pause_scheduled_mutations',
-  'restrict_outbound_mutation',
-  'restrict_command_execution',
-  'restrict_network_egress',
-  'restrict_mcp_tooling',
-  'freeze_mutating_tools',
-  'ir_assist_read_only',
-]);
 
 const RELEVANT_SECURITY_ALERT_EVENT_TYPES = new Set([
   'action_denied',
@@ -274,7 +257,7 @@ export class SecurityEventTriageAgent extends BaseAgent {
           dedupeKey: candidate.dedupeKey,
           triageAgentId: this.targetAgentId,
           automationDisposition: {
-            notify: true,
+            notify: false,
             sendToSecurity: true,
           },
         },
@@ -386,7 +369,7 @@ function classifySecurityEvent(event: AgentEvent): SecurityEventTriageDecision |
         skipReason: 'low_severity',
       };
     }
-    if (LOW_CONFIDENCE_DETAIL_TYPES.has(detailType)) {
+    if (isLowConfidenceSecurityDetailType(detailType)) {
       return {
         dedupeKey: buildDedupeKey(event.type, asString(alert.dedupeKey), detailType),
         detailType,
@@ -420,7 +403,7 @@ function classifySecurityEvent(event: AgentEvent): SecurityEventTriageDecision |
     const severity = toAuditSeverity(payload.severity);
     const details = asRecord(payload.details);
     if (severity === 'info') return null;
-    if (LOW_CONFIDENCE_DETAIL_TYPES.has(detailType) || isExpectedGuardrailDenial(sourceEventType, detailType, details)) {
+    if (isLowConfidenceSecurityDetailType(detailType) || isExpectedGuardrailDenial(sourceEventType, detailType, details)) {
       return {
         dedupeKey: buildDedupeKey(event.type, asString(payload.dedupeKey), `${sourceEventType}:${detailType}`),
         detailType,
@@ -467,7 +450,7 @@ function classifyDirectAlertEvent(
     };
   }
 
-  if (LOW_CONFIDENCE_DETAIL_TYPES.has(detailType)) {
+  if (isLowConfidenceSecurityDetailType(detailType)) {
     return {
       dedupeKey,
       detailType,
@@ -584,7 +567,7 @@ function isExpectedGuardrailDenial(
   if (source === 'containment_service') {
     return true;
   }
-  return EXPECTED_GUARDRAIL_DETAIL_TYPES.has(detailType) || EXPECTED_GUARDRAIL_DETAIL_TYPES.has(matchedAction);
+  return isExpectedGuardrailSecurityDetailType(detailType) || isExpectedGuardrailSecurityDetailType(matchedAction);
 }
 
 function toAuditSeverity(value: unknown): AuditSeverity {

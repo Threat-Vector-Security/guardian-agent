@@ -7,7 +7,11 @@ import {
   type SecurityAlertLifecycle,
   type SecurityAlertStateResult,
 } from './security-alert-lifecycle.js';
-import type { AiSecurityFinding, AiSecurityService } from './ai-security.js';
+import {
+  isAiSecurityFindingPromotedToSecurityLog,
+  type AiSecurityFinding,
+  type AiSecurityService,
+} from './ai-security.js';
 import type { PackageInstallTrustAlert, PackageInstallTrustService } from './package-install-trust-service.js';
 
 export type SecurityAlertSource = 'host' | 'network' | 'gateway' | 'native' | 'assistant' | 'install';
@@ -37,6 +41,8 @@ export interface UnifiedSecurityAlertAcknowledgeResult {
 export interface UnifiedSecurityAlertStateResult extends SecurityAlertStateResult {
   source?: SecurityAlertSource;
 }
+
+export type AssistantSecurityAlertVisibility = 'all' | 'promoted_only';
 
 export const SECURITY_ALERT_SOURCES: readonly SecurityAlertSource[] = ['host', 'network', 'gateway', 'native', 'assistant', 'install'];
 export const SECURITY_ALERT_SEVERITIES: readonly SecurityAlertSeverity[] = ['low', 'medium', 'high', 'critical'];
@@ -73,6 +79,7 @@ export function collectUnifiedSecurityAlerts(input: {
   packageInstallTrust?: PackageInstallTrustService;
   includeAcknowledged: boolean;
   includeInactive?: boolean;
+  assistantVisibility?: AssistantSecurityAlertVisibility;
 }): UnifiedSecurityAlert[] {
   const alerts: UnifiedSecurityAlert[] = [];
   if (input.hostMonitor) {
@@ -107,6 +114,7 @@ export function collectUnifiedSecurityAlerts(input: {
     const now = Date.now();
     alerts.push(...input.assistantSecurity
       .listFindings(500)
+      .filter((finding) => input.assistantVisibility !== 'promoted_only' || isAiSecurityFindingPromotedToSecurityLog(finding))
       .map(toUnifiedAssistantAlert)
       .filter((alert) => isSecurityAlertVisible(alert, now, {
         includeAcknowledged: input.includeAcknowledged,
@@ -403,6 +411,7 @@ function toUnifiedAssistantAlert(finding: AiSecurityFinding): UnifiedSecurityAle
       targetLabel: finding.targetLabel,
       category: finding.category,
       confidence: finding.confidence,
+      alertSemantics: finding.alertSemantics,
       evidence: finding.evidence,
     },
     subject: finding.targetLabel,

@@ -115,13 +115,13 @@ assistant:
     deliveryMode: selected
     destinations:
       web: false
-      cli: true
+      cli: false
       telegram: false
 ```
 
 Notes:
 
-- defaults are intentionally CLI-only to avoid surprising multi-channel fanout
+- defaults keep operator-facing delivery off until an explicit channel is enabled
 - `deliveryMode: all` sends alerts to every active destination; `selected` respects the per-channel booleans
 - Telegram delivery still depends on the Telegram channel being enabled and `allowedChatIds` being configured
 - these settings are exposed in `Configuration > Settings > Security > Security Alerts`

@@ -26,10 +26,58 @@
 
 Second Brain (`#/`) is the default web home.
 
-- Capture and organize tasks, notes, people, routines, and calendar context
-- Use the assistant for planning, retrieval, and deterministic brief generation
+- `Today` centers the day around agenda, quick capture, priority tasks, briefs, notes, and routines
+- `Calendar` combines synced and local events with assistant-aware planning and follow-up
+- `Tasks` provides a lightweight board for priorities, due dates, and status tracking
+- `Notes` keeps searchable, pinnable, and archivable notes in one place
+- `Contacts`, `Library`, `Briefs`, and `Routines` round out the daily-use memory and upkeep workflow
 - Keep daily context separate from the operator and workstation consoles
 - Further reading: [Second Brain As-Built Spec](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md)
+
+<p align="center">
+  <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134400.png">
+    <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134400.png" alt="GuardianAgent Second Brain Today view" width="100%"/>
+  </a>
+</p>
+
+<p align="center">
+  <em>Today is the default Second Brain landing view for agenda, capture, tasks, briefs, notes, and routines.</em>
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134425.png">
+        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134425.png" alt="GuardianAgent Second Brain Calendar view" width="100%"/>
+      </a>
+      <br/>
+      <strong>Calendar</strong>
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134510.png">
+        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134510.png" alt="GuardianAgent Second Brain Tasks view" width="100%"/>
+      </a>
+      <br/>
+      <strong>Tasks</strong>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134540.png">
+        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134540.png" alt="GuardianAgent Second Brain Notes view" width="100%"/>
+      </a>
+      <br/>
+      <strong>Notes</strong>
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134604.png">
+        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134604.png" alt="GuardianAgent Second Brain Routines view" width="100%"/>
+      </a>
+      <br/>
+      <strong>Routines</strong>
+    </td>
+  </tr>
+</table>
 
 ### Power User Capabilities
 
@@ -48,21 +96,12 @@ Second Brain (`#/`) is the default web home.
 
 ## Screenshots
 
-Second Brain is the default web home at `#/`. The screenshot gallery below still includes the operator-focused Dashboard alias while a dedicated Second Brain capture is pending.
-
-### Operator Dashboard
-<p align="center">
-  <img src="docs/images/dashboard.png" alt="GuardianAgent dashboard" width="100%"/>
-</p>
-
-<p align="center">
-  <em>Operator summary, alert queue, runtime health, and the integrated assistant panel at the legacy `#/dashboard` route.</em>
-</p>
+Second Brain screenshots are shown above in Product Overview. The gallery below covers the remaining major Guardian surfaces.
 
 <details>
   <summary>Open the full application gallery</summary>
 
-  <p><em>Second Brain is the main landing page. The gallery below currently shows the operator Dashboard alias plus the remaining major product surfaces.</em></p>
+  <p><em>Security, Network, Cloud, Automations, Configuration, Coding Assistant, and Reference Guide.</em></p>
 
   <table>
     <tr>

@@ -1,15 +1,16 @@
 # Agentic Defensive Security Suite - As-Built Spec
 
-**Status:** Implemented for the current local-defense scope  
-**Date:** 2026-03-20  
+**Status:** Implemented for the current local-defense scope; canonical current-state document  
+**Date:** 2026-04-08  
 **Proposal origin:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)  
-**Implementation plan:** [Agentic Defensive Security Suite - Implementation Plan](/mnt/s/Development/GuardianAgent/docs/plans/AGENTIC-DEFENSIVE-SECURITY-SUITE-IMPLEMENTATION-PLAN.md)
 
 ## Purpose
 
 Define the shipped local defensive-security stack for GuardianAgent.
 
 This is an as-built runtime and operator spec, not a proposal. It documents what is implemented now for the current scope, where the boundaries are, and which parts of the broader plan remain deferred.
+
+This document supersedes the earlier implementation plan for the local defensive-security suite. The proposal remains forward-looking; this spec is the shipped-reference document.
 
 ## Current Scope
 
@@ -18,6 +19,7 @@ The shipped system covers:
 - local runtime hardening and memory boundaries
 - unified local security alerts across host, network, gateway, and native provider sources
 - advisory posture and bounded containment logic
+- filtered, deduped, opt-in operator notifications sourced from security audit events
 - Windows Defender status, alert, and scan integration
 - coding-session repo-trust enrichment via Windows Defender custom-path scans and optional Unix ClamAV path scans
 - event-triggered security response automations
@@ -346,6 +348,30 @@ Primary files:
 - `src/runtime/scheduled-tasks.ts`
 - `src/runtime/scheduled-tasks.test.ts`
 
+## Security notifications and noise controls
+
+Current behavior:
+
+- selected audit events are normalized into `security:alert` events through the notification service
+- duplicate notifications are deduped through a cooldown window keyed by event family, agent, and normalized description
+- low-confidence drift families and expected containment or guardrail-denial details are muted by default through `suppressedDetailTypes`
+- the same shared signal taxonomy now drives notification suppression defaults, security-triage skip behavior, and posture low-confidence filtering so noisy detail families are treated consistently across the suite
+- follow-up triage summaries do not notify by default because `automation_finding` is not part of the default notification event list and the security-triage automation records `notify: false`
+- Assistant Security MCP findings are re-scored using compensating controls such as sandbox strength, startup approval, network access, inherited environment, explicit env injection, and trust overrides so approved low-risk MCP setups stay lower-severity and posture-oriented
+- operator-facing delivery is opt-in by channel; the shipped defaults leave `web`, `cli`, and `telegram` disabled until an operator enables one or more destinations
+- internal `security:alert` event emission remains distinct from channel delivery so downstream security orchestration can still subscribe to normalized alerts when notifications are enabled for that event family
+
+Primary files:
+
+- `src/runtime/notifications.ts`
+- `src/config/types.ts`
+- `src/runtime/security-signal-taxonomy.ts`
+- `src/runtime/security-triage-agent.ts`
+- `src/runtime/security-posture.ts`
+- `src/runtime/ai-security.ts`
+- `src/runtime/control-plane/direct-config-update.ts`
+- `web/public/js/pages/config.js`
+
 ## Operator and API Surfaces
 
 ## Tool surfaces
@@ -413,6 +439,7 @@ Current Security page behavior:
 - Overview optimized for fast posture readout with compact cards, a mode recommendation panel, and top active signals
 - Security Log centered on the unified queue, with historical audit review collapsed until needed
 - alert and audit rows expand into deterministic investigation guidance, normalized evidence/context, and raw JSON without requiring an AI triage pass
+- only incident-candidate Assistant Security findings are promoted into Security Log; broader posture findings stay in the Assistant Security queue
 - Assistant Security centered on posture, monitoring, and the live findings queue, with targets, runs, and activity moved into secondary expandable sections
 - threat-intel workspace focused on summary, watchlist, and findings, with drafted actions and operating plan kept as secondary expandable sections
 - unified alerts still include native-provider findings, but the Security page no longer duplicates a separate native-provider control panel here

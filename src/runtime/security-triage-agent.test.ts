@@ -60,6 +60,10 @@ describe('SecurityEventTriageAgent', () => {
     expect(findings[0]?.agentId).toBe(SECURITY_TRIAGE_DISPATCHER_AGENT_ID);
     expect(findings[0]?.details['automationName']).toBe('Security Triage Agent');
     expect(findings[0]?.details['triggerDetailType']).toBe('defender_threat_detected');
+    expect(findings[0]?.details['automationDisposition']).toEqual({
+      notify: false,
+      sendToSecurity: true,
+    });
     const activity = activityLog.list();
     expect(activity.totalMatches).toBe(2);
     expect(activity.entries[0]?.status).toBe('completed');

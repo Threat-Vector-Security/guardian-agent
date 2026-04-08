@@ -1060,6 +1060,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The Security page is the main operator surface for the local defensive suite. It combines posture, Assistant Security, threat intel, the Security Log, and native Windows Defender visibility in one place.',
                   'Security Overview carries the short `Needs Attention` queue so alert triage does not have to live on the general System page.',
                   'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, native Windows Defender alerts, and package-install trust alerts.',
+                  'Assistant Security keeps its full posture-and-workspace finding queue on the Assistant Security tab. Only promoted incident-candidate findings are added to Security Log.',
                   'Host persistence alerts are prioritised to reduce noise while keeping higher-risk autoruns prominent.',
                   'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',
                   'Built-in Assistant Security checks can be run from the assistant, automations, and the Security page.',

@@ -43,7 +43,7 @@ const SECURITY_HELP = {
       howLinks: 'It keeps alert triage and audit evidence on one page without collapsing them into the same data model.',
     },
     'Unified Alert Queue': {
-      whatItIs: 'This is the actionable alert queue across host, network, gateway, native protection, and high-signal Assistant Security findings.',
+      whatItIs: 'This is the actionable alert queue across host, network, gateway, native protection, and promoted cross-cutting Assistant Security findings.',
       whatSeeing: 'You are seeing active or acknowledged issues that can be acknowledged, resolved, or suppressed where supported, plus expandable deterministic investigation guidance for each row.',
       whatCanDo: 'Filter aggressively, triage the highest-risk items first, and update alert state when you have enough evidence.',
       howLinks: 'This is the action-now surface; the audit history below keeps the durable evidence trail.',
@@ -65,8 +65,8 @@ const SECURITY_HELP = {
     'Assistant Security Findings': {
       whatItIs: 'This is the current queue of Assistant Security findings.',
       whatSeeing: 'You are seeing posture, workspace, browser, MCP, and trust-boundary findings with triage state.',
-      whatCanDo: 'Update finding status, focus on the highest-risk rows, and use this as the source-specific queue behind promoted Security Log anomalies.',
-      howLinks: 'This is the detailed finding surface, while Security Log carries the promoted cross-cutting issues.',
+      whatCanDo: 'Update finding status, focus on the highest-risk rows, and use this as the source-specific queue for posture debt plus any cross-cutting incident candidates.',
+      howLinks: 'This is the detailed finding surface, while Security Log only carries the promoted incident-candidate subset.',
     },
     'Recent Assistant Security Runs': {
       whatItIs: 'This section shows recent Assistant Security scan executions.',
@@ -356,8 +356,8 @@ async function renderAssistantSecurityTab(panel, state = {}) {
       title: 'Assistant Security',
       whatItIs: 'Assistant Security is the command center for runtime and workspace posture scanning, findings, and workflow review.',
       whatSeeing: 'You are seeing scan controls, current findings, recent runs, and the persisted activity trail for the security workflow.',
-      whatCanDo: 'Run scans manually, triage findings, and use this surface as the detailed source queue behind promoted Security Log issues.',
-      howLinks: 'High-risk findings promote into Security Log, and session-local results are also written into Code checks.',
+      whatCanDo: 'Run scans manually, triage findings, and use this surface as the detailed source queue behind any promoted Security Log issues.',
+      howLinks: 'Only incident-candidate findings promote into Security Log; broader posture findings stay here, and session-local results are also written into Code checks.',
     })}
     <section class="table-section">
       <div class="table-header"><h3>Posture & Monitoring</h3></div>
@@ -991,7 +991,7 @@ function buildAlertNarrative(alert) {
     default:
       if (alert.source === 'assistant' || alert.type.startsWith('assistant_security_')) {
         const category = alert.type.replace(/^assistant_security_/, '') || 'assistant';
-        return `Assistant Security promoted a ${formatIdentifierLabel(category)} posture finding for ${subject}. Confirm whether the configuration drift was intentional or whether a trust boundary widened unexpectedly.`;
+        return `Assistant Security promoted a high-signal ${formatIdentifierLabel(category)} finding for ${subject}. Confirm whether the evidence points to a real incident candidate or whether the issue is already explained by reviewed posture debt.`;
       }
       return `${formatSecuritySource(alert.source)} reported ${signal} for ${subject}. Confirm the signal is still current, explain what changed, and look for corroborating evidence before resolving it.`;
   }
