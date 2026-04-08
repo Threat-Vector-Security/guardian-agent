@@ -258,13 +258,14 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Briefs',
                 items: [
-                  'Briefs is where saved Morning Briefs, Weekly Reviews, Pre-Meeting Briefs, and Follow-Up Drafts are reviewed after generation.',
+                  'Briefs is where saved Morning Briefs, Scheduled Reviews, Weekly Reviews, Pre-Meeting Briefs, and Follow-Up Drafts are reviewed after generation.',
                   'Morning Brief gives you a deterministic summary of current calendar, tasks, notes, and routine state.',
+                  'Scheduled Review is the reusable custom review format for operator-defined review cadences such as Friday board review or a project-specific review rhythm.',
                   'Weekly Review rolls up the next seven days of events plus current tasks, notes, people, and saved library references.',
                   'Pre-Meeting Brief is anchored to a selected event and tries to gather the most relevant tasks, notes, and people around that meeting.',
                   'Follow-Up Draft is anchored to a finished event and assembles a draftable follow-up packet from recent shared context.',
                   'Use the Today page, Calendar, or Briefs tab to trigger brief generation manually when you want it on demand.',
-                  'Saved briefs can now be edited, regenerated, or deleted from the Briefs tab. Regeneration replaces the stored content with a fresh deterministic version.',
+                  'Saved briefs can now be edited, regenerated, or deleted from the Briefs tab. Regeneration replaces the stored content with a fresh deterministic version, and scoped or custom routine briefs now preserve their originating routine instead of collapsing back to the default starter brief.',
                 ],
               },
               {
@@ -277,7 +278,9 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian now ships the default assistant set configured: Morning Brief, Weekly Review, Daily Agenda Check, Pre-Meeting Brief, and Follow-Up Draft.',
                   'Use `Create routine` to work from the full capability list without leaving the tab. Core assistant capabilities stay visible even when their starter instance is already configured, and the multi-instance watch capabilities still support additional routines.',
                   'Some assistant capabilities now also support focused extra instances, so you can create things like `Weekly Review: Board prep` or `Morning Brief: Harbor launch` instead of only renaming the starter routine.',
+                  'Scheduled Review is the custom review capability for creating your own review cadence, such as `Friday Board Review` or `Monthly Launch Review`, without overloading the seeded Morning Brief or Weekly Review examples.',
                   'In chat, you can also ask for bounded assistant watch routines directly with requests like `message me when anything mentions Harbor launch` or `message me when I have something due tomorrow`.',
+                  'Chat can now also create a custom review routine from requests like `create a review for Board prep every Friday at 4 pm`.',
                   'The create or edit pane is on the left, and the configured routines table is on the right.',
                   'Use `Sync now` when you want to refresh provider calendar and contact context immediately. Sync is a direct maintenance action now, not a user-visible routine.',
                   'Selecting a configured routine lets you change its name, enabled state, timing, supported context window, delivery channels, or delete it.',

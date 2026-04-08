@@ -2473,6 +2473,94 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).toBe('Routine created: Weekly Review: Board prep');
   });
 
+  it('creates a scheduled review routine from plain-language chat', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_create');
+        expect(args).toMatchObject({
+          templateId: 'scheduled-review',
+          timing: {
+            kind: 'scheduled',
+            schedule: { cadence: 'weekly', dayOfWeek: 'friday', time: '16:00' },
+          },
+          config: { focusQuery: 'Board prep' },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'scheduled-review:board-prep',
+            name: 'Scheduled Review: Board prep',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'scheduled-review',
+        name: 'Scheduled Review',
+        description: 'Prepare a reusable scheduled review with upcoming commitments, open work, and saved context.',
+        category: 'review',
+        seedByDefault: false,
+        allowMultiple: true,
+        configured: false,
+        defaultTiming: {
+          kind: 'scheduled',
+          label: 'Weekly on Monday at 8 a.m.',
+          editable: true,
+          schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '08:00' },
+        },
+        supportedTiming: ['scheduled', 'manual'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: true,
+        supportsTopicQuery: false,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => []),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-create-scheduled-review',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a review for Board prep every Friday at 4 pm.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a scheduled review routine.',
+        turnRelation: 'current_turn',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine created: Scheduled Review: Board prep');
+  });
+
   it('updates a scoped routine focus from plain-language chat', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

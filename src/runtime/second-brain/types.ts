@@ -12,11 +12,11 @@ export type SecondBrainEntityKind =
 export type SecondBrainTaskStatus = 'todo' | 'in_progress' | 'done';
 export type SecondBrainTaskPriority = 'low' | 'medium' | 'high';
 export type SecondBrainPersonRelationship = 'work' | 'personal' | 'family' | 'vendor' | 'other';
-export type SecondBrainBriefKind = 'manual' | 'morning' | 'weekly_review' | 'pre_meeting' | 'follow_up';
-export type SecondBrainGeneratedBriefKind = 'morning' | 'weekly_review' | 'pre_meeting' | 'follow_up';
+export type SecondBrainBriefKind = 'manual' | 'morning' | 'weekly_review' | 'scheduled_review' | 'pre_meeting' | 'follow_up';
+export type SecondBrainGeneratedBriefKind = 'morning' | 'weekly_review' | 'scheduled_review' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
 export type SecondBrainRoutineCategory = 'scheduled' | 'one_off';
-export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'meeting' | 'follow_up' | 'maintenance' | 'watch';
+export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'review' | 'meeting' | 'follow_up' | 'maintenance' | 'watch';
 export type SecondBrainDeliveryChannel = 'web' | 'cli' | 'telegram';
 export type SecondBrainRoutingBias = 'local_first' | 'balanced' | 'quality_first';
 export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
@@ -35,6 +35,7 @@ export type SecondBrainRoutineWeekday =
 export type SecondBrainRoutineTemplateId =
   | 'morning-brief'
   | 'weekly-review'
+  | 'scheduled-review'
   | 'one-off-sync'
   | 'next-24-hours-radar'
   | 'pre-meeting-brief'
@@ -44,6 +45,7 @@ export type SecondBrainRoutineTemplateId =
 export type SecondBrainRoutineCapability =
   | 'morning_brief'
   | 'weekly_review'
+  | 'scheduled_review'
   | 'manual_sync'
   | 'daily_agenda_check'
   | 'pre_meeting_brief'
@@ -371,6 +373,7 @@ export interface SecondBrainRoutineCreateInput {
 export interface SecondBrainGenerateBriefInput {
   kind: SecondBrainGeneratedBriefKind;
   eventId?: string;
+  routineId?: string;
 }
 
 export interface SecondBrainTaskFilter {

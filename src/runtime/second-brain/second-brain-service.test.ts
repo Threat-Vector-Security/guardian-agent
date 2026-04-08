@@ -30,6 +30,7 @@ describe('SecondBrainService', () => {
 
     const overview = service.getOverview();
     const routines = service.listRoutines();
+    const scheduledReviewEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'scheduled-review');
     const topicWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch');
     const deadlineWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'deadline-watch');
     const syncEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'one-off-sync');
@@ -44,6 +45,8 @@ describe('SecondBrainService', () => {
       'weekly-review',
     ]);
     expect(syncEntry).toBeUndefined();
+    expect(scheduledReviewEntry?.configured).toBe(false);
+    expect(scheduledReviewEntry?.allowMultiple).toBe(true);
     expect(topicWatchEntry?.configured).toBe(false);
     expect(topicWatchEntry?.allowMultiple).toBe(true);
     expect(deadlineWatchEntry?.configured).toBe(false);
@@ -270,6 +273,34 @@ describe('SecondBrainService', () => {
     expect(scoped.name).toBe('Weekly Review: Board prep');
     expect(scoped.focusQuery).toBe('Board prep');
     expect(service.listRoutines().filter((routine) => routine.templateId === 'weekly-review')).toHaveLength(2);
+  });
+
+  it('creates reusable scheduled review routines from the routine catalog', () => {
+    const { service } = createService();
+
+    const review = service.createRoutine({
+      templateId: 'scheduled-review',
+      name: 'Friday Board Review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'friday',
+          time: '16:00',
+        },
+      },
+    });
+
+    expect(review.id).toBe('scheduled-review:board-prep');
+    expect(review.templateId).toBe('scheduled-review');
+    expect(review.name).toBe('Friday Board Review');
+    expect(review.focusQuery).toBe('Board prep');
+    expect(review.timing).toMatchObject({
+      schedule: { cadence: 'weekly', dayOfWeek: 'friday', time: '16:00' },
+      label: 'Weekly on Friday at 4 p.m.',
+    });
+    expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'scheduled-review')?.configured).toBe(true);
   });
 
   it('creates deadline watch routines with bounded deadline configuration', () => {

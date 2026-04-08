@@ -573,6 +573,50 @@ guardian:
       return Array.isArray(routines) ? !routines.some((entry) => entry.id === routine.id) : false;
     }, 12_000, 'Expected deleted deadline watch routine to disappear from the routines API.');
 
+    await page.click('[data-routine-create-toggle="true"]');
+    await page.selectOption('#routine-template-id', 'scheduled-review');
+    await page.fill('#routine-name', 'Harness Scheduled Review');
+    await page.fill('#routine-focus-query', 'Harness board prep');
+    await page.selectOption('#routine-schedule-cadence', 'weekly');
+    await page.selectOption('select[name="scheduleDayOfWeek"]', 'friday');
+    await page.fill('#routine-schedule-time', '16:00');
+    await page.locator('form[data-routine-create-form] button[type="submit"]').click();
+    routine = await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines)
+        ? routines.find((entry) => (
+          entry.templateId === 'scheduled-review'
+          && entry.name === 'Harness Scheduled Review'
+          && entry.focusQuery === 'Harness board prep'
+          && entry.timing?.schedule?.cadence === 'weekly'
+          && entry.timing?.schedule?.dayOfWeek === 'friday'
+          && entry.timing?.schedule?.time === '16:00'
+        ))
+        : null;
+    }, 12_000, 'Expected created scheduled review routine to appear in the routines API.');
+    await waitForFormRecordId(page, 'form[data-routine-form]', routine.id);
+    await page.fill('#routine-name', 'Harness Scheduled Review Updated');
+    await page.fill('#routine-focus-query', 'Harness board prep updated');
+    await page.fill('#routine-schedule-time', '17:00');
+    await page.locator('form[data-routine-form] button[type="submit"]').click();
+    routine = await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines)
+        ? routines.find((entry) => (
+          entry.id === routine.id
+          && entry.name === 'Harness Scheduled Review Updated'
+          && entry.focusQuery === 'Harness board prep updated'
+          && entry.timing?.schedule?.time === '17:00'
+        ))
+        : null;
+    }, 12_000, 'Expected edited scheduled review routine to persist through the routines API.');
+    await acceptNextDialog(page);
+    await page.click('[data-routine-delete]');
+    await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines) ? !routines.some((entry) => entry.id === routine.id) : false;
+    }, 12_000, 'Expected deleted scheduled review routine to disappear from the routines API.');
+
     await openSecondBrainTab(page, 'Library', 'form[data-link-form]');
     await waitForFormRecordId(page, 'form[data-link-form]', link.id);
     await acceptNextDialog(page);

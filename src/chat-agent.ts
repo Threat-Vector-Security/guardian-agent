@@ -1165,11 +1165,21 @@ function extractRoutineIncludeOverdue(text: string): boolean | undefined {
 function extractCustomSecondBrainRoutineCreate(
   text: string,
 ): {
-  templateId: 'topic-watch' | 'deadline-watch';
+  templateId: 'topic-watch' | 'deadline-watch' | 'scheduled-review';
   config: Record<string, unknown>;
 } | null {
   const normalized = text.trim();
   if (!normalized) return null;
+
+  if (
+    /\b(?:scheduled\s+review|review)\b/i.test(normalized)
+    && /\b(?:every|each|hourly|daily|weekdays|weekly|fortnightly|monthly|biweekly|bi-weekly|every 2 weeks)\b/i.test(normalized)
+  ) {
+    return {
+      templateId: 'scheduled-review',
+      config: {},
+    };
+  }
 
   if (/\b(?:due|deadline|overdue)\b/i.test(normalized)) {
     const dueWithinHours = extractRoutineDueWithinHours(normalized);
@@ -5337,7 +5347,7 @@ type DirectIntentShadowCandidate =
             ? routineCatalog.find((entry) => entry.templateId === inferredRoutineCreate.templateId) ?? null
             : null);
         if (!createCatalogEntry) {
-          return 'To create a Second Brain routine, tell me which routine type to create, or say something like "message me when anything mentions Harbor launch."';
+          return 'To create a Second Brain routine, tell me which routine to create, or say something like "create a scheduled review every Friday at 4 pm" or "message me when anything mentions Harbor launch."';
         }
         if (
           !createCatalogEntry.allowMultiple
