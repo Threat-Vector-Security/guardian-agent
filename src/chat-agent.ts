@@ -389,7 +389,7 @@ function buildRoutineSemanticHints(
     name?: string;
     category?: string;
     externalCommMode?: string;
-    config?: { topicQuery?: string };
+    config?: { topicQuery?: string; dueWithinHours?: number; includeOverdue?: boolean };
     trigger?: { mode?: string; eventType?: string };
   },
 ): string[] {
@@ -408,6 +408,9 @@ function buildRoutineSemanticHints(
   }
   if ((routine.templateId ?? routine.id) === 'topic-watch') {
     hints.push('watch notify mentions topic tracking');
+  }
+  if ((routine.templateId ?? routine.id) === 'deadline-watch') {
+    hints.push('deadline due soon overdue task pressure reminders');
   }
   const normalizedIdentity = `${routine.id ?? ''} ${routine.templateId ?? ''} ${routine.name ?? ''} ${routine.config?.topicQuery ?? ''}`.toLowerCase();
   if (normalizedIdentity.includes('pre-meeting') || normalizedIdentity.includes('pre meeting')) {
@@ -3965,6 +3968,8 @@ type DirectIntentShadowCandidate =
             routine.trigger.mode,
             routine.trigger.eventType,
             routine.config?.topicQuery,
+            Number.isFinite(routine.config?.dueWithinHours) ? `due within ${routine.config?.dueWithinHours} hours` : undefined,
+            routine.config?.includeOverdue === false ? 'upcoming only' : 'overdue due soon',
             description,
             ...buildRoutineSemanticHints(routine),
           ]
@@ -4014,7 +4019,9 @@ type DirectIntentShadowCandidate =
                 : '';
               const topicSuffix = routine.config?.topicQuery?.trim()
                 ? ` · watching "${routine.config.topicQuery.trim()}"`
-                : '';
+                : Number.isFinite(routine.config?.dueWithinHours)
+                  ? ` · tasks due within ${Number(routine.config?.dueWithinHours)} hours${routine.config?.includeOverdue === false ? '' : ' plus overdue'}`
+                  : '';
               return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${formatRoutineTriggerSummaryForUser(routine.trigger)}${deliverySummary})${topicSuffix}${descriptionSuffix}`;
             }),
           ].join('\n'),

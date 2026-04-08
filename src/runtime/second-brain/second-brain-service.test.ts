@@ -31,6 +31,7 @@ describe('SecondBrainService', () => {
     const overview = service.getOverview();
     const routines = service.listRoutines();
     const topicWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch');
+    const deadlineWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'deadline-watch');
 
     expect(overview.enabledRoutineCount).toBeGreaterThan(0);
     expect(overview.counts.routines).toBe(6);
@@ -44,6 +45,8 @@ describe('SecondBrainService', () => {
     ]);
     expect(topicWatchEntry?.configured).toBe(false);
     expect(topicWatchEntry?.allowMultiple).toBe(true);
+    expect(deadlineWatchEntry?.configured).toBe(false);
+    expect(deadlineWatchEntry?.allowMultiple).toBe(true);
     expect(overview.topTasks).toEqual([]);
     expect(overview.recentNotes).toEqual([]);
     expect(overview.usage.monthlyBudget).toBeGreaterThan(0);
@@ -161,6 +164,21 @@ describe('SecondBrainService', () => {
     expect(first.name).toBe('Topic Watch: Harbor launch');
     expect(second.deliveryDefaults).toEqual(['telegram']);
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch')?.configured).toBe(true);
+  });
+
+  it('creates deadline watch routines with bounded deadline configuration', () => {
+    const { service } = createService();
+
+    const routine = service.createRoutine({
+      templateId: 'deadline-watch',
+      config: { dueWithinHours: 6, includeOverdue: false },
+    });
+
+    expect(routine.id).toContain('deadline-watch:');
+    expect(routine.templateId).toBe('deadline-watch');
+    expect(routine.config).toEqual({ dueWithinHours: 6, includeOverdue: false });
+    expect(routine.name).toBe('Deadline Watch: next 6 hours');
+    expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'deadline-watch')?.configured).toBe(true);
   });
 
   it('stores upcoming events and people through the shared service', () => {

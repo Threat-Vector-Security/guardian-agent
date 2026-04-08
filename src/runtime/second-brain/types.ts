@@ -29,7 +29,8 @@ export type SecondBrainRoutineTemplateId =
   | 'next-24-hours-radar'
   | 'pre-meeting-brief'
   | 'follow-up-watch'
-  | 'topic-watch';
+  | 'topic-watch'
+  | 'deadline-watch';
 export type SecondBrainRoutineCapability =
   | 'morning_brief'
   | 'weekly_review'
@@ -37,7 +38,8 @@ export type SecondBrainRoutineCapability =
   | 'daily_agenda_check'
   | 'pre_meeting_brief'
   | 'follow_up_draft'
-  | 'topic_watch';
+  | 'topic_watch'
+  | 'deadline_watch';
 export type SecondBrainExternalCommMode =
   | 'none'
   | 'draft_only'
@@ -53,6 +55,8 @@ export interface SecondBrainRoutineTrigger {
 
 export interface SecondBrainRoutineConfig {
   topicQuery?: string;
+  dueWithinHours?: number;
+  includeOverdue?: boolean;
 }
 
 export interface SecondBrainNoteRecord {

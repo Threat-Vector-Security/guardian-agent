@@ -238,4 +238,60 @@ describe('HorizonScanner', () => {
       text: expect.stringContaining('Harbor launch'),
     }));
   });
+
+  it('runs deadline watch routines and emits a proactive outcome when tasks enter the watch window', async () => {
+    const { service, briefing, scheduledTaskService, now } = createFixture();
+    const outcomes: Array<{ text: string; channels: readonly string[] }> = [];
+    const localNow = new Date(now());
+    const currentCron = `${localNow.getMinutes()} ${localNow.getHours()} * * *`;
+
+    const created = service.createRoutine({
+      templateId: 'deadline-watch',
+      config: { dueWithinHours: 24, includeOverdue: true },
+      deliveryDefaults: ['telegram'],
+    });
+    const routine = service.getRoutineById(created.id)!;
+    service.updateRoutine({
+      id: routine.id,
+      trigger: { mode: 'cron', cron: currentCron },
+    });
+    service.upsertTask({
+      title: 'Prepare launch deck',
+      priority: 'high',
+      dueAt: Date.parse('2026-04-04T18:00:00Z'),
+    });
+
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      {
+        now,
+        onOutcome: (outcome) => {
+          outcomes.push({ text: outcome.text, channels: outcome.channels });
+        },
+      },
+    );
+
+    const summary = await scanner.runScan('test');
+
+    expect(summary.triggeredRoutines).toContain(created.id);
+    expect(summary.generatedBriefIds.some((id) => id.startsWith(`brief:manual:deadline_watch:${created.id}:`))).toBe(true);
+    expect(outcomes).toContainEqual(expect.objectContaining({
+      channels: ['telegram'],
+      text: expect.stringContaining('deadline watch'),
+    }));
+  });
 });

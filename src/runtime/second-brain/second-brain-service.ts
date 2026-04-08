@@ -180,6 +180,25 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       defaultRoutingBias: 'local_first',
     },
   },
+  {
+    capability: 'deadline_watch',
+    description: 'Watch for upcoming or overdue task pressure and message you when tasks enter the configured window.',
+    catalogCategory: 'watch',
+    seedByDefault: false,
+    allowMultiple: true,
+    manifest: {
+      id: 'deadline-watch',
+      name: 'Deadline Watch',
+      category: 'scheduled',
+      enabledByDefault: true,
+      trigger: { mode: 'cron', cron: '0 8 * * *' },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'daily-low',
+      deliveryDefaults: ['telegram', 'web'],
+      defaultRoutingBias: 'local_first',
+    },
+  },
 ];
 
 const BUILT_IN_ROUTINES_BY_ID = new Map(BUILT_IN_ROUTINES.map((routine) => [routine.manifest.id, routine]));
@@ -197,6 +216,8 @@ function cloneRoutineConfig(config: SecondBrainRoutineConfig | undefined): Secon
   return config
     ? {
         ...(config.topicQuery?.trim() ? { topicQuery: config.topicQuery.trim() } : {}),
+        ...(Number.isFinite(config.dueWithinHours) ? { dueWithinHours: Number(config.dueWithinHours) } : {}),
+        ...(typeof config.includeOverdue === 'boolean' ? { includeOverdue: config.includeOverdue } : {}),
       }
     : undefined;
 }
@@ -283,14 +304,33 @@ function normalizeRoutineConfig(
   config: SecondBrainRoutineConfig | undefined,
   fallback?: SecondBrainRoutineConfig,
 ): SecondBrainRoutineConfig | undefined {
-  if (definition.manifest.id !== 'topic-watch') {
-    return undefined;
+  if (definition.manifest.id === 'topic-watch') {
+    const topicQuery = config?.topicQuery?.trim() || fallback?.topicQuery?.trim() || '';
+    if (!topicQuery) {
+      throw new Error('Topic Watch routines require a topic to watch.');
+    }
+    return { topicQuery };
   }
-  const topicQuery = config?.topicQuery?.trim() || fallback?.topicQuery?.trim() || '';
-  if (!topicQuery) {
-    throw new Error('Topic Watch routines require a topic to watch.');
+  if (definition.manifest.id === 'deadline-watch') {
+    const dueWithinHours = Number.isFinite(config?.dueWithinHours)
+      ? Number(config?.dueWithinHours)
+      : Number.isFinite(fallback?.dueWithinHours)
+        ? Number(fallback?.dueWithinHours)
+        : 24;
+    if (!Number.isFinite(dueWithinHours) || dueWithinHours <= 0) {
+      throw new Error('Deadline Watch routines require a positive due-within window in hours.');
+    }
+    const includeOverdue = typeof config?.includeOverdue === 'boolean'
+      ? config.includeOverdue
+      : typeof fallback?.includeOverdue === 'boolean'
+        ? fallback.includeOverdue
+        : true;
+    return {
+      dueWithinHours,
+      includeOverdue,
+    };
   }
-  return { topicQuery };
+  return undefined;
 }
 
 function slugifyRoutineIdSegment(value: string): string {
@@ -309,8 +349,14 @@ function resolveRoutineRecordId(
   if (!definition.allowMultiple) {
     return definition.manifest.id;
   }
-  const preferredSegment = config?.topicQuery?.trim() || name?.trim() || definition.manifest.name;
-  const slug = slugifyRoutineIdSegment(preferredSegment);
+  const preferredSegment = definition.manifest.id === 'topic-watch'
+    ? config?.topicQuery?.trim()
+    : definition.manifest.id === 'deadline-watch'
+      ? `next-${Number(config?.dueWithinHours ?? 24)}-hours${config?.includeOverdue === false ? '-due' : '-with-overdue'}`
+      : undefined;
+  const explicitSegment = name?.trim();
+  const chosenSegment = preferredSegment || explicitSegment || definition.manifest.name;
+  const slug = slugifyRoutineIdSegment(chosenSegment);
   return slug ? `${definition.manifest.id}:${slug}` : `${definition.manifest.id}:${randomUUID()}`;
 }
 
@@ -325,6 +371,11 @@ function resolveRoutineName(
   }
   if (definition.manifest.id === 'topic-watch' && config?.topicQuery?.trim()) {
     return `Topic Watch: ${config.topicQuery.trim()}`;
+  }
+  if (definition.manifest.id === 'deadline-watch' && Number.isFinite(config?.dueWithinHours)) {
+    const hours = Number(config?.dueWithinHours);
+    const overdueSuffix = config?.includeOverdue === false ? '' : ' + overdue';
+    return `Deadline Watch: next ${hours} hour${hours === 1 ? '' : 's'}${overdueSuffix}`;
   }
   return definition.manifest.name;
 }
@@ -733,10 +784,14 @@ export class SecondBrainService {
       ? normalizeRoutineConfig(definition, input.config, existing.config)
       : cloneRoutineConfig(existing.config);
     const shouldRefreshDerivedName = Boolean(
-      definition?.manifest.id === 'topic-watch'
-      && !input.name?.trim()
-      && input.config?.topicQuery?.trim()
-      && existing.name.startsWith('Topic Watch: '),
+      !input.name?.trim()
+      && definition
+      && (
+        (definition.manifest.id === 'topic-watch' && input.config?.topicQuery?.trim() && existing.name.startsWith('Topic Watch: '))
+        || (definition.manifest.id === 'deadline-watch'
+          && (Number.isFinite(input.config?.dueWithinHours) || typeof input.config?.includeOverdue === 'boolean')
+          && existing.name.startsWith('Deadline Watch: '))
+      ),
     );
     const updated: SecondBrainRoutineRecord = {
       ...existing,

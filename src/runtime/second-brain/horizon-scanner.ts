@@ -90,6 +90,10 @@ function latestCronOccurrenceAtOrBefore(now: number, cron: string): number | nul
   return null;
 }
 
+function occursInSameMinute(left: number, right: number): boolean {
+  return Math.floor(left / 60_000) === Math.floor(right / 60_000);
+}
+
 export class HorizonScanner {
   private readonly now: () => number;
   private onOutcome: ((outcome: HorizonRoutineOutcome) => Promise<void> | void) | null;
@@ -288,6 +292,29 @@ export class HorizonScanner {
       });
     }
 
+    const deadlineWatchRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'deadline-watch');
+    for (const routine of deadlineWatchRoutines) {
+      if (!this.shouldRunCronRoutine(scannedAt, routine)) {
+        continue;
+      }
+      const generated = await this.briefingService.generateDeadlineWatchBrief(routine.id, {
+        onlySince: routine.lastRunAt ?? routine.createdAt,
+      });
+      this.secondBrainService.markRoutineRun(routine.id, scannedAt);
+      if (!generated) {
+        continue;
+      }
+      triggeredRoutines.push(routine.id);
+      generatedBriefIds.push(generated.id);
+      await this.emitOutcome({
+        routineId: routine.id,
+        channels: routine.deliveryDefaults,
+        importance: 'useful',
+        artifactIds: [generated.id],
+        text: `Your deadline watch found new task pressure in the next ${Number(routine.config?.dueWithinHours ?? 24)} hours${routine.config?.includeOverdue === false ? '.' : ' and overdue tasks.'}`,
+      });
+    }
+
     return {
       scannedAt,
       sync,
@@ -309,6 +336,11 @@ export class HorizonScanner {
     if (scheduledAt == null) return false;
     const baseline = routine.lastRunAt
       ?? (this.secondBrainService.isSeededBuiltInRoutine(routine.id) ? 0 : routine.createdAt);
-    return scheduledAt > baseline;
+    if (scheduledAt > baseline) {
+      return true;
+    }
+    return routine.lastRunAt == null
+      && !this.secondBrainService.isSeededBuiltInRoutine(routine.id)
+      && occursInSameMinute(scheduledAt, routine.createdAt);
   }
 }

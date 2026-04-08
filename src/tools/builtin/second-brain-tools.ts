@@ -137,10 +137,20 @@ function normalizeRoutineConfig(value: unknown): import('../../runtime/second-br
   const record = asRecord(value);
   if (!record) return undefined;
   const topicQuery = typeof record.topicQuery === 'string' ? record.topicQuery.trim() : '';
-  if (!topicQuery) {
+  const dueWithinHours = typeof record.dueWithinHours === 'number'
+    ? record.dueWithinHours
+    : undefined;
+  const includeOverdue = typeof record.includeOverdue === 'boolean'
+    ? record.includeOverdue
+    : undefined;
+  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
     return undefined;
   }
-  return { topicQuery };
+  return {
+    ...(topicQuery ? { topicQuery } : {}),
+    ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
+    ...(includeOverdue != null ? { includeOverdue } : {}),
+  };
 }
 
 export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistrarContext): void {
@@ -777,6 +787,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
             type: 'object',
             properties: {
               topicQuery: { type: 'string' },
+              dueWithinHours: { type: 'number' },
+              includeOverdue: { type: 'boolean' },
             },
           },
           defaultRoutingBias: {
@@ -1079,6 +1091,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
             type: 'object',
             properties: {
               topicQuery: { type: 'string' },
+              dueWithinHours: { type: 'number' },
+              includeOverdue: { type: 'boolean' },
             },
           },
           defaultRoutingBias: {
