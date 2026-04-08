@@ -133,6 +133,16 @@ function normalizeRoutineTrigger(value: unknown): SecondBrainRoutineTrigger | un
   };
 }
 
+function normalizeRoutineConfig(value: unknown): import('../../runtime/second-brain/types.js').SecondBrainRoutineConfig | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const topicQuery = typeof record.topicQuery === 'string' ? record.topicQuery.trim() : '';
+  if (!topicQuery) {
+    return undefined;
+  }
+  return { topicQuery };
+}
+
 export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistrarContext): void {
   const { asString, asNumber } = context;
 
@@ -706,7 +716,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_list',
-      description: 'List built-in Second Brain routines and their current enabled state.',
+      description: 'List configured Second Brain routines and their current timing, delivery, and enabled state.',
       shortDescription: 'List Second Brain routines.',
       risk: 'read_only',
       category: 'memory',
@@ -724,8 +734,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_catalog',
-      description: 'List the Second Brain starter routine catalog, including which presets are already configured.',
-      shortDescription: 'List the Second Brain routine catalog.',
+      description: 'List available Second Brain routine types, including which ones are already configured.',
+      shortDescription: 'List Second Brain routine types.',
       risk: 'read_only',
       category: 'memory',
       deferLoading: true,
@@ -742,7 +752,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_create',
-      description: 'Create a bounded Second Brain routine from the starter routine catalog.',
+      description: 'Create a bounded Second Brain routine from the available routine types.',
       shortDescription: 'Create a Second Brain routine.',
       risk: 'mutating',
       category: 'memory',
@@ -761,6 +771,12 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
               cron: { type: 'string' },
               eventType: { type: 'string', enum: ['upcoming_event', 'event_ended', 'task_due', 'task_overdue'] },
               lookaheadMinutes: { type: 'number' },
+            },
+          },
+          config: {
+            type: 'object',
+            properties: {
+              topicQuery: { type: 'string' },
             },
           },
           defaultRoutingBias: {
@@ -791,12 +807,17 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (args.trigger != null && !trigger) {
         return { success: false, error: 'trigger must contain a supported Second Brain routine trigger.' };
       }
+      const config = normalizeRoutineConfig(args.config);
+      if (args.config != null && !config) {
+        return { success: false, error: 'config must contain a supported Second Brain routine configuration.' };
+      }
       try {
         const routine = service.createRoutine({
           templateId: asString(args.templateId).trim(),
           name: asString(args.name).trim() || undefined,
           enabled: parseBoolean(args.enabled),
           trigger,
+          config,
           deliveryDefaults,
           defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
             ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'
@@ -1033,7 +1054,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_update',
-      description: 'Update the enabled state or policy settings for one Second Brain routine.',
+      description: 'Update the enabled state, timing, delivery, or bounded configuration for one Second Brain routine.',
       shortDescription: 'Update a Second Brain routine.',
       risk: 'mutating',
       category: 'memory',
@@ -1052,6 +1073,12 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
               cron: { type: 'string' },
               eventType: { type: 'string', enum: ['upcoming_event', 'event_ended', 'task_due', 'task_overdue'] },
               lookaheadMinutes: { type: 'number' },
+            },
+          },
+          config: {
+            type: 'object',
+            properties: {
+              topicQuery: { type: 'string' },
             },
           },
           defaultRoutingBias: {
@@ -1082,12 +1109,17 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (args.trigger != null && !trigger) {
         return { success: false, error: 'trigger must contain a supported Second Brain routine trigger.' };
       }
+      const config = normalizeRoutineConfig(args.config);
+      if (args.config != null && !config) {
+        return { success: false, error: 'config must contain a supported Second Brain routine configuration.' };
+      }
       try {
         const routine = service.updateRoutine({
           id: asString(args.id).trim(),
           name: asString(args.name).trim() || undefined,
           enabled: parseBoolean(args.enabled),
           trigger,
+          config,
           deliveryDefaults,
           defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
             ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'

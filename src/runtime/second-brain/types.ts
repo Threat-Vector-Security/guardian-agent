@@ -16,12 +16,28 @@ export type SecondBrainBriefKind = 'manual' | 'morning' | 'weekly_review' | 'pre
 export type SecondBrainGeneratedBriefKind = 'morning' | 'weekly_review' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
 export type SecondBrainRoutineCategory = 'scheduled' | 'one_off';
-export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'meeting' | 'follow_up' | 'maintenance';
+export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'meeting' | 'follow_up' | 'maintenance' | 'watch';
 export type SecondBrainDeliveryChannel = 'web' | 'cli' | 'telegram';
 export type SecondBrainRoutingBias = 'local_first' | 'balanced' | 'quality_first';
 export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
 export type SecondBrainRoutineTriggerMode = 'cron' | 'event' | 'horizon' | 'manual';
 export type SecondBrainRoutineEventType = 'upcoming_event' | 'event_ended' | 'task_due' | 'task_overdue';
+export type SecondBrainRoutineTemplateId =
+  | 'morning-brief'
+  | 'weekly-review'
+  | 'one-off-sync'
+  | 'next-24-hours-radar'
+  | 'pre-meeting-brief'
+  | 'follow-up-watch'
+  | 'topic-watch';
+export type SecondBrainRoutineCapability =
+  | 'morning_brief'
+  | 'weekly_review'
+  | 'manual_sync'
+  | 'daily_agenda_check'
+  | 'pre_meeting_brief'
+  | 'follow_up_draft'
+  | 'topic_watch';
 export type SecondBrainExternalCommMode =
   | 'none'
   | 'draft_only'
@@ -33,6 +49,10 @@ export interface SecondBrainRoutineTrigger {
   cron?: string;
   eventType?: SecondBrainRoutineEventType;
   lookaheadMinutes?: number;
+}
+
+export interface SecondBrainRoutineConfig {
+  topicQuery?: string;
 }
 
 export interface SecondBrainNoteRecord {
@@ -138,16 +158,20 @@ export interface SecondBrainRoutineManifest {
 
 export interface SecondBrainRoutineCatalogEntry {
   templateId: string;
+  capability: SecondBrainRoutineCapability;
   name: string;
   description: string;
   category: SecondBrainRoutineCatalogCategory;
   seedByDefault: boolean;
+  allowMultiple: boolean;
   manifest: SecondBrainRoutineManifest;
   configured: boolean;
   configuredRoutineId?: string;
 }
 
 export interface SecondBrainRoutineRecord extends SecondBrainRoutineManifest {
+  templateId?: SecondBrainRoutineTemplateId;
+  config?: SecondBrainRoutineConfig;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -250,6 +274,7 @@ export interface SecondBrainRoutineUpdateInput {
   name?: string;
   enabled?: boolean;
   trigger?: SecondBrainRoutineTrigger;
+  config?: SecondBrainRoutineConfig;
   deliveryDefaults?: SecondBrainDeliveryChannel[];
   defaultRoutingBias?: SecondBrainRoutingBias;
   budgetProfileId?: string;
@@ -260,6 +285,7 @@ export interface SecondBrainRoutineCreateInput {
   name?: string;
   enabled?: boolean;
   trigger?: SecondBrainRoutineTrigger;
+  config?: SecondBrainRoutineConfig;
   deliveryDefaults?: SecondBrainDeliveryChannel[];
   defaultRoutingBias?: SecondBrainRoutingBias;
   budgetProfileId?: string;

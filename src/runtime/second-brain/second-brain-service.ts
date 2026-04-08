@@ -19,9 +19,11 @@ import {
   type SecondBrainPersonRecord,
   type SecondBrainPersonUpsertInput,
   type SecondBrainRoutineCatalogEntry,
+  type SecondBrainRoutineConfig,
   type SecondBrainRoutineCreateInput,
   type SecondBrainRoutineManifest,
   type SecondBrainRoutineRecord,
+  type SecondBrainRoutineTemplateId,
   type SecondBrainRoutineTrigger,
   type SecondBrainRoutineUpdateInput,
   type SecondBrainTaskFilter,
@@ -42,15 +44,18 @@ interface SecondBrainServiceOptions {
 }
 
 interface BuiltInRoutineDefinition {
+  capability: SecondBrainRoutineCatalogEntry['capability'];
   description: string;
   catalogCategory: SecondBrainRoutineCatalogEntry['category'];
   seedByDefault: boolean;
+  allowMultiple?: boolean;
   manifest: SecondBrainRoutineManifest;
 }
 
 const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   {
-    description: 'Creates and stores the daily morning brief after the local workday starts.',
+    capability: 'morning_brief',
+    description: 'Prepare a morning brief with today’s events, open tasks, and recent context.',
     catalogCategory: 'daily',
     seedByDefault: true,
     manifest: {
@@ -62,12 +67,13 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       workloadClass: 'B',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
-      deliveryDefaults: ['web', 'telegram'],
+      deliveryDefaults: ['telegram', 'web'],
       defaultRoutingBias: 'local_first',
     },
   },
   {
-    description: 'Creates and stores the weekly review brief on the default Monday schedule.',
+    capability: 'weekly_review',
+    description: 'Prepare a weekly review with upcoming commitments, open work, and recent context.',
     catalogCategory: 'weekly',
     seedByDefault: true,
     manifest: {
@@ -79,17 +85,18 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       workloadClass: 'C',
       externalCommMode: 'none',
       budgetProfileId: 'weekly-medium',
-      deliveryDefaults: ['web'],
+      deliveryDefaults: ['telegram', 'web'],
       defaultRoutingBias: 'balanced',
     },
   },
   {
-    description: 'Runs provider sync manually to refresh calendar and people context on demand.',
+    capability: 'manual_sync',
+    description: 'Refresh synced calendar events and contacts on demand.',
     catalogCategory: 'maintenance',
     seedByDefault: true,
     manifest: {
       id: 'one-off-sync',
-      name: 'Manual Sync',
+      name: 'Sync Calendar and Contacts',
       category: 'one_off',
       enabledByDefault: true,
       trigger: { mode: 'manual' },
@@ -101,24 +108,26 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
     },
   },
   {
-    description: 'Marks the horizon scan when upcoming events or open tasks make the next day worth reviewing.',
+    capability: 'daily_agenda_check',
+    description: 'Watch the next day for upcoming pressure and flag when a review is worth your attention.',
     catalogCategory: 'daily',
     seedByDefault: true,
     manifest: {
       id: 'next-24-hours-radar',
-      name: 'Next 24 Hours Radar',
+      name: 'Daily Agenda Check',
       category: 'scheduled',
       enabledByDefault: true,
       trigger: { mode: 'horizon', lookaheadMinutes: 1440 },
       workloadClass: 'A',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
-      deliveryDefaults: ['web'],
+      deliveryDefaults: ['telegram', 'web'],
       defaultRoutingBias: 'local_first',
     },
   },
   {
-    description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+    capability: 'pre_meeting_brief',
+    description: 'Prepare a briefing packet before upcoming meetings.',
     catalogCategory: 'meeting',
     seedByDefault: true,
     manifest: {
@@ -130,25 +139,45 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       workloadClass: 'B',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
-      deliveryDefaults: ['web'],
+      deliveryDefaults: ['telegram', 'web'],
       defaultRoutingBias: 'balanced',
     },
   },
   {
-    description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
+    capability: 'follow_up_draft',
+    description: 'Draft meeting follow-ups after recently ended meetings that still need one.',
     catalogCategory: 'follow_up',
     seedByDefault: true,
     manifest: {
       id: 'follow-up-watch',
-      name: 'Follow-Up Watch',
+      name: 'Follow-Up Draft',
       category: 'scheduled',
       enabledByDefault: true,
       trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
       workloadClass: 'B',
       externalCommMode: 'draft_only',
       budgetProfileId: 'daily-low',
-      deliveryDefaults: ['web'],
+      deliveryDefaults: ['telegram', 'web'],
       defaultRoutingBias: 'balanced',
+    },
+  },
+  {
+    capability: 'topic_watch',
+    description: 'Watch a topic across tasks, notes, briefs, people, library items, and events, then message you when new matches appear.',
+    catalogCategory: 'watch',
+    seedByDefault: false,
+    allowMultiple: true,
+    manifest: {
+      id: 'topic-watch',
+      name: 'Topic Watch',
+      category: 'scheduled',
+      enabledByDefault: true,
+      trigger: { mode: 'cron', cron: '0 8 * * *' },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'daily-low',
+      deliveryDefaults: ['telegram', 'web'],
+      defaultRoutingBias: 'local_first',
     },
   },
 ];
@@ -162,6 +191,14 @@ function cloneRoutineTrigger(trigger: SecondBrainRoutineTrigger): SecondBrainRou
     ...(trigger.eventType ? { eventType: trigger.eventType } : {}),
     ...(Number.isFinite(trigger.lookaheadMinutes) ? { lookaheadMinutes: trigger.lookaheadMinutes } : {}),
   };
+}
+
+function cloneRoutineConfig(config: SecondBrainRoutineConfig | undefined): SecondBrainRoutineConfig | undefined {
+  return config
+    ? {
+        ...(config.topicQuery?.trim() ? { topicQuery: config.topicQuery.trim() } : {}),
+      }
+    : undefined;
 }
 
 function cloneRoutineManifest(manifest: SecondBrainRoutineManifest): SecondBrainRoutineManifest {
@@ -241,19 +278,73 @@ function resolveRoutineTriggerOverride(
   return normalized;
 }
 
+function normalizeRoutineConfig(
+  definition: BuiltInRoutineDefinition,
+  config: SecondBrainRoutineConfig | undefined,
+  fallback?: SecondBrainRoutineConfig,
+): SecondBrainRoutineConfig | undefined {
+  if (definition.manifest.id !== 'topic-watch') {
+    return undefined;
+  }
+  const topicQuery = config?.topicQuery?.trim() || fallback?.topicQuery?.trim() || '';
+  if (!topicQuery) {
+    throw new Error('Topic Watch routines require a topic to watch.');
+  }
+  return { topicQuery };
+}
+
+function slugifyRoutineIdSegment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+function resolveRoutineRecordId(
+  definition: BuiltInRoutineDefinition,
+  name: string | undefined,
+  config: SecondBrainRoutineConfig | undefined,
+): string {
+  if (!definition.allowMultiple) {
+    return definition.manifest.id;
+  }
+  const preferredSegment = config?.topicQuery?.trim() || name?.trim() || definition.manifest.name;
+  const slug = slugifyRoutineIdSegment(preferredSegment);
+  return slug ? `${definition.manifest.id}:${slug}` : `${definition.manifest.id}:${randomUUID()}`;
+}
+
+function resolveRoutineName(
+  definition: BuiltInRoutineDefinition,
+  name: string | undefined,
+  config: SecondBrainRoutineConfig | undefined,
+): string {
+  const explicit = name?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (definition.manifest.id === 'topic-watch' && config?.topicQuery?.trim()) {
+    return `Topic Watch: ${config.topicQuery.trim()}`;
+  }
+  return definition.manifest.name;
+}
+
 function materializeRoutineRecord(
   definition: BuiltInRoutineDefinition,
   timestamp: number,
-  overrides: Partial<Pick<SecondBrainRoutineRecord, 'name' | 'enabled' | 'deliveryDefaults' | 'defaultRoutingBias' | 'budgetProfileId' | 'trigger'>> = {},
+  overrides: Partial<Pick<SecondBrainRoutineRecord, 'id' | 'templateId' | 'name' | 'enabled' | 'deliveryDefaults' | 'defaultRoutingBias' | 'budgetProfileId' | 'trigger' | 'config'>> = {},
 ): SecondBrainRoutineRecord {
   return {
     ...cloneRoutineManifest(definition.manifest),
-    name: overrides.name?.trim() || definition.manifest.name,
+    id: overrides.id?.trim() || definition.manifest.id,
+    templateId: overrides.templateId ?? definition.manifest.id as SecondBrainRoutineTemplateId,
+    name: resolveRoutineName(definition, overrides.name, overrides.config),
     enabled: overrides.enabled ?? definition.manifest.enabledByDefault,
     trigger: overrides.trigger ? cloneRoutineTrigger(overrides.trigger) : cloneRoutineTrigger(definition.manifest.trigger),
     deliveryDefaults: overrides.deliveryDefaults ? [...overrides.deliveryDefaults] : [...definition.manifest.deliveryDefaults],
     defaultRoutingBias: overrides.defaultRoutingBias ?? definition.manifest.defaultRoutingBias,
     budgetProfileId: overrides.budgetProfileId ?? definition.manifest.budgetProfileId,
+    ...(overrides.config ? { config: cloneRoutineConfig(overrides.config) } : {}),
     createdAt: timestamp,
     updatedAt: timestamp,
     lastRunAt: null,
@@ -361,7 +452,9 @@ export class SecondBrainService {
       if (!routine.seedByDefault) continue;
       if (existingIds.has(routine.manifest.id)) continue;
       if (deletedIds.has(routine.manifest.id)) continue;
-      this.store.routines.upsertRoutine(materializeRoutineRecord(routine, timestamp));
+      this.store.routines.upsertRoutine(materializeRoutineRecord(routine, timestamp, {
+        templateId: routine.manifest.id as SecondBrainRoutineTemplateId,
+      }));
     }
   }
 
@@ -557,24 +650,35 @@ export class SecondBrainService {
   }
 
   listRoutineCatalog(): SecondBrainRoutineCatalogEntry[] {
-    const existing = new Map(this.listRoutines().map((routine) => [routine.id, routine]));
+    const routines = this.listRoutines();
+    const configuredByTemplate = new Map<string, SecondBrainRoutineRecord[]>();
+    for (const routine of routines) {
+      const templateId = routine.templateId ?? routine.id;
+      const existing = configuredByTemplate.get(templateId) ?? [];
+      existing.push(routine);
+      configuredByTemplate.set(templateId, existing);
+    }
     return BUILT_IN_ROUTINES.map((definition) => {
-      const configured = existing.get(definition.manifest.id);
+      const configuredRoutines = configuredByTemplate.get(definition.manifest.id) ?? [];
       return {
         templateId: definition.manifest.id,
+        capability: definition.capability,
         name: definition.manifest.name,
         description: definition.description,
         category: definition.catalogCategory,
         seedByDefault: definition.seedByDefault,
+        allowMultiple: definition.allowMultiple ?? false,
         manifest: cloneRoutineManifest(definition.manifest),
-        configured: Boolean(configured),
-        ...(configured ? { configuredRoutineId: configured.id } : {}),
+        configured: configuredRoutines.length > 0,
+        ...(configuredRoutines.length === 1 ? { configuredRoutineId: configuredRoutines[0]!.id } : {}),
       };
     });
   }
 
   isSeededBuiltInRoutine(id: string): boolean {
-    return BUILT_IN_ROUTINES_BY_ID.get(id)?.seedByDefault ?? false;
+    const existing = this.getRoutineById(id);
+    const definition = BUILT_IN_ROUTINES_BY_ID.get(existing?.templateId ?? id);
+    return definition?.seedByDefault ?? false;
   }
 
   createRoutine(input: SecondBrainRoutineCreateInput): SecondBrainRoutineRecord {
@@ -583,23 +687,34 @@ export class SecondBrainService {
     if (!definition) {
       throw new Error(`Routine template '${templateId}' not found.`);
     }
-    if (this.getRoutineById(templateId)) {
+    const configuredRoutines = this.listRoutines().filter((routine) => (routine.templateId ?? routine.id) === templateId);
+    if (!definition.allowMultiple && configuredRoutines.length > 0) {
       throw new Error(`Routine '${definition.manifest.name}' already exists.`);
     }
 
     const timestamp = this.now();
+    const config = normalizeRoutineConfig(definition, input.config);
+    let routineId = resolveRoutineRecordId(definition, input.name, config);
+    while (this.getRoutineById(routineId)) {
+      routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
+    }
     const trigger = input.trigger
       ? resolveRoutineTriggerOverride(input.trigger, definition.manifest.trigger, definition.manifest.name)
       : cloneRoutineTrigger(definition.manifest.trigger);
     const routine = materializeRoutineRecord(definition, timestamp, {
+      id: routineId,
+      templateId: templateId as SecondBrainRoutineTemplateId,
       name: input.name,
       enabled: input.enabled,
       trigger,
+      config,
       deliveryDefaults: input.deliveryDefaults,
       defaultRoutingBias: input.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId,
     });
-    this.store.routines.clearRoutineDeletion(templateId);
+    if (!definition.allowMultiple) {
+      this.store.routines.clearRoutineDeletion(templateId);
+    }
     this.store.routines.upsertRoutine(routine);
     return routine;
   }
@@ -613,13 +728,25 @@ export class SecondBrainService {
     if (!existing) {
       throw new Error(`Routine '${input.id}' not found.`);
     }
+    const definition = BUILT_IN_ROUTINES_BY_ID.get(existing.templateId ?? existing.id);
+    const config = definition
+      ? normalizeRoutineConfig(definition, input.config, existing.config)
+      : cloneRoutineConfig(existing.config);
+    const shouldRefreshDerivedName = Boolean(
+      definition?.manifest.id === 'topic-watch'
+      && !input.name?.trim()
+      && input.config?.topicQuery?.trim()
+      && existing.name.startsWith('Topic Watch: '),
+    );
     const updated: SecondBrainRoutineRecord = {
       ...existing,
-      name: input.name?.trim() || existing.name,
+      name: input.name?.trim()
+        || (shouldRefreshDerivedName && definition ? resolveRoutineName(definition, undefined, config) : existing.name),
       enabled: input.enabled ?? existing.enabled,
       trigger: input.trigger
         ? resolveRoutineTriggerOverride(input.trigger, existing.trigger, existing.name)
         : cloneRoutineTrigger(existing.trigger),
+      config,
       deliveryDefaults: input.deliveryDefaults ?? existing.deliveryDefaults,
       defaultRoutingBias: input.defaultRoutingBias ?? existing.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId ?? existing.budgetProfileId,
@@ -635,8 +762,10 @@ export class SecondBrainService {
     if (!routine) {
       throw new Error(`Routine '${id}' not found.`);
     }
-    if (BUILT_IN_ROUTINES_BY_ID.has(routineId)) {
-      this.store.routines.markRoutineDeleted(routineId);
+    const templateId = routine.templateId ?? routine.id;
+    const definition = BUILT_IN_ROUTINES_BY_ID.get(templateId);
+    if (definition?.seedByDefault && !definition.allowMultiple) {
+      this.store.routines.markRoutineDeleted(templateId);
     }
     return routine;
   }

@@ -25,22 +25,25 @@ function createService() {
 }
 
 describe('SecondBrainService', () => {
-  it('seeds the starter routine set and exposes a stable overview shape', () => {
+  it('seeds the default routine set and exposes a stable overview shape', () => {
     const { service } = createService();
 
     const overview = service.getOverview();
     const routines = service.listRoutines();
+    const topicWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch');
 
     expect(overview.enabledRoutineCount).toBeGreaterThan(0);
     expect(overview.counts.routines).toBe(6);
     expect(routines.map((routine) => routine.id)).toEqual([
-      'follow-up-watch',
-      'one-off-sync',
-      'morning-brief',
       'next-24-hours-radar',
+      'follow-up-watch',
+      'morning-brief',
       'pre-meeting-brief',
+      'one-off-sync',
       'weekly-review',
     ]);
+    expect(topicWatchEntry?.configured).toBe(false);
+    expect(topicWatchEntry?.allowMultiple).toBe(true);
     expect(overview.topTasks).toEqual([]);
     expect(overview.recentNotes).toEqual([]);
     expect(overview.usage.monthlyBudget).toBeGreaterThan(0);
@@ -114,7 +117,7 @@ describe('SecondBrainService', () => {
     expect(usage.totalConnectorCalls).toBe(2);
   });
 
-  it('recreates deleted starter routines from the starter catalog on demand', () => {
+  it('recreates deleted default routines from the routine type catalog on demand', () => {
     const { service } = createService();
 
     const catalog = service.listRoutineCatalog();
@@ -135,6 +138,29 @@ describe('SecondBrainService', () => {
     expect(created.defaultRoutingBias).toBe('quality_first');
     expect(created.deliveryDefaults).toEqual(['web', 'cli']);
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'pre-meeting-brief')?.configured).toBe(true);
+  });
+
+  it('creates multiple topic watch routines with stored watch configuration', () => {
+    const { service } = createService();
+
+    const first = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Harbor launch' },
+    });
+    const second = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Board prep' },
+      deliveryDefaults: ['telegram'],
+    });
+
+    expect(first.id).toContain('topic-watch:');
+    expect(second.id).toContain('topic-watch:');
+    expect(first.id).not.toBe(second.id);
+    expect(first.templateId).toBe('topic-watch');
+    expect(first.config).toEqual({ topicQuery: 'Harbor launch' });
+    expect(first.name).toBe('Topic Watch: Harbor launch');
+    expect(second.deliveryDefaults).toEqual(['telegram']);
+    expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch')?.configured).toBe(true);
   });
 
   it('stores upcoming events and people through the shared service', () => {

@@ -2,9 +2,11 @@ import type { ScheduledTaskService } from '../scheduled-tasks.js';
 import type { SecondBrainService } from './second-brain-service.js';
 import type { BriefingService } from './briefing-service.js';
 import type { SyncService, SecondBrainSyncSummary } from './sync-service.js';
+import type { SecondBrainDeliveryChannel, SecondBrainRoutineRecord } from './types.js';
 
 interface HorizonScannerOptions {
   now?: () => number;
+  onOutcome?: (outcome: HorizonRoutineOutcome) => Promise<void> | void;
 }
 
 export interface HorizonScanSummary {
@@ -12,6 +14,14 @@ export interface HorizonScanSummary {
   sync: SecondBrainSyncSummary;
   triggeredRoutines: string[];
   generatedBriefIds: string[];
+}
+
+export interface HorizonRoutineOutcome {
+  routineId: string;
+  channels: readonly SecondBrainDeliveryChannel[];
+  text: string;
+  importance: 'silent' | 'useful' | 'urgent';
+  artifactIds?: string[];
 }
 
 interface SupportedRoutineCron {
@@ -82,6 +92,7 @@ function latestCronOccurrenceAtOrBefore(now: number, cron: string): number | nul
 
 export class HorizonScanner {
   private readonly now: () => number;
+  private onOutcome: ((outcome: HorizonRoutineOutcome) => Promise<void> | void) | null;
 
   constructor(
     private readonly scheduledTaskService: ScheduledTaskService,
@@ -91,6 +102,11 @@ export class HorizonScanner {
     options: HorizonScannerOptions = {},
   ) {
     this.now = options.now ?? Date.now;
+    this.onOutcome = options.onOutcome ?? null;
+  }
+
+  setOutcomeDelivery(onOutcome: ((outcome: HorizonRoutineOutcome) => Promise<void> | void) | null): void {
+    this.onOutcome = onOutcome;
   }
 
   start(): void {
@@ -128,23 +144,37 @@ export class HorizonScanner {
     const triggeredRoutines: string[] = [];
     const generatedBriefIds: string[] = [];
 
-    const morningRoutine = routines.find((routine) => routine.id === 'morning-brief');
+    const morningRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'morning-brief');
     if (morningRoutine && this.shouldRunCronRoutine(scannedAt, morningRoutine)) {
       const brief = await this.briefingService.generateMorningBrief();
       this.secondBrainService.markRoutineRun(morningRoutine.id, scannedAt);
       triggeredRoutines.push(morningRoutine.id);
       generatedBriefIds.push(brief.id);
+      await this.emitOutcome({
+        routineId: morningRoutine.id,
+        channels: morningRoutine.deliveryDefaults,
+        importance: 'useful',
+        artifactIds: [brief.id],
+        text: `Your morning brief is ready.\n\n${brief.title}`,
+      });
     }
 
-    const weeklyReviewRoutine = routines.find((routine) => routine.id === 'weekly-review');
+    const weeklyReviewRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'weekly-review');
     if (weeklyReviewRoutine && this.shouldRunCronRoutine(scannedAt, weeklyReviewRoutine)) {
       const brief = await this.briefingService.generateWeeklyReview();
       this.secondBrainService.markRoutineRun(weeklyReviewRoutine.id, scannedAt);
       triggeredRoutines.push(weeklyReviewRoutine.id);
       generatedBriefIds.push(brief.id);
+      await this.emitOutcome({
+        routineId: weeklyReviewRoutine.id,
+        channels: weeklyReviewRoutine.deliveryDefaults,
+        importance: 'useful',
+        artifactIds: [brief.id],
+        text: `Your weekly review is ready.\n\n${brief.title}`,
+      });
     }
 
-    const radarRoutine = routines.find((routine) => routine.id === 'next-24-hours-radar');
+    const radarRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'next-24-hours-radar');
     if (radarRoutine) {
       const horizonMinutes = radarRoutine.trigger.mode === 'horizon' && Number.isFinite(radarRoutine.trigger.lookaheadMinutes)
         ? Number(radarRoutine.trigger.lookaheadMinutes)
@@ -161,10 +191,16 @@ export class HorizonScanner {
       ) {
         this.secondBrainService.markRoutineRun(radarRoutine.id, scannedAt);
         triggeredRoutines.push(radarRoutine.id);
+        await this.emitOutcome({
+          routineId: radarRoutine.id,
+          channels: radarRoutine.deliveryDefaults,
+          importance: 'useful',
+          text: `Your daily agenda check found ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
+        });
       }
     }
 
-    const preMeetingRoutine = routines.find((routine) => routine.id === 'pre-meeting-brief');
+    const preMeetingRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'pre-meeting-brief');
     if (preMeetingRoutine) {
       const lookaheadMinutes = preMeetingRoutine.trigger.mode === 'event' && Number.isFinite(preMeetingRoutine.trigger.lookaheadMinutes)
         ? Number(preMeetingRoutine.trigger.lookaheadMinutes)
@@ -181,6 +217,13 @@ export class HorizonScanner {
         const generated = await this.briefingService.generatePreMeetingBrief(event.id);
         generatedBriefIds.push(generated.id);
         triggered = true;
+        await this.emitOutcome({
+          routineId: preMeetingRoutine.id,
+          channels: preMeetingRoutine.deliveryDefaults,
+          importance: 'useful',
+          artifactIds: [generated.id, event.id],
+          text: `I prepared a pre-meeting brief for "${event.title}".`,
+        });
       }
       if (triggered) {
         this.secondBrainService.markRoutineRun(preMeetingRoutine.id, scannedAt);
@@ -188,7 +231,7 @@ export class HorizonScanner {
       }
     }
 
-    const followUpRoutine = routines.find((routine) => routine.id === 'follow-up-watch');
+    const followUpRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'follow-up-watch');
     if (followUpRoutine) {
       const lookbackMinutes = followUpRoutine.trigger.mode === 'event' && Number.isFinite(followUpRoutine.trigger.lookaheadMinutes)
         ? Number(followUpRoutine.trigger.lookaheadMinutes)
@@ -208,11 +251,41 @@ export class HorizonScanner {
         const generated = await this.briefingService.draftFollowUp(event.id);
         generatedBriefIds.push(generated.id);
         triggered = true;
+        await this.emitOutcome({
+          routineId: followUpRoutine.id,
+          channels: followUpRoutine.deliveryDefaults,
+          importance: 'useful',
+          artifactIds: [generated.id, event.id],
+          text: `I drafted a follow-up for "${event.title}".`,
+        });
       }
       if (triggered) {
         this.secondBrainService.markRoutineRun(followUpRoutine.id, scannedAt);
         triggeredRoutines.push(followUpRoutine.id);
       }
+    }
+
+    const topicWatchRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'topic-watch');
+    for (const routine of topicWatchRoutines) {
+      if (!this.shouldRunCronRoutine(scannedAt, routine)) {
+        continue;
+      }
+      const generated = await this.briefingService.generateTopicWatchBrief(routine.id, {
+        onlySince: routine.lastRunAt ?? routine.createdAt,
+      });
+      this.secondBrainService.markRoutineRun(routine.id, scannedAt);
+      if (!generated) {
+        continue;
+      }
+      triggeredRoutines.push(routine.id);
+      generatedBriefIds.push(generated.id);
+      await this.emitOutcome({
+        routineId: routine.id,
+        channels: routine.deliveryDefaults,
+        importance: 'useful',
+        artifactIds: [generated.id],
+        text: `Your topic watch for "${routine.config?.topicQuery ?? routine.name}" found new matching context.`,
+      });
     }
 
     return {
@@ -223,7 +296,14 @@ export class HorizonScanner {
     };
   }
 
-  private shouldRunCronRoutine(now: number, routine: ReturnType<SecondBrainService['listRoutines']>[number]): boolean {
+  private async emitOutcome(outcome: HorizonRoutineOutcome): Promise<void> {
+    if (!this.onOutcome) {
+      return;
+    }
+    await this.onOutcome(outcome);
+  }
+
+  private shouldRunCronRoutine(now: number, routine: SecondBrainRoutineRecord): boolean {
     if (routine.trigger.mode !== 'cron' || !routine.trigger.cron) return false;
     const scheduledAt = latestCronOccurrenceAtOrBefore(now, routine.trigger.cron);
     if (scheduledAt == null) return false;

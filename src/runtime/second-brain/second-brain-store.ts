@@ -233,6 +233,17 @@ export class SecondBrainStore implements SecondBrainStoreContext {
         updated_at INTEGER NOT NULL
       );
     `);
+    this.ensureOptionalColumn('sb_routines', 'template_id', 'TEXT');
+    this.ensureOptionalColumn('sb_routines', 'config_json', 'TEXT');
+  }
+
+  private ensureOptionalColumn(table: string, column: string, ddl: string): void {
+    if (!this.db) return;
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+    if (rows.some((row) => String(row.name) === column)) {
+      return;
+    }
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
   }
 
   getCounts(): { notes: number; tasks: number; routines: number } {

@@ -385,9 +385,11 @@ function normalizeRoutineSearchTokens(value: string | undefined): string[] {
 function buildRoutineSemanticHints(
   routine: {
     id?: string;
+    templateId?: string;
     name?: string;
     category?: string;
     externalCommMode?: string;
+    config?: { topicQuery?: string };
     trigger?: { mode?: string; eventType?: string };
   },
 ): string[] {
@@ -404,7 +406,10 @@ function buildRoutineSemanticHints(
   if (routine.trigger?.mode === 'event' && routine.trigger.eventType === 'upcoming_event') {
     hints.push('meeting prep preparation');
   }
-  const normalizedIdentity = `${routine.id ?? ''} ${routine.name ?? ''}`.toLowerCase();
+  if ((routine.templateId ?? routine.id) === 'topic-watch') {
+    hints.push('watch notify mentions topic tracking');
+  }
+  const normalizedIdentity = `${routine.id ?? ''} ${routine.templateId ?? ''} ${routine.name ?? ''} ${routine.config?.topicQuery ?? ''}`.toLowerCase();
   if (normalizedIdentity.includes('pre-meeting') || normalizedIdentity.includes('pre meeting')) {
     hints.push('meeting prep');
   }
@@ -546,18 +551,18 @@ function formatRoutineTriggerSummaryForUser(
   }
   if (trigger.mode === 'event') {
     const label = trigger.eventType === 'upcoming_event'
-      ? 'Upcoming meetings'
+      ? 'Before meetings'
       : trigger.eventType === 'event_ended'
-        ? 'Recently ended meetings'
+        ? 'After meetings'
         : typeof trigger.eventType === 'string' && trigger.eventType.trim()
           ? trigger.eventType.replaceAll('_', ' ')
           : 'Event-driven';
     const lookahead = formatRoutineLookaheadMinutes(trigger.lookaheadMinutes);
-    return lookahead ? `${label} within ${lookahead}` : label;
+    return lookahead ? `${label} · ${lookahead}` : label;
   }
   if (trigger.mode === 'horizon') {
     const lookahead = formatRoutineLookaheadMinutes(trigger.lookaheadMinutes);
-    return lookahead ? `Horizon scan for the next ${lookahead}` : 'Horizon scan';
+    return lookahead ? `Daily agenda check · ${lookahead}` : 'Daily agenda check';
   }
   return 'Run on demand';
 }
@@ -3948,16 +3953,18 @@ type DirectIntentShadowCandidate =
           if (queryTokens.length === 0) {
             return true;
           }
-          const description = routineCatalogById.get(routine.id)?.trim() ?? '';
+          const description = routineCatalogById.get(routine.id)?.trim()
+            ?? routineCatalogById.get(routine.templateId ?? '')?.trim()
+            ?? '';
           const searchTokens = new Set(normalizeRoutineSearchTokens([
             routine.name,
             routine.id,
+            routine.templateId,
             routine.category,
-            routine.defaultRoutingBias,
-            routine.workloadClass,
             routine.externalCommMode,
             routine.trigger.mode,
             routine.trigger.eventType,
+            routine.config?.topicQuery,
             description,
             ...buildRoutineSemanticHints(routine),
           ]
@@ -3996,11 +4003,19 @@ type DirectIntentShadowCandidate =
                   ? 'Disabled Second Brain routines:'
                   : 'Second Brain routines:',
             ...filteredRoutines.map((routine) => {
-              const description = routineCatalogById.get(routine.id)?.trim() ?? '';
+              const description = routineCatalogById.get(routine.id)?.trim()
+                ?? routineCatalogById.get(routine.templateId ?? '')?.trim()
+                ?? '';
               const descriptionSuffix = description
                 ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
                 : '';
-              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${formatRoutineTriggerSummaryForUser(routine.trigger)} · ${routine.defaultRoutingBias.replaceAll('_', ' ')})${descriptionSuffix}`;
+              const deliverySummary = Array.isArray(routine.deliveryDefaults) && routine.deliveryDefaults.length > 0
+                ? ` · ${routine.deliveryDefaults.join(', ')}`
+                : '';
+              const topicSuffix = routine.config?.topicQuery?.trim()
+                ? ` · watching "${routine.config.topicQuery.trim()}"`
+                : '';
+              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${formatRoutineTriggerSummaryForUser(routine.trigger)}${deliverySummary})${topicSuffix}${descriptionSuffix}`;
             }),
           ].join('\n'),
           metadata: buildSecondBrainFocusMetadata(priorFocus, 'routine', items, {

@@ -131,6 +131,16 @@ function renderLinkLine(link: SecondBrainLinkRecord): string {
     : `- ${link.title}`;
 }
 
+function matchesTopic(haystack: string, topicQuery: string, keywords: string[]): boolean {
+  const normalizedHaystack = haystack.toLowerCase();
+  const normalizedTopic = topicQuery.trim().toLowerCase();
+  if (!normalizedHaystack) return false;
+  if (normalizedTopic && normalizedHaystack.includes(normalizedTopic)) {
+    return true;
+  }
+  return keywords.length > 0 && includesKeyword(haystack, keywords);
+}
+
 export class BriefingService {
   private readonly now: () => number;
 
@@ -202,7 +212,7 @@ export class BriefingService {
       '',
       'Enabled Routines',
       ...(routines.length > 0
-        ? routines.slice(0, 5).map((routine) => `- ${routine.name} (${routine.defaultRoutingBias})`)
+        ? routines.slice(0, 5).map((routine) => `- ${routine.name}`)
         : ['- No enabled routines.']),
     ];
 
@@ -436,6 +446,106 @@ export class BriefingService {
       promptTokens: 0,
       completionTokens: 0,
       outboundAction: 'email_draft',
+    });
+
+    return brief;
+  }
+
+  async generateTopicWatchBrief(
+    routineId: string,
+    options: { onlySince?: number | null } = {},
+  ): Promise<SecondBrainBriefRecord | null> {
+    const routine = this.secondBrainService.getRoutineById(routineId);
+    if (!routine) {
+      throw new Error(`Routine '${routineId}' not found.`);
+    }
+    const topicQuery = routine.config?.topicQuery?.trim() ?? '';
+    if (!topicQuery) {
+      throw new Error(`Routine '${routine.name}' does not have a topic configured.`);
+    }
+
+    const keywords = extractKeywords(topicQuery);
+    const onlySince = options.onlySince ?? routine.lastRunAt ?? null;
+    const matchesSince = (timestamp: number | null | undefined): boolean => (
+      onlySince == null || (Number.isFinite(timestamp) && Number(timestamp) > onlySince)
+    );
+
+    const relatedTasks = this.secondBrainService.listTasks({ limit: 50 })
+      .filter((task) => matchesSince(task.updatedAt) && matchesTopic([task.title, task.details].filter(Boolean).join(' '), topicQuery, keywords))
+      .slice(0, 8);
+    const relatedNotes = this.secondBrainService.listNotes({ limit: 50 })
+      .filter((note) => matchesSince(note.updatedAt) && matchesTopic(`${note.title} ${note.content}`, topicQuery, keywords))
+      .slice(0, 8);
+    const relatedPeople = this.secondBrainService.listPeople({ limit: 50 })
+      .filter((person) => matchesSince(person.updatedAt) && matchesTopic([person.name, person.company, person.title, person.notes, person.email].filter(Boolean).join(' '), topicQuery, keywords))
+      .slice(0, 8);
+    const relatedLinks = this.secondBrainService.listLinks({ limit: 50 })
+      .filter((link) => matchesSince(link.updatedAt) && matchesTopic([link.title, link.summary, link.url].filter(Boolean).join(' '), topicQuery, keywords))
+      .slice(0, 8);
+    const relatedEvents = this.secondBrainService.listEvents({ includePast: true, fromTime: 0, limit: 100 })
+      .filter((event) => matchesSince(Math.max(event.updatedAt, event.startsAt)) && matchesTopic([event.title, event.description, event.location].filter(Boolean).join(' '), topicQuery, keywords))
+      .slice(0, 8);
+    const relatedBriefs = this.secondBrainService.listBriefs({ limit: 50 })
+      .filter((brief) => matchesSince(brief.updatedAt) && matchesTopic(`${brief.title} ${brief.content}`, topicQuery, keywords))
+      .slice(0, 8);
+
+    const totalMatches = relatedTasks.length
+      + relatedNotes.length
+      + relatedPeople.length
+      + relatedLinks.length
+      + relatedEvents.length
+      + relatedBriefs.length;
+    if (totalMatches === 0) {
+      return null;
+    }
+
+    const now = this.now();
+    const sections = [
+      'Topic Watch',
+      `- Topic: ${topicQuery}`,
+      `- Generated ${formatDateTime(now)}`,
+      onlySince != null
+        ? `- New matching context since ${formatDateTime(onlySince)}`
+        : '- Matching context from your current Second Brain records.',
+      `- Matches found: ${totalMatches}`,
+      '',
+      'Tasks',
+      ...(relatedTasks.length > 0 ? relatedTasks.map(renderTaskLine) : ['- No matching tasks.']),
+      '',
+      'Notes',
+      ...(relatedNotes.length > 0 ? relatedNotes.map(renderNoteLine) : ['- No matching notes.']),
+      '',
+      'People',
+      ...(relatedPeople.length > 0 ? relatedPeople.map(renderPersonLine) : ['- No matching people.']),
+      '',
+      'Library',
+      ...(relatedLinks.length > 0 ? relatedLinks.map(renderLinkLine) : ['- No matching library items.']),
+      '',
+      'Events',
+      ...(relatedEvents.length > 0 ? relatedEvents.map(renderEventLine) : ['- No matching events.']),
+      '',
+      'Briefs',
+      ...(relatedBriefs.length > 0
+        ? relatedBriefs.map((brief) => `- ${brief.title}: ${summarizeText(brief.content, 120)}`)
+        : ['- No matching briefs.']),
+    ];
+
+    const brief = this.persistBrief({
+      id: `brief:manual:topic_watch:${routine.id}:${now}`,
+      kind: 'manual',
+      title: `Topic Watch: ${topicQuery}`,
+      content: sections.join('\n'),
+      generatedAt: now,
+      routineId: routine.id,
+    });
+
+    this.secondBrainService.recordUsage({
+      featureArea: 'brief',
+      featureId: brief.id,
+      provider: 'second_brain',
+      locality: 'local',
+      promptTokens: 0,
+      completionTokens: 0,
     });
 
     return brief;

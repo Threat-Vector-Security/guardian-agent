@@ -166,6 +166,7 @@ async function startFakeProvider() {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     model: 'second-brain-ui-harness-model',
+    providerType: 'ollama',
     mode: 'fake',
     close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
@@ -496,22 +497,30 @@ guardian:
 
     await openSecondBrainTab(page, 'Routines', '#sb-routine-catalog-table');
     await page.click('[data-routine-create-toggle="true"]');
-    await page.selectOption('#routine-template-id', 'pre-meeting-brief');
-    await page.fill('#routine-name', 'Harness Pre-Meeting Brief');
+    await page.selectOption('#routine-template-id', 'topic-watch');
+    await page.fill('#routine-name', 'Harness Topic Watch');
+    await page.fill('#routine-topic-query', 'Harness launch');
     await page.locator('form[data-routine-create-form] button[type="submit"]').click();
     let routine = await waitFor(async () => {
       const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
-      return Array.isArray(routines) ? routines.find((entry) => entry.id === 'pre-meeting-brief') : null;
-    }, 12_000, 'Expected created pre-meeting routine to appear in the routines API.');
+      return Array.isArray(routines)
+        ? routines.find((entry) => entry.templateId === 'topic-watch' && entry.name === 'Harness Topic Watch')
+        : null;
+    }, 12_000, 'Expected created topic watch routine to appear in the routines API.');
     await waitForFormRecordId(page, 'form[data-routine-form]', routine.id);
-    await page.fill('#routine-name', 'Harness Pre-Meeting Brief Updated');
+    await page.fill('#routine-name', 'Harness Topic Watch Updated');
+    await page.fill('#routine-topic-query', 'Harness launch updated');
     await page.locator('form[data-routine-form] button[type="submit"]').click();
     routine = await waitFor(async () => {
       const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
       return Array.isArray(routines)
-        ? routines.find((entry) => entry.id === routine.id && entry.name === 'Harness Pre-Meeting Brief Updated')
+        ? routines.find((entry) => (
+          entry.id === routine.id
+          && entry.name === 'Harness Topic Watch Updated'
+          && entry.config?.topicQuery === 'Harness launch updated'
+        ))
         : null;
-    }, 12_000, 'Expected edited routine to persist through the routines API.');
+    }, 12_000, 'Expected edited topic watch routine to persist through the routines API.');
     await acceptNextDialog(page);
     await page.click('[data-routine-delete]');
     await waitFor(async () => {

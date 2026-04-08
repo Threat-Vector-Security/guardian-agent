@@ -58,6 +58,7 @@ import { SecondBrainService } from './runtime/second-brain/second-brain-service.
 import { BriefingService } from './runtime/second-brain/briefing-service.js';
 import { SyncService } from './runtime/second-brain/sync-service.js';
 import { HorizonScanner } from './runtime/second-brain/horizon-scanner.js';
+import { createSecondBrainRoutineNotifier } from './runtime/second-brain/routine-notifier.js';
 import { CodeWorkspaceNativeProtectionScanner } from './runtime/code-workspace-native-protection.js';
 import { inspectCodeWorkspaceSync } from './runtime/code-workspace-profile.js';
 import {
@@ -6301,6 +6302,13 @@ async function main(): Promise<void> {
     getTelegramChannel: () => startedChannels.getTelegramChannel(),
     getWebChannel: () => activeWebChannel,
   });
+
+  secondBrainHorizonScanner.setOutcomeDelivery(createSecondBrainRoutineNotifier({
+    configRef,
+    getCliChannel: () => cliChannel,
+    getTelegramChannel: () => startedChannels.getTelegramChannel(),
+    getWebChannel: () => activeWebChannel,
+  }));
 
   const notificationService = createRuntimeNotificationService({
     configRef,
