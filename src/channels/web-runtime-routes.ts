@@ -87,8 +87,20 @@ function parseSecondBrainRoutineConfig(value: unknown): import('../runtime/secon
   const record = asRecord(value);
   if (!record) return undefined;
   const topicQuery = trimOptionalString(record.topicQuery);
-  if (!topicQuery) return undefined;
-  return { topicQuery };
+  const dueWithinHours = typeof record.dueWithinHours === 'number'
+    ? record.dueWithinHours
+    : typeof record.dueWithinHours === 'string' && record.dueWithinHours.trim()
+      ? Number(record.dueWithinHours)
+      : undefined;
+  const includeOverdue = typeof record.includeOverdue === 'boolean'
+    ? record.includeOverdue
+    : undefined;
+  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) return undefined;
+  return {
+    ...(topicQuery ? { topicQuery } : {}),
+    ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
+    ...(includeOverdue != null ? { includeOverdue } : {}),
+  };
 }
 
 export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): Promise<boolean> {

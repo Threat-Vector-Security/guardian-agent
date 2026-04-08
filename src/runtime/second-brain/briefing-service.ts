@@ -141,6 +141,17 @@ function matchesTopic(haystack: string, topicQuery: string, keywords: string[]):
   return keywords.length > 0 && includesKeyword(haystack, keywords);
 }
 
+function formatHoursWindow(hours: number): string {
+  return `${hours} hour${hours === 1 ? '' : 's'}`;
+}
+
+function taskEnteredDeadlineWindowAt(task: SecondBrainTaskRecord, dueWithinMs: number): number | null {
+  if (!Number.isFinite(task.dueAt)) {
+    return null;
+  }
+  return Math.max(0, Number(task.dueAt) - dueWithinMs);
+}
+
 export class BriefingService {
   private readonly now: () => number;
 
@@ -466,8 +477,9 @@ export class BriefingService {
 
     const keywords = extractKeywords(topicQuery);
     const onlySince = options.onlySince ?? routine.lastRunAt ?? null;
+    const initialBaseline = routine.lastRunAt == null && onlySince != null && onlySince === routine.createdAt;
     const matchesSince = (timestamp: number | null | undefined): boolean => (
-      onlySince == null || (Number.isFinite(timestamp) && Number(timestamp) > onlySince)
+      initialBaseline || onlySince == null || (Number.isFinite(timestamp) && Number(timestamp) > onlySince)
     );
 
     const relatedTasks = this.secondBrainService.listTasks({ limit: 50 })
@@ -534,6 +546,85 @@ export class BriefingService {
       id: `brief:manual:topic_watch:${routine.id}:${now}`,
       kind: 'manual',
       title: `Topic Watch: ${topicQuery}`,
+      content: sections.join('\n'),
+      generatedAt: now,
+      routineId: routine.id,
+    });
+
+    this.secondBrainService.recordUsage({
+      featureArea: 'brief',
+      featureId: brief.id,
+      provider: 'second_brain',
+      locality: 'local',
+      promptTokens: 0,
+      completionTokens: 0,
+    });
+
+    return brief;
+  }
+
+  async generateDeadlineWatchBrief(
+    routineId: string,
+    options: { onlySince?: number | null } = {},
+  ): Promise<SecondBrainBriefRecord | null> {
+    const routine = this.secondBrainService.getRoutineById(routineId);
+    if (!routine) {
+      throw new Error(`Routine '${routineId}' not found.`);
+    }
+    const dueWithinHours = Number.isFinite(routine.config?.dueWithinHours)
+      ? Number(routine.config?.dueWithinHours)
+      : 24;
+    const includeOverdue = routine.config?.includeOverdue !== false;
+    const onlySince = options.onlySince ?? routine.lastRunAt ?? null;
+    const initialBaseline = routine.lastRunAt == null && onlySince != null && onlySince === routine.createdAt;
+    const dueWithinMs = dueWithinHours * 60 * 60 * 1000;
+    const now = this.now();
+
+    const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 100 })
+      .filter((task) => Number.isFinite(task.dueAt));
+    const overdueTasks = openTasks.filter((task) => (
+      includeOverdue
+      && Number(task.dueAt) < now
+      && (
+        initialBaseline
+        || onlySince == null
+        || Number(task.dueAt) > onlySince
+        || task.updatedAt > onlySince
+      )
+    ));
+    const dueSoonTasks = openTasks.filter((task) => {
+      const dueAt = Number(task.dueAt);
+      if (dueAt < now || dueAt > now + dueWithinMs) {
+        return false;
+      }
+      const enteredWindowAt = taskEnteredDeadlineWindowAt(task, dueWithinMs);
+      return initialBaseline
+        || onlySince == null
+        || (enteredWindowAt != null && enteredWindowAt > onlySince)
+        || task.updatedAt > onlySince;
+    });
+
+    if (overdueTasks.length === 0 && dueSoonTasks.length === 0) {
+      return null;
+    }
+
+    const sections = [
+      'Deadline Watch',
+      `- Generated ${formatDateTime(now)}`,
+      `- Watching tasks due within ${formatHoursWindow(dueWithinHours)}`,
+      `- Include overdue tasks: ${includeOverdue ? 'Yes' : 'No'}`,
+      '',
+      'Overdue Tasks',
+      ...(overdueTasks.length > 0 ? overdueTasks.map(renderTaskLine) : ['- No newly overdue tasks.']),
+      '',
+      'Due Soon',
+      ...(dueSoonTasks.length > 0 ? dueSoonTasks.map(renderTaskLine) : ['- No tasks newly entering the due-soon window.']),
+    ];
+
+    const brief = this.persistBrief({
+      id: `brief:manual:deadline_watch:${routine.id}:${now}`,
+      kind: 'manual',
+      title: `Deadline Watch: next ${formatHoursWindow(dueWithinHours)}`,
       content: sections.join('\n'),
       generatedAt: now,
       routineId: routine.id,

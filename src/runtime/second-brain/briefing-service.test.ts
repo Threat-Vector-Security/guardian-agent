@@ -164,4 +164,32 @@ describe('BriefingService', () => {
     expect(brief?.content).toContain('Harbor launch review notes');
     expect(brief?.content).toContain('Harbor launch checklist');
   });
+
+  it('builds a deadline watch brief from due-soon and overdue tasks', async () => {
+    const { service, briefing } = createFixture();
+
+    const routine = service.createRoutine({
+      templateId: 'deadline-watch',
+      config: { dueWithinHours: 24, includeOverdue: true },
+    });
+    service.upsertTask({
+      title: 'Prepare launch deck',
+      priority: 'high',
+      dueAt: Date.parse('2026-04-04T18:00:00Z'),
+    });
+    service.upsertTask({
+      title: 'Close stale launch actions',
+      priority: 'medium',
+      dueAt: Date.parse('2026-04-04T07:00:00Z'),
+    });
+
+    const brief = await briefing.generateDeadlineWatchBrief(routine.id, {
+      onlySince: routine.createdAt,
+    });
+
+    expect(brief).toBeTruthy();
+    expect(brief?.title).toBe('Deadline Watch: next 24 hours');
+    expect(brief?.content).toContain('Prepare launch deck');
+    expect(brief?.content).toContain('Close stale launch actions');
+  });
 });

@@ -1467,6 +1467,8 @@ function renderRoutineListRow(routine, data) {
   const typeLabel = entry?.name || routine.name;
   const description = routine.templateId === 'topic-watch' && routine.config?.topicQuery
     ? `Watching "${routine.config.topicQuery}".`
+    : routine.templateId === 'deadline-watch' && routine.config?.dueWithinHours
+      ? `Watching tasks due within ${routine.config.dueWithinHours} hour${routine.config.dueWithinHours === 1 ? '' : 's'}${routine.config?.includeOverdue === false ? '' : ', including overdue work'}.`
     : (entry?.description || '');
   const isSelected = state.selectedRoutineId === routine.id;
 
@@ -1512,7 +1514,11 @@ function renderRoutineCreateForm(entry, data) {
     ...selectedEntry.manifest,
     templateId: selectedEntry.templateId,
     enabled: selectedEntry.manifest.enabledByDefault,
-    config: selectedEntry.templateId === 'topic-watch' ? { topicQuery: '' } : undefined,
+    config: selectedEntry.templateId === 'topic-watch'
+      ? { topicQuery: '' }
+      : selectedEntry.templateId === 'deadline-watch'
+        ? { dueWithinHours: 24, includeOverdue: true }
+        : undefined,
     lastRunAt: null,
   };
 
@@ -1585,6 +1591,21 @@ function renderRoutineFormFields(routine, options = {}) {
         value="${escAttr(routine.config?.topicQuery || '')}"
       >
       <div class="sb-table-copy">Guardian will scan matching tasks, notes, people, library items, briefs, and events, then message you when new matching context appears.</div>
+    ` : templateId === 'deadline-watch' ? `
+      <label class="sb-form__label" for="routine-due-within-hours">Alert me about tasks due within (hours)</label>
+      <input
+        id="routine-due-within-hours"
+        name="dueWithinHours"
+        type="number"
+        min="1"
+        step="1"
+        value="${escAttr(String(routine.config?.dueWithinHours ?? 24))}"
+      >
+      <label class="sb-check">
+        <input name="includeOverdue" type="checkbox" ${routine.config?.includeOverdue !== false ? 'checked' : ''}>
+        <span>Include overdue tasks too</span>
+      </label>
+      <div class="sb-table-copy">Guardian will watch open tasks entering the due-soon window and can also include newly overdue tasks in the alert.</div>
     ` : ''}
 
     ${editableCron ? `
@@ -2573,6 +2594,8 @@ function filteredRoutineList(data) {
         describeRoutineTrigger(routine.trigger),
         routineTimingLabel(routine.trigger),
         routine.config?.topicQuery || '',
+        Number.isFinite(routine.config?.dueWithinHours) ? `due within ${routine.config.dueWithinHours} hours` : '',
+        typeof routine.config?.includeOverdue === 'boolean' ? (routine.config.includeOverdue ? 'overdue tasks' : 'upcoming tasks only') : '',
         routine.deliveryDefaults.join(' '),
       ].join(' ').toLowerCase();
       return haystack.includes(query);
@@ -2953,10 +2976,19 @@ function readRoutineTriggerForm(form) {
 
 function readRoutineConfigForm(form) {
   const topicQuery = readString(form, 'topicQuery');
-  if (!topicQuery) {
+  const dueWithinHours = Number(readString(form, 'dueWithinHours'));
+  const includeOverdueField = form.querySelector('[name="includeOverdue"]');
+  const includeOverdue = includeOverdueField instanceof HTMLInputElement
+    ? includeOverdueField.checked
+    : undefined;
+  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
     return undefined;
   }
-  return { topicQuery };
+  return {
+    ...(topicQuery ? { topicQuery } : {}),
+    ...(Number.isFinite(dueWithinHours) && dueWithinHours > 0 ? { dueWithinHours } : {}),
+    ...(includeOverdue != null ? { includeOverdue } : {}),
+  };
 }
 
 function parseTags(value) {

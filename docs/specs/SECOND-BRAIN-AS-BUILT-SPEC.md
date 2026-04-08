@@ -204,12 +204,14 @@ Current default seeded routines on first run:
 
 Current additional routine type available through `Create routine`:
 - `topic-watch` (`Topic Watch`)
+- `deadline-watch` (`Deadline Watch`)
 
 Current behavior note:
 - `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
 - the Routines table shows only configured routines; `Create routine` is the explicit path for adding another bounded routine type.
 - deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 - `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
+- `deadline-watch` supports multiple configured instances and stores bounded deadline settings (`dueWithinHours`, `includeOverdue`) for proactive task-pressure notifications.
 
 ## Sync Model
 
@@ -280,6 +282,10 @@ Current supported brief kinds:
 - is currently stored as a `manual` brief artifact tied back to the triggering routine id
 - summarizes newly matched tasks, notes, people, library items, events, and briefs for the configured topic
 
+`deadline watch` output
+- is currently stored as a `manual` brief artifact tied back to the triggering routine id
+- summarizes overdue and due-soon open tasks that are newly relevant for the configured deadline window
+
 Current limitations:
 - synthesis is deterministic string assembly, not open-ended agent drafting
 - there is no dedicated research-enriched meeting brief flow yet
@@ -315,6 +321,7 @@ Current trigger behavior:
 - `pre-meeting-brief`: generates missing pre-meeting briefs for events within the configured lookahead window
 - `follow-up-watch`: generates missing follow-up drafts for recently ended events
 - `topic-watch`: generates a topic-watch brief when new matching context appears since the last run
+- `deadline-watch`: generates a deadline-watch brief when due-soon or overdue tasks become newly relevant for the configured watch window
 - `one-off-sync`: executed manually to sync context from external providers
 
 ## Tool Surface

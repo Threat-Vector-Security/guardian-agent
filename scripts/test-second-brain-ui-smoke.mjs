@@ -528,6 +528,46 @@ guardian:
       return Array.isArray(routines) ? !routines.some((entry) => entry.id === routine.id) : false;
     }, 12_000, 'Expected deleted routine to disappear from the routines API.');
 
+    await page.click('[data-routine-create-toggle="true"]');
+    await page.selectOption('#routine-template-id', 'deadline-watch');
+    await page.fill('#routine-name', 'Harness Deadline Watch');
+    await page.fill('#routine-due-within-hours', '8');
+    await page.locator('input[name="includeOverdue"]').uncheck();
+    await page.locator('form[data-routine-create-form] button[type="submit"]').click();
+    routine = await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines)
+        ? routines.find((entry) => (
+          entry.templateId === 'deadline-watch'
+          && entry.name === 'Harness Deadline Watch'
+          && entry.config?.dueWithinHours === 8
+          && entry.config?.includeOverdue === false
+        ))
+        : null;
+    }, 12_000, 'Expected created deadline watch routine to appear in the routines API.');
+    await waitForFormRecordId(page, 'form[data-routine-form]', routine.id);
+    await page.fill('#routine-name', 'Harness Deadline Watch Updated');
+    await page.fill('#routine-due-within-hours', '12');
+    await page.locator('input[name="includeOverdue"]').check();
+    await page.locator('form[data-routine-form] button[type="submit"]').click();
+    routine = await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines)
+        ? routines.find((entry) => (
+          entry.id === routine.id
+          && entry.name === 'Harness Deadline Watch Updated'
+          && entry.config?.dueWithinHours === 12
+          && entry.config?.includeOverdue === true
+        ))
+        : null;
+    }, 12_000, 'Expected edited deadline watch routine to persist through the routines API.');
+    await acceptNextDialog(page);
+    await page.click('[data-routine-delete]');
+    await waitFor(async () => {
+      const routines = await requestJson(baseUrl, authToken, 'GET', '/api/second-brain/routines');
+      return Array.isArray(routines) ? !routines.some((entry) => entry.id === routine.id) : false;
+    }, 12_000, 'Expected deleted deadline watch routine to disappear from the routines API.');
+
     await openSecondBrainTab(page, 'Library', 'form[data-link-form]');
     await waitForFormRecordId(page, 'form[data-link-form]', link.id);
     await acceptNextDialog(page);
