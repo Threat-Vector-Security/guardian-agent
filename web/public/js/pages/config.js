@@ -3820,7 +3820,7 @@ function createNotificationsPanel(config, settingsPanel) {
   const suppressedDetailTypes = Array.isArray(notifications.suppressedDetailTypes) ? notifications.suppressedDetailTypes : [];
   const cooldownSeconds = Math.max(0, Math.round((notifications.cooldownMs || 0) / 1000));
   const deliveryMode = notifications.deliveryMode || 'selected';
-  const destinations = notifications.destinations || { web: false, cli: true, telegram: false };
+  const destinations = notifications.destinations || { web: false, cli: false, telegram: false };
 
   section.innerHTML = `
     <div class="table-header">
@@ -3878,7 +3878,7 @@ function createNotificationsPanel(config, settingsPanel) {
       </div>
 
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Defaults are CLI-only and limited to primary security events. Low-confidence drift signals and expected guardrail denials are muted by default so the notification stream stays focused on primary detections. Web alerts appear as a live tray in the main web shell. Add <code>automation_finding</code> only if you want follow-up triage or automation summaries to notify. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
+        Defaults keep outbound delivery off and limit alert eligibility to primary security events. Low-confidence drift signals and expected guardrail denials are muted by default so the notification stream stays focused on primary detections when you enable a channel. Web alerts appear as a live tray in the main web shell. Add <code>automation_finding</code> only if you want follow-up triage or automation summaries to notify. Telegram delivery also requires the Telegram channel to be enabled and at least one allowed chat ID to be configured.
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="cfg-notify-save" type="button">Save Alert Settings</button>

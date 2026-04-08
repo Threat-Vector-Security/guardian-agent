@@ -1,10 +1,12 @@
 # Assistant Security Spec
 
 **Status:** Proposed intended implementation  
-**Date:** 2026-03-21  
+**Date:** 2026-04-08  
 **Owner:** Security + Runtime + Web UI  
 **Amends:** [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md) for the future `Security > Assistant Security` tab  
 **Related:** [SECURITY-PANEL-CONSOLIDATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-PANEL-CONSOLIDATION-SPEC.md), [THREAT-INTEL-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/THREAT-INTEL-SPEC.md), [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
+
+The as-built defensive-security suite document is the canonical shipped reference. This spec remains the forward-looking Assistant Security design doc and is updated here where shipped behavior now sets the contract.
 
 Configuration remains the owner of security settings. `Security > Assistant Security` is the operator command center.
 
@@ -181,7 +183,7 @@ Shows:
 - short summary
 - evidence preview
 - current finding status
-- "View in Security Log" when promoted
+- "View in Security Log" when the finding is an incident-candidate and was promoted
 
 #### `Trends`
 
@@ -220,8 +222,8 @@ Optional later component:
 2. The profile resolves into a bounded probe list.
 3. The scan service runs those probes against the target.
 4. Raw results are normalized into findings.
-5. Findings are persisted, triaged, and optionally promoted.
-6. Relevant promoted findings appear in `Security Log`.
+5. Findings are persisted, triaged, and classified as either posture-only debt or incident-candidate evidence.
+6. Relevant incident-candidate findings that meet the promotion threshold appear in `Security Log`.
 7. Run lifecycle events appear in `Agentic Security Log` when agent-driven or scheduled.
 
 ## Settings Integration
@@ -238,7 +240,7 @@ If the concurrent config work nests this differently, the fields can be remapped
 - `mode: off | manual | continuous`
 - `defaultProfile: quick | standard | release_gate | continuous | browser`
 - `scheduleCron` or `intervalMinutes`
-- `promoteSeverity: high | critical`
+- `promoteSeverity: high | critical` for incident-candidate findings
 - `allowCodeSessionTargets: boolean`
 - `allowWebTargets: boolean`
 - `allowExternalProbeWorkers: boolean`
@@ -294,8 +296,9 @@ The tab should **read** this posture, not become the place where those settings 
 - `confidence`
 - `summary`
 - `evidence`
+- `alertSemantics: posture_only | incident_candidate`
 - `status: new | triaged | accepted_risk | fixed | false_positive`
-- `promotedToSecurityLog: boolean`
+- `promotedToSecurityLog: boolean` derived from `alertSemantics` and the active promotion threshold
 - `createdAt`
 - `updatedAt`
 
@@ -303,13 +306,11 @@ The tab should **read** this posture, not become the place where those settings 
 
 ### Security Log
 
-High and critical Assistant Security findings must flow into `Security Log`.
+Only high and critical Assistant Security findings classified as incident candidates should flow into `Security Log`.
 
-Phase 1 should do this by emitting audit events and rendering promoted rows in the merged `Security Log` view.
+Posture-only findings should remain in `Assistant Security`, while promoted incident-candidate rows appear in the merged `Security Log` view.
 
-Do **not** force these findings into the current `UnifiedSecurityAlert` source union immediately, because that lifecycle model is currently optimized for host/network/gateway/native alerts.
-
-Phase 2 can add a broader lifecycle model for AI findings if inline acknowledge/resolve behavior is needed.
+The current as-built path uses the shared `UnifiedSecurityAlert` lifecycle so promoted Assistant Security findings can be triaged alongside host, network, gateway, native, and install alerts. Broader posture-only findings stay visible only in `Assistant Security`.
 
 ### Agentic Security Log
 
@@ -383,7 +384,7 @@ Add audit types for:
 - `assistant_security_finding`
 - `assistant_security_regression_detected`
 
-These events should support Security Log rendering without inventing a second evidence pipeline.
+These events should support Security Log correlation and Assistant Security history rendering without inventing a second evidence pipeline.
 
 ## Implementation Phases
 
@@ -393,7 +394,7 @@ These events should support Security Log rendering without inventing a second ev
 - add target/profile/run/finding persistence
 - ship built-in deterministic probes
 - support manual scans for `assistant_runtime` and `code_session`
-- promote high/critical findings into `Security Log`
+- promote only incident-candidate high/critical findings into `Security Log`
 - surface session-local results in Code checks
 
 ### Phase 2
@@ -432,7 +433,7 @@ Build `Assistant Security` as a Guardian-native feature, not as a bolt-on scanne
 The key design choices are:
 
 - the command center lives in `Security > Assistant Security`
-- actionable findings land in `Security Log`
+- incident-candidate high/critical findings land in `Security Log`, while posture-only findings remain in `Assistant Security`
 - code-session results also appear in `Code > Checks`
 - configuration stays in the broader Security settings surface
 - scan confidence is explicitly tied to runtime containment posture

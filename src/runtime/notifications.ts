@@ -178,7 +178,7 @@ export class NotificationService {
       deliveryMode: 'selected',
       destinations: {
         web: false,
-        cli: true,
+        cli: false,
         telegram: false,
       },
     };

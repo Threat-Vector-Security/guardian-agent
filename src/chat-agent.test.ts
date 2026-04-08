@@ -1018,6 +1018,923 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).not.toContain('Second Brain overview:');
   });
 
+  it('keeps meeting prep routine retrieval scoped to the pre-meeting routine', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listRoutines: vi.fn(() => [
+        {
+          id: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+          workloadClass: 'B',
+          externalCommMode: 'draft_only',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+        {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 90 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web', 'telegram'],
+          defaultRoutingBias: 'quality_first',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+      ]),
+      listRoutineCatalog: vi.fn(() => [
+        {
+          templateId: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
+          category: 'follow_up',
+          seedByDefault: false,
+          manifest: {
+            id: 'follow-up-watch',
+            name: 'Follow-Up Watch',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+            workloadClass: 'B',
+            externalCommMode: 'draft_only',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'follow-up-watch',
+        },
+        {
+          templateId: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+          category: 'meeting',
+          seedByDefault: false,
+          manifest: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 90 },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web', 'telegram'],
+            defaultRoutingBias: 'quality_first',
+          },
+          configured: true,
+          configuredRoutineId: 'pre-meeting-brief',
+        },
+      ]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-routines-meeting-prep',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show only my enabled routines related to meeting prep.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads routines related to meeting prep.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine', enabled: true, query: 'meeting prep' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Enabled Second Brain routines related to "meeting prep":');
+    expect(content).toContain('Pre-Meeting Brief');
+    expect(content).not.toContain('Follow-Up Watch');
+  });
+
+  it('keeps follow up routine retrieval scoped to follow-up routines', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listRoutines: vi.fn(() => [
+        {
+          id: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+          workloadClass: 'B',
+          externalCommMode: 'draft_only',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+        {
+          id: 'next-24-hours-radar',
+          name: 'Next 24 Hours Radar',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'horizon', lookaheadMinutes: 1440 },
+          workloadClass: 'A',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'local_first',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+        {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 90 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web', 'telegram'],
+          defaultRoutingBias: 'quality_first',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+      ]),
+      listRoutineCatalog: vi.fn(() => [
+        {
+          templateId: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
+          category: 'follow_up',
+          seedByDefault: false,
+          manifest: {
+            id: 'follow-up-watch',
+            name: 'Follow-Up Watch',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+            workloadClass: 'B',
+            externalCommMode: 'draft_only',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'follow-up-watch',
+        },
+        {
+          templateId: 'next-24-hours-radar',
+          name: 'Next 24 Hours Radar',
+          description: 'Marks the horizon scan when upcoming events or open tasks make the next day worth reviewing.',
+          category: 'daily',
+          seedByDefault: false,
+          manifest: {
+            id: 'next-24-hours-radar',
+            name: 'Next 24 Hours Radar',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'horizon', lookaheadMinutes: 1440 },
+            workloadClass: 'A',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'local_first',
+          },
+          configured: true,
+          configuredRoutineId: 'next-24-hours-radar',
+        },
+        {
+          templateId: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+          category: 'meeting',
+          seedByDefault: false,
+          manifest: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 90 },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web', 'telegram'],
+            defaultRoutingBias: 'quality_first',
+          },
+          configured: true,
+          configuredRoutineId: 'pre-meeting-brief',
+        },
+      ]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-routines-follow-up',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show only my enabled routines related to follow up.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads routines related to follow up.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine', enabled: true, query: 'follow up' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Enabled Second Brain routines related to "follow up":');
+    expect(content).toContain('Follow-Up Watch');
+    expect(content).not.toContain('Next 24 Hours Radar');
+    expect(content).not.toContain('Pre-Meeting Brief');
+  });
+
+  it('returns routine focus metadata for direct Second Brain routine reads', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listRoutines: vi.fn(() => [
+        {
+          id: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+          workloadClass: 'B',
+          externalCommMode: 'draft_only',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+        {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+      ]),
+      listRoutineCatalog: vi.fn(() => [
+        {
+          templateId: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
+          category: 'follow_up',
+          seedByDefault: false,
+          manifest: {
+            id: 'follow-up-watch',
+            name: 'Follow-Up Watch',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+            workloadClass: 'B',
+            externalCommMode: 'draft_only',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'follow-up-watch',
+        },
+        {
+          templateId: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+          category: 'meeting',
+          seedByDefault: false,
+          manifest: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'pre-meeting-brief',
+        },
+      ]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-routines-focus',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my routines.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads Second Brain routines.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'pre-meeting-brief',
+            items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+            byType: {
+              routine: {
+                focusId: 'pre-meeting-brief',
+                items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toContain('Second Brain routines:');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'routine',
+        itemType: 'routine',
+        focusId: 'pre-meeting-brief',
+      },
+    });
+  });
+
+  it('disables the focused Second Brain routine directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          enabled: false,
+          defaultRoutingBias: 'balanced',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+        });
+        return {
+          success: true,
+          output: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [
+        {
+          templateId: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+          category: 'meeting',
+          seedByDefault: false,
+          manifest: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'pre-meeting-brief',
+        },
+      ]),
+      listRoutines: vi.fn(() => [
+        {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+      ]),
+      getRoutineById: vi.fn((id: string) => id === 'pre-meeting-brief'
+        ? {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            enabled: true,
+            trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+            createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+            updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+            lastRunAt: null,
+          }
+        : null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-disable',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Disable that routine.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'toggle',
+        confidence: 'high',
+        summary: 'Disables the focused routine.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine', enabled: false },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'pre-meeting-brief',
+            items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+            byType: {
+              routine: {
+                focusId: 'pre-meeting-brief',
+                items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Routine updated: Pre-Meeting Brief');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'routine',
+        itemType: 'routine',
+        focusId: 'pre-meeting-brief',
+      },
+    });
+  });
+
+  it('updates focused Second Brain routine settings directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          enabled: true,
+          defaultRoutingBias: 'quality_first',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web', 'telegram'],
+          trigger: {
+            mode: 'event',
+            eventType: 'upcoming_event',
+            lookaheadMinutes: 90,
+          },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const routineRecord = {
+      id: 'pre-meeting-brief',
+      name: 'Pre-Meeting Brief',
+      category: 'scheduled',
+      enabledByDefault: true,
+      enabled: true,
+      trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'daily-low',
+      deliveryDefaults: ['web'],
+      defaultRoutingBias: 'balanced',
+      createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      lastRunAt: null,
+    };
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'pre-meeting-brief',
+        name: 'Pre-Meeting Brief',
+        description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+        category: 'meeting',
+        seedByDefault: false,
+        manifest: {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+        },
+        configured: true,
+        configuredRoutineId: 'pre-meeting-brief',
+      }]),
+      listRoutines: vi.fn(() => [routineRecord]),
+      getRoutineById: vi.fn(() => routineRecord),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-settings',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that routine to use the quality_first routing bias, deliver on web and telegram, and use a 90 minute lookahead window.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates routine settings.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'pre-meeting-brief',
+            items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+            byType: {
+              routine: {
+                focusId: 'pre-meeting-brief',
+                items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Routine updated: Pre-Meeting Brief');
+  });
+
+  it('canonicalizes legacy routine event trigger values before lookahead updates', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'pre-meeting-brief',
+          trigger: {
+            mode: 'event',
+            eventType: 'upcoming_event',
+            lookaheadMinutes: 90,
+          },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'pre-meeting-brief',
+            name: 'Pre-Meeting Brief',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const routineRecord = {
+      id: 'pre-meeting-brief',
+      name: 'Pre-Meeting Brief',
+      category: 'scheduled',
+      enabledByDefault: true,
+      enabled: true,
+      trigger: { mode: 'event', eventType: 'upcoming-event', lookaheadMinutes: 60 },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'daily-low',
+      deliveryDefaults: ['web'],
+      defaultRoutingBias: 'balanced',
+      createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      lastRunAt: null,
+    };
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'pre-meeting-brief',
+        name: 'Pre-Meeting Brief',
+        description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+        category: 'meeting',
+        seedByDefault: false,
+        manifest: {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+        },
+        configured: true,
+        configuredRoutineId: 'pre-meeting-brief',
+      }]),
+      listRoutines: vi.fn(() => [routineRecord]),
+      getRoutineById: vi.fn(() => routineRecord),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-legacy-lookahead',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that routine to use a 90 minute lookahead window.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates routine lookahead.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'pre-meeting-brief',
+            items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+            byType: {
+              routine: {
+                focusId: 'pre-meeting-brief',
+                items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Routine updated: Pre-Meeting Brief');
+  });
+
+  it('focuses the existing routine when create targets a routine that is already configured', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'pre-meeting-brief',
+        name: 'Pre-Meeting Brief',
+        description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
+        category: 'meeting',
+        seedByDefault: false,
+        manifest: {
+          id: 'pre-meeting-brief',
+          name: 'Pre-Meeting Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          trigger: { mode: 'event', eventType: 'upcoming_event', lookaheadMinutes: 60 },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+        },
+        configured: true,
+        configuredRoutineId: 'pre-meeting-brief',
+      }]),
+      listRoutines: vi.fn(() => []),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-create-existing',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create the Pre-Meeting Brief routine in Second Brain.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a Second Brain routine.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+    );
+
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Routine already exists: Pre-Meeting Brief');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'routine',
+        itemType: 'routine',
+        focusId: 'pre-meeting-brief',
+        items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
+      },
+    });
+  });
+
   it('honors a gateway-provided calendar day window for direct Second Brain calendar reads', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

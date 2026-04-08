@@ -7,6 +7,7 @@ import type {
 } from './code-sessions.js';
 import type {
   CodeWorkspaceTrustAssessment,
+  CodeWorkspaceTrustFindingKind,
   CodeWorkspaceTrustReview,
 } from './code-workspace-trust.js';
 import {
@@ -24,6 +25,7 @@ export type AiSecurityFindingCategory =
   | 'mcp'
   | 'workspace'
   | 'trust_boundary';
+export type AiSecurityAlertSemantics = 'posture_only' | 'incident_candidate';
 export type AiSecurityTargetType = 'runtime' | 'workspace';
 export type AiSecurityRunSource = 'manual' | 'scheduled' | 'system';
 
@@ -60,6 +62,7 @@ export interface AiSecurityFinding {
   category: AiSecurityFindingCategory;
   severity: AiSecuritySeverity;
   confidence: number;
+  alertSemantics: AiSecurityAlertSemantics;
   status: AiSecurityFindingStatus;
   title: string;
   summary: string;
@@ -380,7 +383,8 @@ export class AiSecurityService {
     const allTargets = this.listTargets();
     const selectedTargets = filterTargetsForScan(allTargets, profile, input?.targetIds);
     const findings = this.evaluateTargets(selectedTargets, now);
-    const promotedFindings = findings.filter((finding) => finding.severity === 'high' || finding.severity === 'critical');
+    const highOrCriticalFindings = findings.filter((finding) => finding.severity === 'high' || finding.severity === 'critical');
+    const promotedFindings = highOrCriticalFindings.filter((finding) => isAiSecurityFindingPromotedToSecurityLog(finding));
 
     const run: AiSecurityRun = {
       id: randomUUID(),
@@ -395,7 +399,7 @@ export class AiSecurityService {
         : `No Assistant Security posture issues were detected across ${selectedTargets.length} target${selectedTargets.length === 1 ? '' : 's'}.`,
       targetCount: selectedTargets.length,
       findingCount: findings.length,
-      highOrCriticalCount: promotedFindings.length,
+      highOrCriticalCount: highOrCriticalFindings.length,
     };
 
     this.runs.unshift(run);
@@ -553,6 +557,7 @@ export class AiSecurityService {
     }
 
     const connectedThirdPartyServers = runtime.mcp.thirdPartyServers.filter((server) => server.connected);
+    const connectedMcpAssessment = assessConnectedThirdPartyMcpRisk(runtime, connectedThirdPartyServers);
 
     if (runtime.mcp.enabled && runtime.mcp.connectedThirdPartyServerCount > 0) {
       findings.push(this.upsertFinding({
@@ -561,8 +566,8 @@ export class AiSecurityService {
         targetType: target.type,
         targetLabel: target.label,
         category: 'mcp',
-        severity: degraded ? 'high' : 'medium',
-        confidence: 0.84,
+        severity: connectedMcpAssessment.severity,
+        confidence: connectedMcpAssessment.confidence,
         title: 'Connected third-party MCP servers are active',
         summary: `Guardian currently has ${runtime.mcp.connectedThirdPartyServerCount} connected third-party MCP server${runtime.mcp.connectedThirdPartyServerCount === 1 ? '' : 's'}, which expands subprocess, network, and tool-metadata trust surface.`,
         observedAt,
@@ -584,14 +589,15 @@ export class AiSecurityService {
 
     const networkedServers = connectedThirdPartyServers.filter((server) => server.networkAccess);
     if (networkedServers.length > 0) {
+      const networkAccessAssessment = assessThirdPartyMcpNetworkRisk(runtime, networkedServers);
       findings.push(this.upsertFinding({
         dedupeKey: `${target.id}:mcp-network-access`,
         targetId: target.id,
         targetType: target.type,
         targetLabel: target.label,
         category: 'mcp',
-        severity: 'high',
-        confidence: 0.9,
+        severity: networkAccessAssessment.severity,
+        confidence: networkAccessAssessment.confidence,
         title: 'Third-party MCP servers have outbound network access',
         summary: 'One or more connected third-party MCP servers can make outbound network requests outside the built-in tool allowlist path.',
         observedAt,
@@ -611,14 +617,15 @@ export class AiSecurityService {
 
     const inheritEnvServers = connectedThirdPartyServers.filter((server) => server.inheritEnv);
     if (inheritEnvServers.length > 0) {
+      const inheritEnvAssessment = assessThirdPartyMcpEnvironmentInheritanceRisk(runtime, inheritEnvServers);
       findings.push(this.upsertFinding({
         dedupeKey: `${target.id}:mcp-inherit-env`,
         targetId: target.id,
         targetType: target.type,
         targetLabel: target.label,
         category: 'mcp',
-        severity: 'high',
-        confidence: 0.88,
+        severity: inheritEnvAssessment.severity,
+        confidence: inheritEnvAssessment.confidence,
         title: 'Third-party MCP servers inherit the parent environment',
         summary: 'One or more connected third-party MCP servers inherit Guardian process environment variables, which increases credential and secret exposure risk.',
         observedAt,
@@ -638,14 +645,15 @@ export class AiSecurityService {
 
     const envScopedServers = connectedThirdPartyServers.filter((server) => server.envKeyCount > 0);
     if (envScopedServers.length > 0) {
+      const envExposureAssessment = assessThirdPartyMcpEnvInjectionRisk(runtime, envScopedServers);
       findings.push(this.upsertFinding({
         dedupeKey: `${target.id}:mcp-env-exposure`,
         targetId: target.id,
         targetType: target.type,
         targetLabel: target.label,
         category: 'mcp',
-        severity: 'medium',
-        confidence: 0.77,
+        severity: envExposureAssessment.severity,
+        confidence: envExposureAssessment.confidence,
         title: 'Connected MCP servers receive explicit environment variables',
         summary: 'One or more connected MCP server definitions inject environment variables directly into server subprocesses, which increases credential and secret exposure risk.',
         observedAt,
@@ -665,14 +673,15 @@ export class AiSecurityService {
 
     const trustOverrideServers = connectedThirdPartyServers.filter((server) => typeof server.trustLevel === 'string' && server.trustLevel.trim().length > 0);
     if (trustOverrideServers.length > 0) {
+      const trustOverrideAssessment = assessThirdPartyMcpTrustOverrideRisk(runtime, trustOverrideServers);
       findings.push(this.upsertFinding({
         dedupeKey: `${target.id}:mcp-trust-override`,
         targetId: target.id,
         targetType: target.type,
         targetLabel: target.label,
         category: 'mcp',
-        severity: 'medium',
-        confidence: 0.83,
+        severity: trustOverrideAssessment.severity,
+        confidence: trustOverrideAssessment.confidence,
         title: 'Third-party MCP trust overrides are configured',
         summary: 'One or more connected third-party MCP servers use an explicit trust-level override, which can make broad tool surfaces look safer than they really are if set too loosely.',
         observedAt,
@@ -845,6 +854,7 @@ export class AiSecurityService {
         category: finding.kind === 'prompt_injection' ? 'trust_boundary' : 'workspace',
         severity: 'high',
         confidence: 0.86,
+        alertSemantics: inferWorkspaceFindingAlertSemantics(finding.kind, reviewActive),
         title: `Workspace contains ${formatWorkspaceFindingKind(finding.kind)}`,
         summary: `${finding.summary} (${finding.path})`,
         observedAt,
@@ -870,6 +880,7 @@ export class AiSecurityService {
     category: AiSecurityFindingCategory;
     severity: AiSecuritySeverity;
     confidence: number;
+    alertSemantics?: AiSecurityAlertSemantics;
     title: string;
     summary: string;
     observedAt: number;
@@ -881,6 +892,7 @@ export class AiSecurityService {
       existing.occurrenceCount += 1;
       existing.severity = input.severity;
       existing.confidence = input.confidence;
+      existing.alertSemantics = input.alertSemantics ?? 'posture_only';
       existing.title = input.title;
       existing.summary = input.summary;
       existing.targetLabel = input.targetLabel;
@@ -897,6 +909,7 @@ export class AiSecurityService {
       category: input.category,
       severity: input.severity,
       confidence: input.confidence,
+      alertSemantics: input.alertSemantics ?? 'posture_only',
       status: 'new',
       title: input.title,
       summary: input.summary,
@@ -942,6 +955,95 @@ function dedupeSessionsByWorkspace(sessions: AiSecuritySessionSnapshot[]): AiSec
   return deduped;
 }
 
+type ThirdPartyMcpServerSnapshot = AiSecurityRuntimeSnapshot['mcp']['thirdPartyServers'][number];
+
+interface McpRiskAssessment {
+  severity: AiSecuritySeverity;
+  confidence: number;
+}
+
+function isStrongSandboxForMcpRisk(runtime: AiSecurityRuntimeSnapshot): boolean {
+  return runtime.sandbox.enabled
+    && runtime.sandbox.availability === 'strong'
+    && runtime.sandbox.enforcementMode === 'strict'
+    && !runtime.sandbox.degradedFallbackActive;
+}
+
+function countUnapprovedMcpServers(servers: ThirdPartyMcpServerSnapshot[]): number {
+  return servers.filter((server) => !server.startupApproved).length;
+}
+
+function assessConnectedThirdPartyMcpRisk(
+  runtime: AiSecurityRuntimeSnapshot,
+  servers: ThirdPartyMcpServerSnapshot[],
+): McpRiskAssessment {
+  const strongSandbox = isStrongSandboxForMcpRisk(runtime);
+  const unapprovedCount = countUnapprovedMcpServers(servers);
+  const networkedCount = servers.filter((server) => server.networkAccess).length;
+  const inheritEnvCount = servers.filter((server) => server.inheritEnv).length;
+  const envInjectionCount = servers.filter((server) => server.envKeyCount > 0).length;
+  const trustOverrideCount = servers.filter((server) => typeof server.trustLevel === 'string' && server.trustLevel.trim()).length;
+
+  let score = Math.min(servers.length, 2);
+  if (!strongSandbox) score += 2;
+  if (networkedCount > 0) score += 1;
+  if (inheritEnvCount > 0) score += 1;
+  if (envInjectionCount > 0) score += 1;
+  if (trustOverrideCount > 0) score += 1;
+  if (unapprovedCount > 0) score += 2;
+
+  if (score >= 6) return { severity: 'high', confidence: 0.86 };
+  if (score >= 3) return { severity: 'medium', confidence: 0.78 };
+  return { severity: 'low', confidence: 0.68 };
+}
+
+function assessThirdPartyMcpNetworkRisk(
+  runtime: AiSecurityRuntimeSnapshot,
+  servers: ThirdPartyMcpServerSnapshot[],
+): McpRiskAssessment {
+  const strongSandbox = isStrongSandboxForMcpRisk(runtime);
+  const unapprovedCount = countUnapprovedMcpServers(servers);
+  const inheritEnvCount = servers.filter((server) => server.inheritEnv).length;
+  const score = servers.length + unapprovedCount + inheritEnvCount + (strongSandbox ? 0 : 2);
+  if (score >= 4) return { severity: 'high', confidence: 0.9 };
+  return { severity: 'medium', confidence: 0.79 };
+}
+
+function assessThirdPartyMcpEnvironmentInheritanceRisk(
+  runtime: AiSecurityRuntimeSnapshot,
+  servers: ThirdPartyMcpServerSnapshot[],
+): McpRiskAssessment {
+  const strongSandbox = isStrongSandboxForMcpRisk(runtime);
+  const unapprovedCount = countUnapprovedMcpServers(servers);
+  const score = (servers.length * 2) + unapprovedCount + (strongSandbox ? 0 : 1);
+  if (score >= 4) return { severity: 'high', confidence: 0.88 };
+  return { severity: 'medium', confidence: 0.8 };
+}
+
+function assessThirdPartyMcpEnvInjectionRisk(
+  runtime: AiSecurityRuntimeSnapshot,
+  servers: ThirdPartyMcpServerSnapshot[],
+): McpRiskAssessment {
+  const strongSandbox = isStrongSandboxForMcpRisk(runtime);
+  const unapprovedCount = countUnapprovedMcpServers(servers);
+  const envKeyCount = servers.reduce((sum, server) => sum + Math.max(0, server.envKeyCount), 0);
+  const score = envKeyCount + unapprovedCount + (strongSandbox ? 0 : 1);
+  if (score >= 5) return { severity: 'medium', confidence: 0.8 };
+  return { severity: 'low', confidence: 0.69 };
+}
+
+function assessThirdPartyMcpTrustOverrideRisk(
+  runtime: AiSecurityRuntimeSnapshot,
+  servers: ThirdPartyMcpServerSnapshot[],
+): McpRiskAssessment {
+  const strongSandbox = isStrongSandboxForMcpRisk(runtime);
+  const unapprovedCount = countUnapprovedMcpServers(servers);
+  const riskyServerCount = servers.filter((server) => server.networkAccess || server.inheritEnv || server.envKeyCount > 0).length;
+  const score = servers.length + riskyServerCount + unapprovedCount + (strongSandbox ? 0 : 1);
+  if (score >= 4) return { severity: 'medium', confidence: 0.8 };
+  return { severity: 'low', confidence: 0.7 };
+}
+
 function deriveRuntimeRisk(snapshot: AiSecurityRuntimeSnapshot): AiSecurityTarget['riskLevel'] {
   if (!snapshot.sandbox.enabled || (snapshot.sandbox.degradedFallbackActive && snapshot.sandbox.enforcementMode !== 'strict')) {
     return 'high';
@@ -977,6 +1079,61 @@ function isWorkspaceReviewActive(
     && review.assessmentFingerprint === getCodeWorkspaceTrustAssessmentFingerprint(assessment);
 }
 
+function inferWorkspaceFindingAlertSemantics(
+  kind: CodeWorkspaceTrustFindingKind,
+  reviewActive = false,
+): AiSecurityAlertSemantics {
+  if (reviewActive) {
+    return 'posture_only';
+  }
+  switch (kind) {
+    case 'prompt_injection':
+    case 'fetch_pipe_exec':
+    case 'encoded_exec':
+    case 'inline_exec':
+    case 'native_av_detection':
+      return 'incident_candidate';
+    default:
+      return 'posture_only';
+  }
+}
+
+function inferAiSecurityFindingAlertSemantics(input: {
+  category: AiSecurityFindingCategory;
+  targetType: AiSecurityTargetType;
+  title: string;
+  evidence: AiSecurityFindingEvidence[];
+}): AiSecurityAlertSemantics {
+  if (input.targetType === 'runtime') {
+    return 'posture_only';
+  }
+
+  const normalizedTitle = input.title.toLowerCase();
+  if (normalizedTitle.includes('manually accepted')
+    || normalizedTitle.includes('workspace trust is blocked')
+    || normalizedTitle.includes('workspace trust is in caution state')) {
+    return 'posture_only';
+  }
+
+  if (normalizedTitle.startsWith('workspace contains ')) {
+    const explicitKind = normalizedTitle
+      .replace(/^workspace contains\s+/, '')
+      .replace(/\s+/g, '_') as CodeWorkspaceTrustFindingKind;
+    return inferWorkspaceFindingAlertSemantics(explicitKind);
+  }
+
+  return input.category === 'workspace' || input.category === 'trust_boundary'
+    ? 'incident_candidate'
+    : 'posture_only';
+}
+
+export function isAiSecurityFindingPromotedToSecurityLog(
+  finding: Pick<AiSecurityFinding, 'severity' | 'alertSemantics'>,
+): boolean {
+  return finding.alertSemantics === 'incident_candidate'
+    && (finding.severity === 'high' || finding.severity === 'critical');
+}
+
 function cloneFinding(finding: AiSecurityFinding): AiSecurityFinding {
   return {
     ...finding,
@@ -1006,6 +1163,9 @@ function normalizePersistedFinding(value: unknown): AiSecurityFinding | null {
     : null;
   const category = typeof record.category === 'string' && isAiSecurityFindingCategory(record.category)
     ? record.category
+    : null;
+  const alertSemantics = typeof record.alertSemantics === 'string' && isAiSecurityAlertSemantics(record.alertSemantics)
+    ? record.alertSemantics
     : null;
   const targetType = typeof record.targetType === 'string' && isAiSecurityTargetType(record.targetType)
     ? record.targetType
@@ -1040,6 +1200,12 @@ function normalizePersistedFinding(value: unknown): AiSecurityFinding | null {
     category,
     severity,
     confidence,
+    alertSemantics: alertSemantics ?? inferAiSecurityFindingAlertSemantics({
+      category,
+      targetType,
+      title,
+      evidence,
+    }),
     status,
     title,
     summary,
@@ -1117,6 +1283,10 @@ function isAiSecurityFindingCategory(value: string): value is AiSecurityFindingC
     || value === 'mcp'
     || value === 'workspace'
     || value === 'trust_boundary';
+}
+
+function isAiSecurityAlertSemantics(value: string): value is AiSecurityAlertSemantics {
+  return value === 'posture_only' || value === 'incident_candidate';
 }
 
 function isAiSecurityTargetType(value: string): value is AiSecurityTargetType {

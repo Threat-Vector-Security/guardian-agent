@@ -4025,6 +4025,7 @@ async function main(): Promise<void> {
       packageInstallTrust: sharedPackageInstallTrustService,
       includeAcknowledged: false,
       includeInactive: false,
+      assistantVisibility: 'all',
     });
     const posture = assessSecurityPosture({
       profile,

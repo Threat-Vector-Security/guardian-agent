@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AiSecurityService,
   createAiSecuritySessionSnapshot,
+  isAiSecurityFindingPromotedToSecurityLog,
   type AiSecurityRuntimeSnapshot,
 } from './ai-security.js';
 import { createCodeWorkspaceTrustReview, type CodeWorkspaceTrustAssessment } from './code-workspace-trust.js';
@@ -185,6 +186,7 @@ describe('AiSecurityService', () => {
     expect(result.findings.some((finding) => finding.title.includes('Connected third-party MCP servers'))).toBe(true);
     expect(result.findings.some((finding) => finding.title.includes('outbound network access'))).toBe(true);
     expect(result.findings.some((finding) => finding.title.includes('inherit the parent environment'))).toBe(true);
+    expect(result.promotedFindings).toHaveLength(0);
     expect(service.getSummary().findings.highOrCritical).toBeGreaterThan(0);
   });
 
@@ -211,9 +213,16 @@ describe('AiSecurityService', () => {
     });
 
     const result = await service.scan({ profileId: 'workspace-boundaries' });
-    expect(result.findings.some((finding) => finding.title.includes('Workspace trust is blocked'))).toBe(true);
-    expect(result.findings.some((finding) => finding.title.includes('prompt injection'))).toBe(true);
-    expect(result.promotedFindings.every((finding) => finding.severity === 'high' || finding.severity === 'critical')).toBe(true);
+    const blockedFinding = result.findings.find((finding) => finding.title.includes('Workspace trust is blocked'));
+    const promptInjectionFinding = result.findings.find((finding) => finding.title.includes('prompt injection'));
+
+    expect(blockedFinding).toBeDefined();
+    expect(promptInjectionFinding).toBeDefined();
+    expect(blockedFinding?.alertSemantics).toBe('posture_only');
+    expect(promptInjectionFinding?.alertSemantics).toBe('incident_candidate');
+    expect(result.promotedFindings).toHaveLength(1);
+    expect(result.promotedFindings[0]?.id).toBe(promptInjectionFinding?.id);
+    expect(result.promotedFindings.every((finding) => isAiSecurityFindingPromotedToSecurityLog(finding))).toBe(true);
   });
 
   it('downgrades blocked workspaces with an active manual review and allows status updates', async () => {
@@ -239,10 +248,49 @@ describe('AiSecurityService', () => {
     const result = await service.scan({ profileId: 'workspace-boundaries' });
     const acceptedFinding = result.findings.find((finding) => finding.title.includes('manually accepted'));
     expect(acceptedFinding?.severity).toBe('medium');
+    expect(acceptedFinding?.alertSemantics).toBe('posture_only');
+    expect(result.promotedFindings).toHaveLength(0);
 
     const update = service.updateFindingStatus(result.findings[0]?.id ?? '', 'triaged');
     expect(update.success).toBe(true);
     expect(service.listFindings(10).some((finding) => finding.status === 'triaged')).toBe(true);
+  });
+
+  it('keeps approved low-risk MCP connectivity as posture-only signal debt', async () => {
+    const service = new AiSecurityService({
+      enabled: true,
+      getRuntimeSnapshot: () => createRuntimeSnapshot({
+        mcp: {
+          enabled: true,
+          configuredThirdPartyServerCount: 1,
+          connectedThirdPartyServerCount: 1,
+          managedProviderIds: [],
+          usesDynamicPlaywrightPackage: false,
+          thirdPartyServers: [
+            {
+              id: 'approved-readonly-server',
+              name: 'Approved Readonly Server',
+              command: 'approved-mcp',
+              startupApproved: true,
+              networkAccess: false,
+              inheritEnv: false,
+              allowedEnvKeyCount: 0,
+              envKeyCount: 0,
+              connected: true,
+            },
+          ],
+        },
+      }),
+      listCodeSessions: () => [],
+      now: () => 7_500,
+    });
+
+    const result = await service.scan({ profileId: 'runtime-hardening' });
+    const connectedFinding = result.findings.find((finding) => finding.title.includes('Connected third-party MCP servers'));
+
+    expect(connectedFinding?.severity).toBe('low');
+    expect(connectedFinding?.alertSemantics).toBe('posture_only');
+    expect(result.promotedFindings).toHaveLength(0);
   });
 
   it('persists runs and findings across restart', async () => {

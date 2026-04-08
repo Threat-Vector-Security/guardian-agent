@@ -62,6 +62,9 @@ describe('assessSecurityPosture', () => {
         type: 'assistant_security_sandbox',
         severity: 'critical',
         description: 'Sandbox isolation is disabled',
+        evidence: {
+          alertSemantics: 'posture_only',
+        },
       }],
       availableSources: ['assistant'],
     });
@@ -69,6 +72,28 @@ describe('assessSecurityPosture', () => {
     expect(result.recommendedMode).toBe('guarded');
     expect(result.shouldEscalate).toBe(true);
     expect(result.reasons.join(' ')).toContain('posture-oriented');
+  });
+
+  it('treats assistant incident candidates as investigation signals instead of posture debt', () => {
+    const result = assessSecurityPosture({
+      profile: 'personal',
+      currentMode: 'monitor',
+      alerts: [{
+        id: 'assistant-incident-1',
+        source: 'assistant',
+        type: 'assistant_security_trust_boundary',
+        severity: 'critical',
+        description: 'Workspace contains prompt injection',
+        evidence: {
+          alertSemantics: 'incident_candidate',
+        },
+      }],
+      availableSources: ['assistant'],
+    });
+
+    expect(result.recommendedMode).toBe('ir_assist');
+    expect(result.shouldEscalate).toBe(true);
+    expect(result.reasons.join(' ')).not.toContain('posture-oriented');
   });
 
   it('keeps a lone arp conflict in guarded mode until corroborated', () => {

@@ -113,6 +113,14 @@ describe('validateConfig', () => {
     });
   });
 
+  it('should default security alert delivery to no operator channels', () => {
+    expect(DEFAULT_CONFIG.assistant.notifications.destinations).toEqual({
+      web: false,
+      cli: false,
+      telegram: false,
+    });
+  });
+
   it('should pass with valid default config', () => {
     const errors = validateConfig(DEFAULT_CONFIG);
     expect(errors).toEqual([]);
