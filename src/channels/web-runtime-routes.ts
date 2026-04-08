@@ -299,6 +299,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       const brief = await dashboard.onSecondBrainGenerateBrief({
         kind: trimOptionalString(parsed.kind) as import('../runtime/second-brain/types.js').SecondBrainGenerateBriefInput['kind'],
         eventId: trimOptionalString(parsed.eventId),
+        routineId: trimOptionalString(parsed.routineId),
       });
       sendJSON(res, 200, brief);
       context.maybeEmitUIInvalidation(brief, ['second-brain'], 'second-brain.brief.generated', url.pathname);

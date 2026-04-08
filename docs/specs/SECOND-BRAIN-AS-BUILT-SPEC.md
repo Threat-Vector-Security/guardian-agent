@@ -202,6 +202,7 @@ Current default seeded routines on first run:
 - `follow-up-watch` (`Follow-Up Draft`)
 
 Current additional multi-instance capabilities available through `Create routine`:
+- `scheduled-review` (`Scheduled Review`)
 - `topic-watch` (`Topic Watch`)
 - `deadline-watch` (`Deadline Watch`)
 
@@ -214,10 +215,12 @@ Current behavior note:
 - the create flow now shows the full assistant capability list, not just the unconfigured extras. Capabilities that already have a singleton starter instance are marked as already configured and route the operator back to editing that existing instance rather than silently disappearing from the picker.
 - scheduled routines now support `hourly`, `daily`, `weekdays`, `weekly`, `fortnightly`, and `monthly` cadence options in the shared routine timing model.
 - selected assistant capabilities now support bounded scoped instances through routine config. This allows additional routines such as a focused `Weekly Review: Board prep` or `Morning Brief: Harbor launch` instead of only duplicating the unscoped starter routine.
+- `scheduled-review` is now the reusable custom review capability for operator-defined review rhythms such as `Friday Board Review` or `Monthly Launch Review`, instead of overloading the seeded Morning Brief and Weekly Review examples.
 - deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 - `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
 - `deadline-watch` supports multiple configured instances and stores bounded deadline settings (`dueWithinHours`, `includeOverdue`) for proactive task-pressure notifications.
-- chat routine authoring now supports bounded natural-language watch creation and updates such as `message me when anything mentions Harbor launch`, `message me when I have something due tomorrow`, `run daily at 6 pm`, and `include overdue tasks`.
+- chat routine authoring now supports bounded natural-language watch and review creation and updates such as `message me when anything mentions Harbor launch`, `message me when I have something due tomorrow`, `create a review for Board prep every Friday at 4 pm`, `run daily at 6 pm`, and `include overdue tasks`.
+- brief regeneration now carries `routineId` through the public web path so scoped or custom routine briefs regenerate from the originating routine instead of collapsing back to the default brief kind.
 
 ## Sync Model
 

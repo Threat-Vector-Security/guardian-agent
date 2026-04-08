@@ -106,6 +106,29 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
     },
   },
   {
+    capability: 'scheduled_review',
+    description: 'Prepare a reusable scheduled review with upcoming commitments, open work, and saved context.',
+    catalogCategory: 'review',
+    seedByDefault: false,
+    allowMultiple: true,
+    manifest: {
+      id: 'scheduled-review',
+      name: 'Scheduled Review',
+      category: 'scheduled',
+      enabledByDefault: true,
+      trigger: {
+        mode: 'cron',
+        cron: '0 8 * * 1',
+        schedule: { cadence: 'weekly', time: '08:00', dayOfWeek: 'monday' },
+      },
+      workloadClass: 'B',
+      externalCommMode: 'none',
+      budgetProfileId: 'weekly-medium',
+      deliveryDefaults: ['telegram', 'web'],
+      defaultRoutingBias: 'balanced',
+    },
+  },
+  {
     capability: 'manual_sync',
     description: 'Refresh synced calendar events and contacts on demand.',
     catalogCategory: 'maintenance',
@@ -485,6 +508,7 @@ function supportsFocusQuery(definition: BuiltInRoutineDefinition): boolean {
   return [
     'morning-brief',
     'weekly-review',
+    'scheduled-review',
     'next-24-hours-radar',
     'pre-meeting-brief',
     'follow-up-watch',

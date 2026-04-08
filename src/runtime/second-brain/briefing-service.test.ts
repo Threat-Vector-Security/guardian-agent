@@ -131,6 +131,76 @@ describe('BriefingService', () => {
     expect(brief.content).toContain('Launch checklist');
   });
 
+  it('builds a scheduled review from a configured custom routine', async () => {
+    const { service, briefing } = createFixture();
+
+    const routine = service.createRoutine({
+      templateId: 'scheduled-review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'friday',
+          time: '16:00',
+        },
+      },
+    });
+    service.upsertTask({
+      title: 'Board prep checklist',
+      priority: 'high',
+    });
+    service.upsertNote({
+      title: 'Board prep notes',
+      content: 'Need to tighten the board prep narrative.',
+    });
+
+    const brief = await briefing.generateBrief({
+      kind: 'scheduled_review',
+      routineId: routine.id,
+    });
+
+    expect(brief.kind).toBe('scheduled_review');
+    expect(brief.routineId).toBe(routine.id);
+    expect(brief.id).toBe(`brief:scheduled_review:${routine.id}:2026-04-04`);
+    expect(brief.title).toContain('Scheduled Review: Board prep');
+    expect(brief.content).toContain('Review window');
+    expect(brief.content).toContain('Board prep checklist');
+    expect(brief.content).toContain('Board prep notes');
+  });
+
+  it('regenerates scoped weekly reviews through the public generate path without dropping routine focus', async () => {
+    const { service, briefing } = createFixture();
+
+    const routine = service.createRoutine({
+      templateId: 'weekly-review',
+      config: { focusQuery: 'Harbor launch' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'monday',
+          time: '09:00',
+        },
+      },
+    });
+    service.upsertTask({
+      title: 'Ship Harbor launch deck',
+      priority: 'high',
+    });
+
+    const brief = await briefing.generateBrief({
+      kind: 'weekly_review',
+      routineId: routine.id,
+    });
+
+    expect(brief.kind).toBe('weekly_review');
+    expect(brief.routineId).toBe(routine.id);
+    expect(brief.id).toBe(`brief:weekly_review:${routine.id}:2026-04-04`);
+    expect(brief.title).toContain('Harbor launch');
+    expect(brief.content).toContain('Ship Harbor launch deck');
+  });
+
   it('builds a topic watch brief from new matching records', async () => {
     const { service, briefing, tick } = createFixture();
 

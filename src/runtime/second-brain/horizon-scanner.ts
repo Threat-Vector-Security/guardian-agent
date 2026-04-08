@@ -298,6 +298,30 @@ export class HorizonScanner {
       });
     }
 
+    const scheduledReviewRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'scheduled-review');
+    for (const scheduledReviewRoutine of scheduledReviewRoutines) {
+      if (!this.shouldRunCronRoutine(scannedAt, scheduledReviewRoutine)) {
+        continue;
+      }
+      const focusQuery = scheduledReviewRoutine.config?.focusQuery?.trim() || undefined;
+      const brief = await this.briefingService.generateScheduledReview({ routineId: scheduledReviewRoutine.id, focusQuery });
+      this.secondBrainService.markRoutineRun(scheduledReviewRoutine.id, scannedAt);
+      triggeredRoutines.push(scheduledReviewRoutine.id);
+      generatedBriefIds.push(brief.id);
+      await this.emitOutcome({
+        routineId: scheduledReviewRoutine.id,
+        channels: scheduledReviewRoutine.deliveryDefaults,
+        kind: 'brief',
+        title: brief.title,
+        summary: focusQuery ? `Your scheduled review for "${focusQuery}" is ready.` : 'Your scheduled review is ready.',
+        importance: 'useful',
+        deliveryMode: scheduledReviewRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+        followUpActions: ['open_brief', 'regenerate'],
+        artifactIds: [brief.id],
+        text: `${focusQuery ? `Your scheduled review for "${focusQuery}" is ready.` : 'Your scheduled review is ready.'}\n\n${brief.title}`,
+      });
+    }
+
     const radarRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'next-24-hours-radar');
     for (const radarRoutine of radarRoutines) {
       const horizonMinutes = radarRoutine.trigger.mode === 'horizon' && Number.isFinite(radarRoutine.trigger.lookaheadMinutes)

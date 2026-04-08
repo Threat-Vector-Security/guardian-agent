@@ -1272,7 +1272,7 @@ function renderBriefs(panel, data) {
         <div>
           <div class="sb-card__eyebrow">Briefs</div>
           <h3>Meeting, daily, and weekly briefs</h3>
-          <p class="sb-section__copy">Create a morning summary, a weekly review, a meeting brief, or a follow-up draft and review them here.</p>
+          <p class="sb-section__copy">Create a morning summary, a scheduled review, a weekly review, a meeting brief, or a follow-up draft and review them here.</p>
         </div>
       </div>
       <div class="sb-card sb-card--action-strip">
@@ -1286,6 +1286,7 @@ function renderBriefs(panel, data) {
           <div class="sb-segmented">
             ${renderSegmentButton('all', 'All', state.briefKind === 'all', 'data-brief-kind')}
             ${renderSegmentButton('morning', 'Morning', state.briefKind === 'morning', 'data-brief-kind')}
+            ${renderSegmentButton('scheduled_review', 'Review', state.briefKind === 'scheduled_review', 'data-brief-kind')}
             ${renderSegmentButton('weekly_review', 'Weekly', state.briefKind === 'weekly_review', 'data-brief-kind')}
             ${renderSegmentButton('pre_meeting', 'Meeting', state.briefKind === 'pre_meeting', 'data-brief-kind')}
             ${renderSegmentButton('follow_up', 'Follow-up', state.briefKind === 'follow_up', 'data-brief-kind')}
@@ -1321,10 +1322,10 @@ function renderBriefListItem(brief) {
 
 function renderBriefEditor(brief, data) {
   const sourceEvent = brief.eventId ? findRecord([...data.focusEvents, ...data.calendarEvents], brief.eventId) : null;
-  const regenerateButton = brief.kind === 'morning' || brief.kind === 'weekly_review'
-    ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}">Regenerate brief</button>`
+  const regenerateButton = brief.kind === 'morning' || brief.kind === 'weekly_review' || brief.kind === 'scheduled_review'
+    ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}" ${brief.routineId ? `data-routine-id="${escAttr(brief.routineId)}"` : ''}>Regenerate brief</button>`
     : brief.eventId
-      ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}" data-event-id="${escAttr(brief.eventId)}">Regenerate brief</button>`
+      ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}" data-event-id="${escAttr(brief.eventId)}" ${brief.routineId ? `data-routine-id="${escAttr(brief.routineId)}"` : ''}>Regenerate brief</button>`
       : '';
   return `
     <form class="sb-form" data-brief-form>
@@ -2030,7 +2031,7 @@ function bindInteractions(container) {
 
     const generateBrief = target.closest('[data-generate-brief]');
     if (generateBrief?.dataset.generateBrief) {
-      await generateBriefAction(generateBrief.dataset.generateBrief, generateBrief.dataset.eventId);
+      await generateBriefAction(generateBrief.dataset.generateBrief, generateBrief.dataset.eventId, generateBrief.dataset.routineId);
       return;
     }
 
@@ -2479,11 +2480,12 @@ async function updatePersonLastContact(personId) {
   });
 }
 
-async function generateBriefAction(kind, eventId) {
+async function generateBriefAction(kind, eventId, routineId) {
   try {
     const brief = await api.secondBrainGenerateBrief({
       kind,
       eventId: eventId || undefined,
+      routineId: routineId || undefined,
     });
     state.selectedBriefId = brief.id;
     setFlash('success', `Generated '${brief.title}'.`);
