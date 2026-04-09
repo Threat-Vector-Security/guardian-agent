@@ -35,13 +35,58 @@ function parseBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-function normalizeTaskStatus(value: unknown): SecondBrainTaskStatus | 'open' | undefined {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+function normalizeFreeformSecondBrainToken(value: unknown): string {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+    : '';
+}
+
+function normalizeTaskStatusFilter(value: unknown): SecondBrainTaskStatus | 'open' | undefined {
+  const normalized = normalizeFreeformSecondBrainToken(value);
   switch (normalized) {
+    case 'todo':
+    case 'to_do':
+    case 'not_started':
+    case 'notstarted':
+    case 'in_progress':
+    case 'inprogress':
+    case 'progress':
+    case 'doing':
+    case 'started':
+    case 'done':
+    case 'complete':
+    case 'completed':
+    case 'finished':
+    case 'closed':
+    case 'open':
+    case 'pending':
+    case 'outstanding':
+    case 'active':
+      return normalized === 'to_do' || normalized === 'not_started' || normalized === 'notstarted'
+        ? 'todo'
+        : normalized === 'inprogress' || normalized === 'progress' || normalized === 'doing' || normalized === 'started'
+          ? 'in_progress'
+          : normalized === 'complete' || normalized === 'completed' || normalized === 'finished' || normalized === 'closed'
+            ? 'done'
+            : normalized === 'pending' || normalized === 'outstanding' || normalized === 'active'
+              ? 'open'
+              : normalized;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeTaskStatusValue(value: unknown): SecondBrainTaskStatus | undefined {
+  const normalized = normalizeTaskStatusFilter(value);
+  if (!normalized) {
+    return undefined;
+  }
+  switch (normalized) {
+    case 'open':
+      return 'todo';
     case 'todo':
     case 'in_progress':
     case 'done':
-    case 'open':
       return normalized;
     default:
       return undefined;
@@ -84,7 +129,7 @@ function normalizeGeneratedBriefKind(value: unknown): SecondBrainGeneratedBriefK
 }
 
 function normalizeLinkKind(value: unknown): SecondBrainLinkKind | undefined {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const normalized = normalizeFreeformSecondBrainToken(value);
   switch (normalized) {
     case 'document':
     case 'article':
@@ -93,6 +138,28 @@ function normalizeLinkKind(value: unknown): SecondBrainLinkKind | undefined {
     case 'file':
     case 'other':
       return normalized;
+    case 'link':
+    case 'url':
+    case 'website':
+    case 'web':
+    case 'resource':
+    case 'bookmark':
+    case 'checklist':
+      return 'reference';
+    case 'repository':
+    case 'github':
+      return 'repo';
+    case 'doc':
+    case 'docs':
+    case 'guide':
+    case 'runbook':
+    case 'manual':
+    case 'pdf':
+      return 'document';
+    case 'blog':
+    case 'news':
+    case 'post':
+      return 'article';
     default:
       return undefined;
   }
@@ -569,7 +636,6 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         properties: {
           status: {
             type: 'string',
-            enum: ['todo', 'in_progress', 'done', 'open'],
           },
           limit: { type: 'number' },
         },
@@ -579,7 +645,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       context.guardAction(request, 'read_file', { path: 'second-brain:tasks' });
       const service = context.getService();
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
-      const status = normalizeTaskStatus(args.status);
+      const status = normalizeTaskStatusFilter(args.status);
       if (args.status != null && !status) {
         return { success: false, error: 'status must be todo, in_progress, done, or open.' };
       }
@@ -608,7 +674,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           id: { type: 'string' },
           title: { type: 'string' },
           details: { type: 'string' },
-          status: { type: 'string', enum: ['todo', 'in_progress', 'done'] },
+          status: { type: 'string' },
           priority: { type: 'string', enum: ['low', 'medium', 'high'] },
           dueAt: { type: 'number' },
         },
@@ -618,8 +684,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       context.guardAction(request, 'write_file', { path: 'second-brain:tasks' });
       const service = context.getService();
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
-      const status = args.status == null ? undefined : normalizeTaskStatus(args.status);
-      if (args.status != null && (!status || status === 'open')) {
+      const status = args.status == null ? undefined : normalizeTaskStatusValue(args.status);
+      if (args.status != null && !status) {
         return { success: false, error: 'status must be todo, in_progress, or done.' };
       }
       const priority = typeof args.priority === 'string'
@@ -1053,7 +1119,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         type: 'object',
         properties: {
           query: { type: 'string' },
-          kind: { type: 'string', enum: ['document', 'article', 'reference', 'repo', 'file', 'other'] },
+          kind: { type: 'string' },
           limit: { type: 'number' },
         },
       },
@@ -1094,7 +1160,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           url: { type: 'string' },
           summary: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
-          kind: { type: 'string', enum: ['document', 'article', 'reference', 'repo', 'file', 'other'] },
+          kind: { type: 'string' },
         },
       },
     },

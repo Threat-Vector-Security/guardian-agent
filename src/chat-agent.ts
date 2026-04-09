@@ -1081,8 +1081,48 @@ function buildDirectHandlerResponseSource(
 }
 
 function extractQuotedText(text: string): string {
-  const match = text.match(/(["'])([\s\S]+?)\1/);
+  const match = matchWithCollapsedWhitespaceFallback(text, /(["'])([\s\S]+?)\1/);
   return match?.[2]?.trim() ?? '';
+}
+
+const SECOND_BRAIN_WRAPPED_WORD_PREFIX_EXCLUSIONS = new Set([
+  'a',
+  'an',
+  'and',
+  'as',
+  'at',
+  'by',
+  'for',
+  'from',
+  'in',
+  'into',
+  'is',
+  'it',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'up',
+  'via',
+  'with',
+]);
+
+function normalizeSecondBrainInlineFieldValue(value: string): string {
+  const repairedWrappedWords = value.replace(
+    /\b([A-Za-z]{3,4})\s*\n\s+([a-z]{2,})\b/g,
+    (_fullMatch, left: string, right: string) => {
+      if (SECOND_BRAIN_WRAPPED_WORD_PREFIX_EXCLUSIONS.has(left.toLowerCase())) {
+        return `${left} ${right}`;
+      }
+      return `${left}${right}`;
+    },
+  );
+  return collapseWhitespaceForSecondBrainParsing(repairedWrappedWords);
+}
+
+function normalizeSecondBrainReadQueryValue(value: string): string {
+  return normalizeSecondBrainInlineFieldValue(value).replace(/^[("'`\s]+|[)"'`.,!?;:\s]+$/g, '').trim();
 }
 
 function extractSecondBrainTextBody(text: string): string {
@@ -1094,8 +1134,8 @@ function extractSecondBrainTextBody(text: string): string {
 }
 
 function extractExplicitNamedSecondBrainTitle(text: string): string {
-  const namedMatch = text.match(/\b(?:called|named|titled)\s*(["'])([\s\S]+?)\1/i);
-  return namedMatch?.[2]?.trim() ?? '';
+  const namedMatch = matchWithCollapsedWhitespaceFallback(text, /\b(?:called|named|titled)\s*(["'])([\s\S]+?)\1/i);
+  return normalizeSecondBrainInlineFieldValue(namedMatch?.[2]?.trim() ?? '');
 }
 
 function extractNamedSecondBrainTitle(text: string): string {
@@ -1103,7 +1143,7 @@ function extractNamedSecondBrainTitle(text: string): string {
   if (explicit) {
     return explicit;
   }
-  return extractQuotedText(text);
+  return normalizeSecondBrainInlineFieldValue(extractQuotedText(text));
 }
 
 function extractQuotedLabeledValue(text: string, labels: string[]): string {
@@ -1111,12 +1151,12 @@ function extractQuotedLabeledValue(text: string, labels: string[]): string {
     .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
   const pattern = new RegExp(`\\b(?:${escaped})\\b(?:\\s+(?:is|to|as|for|with|include|including))?\\s*:?\\s*([\"'])([\\s\\S]+?)\\1`, 'i');
-  const match = text.match(pattern);
+  const match = matchWithCollapsedWhitespaceFallback(text, pattern);
   return match?.[2]?.trim() ?? '';
 }
 
 function extractEmailAddressFromText(text: string): string {
-  const match = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  const match = matchWithCollapsedWhitespaceFallback(text, /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
   return match?.[0]?.trim() ?? '';
 }
 
@@ -1134,7 +1174,7 @@ function extractPhoneNumberFromText(text: string): string {
   if (labeled) {
     return labeled;
   }
-  const match = text.match(/\b(?:phone(?:\s+number)?|mobile(?:\s+number)?|telephone|tel)\b(?:\s+(?:is|to|as|for|with|include|including))?\s*:?[\s"']*([+()\d][\d\s().-]{4,}\d)/i);
+  const match = matchWithCollapsedWhitespaceFallback(text, /\b(?:phone(?:\s+number)?|mobile(?:\s+number)?|telephone|tel)\b(?:\s+(?:is|to|as|for|with|include|including))?\s*:?[\s"']*([+()\d][\d\s().-]{4,}\d)/i);
   return normalizePhoneNumber(match?.[1] ?? '');
 }
 
@@ -1143,8 +1183,27 @@ function extractUrlFromText(text: string): string {
   if (labeled) {
     return labeled;
   }
-  const match = text.match(/\bhttps?:\/\/[^\s"'`<>]+/i);
+  const match = matchWithCollapsedWhitespaceFallback(text, /\bhttps?:\/\/[^\s"'`<>]+/i);
   return match?.[0]?.replace(/[),.;]+$/, '').trim() ?? '';
+}
+
+function collapseWhitespaceForSecondBrainParsing(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function matchWithCollapsedWhitespaceFallback(
+  text: string,
+  pattern: RegExp,
+): RegExpMatchArray | null {
+  const directMatch = text.match(pattern);
+  if (directMatch) {
+    return directMatch;
+  }
+  const collapsed = collapseWhitespaceForSecondBrainParsing(text);
+  if (!collapsed || collapsed === text) {
+    return null;
+  }
+  return collapsed.match(pattern);
 }
 
 const SECOND_BRAIN_PERSON_NAME_IGNORE = new Set([
@@ -1167,25 +1226,32 @@ function isPlausibleSecondBrainPersonName(value: string): boolean {
 }
 
 function extractSecondBrainFallbackPersonName(text: string): string {
-  const labeled = extractQuotedLabeledValue(text, ['name']);
+  const labeled = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(text, ['name']));
   if (isPlausibleSecondBrainPersonName(labeled)) {
     return labeled;
   }
 
+  const candidateTexts = [text];
+  const collapsed = collapseWhitespaceForSecondBrainParsing(text);
+  if (collapsed && collapsed !== text) {
+    candidateTexts.push(collapsed);
+  }
   const patterns = [
     /\b(?:named|called)\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
     /\b(?:person|contact)\b(?:\s+in\s+my\s+second\s+brain\b)?(?:\s*(?:\.{3}|…|[-,:;()]|\s))+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
     /^\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
   ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    const candidate = match?.[1]?.trim() ?? '';
-    if (isPlausibleSecondBrainPersonName(candidate)) {
-      return candidate;
+  for (const candidateText of candidateTexts) {
+    for (const pattern of patterns) {
+      const match = candidateText.match(pattern);
+      const candidate = match?.[1]?.trim() ?? '';
+      if (isPlausibleSecondBrainPersonName(candidate)) {
+        return candidate;
+      }
     }
   }
 
-  const candidates = Array.from(text.matchAll(/\b([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})\b/g))
+  const candidates = Array.from(candidateTexts.join('\n').matchAll(/\b([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})\b/g))
     .map((match) => match[1]?.trim() ?? '')
     .filter(isPlausibleSecondBrainPersonName);
   return candidates[candidates.length - 1] ?? '';
@@ -1194,8 +1260,66 @@ function extractSecondBrainFallbackPersonName(text: string): string {
 function extractSecondBrainPersonRelationship(
   text: string,
 ): 'work' | 'personal' | 'family' | 'vendor' | 'other' | undefined {
-  const match = text.match(/\b(?:relationship|as|mark(?:ed)?\s+as)\s+(?:a\s+)?(work|personal|family|vendor|other)\b/i);
+  const match = matchWithCollapsedWhitespaceFallback(text, /\b(?:relationship|as|mark(?:ed)?\s+as)\s+(?:a\s+)?(work|personal|family|vendor|other)\b/i);
   return match?.[1]?.trim().toLowerCase() as 'work' | 'personal' | 'family' | 'vendor' | 'other' | undefined;
+}
+
+function extractSecondBrainReadTopicQuery(text: string): string {
+  const candidateTexts = [text];
+  const collapsed = collapseWhitespaceForSecondBrainParsing(text);
+  if (collapsed && collapsed !== text) {
+    candidateTexts.push(collapsed);
+  }
+
+  const patterns = [
+    /\b(?:about|for|related to|matching)\b\s*(["'])([\s\S]+?)\1/i,
+    /\b(?:about|for|related to|matching)\b\s+(.+?)(?=$|[.?!])/i,
+  ];
+  for (const candidateText of candidateTexts) {
+    for (const pattern of patterns) {
+      const match = candidateText.match(pattern);
+      const candidate = normalizeSecondBrainReadQueryValue(match?.[2] ?? match?.[1] ?? '');
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+  return '';
+}
+
+function resolveDirectSecondBrainReadQuery(
+  text: string,
+  itemType: string,
+  decision: IntentGatewayDecision,
+): { query: string; exactMatch?: boolean } | null {
+  const explicitQuery = normalizeSecondBrainReadQueryValue(toString(decision.entities.query));
+  if (explicitQuery) {
+    return { query: explicitQuery };
+  }
+
+  switch (itemType) {
+    case 'person': {
+      const quoted = normalizeSecondBrainReadQueryValue(extractQuotedText(text));
+      if (quoted) {
+        return { query: quoted, exactMatch: true };
+      }
+      const named = normalizeSecondBrainReadQueryValue(extractSecondBrainFallbackPersonName(text));
+      if (named) {
+        return { query: named, exactMatch: true };
+      }
+      return null;
+    }
+    case 'library': {
+      const topicQuery = extractSecondBrainReadTopicQuery(text);
+      if (topicQuery) {
+        return { query: topicQuery };
+      }
+      const quoted = normalizeSecondBrainReadQueryValue(extractQuotedText(text));
+      return quoted ? { query: quoted } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 function defaultSecondBrainItemLabel(itemType: DirectSecondBrainMutationItemType): string {
@@ -4427,7 +4551,7 @@ type DirectIntentShadowCandidate =
   }
 
   private async tryDirectSecondBrainRead(
-    _message: UserMessage,
+    message: UserMessage,
     decision?: IntentGatewayDecision,
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
@@ -4487,10 +4611,16 @@ type DirectIntentShadowCandidate =
         };
       }
       case 'library': {
-        const links = this.secondBrainService.listLinks({ limit: 8 });
+        const querySpec = resolveDirectSecondBrainReadQuery(message.content, resolvedItemType, decision);
+        const links = this.secondBrainService.listLinks({
+          limit: 8,
+          ...(querySpec?.query ? { query: querySpec.query } : {}),
+        });
         if (links.length === 0) {
           return {
-            content: 'Second Brain has no saved library items yet.',
+            content: querySpec?.query
+              ? `Second Brain has no library items related to "${querySpec.query}".`
+              : 'Second Brain has no saved library items yet.',
             metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'library'),
           };
         }
@@ -4499,7 +4629,9 @@ type DirectIntentShadowCandidate =
         const items = links.map((link) => ({ id: link.id, label: link.title }));
         return {
           content: [
-          'Library items:',
+          querySpec?.query
+            ? `Library items related to "${querySpec.query}":`
+            : 'Library items:',
           ...links.map((link) => {
             const summary = link.summary?.trim()
               ? `: ${link.summary.trim().slice(0, 120)}${link.summary.trim().length > 120 ? '...' : ''}`
@@ -4673,10 +4805,23 @@ type DirectIntentShadowCandidate =
         };
       }
       case 'person': {
-        const people = this.secondBrainService.listPeople({ limit: 6 });
+        const querySpec = resolveDirectSecondBrainReadQuery(message.content, resolvedItemType, decision);
+        let people = this.secondBrainService.listPeople({
+          limit: 6,
+          ...(querySpec?.query ? { query: querySpec.query } : {}),
+        });
+        if (querySpec?.exactMatch && querySpec.query) {
+          const normalizedExactName = normalizeSecondBrainInlineFieldValue(querySpec.query).toLowerCase();
+          const exactMatches = people.filter((person) => normalizeSecondBrainInlineFieldValue(person.name).toLowerCase() === normalizedExactName);
+          if (exactMatches.length > 0) {
+            people = exactMatches;
+          }
+        }
         if (people.length === 0) {
           return {
-            content: 'Second Brain has no saved people yet.',
+            content: querySpec?.query
+              ? `Second Brain has no people matching "${querySpec.query}".`
+              : 'Second Brain has no saved people yet.',
             metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'person'),
           };
         }
@@ -4685,7 +4830,9 @@ type DirectIntentShadowCandidate =
         const items = people.map((person) => ({ id: person.id, label: person.name }));
         return {
           content: [
-          'People in Second Brain:',
+          querySpec?.query
+            ? `${querySpec.exactMatch ? 'People in Second Brain matching' : 'People in Second Brain related to'} "${querySpec.query}":`
+            : 'People in Second Brain:',
           ...people.map((person) => {
             const parts = [
               person.email?.trim(),
@@ -5081,7 +5228,11 @@ type DirectIntentShadowCandidate =
     decision: IntentGatewayDecision,
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    const content = extractSecondBrainTextBody(message.content);
+    const explicitTitle = normalizeSecondBrainInlineFieldValue(
+      extractQuotedLabeledValue(message.content, ['title']) || extractExplicitNamedSecondBrainTitle(message.content),
+    );
+    const explicitContent = extractQuotedLabeledValue(message.content, ['content']);
+    const content = explicitContent || extractSecondBrainTextBody(message.content);
     const focused = readSecondBrainFocusContinuationState(continuityThread);
     const noteFocus = getSecondBrainFocusEntry(focused, 'note');
     const focusItem = noteFocus
@@ -5100,7 +5251,10 @@ type DirectIntentShadowCandidate =
           userKey,
           decision,
           toolName: 'second_brain_note_upsert',
-          args: { content },
+          args: {
+            ...(explicitTitle ? { title: explicitTitle } : {}),
+            content,
+          },
           summary: 'Creates a local Second Brain note.',
           pendingIntro: 'I prepared a local note save, but it needs approval first.',
           successDescriptor: {
@@ -5125,7 +5279,7 @@ type DirectIntentShadowCandidate =
           toolName: 'second_brain_note_upsert',
           args: {
             id: focusItem.id,
-            ...(focusItem.label ? { title: focusItem.label } : {}),
+            ...(explicitTitle || focusItem.label ? { title: explicitTitle || focusItem.label } : {}),
             content,
           },
           summary: 'Updates a local Second Brain note.',
@@ -5411,9 +5565,11 @@ type DirectIntentShadowCandidate =
     const focusItem = libraryFocus
       ? libraryFocus.items.find((item) => item.id === libraryFocus.focusId) ?? null
       : null;
-    const explicitTitle = extractQuotedLabeledValue(message.content, ['title']);
+    const explicitTitle = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title']));
     const explicitUrl = extractUrlFromText(message.content);
-    const explicitSummary = extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description']);
+    const explicitSummary = collapseWhitespaceForSecondBrainParsing(
+      extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description']),
+    );
 
     switch (decision.operation) {
       case 'create':
@@ -5618,15 +5774,20 @@ type DirectIntentShadowCandidate =
     const focusItem = personFocus
       ? personFocus.items.find((item) => item.id === personFocus.focusId) ?? null
       : null;
-    const explicitName = extractQuotedLabeledValue(message.content, ['name']) || extractExplicitNamedSecondBrainTitle(message.content);
+    const explicitName = normalizeSecondBrainInlineFieldValue(
+      extractQuotedLabeledValue(message.content, ['name']) || extractExplicitNamedSecondBrainTitle(message.content),
+    );
     const explicitEmail = extractEmailAddressFromText(message.content);
     const explicitPhone = extractPhoneNumberFromText(message.content);
-    const explicitTitle = extractQuotedLabeledValue(message.content, ['title']);
-    const explicitCompany = extractQuotedLabeledValue(message.content, ['company']);
-    const explicitLocation = extractQuotedLabeledValue(message.content, ['location']);
-    const explicitNotes = /\b(?:note|notes|saying|say|says|write|content)\b/i.test(message.content)
-      ? extractSecondBrainTextBody(message.content)
-      : '';
+    const explicitTitle = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title']));
+    const explicitCompany = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['company']));
+    const explicitLocation = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['location']));
+    const explicitNotes = collapseWhitespaceForSecondBrainParsing(
+      extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description'])
+      || (/\b(?:saying|say|says|write|content)\b/i.test(message.content)
+        ? extractSecondBrainTextBody(message.content)
+        : ''),
+    );
     const explicitRelationship = extractSecondBrainPersonRelationship(message.content);
 
     switch (decision.operation) {

@@ -265,6 +265,119 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.personalItemType).toBe('task');
   });
 
+  it('repairs a misrouted multiline task create into personal assistant work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create a task called "Send Harbor launch review deck" due   \n  April 9, 2026 at 4 PM.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-repair-task-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'medium',
+            operation: 'create',
+            summary: 'Creates something for the user.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('task');
+  });
+
+  it('repairs a misrouted multiline library save into personal assistant work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Save this link in my library with title "Harbor launch checklist", url "https://example.com", and notes "Reference for the\nHarbor launch review."',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-repair-library-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'unknown',
+            confidence: 'low',
+            operation: 'save',
+            summary: 'Unsure.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('save');
+    expect(result.decision.entities.personalItemType).toBe('library');
+  });
+
+  it('repairs a misrouted library query into a direct Second Brain read with a search query', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show my library items about Harbor.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-repair-library-read-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'medium',
+            operation: 'unknown',
+            summary: 'Unsure.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('library');
+    expect(result.decision.entities.query).toBe('Harbor');
+  });
+
+  it('repairs a misrouted person lookup into a direct Second Brain read with a search query', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Find the person "Jordan Lee" in my Second Brain.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Unsure.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('search');
+    expect(result.decision.entities.personalItemType).toBe('person');
+    expect(result.decision.entities.query).toBe('Jordan Lee');
+  });
+
   it('captures local Second Brain calendar targeting for unqualified calendar CRUD', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -829,7 +942,9 @@ describe('IntentGateway', () => {
     expect(primaryPrompt).toContain('Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.');
     expect(primaryPrompt).toContain('Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.');
+    expect(primaryPrompt).toContain('Example: "Show my library items about Harbor." -> route=personal_assistant_task, operation=read, personalItemType=library, query="Harbor".');
     expect(primaryPrompt).toContain('Example: "Show the people in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.');
+    expect(primaryPrompt).toContain('Example: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Jordan Lee".');
     expect(primaryPrompt).toContain('Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.');
     expect(primaryPrompt).toContain('Example: "What routines are related to email or inbox processing?" -> route=personal_assistant_task, operation=read, personalItemType=routine, query="email or inbox processing".');
     expect(primaryPrompt).toContain('Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.');
@@ -848,7 +963,9 @@ describe('IntentGateway', () => {
     expect(fallbackPrompt).toContain('Examples: "Give me a concise plan for organizing my week." -> route="general_assistant", operation="inspect"');
     expect(fallbackPrompt).toContain('Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".');
     expect(fallbackPrompt).toContain('Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".');
+    expect(fallbackPrompt).toContain('Examples: "Show my library items about Harbor." -> route="personal_assistant_task", operation="read", personalItemType="library", query="Harbor".');
     expect(fallbackPrompt).toContain('Examples: "Show the people in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".');
+    expect(fallbackPrompt).toContain('Examples: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Jordan Lee".');
     expect(fallbackPrompt).toContain('Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.');
     expect(fallbackPrompt).toContain('Examples: "What routines are related to email or inbox processing?" -> route="personal_assistant_task", operation="read", personalItemType="routine", query="email or inbox processing".');
     expect(fallbackPrompt).toContain('Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.');

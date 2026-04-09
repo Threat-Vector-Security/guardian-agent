@@ -405,8 +405,10 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Show my tasks." -> route=personal_assistant_task, operation=read, personalItemType=task.',
   'Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.',
   'Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.',
+  'Example: "Show my library items about Harbor." -> route=personal_assistant_task, operation=read, personalItemType=library, query="Harbor".',
   'Example: "Show my briefs." -> route=personal_assistant_task, operation=read, personalItemType=brief.',
   'Example: "Show the people in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.',
+  'Example: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Jordan Lee".',
   'Example: "Show my routines." -> route=personal_assistant_task, operation=read, personalItemType=routine.',
   'Example: "Show only my enabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=true.',
   'Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.',
@@ -512,8 +514,10 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Show my tasks." -> route="personal_assistant_task", operation="read", personalItemType="task".',
   'Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".',
   'Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".',
+  'Examples: "Show my library items about Harbor." -> route="personal_assistant_task", operation="read", personalItemType="library", query="Harbor".',
   'Examples: "Show my briefs." -> route="personal_assistant_task", operation="read", personalItemType="brief".',
   'Examples: "Show the people in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".',
+  'Examples: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Jordan Lee".',
   'Examples: "Show my routines." -> route="personal_assistant_task", operation="read", personalItemType="routine".',
   'Examples: "Show only my enabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=true.',
   'Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.',
@@ -771,6 +775,8 @@ export function shouldReusePreRoutedIntentGateway(
 
 function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: string): ChatMessage[] {
   const channelLabel = input.channel?.trim() || 'unknown';
+  const rawRequest = input.content.trim();
+  const normalizedRequest = collapseIntentGatewayWhitespace(rawRequest);
   const historySection = input.recentHistory && input.recentHistory.length > 0
     ? [
         'Recent conversation:',
@@ -824,10 +830,13 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
         codingBackendSection.trimEnd(),
         'Classify this request.',
         '',
+        normalizedRequest && normalizedRequest !== rawRequest
+          ? `Whitespace-normalized request: ${normalizedRequest}`
+          : '',
         historySection,
         pendingActionSection,
         continuitySection,
-        input.content.trim(),
+        rawRequest,
       ].filter(Boolean).join('\n'),
     },
   ];
@@ -996,7 +1005,7 @@ function normalizeIntentGatewayDecision(
     : undefined;
   const query = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
-    : inferRoutineQuery(repairContext?.sourceContent, route, operation, personalItemType);
+    : inferSecondBrainQuery(repairContext?.sourceContent, route, operation, personalItemType);
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
@@ -1549,11 +1558,14 @@ function repairIntentGatewayRoute(
   if (route === 'personal_assistant_task') {
     return route;
   }
-  const sourceContent = repairContext?.sourceContent?.trim() ?? '';
+  const sourceContent = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
   if (mentionsAutomationControlTerms(sourceContent)) {
     return route;
   }
   if (isExplicitSecondBrainRoutineRequest(sourceContent, operation)) {
+    return 'personal_assistant_task';
+  }
+  if (isExplicitSecondBrainEntityRequest(sourceContent, operation)) {
     return 'personal_assistant_task';
   }
   if ((turnRelation === 'follow_up' || turnRelation === 'clarification_answer')
@@ -1574,16 +1586,16 @@ function repairIntentGatewayOperation(
   repairContext: IntentGatewayRepairContext | undefined,
 ): IntentGatewayOperation {
   if (turnRelation !== 'clarification_answer' && turnRelation !== 'correction') {
-    return operation;
+    return inferSecondBrainOperation(repairContext?.sourceContent, route, operation) ?? operation;
   }
   const pendingAction = repairContext?.pendingAction;
   if (!pendingAction) {
-    return operation;
+    return inferSecondBrainOperation(repairContext?.sourceContent, route, operation) ?? operation;
   }
   const pendingRoute = normalizeRoute(pendingAction.route);
   const pendingOperation = normalizeOperation(pendingAction.operation);
   if (pendingRoute !== route || pendingOperation === 'unknown') {
-    return operation;
+    return inferSecondBrainOperation(repairContext?.sourceContent, route, operation) ?? operation;
   }
   return pendingOperation;
 }
@@ -1597,7 +1609,7 @@ function inferRoutineEnabledFilter(
   if (route !== 'personal_assistant_task' || operation !== 'read' || personalItemType !== 'routine') {
     return undefined;
   }
-  const normalized = content?.trim().toLowerCase() ?? '';
+  const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return undefined;
   if (/\bdisabled routines?\b/.test(normalized) || /\bpaused routines?\b/.test(normalized)) {
     return false;
@@ -1620,7 +1632,7 @@ function inferSecondBrainPersonalItemType(
   if (routineItemType) {
     return routineItemType;
   }
-  const primaryNormalized = repairContext?.sourceContent?.trim().toLowerCase() ?? '';
+  const primaryNormalized = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
   const primaryMatch = inferSecondBrainPersonalItemTypeFromText(primaryNormalized, operation);
   if (primaryMatch) {
     return primaryMatch;
@@ -1632,16 +1644,15 @@ function inferSecondBrainPersonalItemType(
 function buildSecondBrainContextRepairText(
   repairContext: IntentGatewayRepairContext | undefined,
 ): string {
-  return [
+  const contextualText = [
     repairContext?.pendingAction?.originalRequest,
     repairContext?.pendingAction?.prompt,
     repairContext?.continuity?.lastActionableRequest,
     repairContext?.continuity?.focusSummary,
   ]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    .join('\n')
-    .trim()
-    .toLowerCase();
+    .join('\n');
+  return normalizeIntentGatewayRepairText(contextualText);
 }
 
 function inferSecondBrainPersonalItemTypeFromText(
@@ -1699,7 +1710,7 @@ function inferRoutinePersonalItemType(
     return undefined;
   }
   const content = repairContext?.sourceContent;
-  const normalized = content?.trim().toLowerCase() ?? '';
+  const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return undefined;
   if (isExplicitSecondBrainRoutineRequest(normalized, operation)
     || pendingActionSuggestsRoutine(repairContext)
@@ -1709,19 +1720,100 @@ function inferRoutinePersonalItemType(
   return undefined;
 }
 
-function inferRoutineQuery(
+function inferSecondBrainQuery(
   content: string | undefined,
   route: IntentGatewayRoute,
   operation: IntentGatewayOperation,
   personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
 ): string | undefined {
-  if (route !== 'personal_assistant_task' || operation !== 'read' || personalItemType !== 'routine') {
+  if (route !== 'personal_assistant_task' || !['inspect', 'read', 'search'].includes(operation)) {
     return undefined;
   }
-  const normalized = content?.trim() ?? '';
+  if (personalItemType === 'routine') {
+    return inferRoutineQuery(content);
+  }
+  if (personalItemType === 'library') {
+    return inferLibraryReadQuery(content);
+  }
+  if (personalItemType === 'person') {
+    return inferPersonReadQuery(content);
+  }
+  return undefined;
+}
+
+function inferRoutineQuery(
+  content: string | undefined,
+): string | undefined {
+  const normalized = collapseIntentGatewayWhitespace(content ?? '');
   if (!normalized) return undefined;
   const relatedMatch = normalized.match(/\brelated\s+to\s+(.+?)(?:[.?!]|$)/i);
   return relatedMatch?.[1]?.trim() || undefined;
+}
+
+function inferLibraryReadQuery(content: string | undefined): string | undefined {
+  const collapsed = collapseIntentGatewayWhitespace(content ?? '');
+  if (!collapsed) return undefined;
+  const aboutMatch = collapsed.match(/\babout\s+(.+?)(?:[.?!]|$)/i);
+  if (aboutMatch?.[1]?.trim()) {
+    return aboutMatch[1].trim();
+  }
+  const relatedMatch = collapsed.match(/\brelated\s+to\s+(.+?)(?:[.?!]|$)/i);
+  if (relatedMatch?.[1]?.trim()) {
+    return relatedMatch[1].trim();
+  }
+  const quotedMatch = collapsed.match(/["']([^"']+)["']/);
+  return quotedMatch?.[1]?.trim() || undefined;
+}
+
+function inferPersonReadQuery(content: string | undefined): string | undefined {
+  const collapsed = collapseIntentGatewayWhitespace(content ?? '');
+  if (!collapsed) return undefined;
+  const quotedMatch = collapsed.match(/["']([^"']+)["']/);
+  if (quotedMatch?.[1]?.trim()) {
+    return quotedMatch[1].trim();
+  }
+  const namedMatch = collapsed.match(/\b(?:person|contact)\b(?:\s+named)?\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:in my second brain|$|[.?!]))/);
+  if (namedMatch?.[1]?.trim()) {
+    return namedMatch[1].trim();
+  }
+  return undefined;
+}
+
+function inferSecondBrainOperation(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+): IntentGatewayOperation | undefined {
+  if (route !== 'personal_assistant_task') {
+    return undefined;
+  }
+  if (operation !== 'unknown' && operation !== 'navigate') {
+    return undefined;
+  }
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return undefined;
+  if (/\b(?:delete|remove|erase)\b/.test(normalized)) {
+    return 'delete';
+  }
+  if (/\b(?:update|edit|change|rename|move|mark)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\bsave\b/.test(normalized)) {
+    return 'save';
+  }
+  if (/\b(?:create|add)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (/\b(?:find|search|look up|lookup|look through)\b/.test(normalized)) {
+    return 'search';
+  }
+  if (/\b(?:show|list|what|which|view)\b/.test(normalized)) {
+    return 'read';
+  }
+  if (/\b(?:overview|summarize|summary|due today|today)\b/.test(normalized)) {
+    return 'inspect';
+  }
+  return undefined;
 }
 
 function normalizePersonalItemType(
@@ -1779,7 +1871,7 @@ function normalizeCodingBackend(value: unknown): string | undefined {
 }
 
 function mentionsAutomationControlTerms(content: string | undefined): boolean {
-  const normalized = content?.trim().toLowerCase() ?? '';
+  const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
   return /\bautomation\b/.test(normalized)
     || /\bworkflow\b/.test(normalized)
@@ -1809,7 +1901,7 @@ function isExplicitSecondBrainRoutineRequest(
   content: string | undefined,
   operation: IntentGatewayOperation,
 ): boolean {
-  const normalized = content?.trim().toLowerCase() ?? '';
+  const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
   if (containsSecondBrainRoutineConcept(normalized)) {
     return true;
@@ -1825,6 +1917,33 @@ function isExplicitSecondBrainRoutineRequest(
     return true;
   }
   return false;
+}
+
+function isExplicitSecondBrainEntityRequest(
+  content: string | undefined,
+  operation: IntentGatewayOperation,
+): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  const personalItemType = inferSecondBrainPersonalItemTypeFromText(normalized, operation);
+  if (!personalItemType || personalItemType === 'routine') {
+    return false;
+  }
+  if (/\b(?:google calendar|outlook calendar|microsoft 365 calendar|gmail|outlook|google workspace|microsoft 365|office 365|google docs?|google sheets?|google drive|onedrive|sharepoint|teams)\b/.test(normalized)) {
+    return false;
+  }
+  if (['create', 'update', 'delete', 'save'].includes(operation)) {
+    return true;
+  }
+  return /\b(?:second brain|my tasks?|my notes?|my library|my briefs?|my calendar|my events?|my people|my contacts?|people in my second brain|contacts? in my second brain)\b/.test(normalized);
+}
+
+function normalizeIntentGatewayRepairText(content: string | undefined): string {
+  return collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
+}
+
+function collapseIntentGatewayWhitespace(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
 }
 
 function pendingActionSuggestsRoutine(

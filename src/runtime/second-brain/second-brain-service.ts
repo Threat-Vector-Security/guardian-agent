@@ -1070,6 +1070,36 @@ function normalizeLinkKind(rawValue: unknown): SecondBrainLinkUpsertInput['kind'
   return undefined;
 }
 
+function normalizeTaskStatus(rawValue: unknown): SecondBrainTaskUpsertInput['status'] | undefined {
+  const normalized = typeof rawValue === 'string'
+    ? rawValue.trim().toLowerCase().replace(/[\s-]+/g, '_')
+    : '';
+  switch (normalized) {
+    case 'todo':
+    case 'to_do':
+    case 'not_started':
+    case 'notstarted':
+    case 'open':
+    case 'pending':
+    case 'outstanding':
+      return 'todo';
+    case 'in_progress':
+    case 'inprogress':
+    case 'progress':
+    case 'doing':
+    case 'started':
+      return 'in_progress';
+    case 'done':
+    case 'complete':
+    case 'completed':
+    case 'finished':
+    case 'closed':
+      return 'done';
+    default:
+      return undefined;
+  }
+}
+
 export class SecondBrainService {
   private readonly store: SecondBrainStore;
   private readonly now: () => number;
@@ -1160,10 +1190,14 @@ export class SecondBrainService {
     if (!input.title.trim()) {
       throw new Error('Task title is required.');
     }
+    const normalizedStatus = input.status == null ? undefined : normalizeTaskStatus(input.status);
     return this.store.tasks.upsertTask({
-      ...input,
+      ...(input.id ? { id: input.id } : {}),
       title: input.title.trim(),
       details: input.details?.trim() || undefined,
+      ...(input.priority ? { priority: input.priority } : {}),
+      ...(Object.prototype.hasOwnProperty.call(input, 'dueAt') ? { dueAt: input.dueAt } : {}),
+      ...(normalizedStatus ? { status: normalizedStatus } : {}),
     });
   }
 

@@ -14,6 +14,8 @@ import { ConversationService } from '../runtime/conversation.js';
 import { SHARED_TIER_AGENT_STATE_ID } from '../runtime/agent-state-context.js';
 import { CodeSessionStore } from '../runtime/code-sessions.js';
 import { AutomationOutputStore } from '../runtime/automation-output-store.js';
+import { SecondBrainStore } from '../runtime/second-brain/second-brain-store.js';
+import { SecondBrainService } from '../runtime/second-brain/second-brain-service.js';
 import {
   WorkspaceDependencyLedger,
   captureJsDependencySnapshot,
@@ -4893,6 +4895,55 @@ describe('ToolExecutor', () => {
       argsPreview: '{"id":"scheduled-review:board-prep","templateId":"scheduled-review","name":"Friday Board Review"}',
       actionLabel: 'update Second Brain routine "Friday Board Review"',
     });
+  });
+
+  it('accepts normalized Second Brain task statuses and library kinds before tool execution', async () => {
+    const root = createExecutorRoot();
+    const sqlitePath = join(root, 'second-brain.sqlite');
+    const store = new SecondBrainStore({ sqlitePath, now: () => 1_710_000_000_000 });
+    const secondBrainService = new SecondBrainService(store, { now: () => 1_710_000_000_000 });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      secondBrainService,
+    });
+
+    try {
+      const taskRun = await executor.runTool({
+        toolName: 'second_brain_task_upsert',
+        args: {
+          title: 'Schema normalization smoke test',
+          status: 'open',
+        },
+        origin: 'web',
+      });
+      expect(taskRun.success).toBe(true);
+      expect(taskRun.output).toMatchObject({
+        title: 'Schema normalization smoke test',
+        status: 'todo',
+      });
+
+      const linkRun = await executor.runTool({
+        toolName: 'second_brain_library_upsert',
+        args: {
+          title: 'Schema normalization bookmark',
+          url: 'https://example.com',
+          kind: 'bookmark',
+        },
+        origin: 'web',
+      });
+      expect(linkRun.success).toBe(true);
+      expect(linkRun.output).toMatchObject({
+        title: 'Schema normalization bookmark',
+        kind: 'reference',
+      });
+    } finally {
+      store.close();
+    }
   });
 
   it('runs saved automations immediately through automation_run', async () => {

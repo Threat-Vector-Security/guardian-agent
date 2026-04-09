@@ -802,6 +802,53 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).not.toContain('Second Brain overview:');
   });
 
+  it('filters direct Second Brain library reads by a query derived from the user message', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const listLinks = vi.fn((filter?: Record<string, unknown>) => {
+      expect(filter).toMatchObject({ limit: 8, query: 'Harbor' });
+      return [{
+        id: 'link-1',
+        title: 'Harbor launch checklist',
+        kind: 'reference',
+        url: 'https://example.com/',
+        summary: 'Reference for the Harbor launch review.',
+      }];
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = { listLinks };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-library-query',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my library items about Harbor.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads library items related to Harbor.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'library' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Library items related to "Harbor":');
+    expect(content).toContain('Harbor launch checklist [reference] - https://example.com/');
+  });
+
   it('formats direct Second Brain brief reads as saved briefs instead of falling back to overview', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -1019,6 +1066,61 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).toContain('Follow-Up Watch');
     expect(content).not.toContain('Morning Brief');
     expect(content).not.toContain('Second Brain overview:');
+  });
+
+  it('filters direct Second Brain person reads to the requested quoted name', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const listPeople = vi.fn((filter?: Record<string, unknown>) => {
+      expect(filter).toMatchObject({ limit: 6, query: 'Jordan Lee' });
+      return [
+        {
+          id: 'person-1',
+          name: 'Jordan Lee',
+          email: 'jordan.lee@example.com',
+          title: 'Design Lead',
+          company: 'Harbor Labs',
+        },
+        {
+          id: 'person-2',
+          name: 'VentraIP Australia',
+          email: 'noreply@ventraip.com.au',
+        },
+      ];
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = { listPeople };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-person-query',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Find the person "Jordan Lee" in my Second Brain.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads the requested person in Second Brain.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'person' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('People in Second Brain matching "Jordan Lee":');
+    expect(content).toContain('Jordan Lee - jordan.lee@example.com · Design Lead · Harbor Labs');
+    expect(content).not.toContain('VentraIP Australia');
   });
 
   it('keeps meeting prep routine retrieval scoped to the pre-meeting routine', async () => {
@@ -2853,6 +2955,68 @@ describe('LLMChatAgent direct intent metadata', () => {
     }
   });
 
+  it('creates a titled local Second Brain note directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_note_upsert');
+        expect(args).toMatchObject({
+          title: 'Second Brain write smoke test note',
+          content: 'Second Brain write smoke test note.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'note-create-1',
+            title: 'Second Brain write smoke test note',
+            content: 'Second Brain write smoke test note.',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-note-create',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Use Second Brain to create a note titled "Second Brain write smoke test note" with content "Second Brain write smoke test note."',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'save',
+        confidence: 'high',
+        summary: 'Creates a local note.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'note' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Note created: Second Brain write smoke test note');
+  });
+
   it('updates the focused Second Brain note directly instead of falling through to briefs', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -3218,6 +3382,73 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect((result as { content: string }).content).toBe('Person created: Jordan Lee');
   });
 
+  it('creates a local Second Brain person directly from pasted multiline fields', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_person_upsert');
+        expect(args).toMatchObject({
+          name: 'Jordan Lee',
+          email: 'jordan.lee@example.com',
+          title: 'Design Lead',
+          company: 'Harbor Labs',
+          notes: 'Owner for the Harbor launch review.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'person-multiline',
+            name: 'Jordan Lee',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-person-create-multiline',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a person in my Second Brain named "Jordan Lee" with  \n  email "jordan.lee@example.com", title "Design Lead", company   \n  "Harbor Labs", and notes "Owner for the Harbor launch review."',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a local person.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'person' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Person created: Jordan Lee');
+  });
+
   it('creates a clarification pending action when person create is missing both name and email', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -3359,6 +3590,72 @@ describe('LLMChatAgent direct intent metadata', () => {
         focusId: 'link-1',
       },
     });
+  });
+
+  it('creates a local Second Brain library item directly from pasted multiline fields with a wrapped title fragment', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_library_upsert');
+        expect(args).toMatchObject({
+          title: 'Harbor launch checklist',
+          url: 'https://example.com',
+          summary: 'Reference for the Harbor launch review.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'link-multiline',
+            title: 'Harbor launch checklist',
+            url: 'https://example.com/',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getLinkById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-library-create-multiline',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Save this link in my library with title "Harbor launch chec \n  klist", url "https://example.com", and notes "Reference for the\nHarbor launch review."',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'save',
+        confidence: 'high',
+        summary: 'Creates a local library item.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'library' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Library item created: Harbor launch checklist');
   });
 
   it('updates the focused Second Brain person directly', async () => {
@@ -3531,6 +3828,70 @@ describe('LLMChatAgent direct intent metadata', () => {
         ],
       },
     });
+  });
+
+  it('creates a local Second Brain task directly from a pasted multiline prompt', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_task_upsert');
+        expect(args).toMatchObject({
+          title: 'Send Harbor launch review deck',
+          dueAt: expect.any(Number),
+        });
+        return {
+          success: true,
+          output: {
+            id: 'task-created',
+            title: 'Send Harbor launch review deck',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getTaskById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-task-create-multiline',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a task called "Send Harbor launch review deck" due   \n  April 9, 2026 at 4 PM.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a local task.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'task' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Task created: Send Harbor launch review deck');
   });
 
   it('marks the focused Second Brain task done directly', async () => {
