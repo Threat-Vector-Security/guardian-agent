@@ -1363,6 +1363,7 @@ const DEFAULT_CODING_BACKENDS_CONFIG: NonNullable<GuardianAgentConfig['assistant
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   const llm: Record<string, {
     provider: string;
+    enabled?: boolean;
     model: string;
     baseUrl?: string;
     credentialRef?: string;
@@ -1376,6 +1377,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   for (const [name, cfg] of Object.entries(config.llm)) {
     llm[name] = {
       provider: cfg.provider,
+      enabled: cfg.enabled,
       model: cfg.model,
       baseUrl: cfg.baseUrl,
       credentialRef: cfg.credentialRef,

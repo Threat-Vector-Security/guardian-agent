@@ -468,6 +468,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     model: 'coding-harness-model',
+    providerType: 'ollama',
     mode: 'fake',
     close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };

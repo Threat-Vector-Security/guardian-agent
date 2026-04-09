@@ -36,7 +36,11 @@ export function createProvider(config: LLMConfig): LLMProvider {
 export function createProviders(
   configs: Record<string, LLMConfig>,
 ): Map<string, LLMProvider> {
-  return getProviderRegistry().createProviders(configs);
+  return getProviderRegistry().createProviders(
+    Object.fromEntries(
+      Object.entries(configs).filter(([, config]) => config.enabled !== false),
+    ),
+  );
 }
 
 /**
@@ -48,11 +52,13 @@ export function createFailoverProvider(
   failoverConfig?: FailoverConfig,
 ): FailoverProvider {
   const registry = getProviderRegistry();
-  const providerEntries = Object.entries(configs).map(([name, config]) => ({
-    name,
-    provider: registry.createProvider(config),
-    priority: config.priority ?? 10,
-  }));
+  const providerEntries = Object.entries(configs)
+    .filter(([, config]) => config.enabled !== false)
+    .map(([name, config]) => ({
+      name,
+      provider: registry.createProvider(config),
+      priority: config.priority ?? 10,
+    }));
 
   return new FailoverProvider(providerEntries, {
     failureThreshold: failoverConfig?.failureThreshold ?? 3,

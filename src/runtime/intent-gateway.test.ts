@@ -327,6 +327,203 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.personalItemType).toBe('routine');
   });
 
+  it('repairs missing personalItemType for natural-language scheduled review creation requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create a review for Board prep every Friday at 4 pm.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Creates a scheduled review routine.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+  });
+
+  it('repairs missing personalItemType for natural-language task creation requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create a task called "Send Harbor launch review deck" due April 9, 2026 at 4 PM.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Creates a local task.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('task');
+  });
+
+  it('repairs missing personalItemType for natural-language note saves', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Save a note titled "Harbor launch review notes" with content "Finalize launch metrics."',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'save',
+          summary: 'Saves a local note.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('save');
+    expect(result.decision.entities.personalItemType).toBe('note');
+  });
+
+  it('repairs missing personalItemType for natural-language library saves', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Save this link in my library with title "Harbor launch checklist", url "https://example.com".',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'save',
+          summary: 'Saves a local library item.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('save');
+    expect(result.decision.entities.personalItemType).toBe('library');
+  });
+
+  it('repairs misclassified routine follow-up updates away from automation control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Update that routine to run every Friday at 5 pm.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Updates an existing automation.',
+          automationName: 'Board prep review',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+    expect(result.decision.entities.automationName).toBeUndefined();
+  });
+
+  it('repairs routine clarification answers back onto the pending Second Brain route', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Friday Board Review',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-routine-name',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'name',
+          route: 'personal_assistant_task',
+          operation: 'create',
+          prompt: 'What should I call this Second Brain routine?',
+          originalRequest: 'Create a review for Board prep every Friday at 4 pm.',
+          transferPolicy: 'origin_surface_only',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Names the thing to update.',
+          turnRelation: 'clarification_answer',
+          automationName: 'Friday Board Review',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+  });
+
+  it('repairs personal-assistant clarification answers back onto the pending Second Brain person route', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Angela Lee ... phone number 0887 895 687',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-person-identity',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'person_identity',
+          route: 'personal_assistant_task',
+          operation: 'create',
+          prompt: 'To create a local person, I need at least a name or email address.',
+          originalRequest: 'Create a person in my Second Brain.',
+          transferPolicy: 'origin_surface_only',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Provides the missing person details.',
+          turnRelation: 'clarification_answer',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('person');
+  });
+
   it('repairs missing enabled=false for disabled routine reads from the source request', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

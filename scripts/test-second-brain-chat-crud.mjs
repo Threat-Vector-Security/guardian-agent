@@ -10,6 +10,7 @@ import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollam
 
 const FAKE_MODEL_NAME = 'second-brain-chat-crud-harness-model';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const GENERIC_INTERNAL_ERROR = 'Internal server error';
 
 function printHelp() {
   console.log([
@@ -100,6 +101,10 @@ function createTextPayload(content) {
     model: FAKE_MODEL_NAME,
     content,
   });
+}
+
+function formatErrorForLog(error) {
+  return error instanceof Error ? error.stack || error.message : String(error);
 }
 
 async function readJsonBody(req) {
@@ -503,8 +508,9 @@ async function startFakeProvider(steps, scenarioLog) {
         res.end(JSON.stringify(createTextPayload('Second Brain chat CRUD harness provider response.')));
         return;
       } catch (error) {
+        console.error('[second-brain-chat-crud] fake provider request failed', req.method, url.pathname, formatErrorForLog(error));
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        res.end(JSON.stringify({ error: GENERIC_INTERNAL_ERROR }));
         return;
       }
     }
@@ -1430,6 +1436,6 @@ guardian:
 }
 
 runHarness().catch((error) => {
-  console.error(error instanceof Error ? error.stack || error.message : String(error));
+  console.error(formatErrorForLog(error));
   process.exit(1);
 });

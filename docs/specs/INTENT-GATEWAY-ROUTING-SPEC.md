@@ -71,6 +71,8 @@ The gateway returns an `IntentGatewayRecord` with:
 - `latencyMs`
 - `decision`
 
+The gateway function signature accepts an `AbortSignal` propagated from the channel, allowing the underlying LLM provider fetch to be aborted mid-flight if the user cancels the request.
+
 The `decision` is structured and includes:
 - `route`
 - `confidence`
@@ -268,11 +270,13 @@ The gateway no longer hands control directly from route classification to a sing
 
 ```text
 IntentGateway decision
-  -> local/external tier routing
+  -> request-scoped provider override, if any
+  -> otherwise local/external tier routing
   -> deterministic execution-profile selection
      using:
+       - explicit web chat provider override, if any
        - forced chat mode, if any
-       - configured providers
+       - enabled configured providers
        - configured routed defaults
        - operator auto-selection policy
        - managed-cloud role bindings, when Layer 4 is selected
@@ -284,10 +288,16 @@ IntentGateway decision
 Rules:
 - the gateway must not emit raw provider names or model names
 - provider/model-profile choice is deterministic server-side policy, not an LLM self-selection task
+- an explicit web chat provider selection is a request-scoped hard override to one enabled provider profile and does not persist back into global routing config
 - forced chat modes remain hard overrides for `local`, `managed cloud`, and `frontier`
+- disabled provider profiles are ignored by default derivation, managed-cloud role selection, execution-profile selection, and per-request fallback order
 - in `auto`, Guardian may choose `frontier` as the first execution profile for harder repo-grounded or security-heavy work instead of always trying managed cloud first
 - when `managed cloud` is selected, provider choice inside that tier may use operator-managed role bindings for direct answers, tool loops, managed-cloud coding, and general fallback
+- direct-assistant routes such as `personal_assistant_task`, `memory_task`, `ui_control`, and `coding_session_control` should prefer the managed-cloud `direct` role when they must leave the local tier instead of inheriting a tools profile solely from `preferredAnswerPath=tool_loop`
+- low-confidence `unknown` or `general_assistant` gateway outcomes should avoid over-specialized managed-cloud role selection and prefer the managed-cloud `general` profile when available
 - request-scoped execution-profile metadata is attached to the routed message and reused by runtime dispatch and brokered workers
+- request-scoped explicit-provider turns still use the shared orchestration path, gateway trace, execution-profile metadata, and fallback-order machinery instead of bypassing dispatch
+- explicit-agent web chat dispatch still prepares and carries that execution-profile metadata so direct-handler replies can show the exact routed managed-cloud profile and model instead of collapsing to only the provider family
 
 Current trace stages for this slice:
 - `gateway_classified`

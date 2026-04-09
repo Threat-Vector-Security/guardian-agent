@@ -217,4 +217,53 @@ describe('AssistantOrchestrator', () => {
     expect(trace.steps.some((step) => step.name === 'input_validated' && step.status === 'succeeded')).toBe(true);
     expect(trace.steps.some((step) => step.name === 'provider_chat' && step.status === 'succeeded')).toBe(true);
   });
+
+  it('tracks the active response source on the session snapshot', async () => {
+    const orchestrator = new AssistantOrchestrator();
+
+    await orchestrator.dispatch(
+      {
+        agentId: 'default',
+        userId: 'owner',
+        channel: 'web',
+        content: 'trace source',
+        requestType: 'chat',
+        selectedResponseSource: {
+          locality: 'external',
+          providerName: 'ollama_cloud',
+          providerProfileName: 'ollama-cloud-coding',
+          providerTier: 'managed_cloud',
+          model: 'qwen3-coder-next',
+          usedFallback: false,
+        },
+      },
+      async (ctx) => {
+        ctx.addNode({
+          kind: 'provider_call',
+          name: 'Model response: anthropic • claude-opus-4.6',
+          startedAt: 100,
+          completedAt: 120,
+          status: 'succeeded',
+          metadata: {
+            responseSource: {
+              locality: 'external',
+              providerName: 'anthropic',
+              providerTier: 'frontier',
+              model: 'claude-opus-4.6',
+              usedFallback: false,
+            },
+          },
+        });
+        return { content: 'done' };
+      },
+    );
+
+    const state = orchestrator.getState();
+    expect(state.sessions[0].responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      model: 'claude-opus-4.6',
+    });
+  });
 });

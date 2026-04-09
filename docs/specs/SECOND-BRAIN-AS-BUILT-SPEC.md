@@ -58,6 +58,7 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing and delete on the left and board content on the right.
 - `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing and delete on the left and list content on the right.
 - `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
+- the current person editor includes structured `phone` and `location` fields alongside name, email, title, company, relationship, notes, and last-contact state so contact details do not have to be stuffed into notes
 - `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
 - `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
 - `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses assistant capabilities as the creation model when the operator explicitly opens `Create routine`.
@@ -99,6 +100,8 @@ Current route boundaries are:
 - notes
 - calendar
 - people
+- library
+- briefs
 - routines
 
 That direct-read path is bounded to `inspect`, `read`, and `search` style requests. Mutations and synthesis still route through the runtime service and tool surface.
@@ -169,6 +172,8 @@ It also seeds the default assistant routine set at startup.
 
 Current mutation behavior note:
 - chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
+- chat-driven local people writes now extract labeled phone numbers into the structured contact record instead of forcing them into free-form notes
+- when a local Second Brain write needs one missing detail, the missing-detail reply is expected to stay bound to that same pending personal-assistant action rather than drifting back into generic chat
 - unqualified calendar CRUD still targets the local Guardian `Second Brain` calendar; explicit Google Calendar or Microsoft 365 calendar CRUD stays on the provider route
 
 ### Ownership model: current vs target

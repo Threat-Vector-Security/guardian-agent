@@ -81,6 +81,8 @@ export interface UserMessage {
   metadata?: Record<string, unknown>;
   /** Timestamp. */
   timestamp: number;
+  /** Optional abort signal for cancellation. */
+  abortSignal?: AbortSignal;
 }
 
 /** Agent response to a user message. */

@@ -1,5 +1,5 @@
 /**
- * Persistent Chat Panel — tier mode toggle, message history, text input.
+ * Persistent Chat Panel — provider selector, message history, text input.
  * Integrated into the right-hand sidebar.
  *
  * Approval buttons are rendered from structured metadata returned by the
@@ -17,13 +17,21 @@ import {
 import { decideChatApproval } from './chat-approval.js';
 import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
 import { resolveChatHistoryKey } from './chat-history.js';
+import {
+  getChatProviderAgentId,
+  getChatProviderOptions,
+  normalizeChatProviderSelection,
+  shouldUseChatProviderSelector,
+} from './chat-mode-selector.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
 const chatHistoryByAgent = new Map();
 const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
-const TIER_MODE_KEY = 'guardianagent_tier_mode';
+const CHAT_PROVIDER_SELECTION_KEY = 'guardianagent_chat_provider_selection';
+const CHAT_PROVIDER_SELECTION_METADATA_KEY = '__guardian_chat_provider_selection';
+const CHAT_ACTIVE_REQUEST_KEY = 'guardianagent_chat_active_request';
 const WEB_USER_KEY = 'guardianagent_web_user';
 const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
@@ -32,6 +40,51 @@ let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
 let activeChatIndicator = null;
+let activeRequestController = null;
+
+function persistActiveRequest(request) {
+  if (!request || typeof request !== 'object') return;
+  const requestId = typeof request.requestId === 'string' ? request.requestId.trim() : '';
+  if (!requestId) return;
+  const payload = {
+    requestId,
+    agentId: typeof request.agentId === 'string' ? request.agentId.trim() : '',
+    userId: typeof request.userId === 'string' ? request.userId.trim() : '',
+    channel: typeof request.channel === 'string' ? request.channel.trim() : '',
+    createdAt: Date.now(),
+  };
+  sessionStorage.setItem(CHAT_ACTIVE_REQUEST_KEY, JSON.stringify(payload));
+}
+
+function readPersistedActiveRequest() {
+  const raw = sessionStorage.getItem(CHAT_ACTIVE_REQUEST_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const requestId = typeof parsed.requestId === 'string' ? parsed.requestId.trim() : '';
+    if (!requestId) return null;
+    return {
+      requestId,
+      agentId: typeof parsed.agentId === 'string' && parsed.agentId.trim() ? parsed.agentId.trim() : undefined,
+      userId: typeof parsed.userId === 'string' && parsed.userId.trim() ? parsed.userId.trim() : undefined,
+      channel: typeof parsed.channel === 'string' && parsed.channel.trim() ? parsed.channel.trim() : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedActiveRequest(requestId) {
+  const active = readPersistedActiveRequest();
+  if (!active) {
+    sessionStorage.removeItem(CHAT_ACTIVE_REQUEST_KEY);
+    return;
+  }
+  if (!requestId || active.requestId === requestId) {
+    sessionStorage.removeItem(CHAT_ACTIVE_REQUEST_KEY);
+  }
+}
 
 function clearActiveChatIndicator() {
   if (activeChatIndicator?.element?.isConnected) {
@@ -84,11 +137,11 @@ export async function initChatPanel(container) {
   container.innerHTML = '<div class="loading">Loading Chat...</div>';
 
   let agents = [];
-  let routingMode = null;
+  let routingState = null;
   let codeSessionsState = { sessions: [], currentSessionId: null };
   const webUserId = resolveWebUserId();
   try {
-    [agents, routingMode, codeSessionsState] = await Promise.all([
+    [agents, routingState, codeSessionsState] = await Promise.all([
       api.agents().catch(() => []),
       api.routingMode().catch(() => null),
       api.codeSessions({
@@ -103,7 +156,7 @@ export async function initChatPanel(container) {
 
   const chatAgents = agents.filter((a) => a.canChat !== false);
   const userAgents = chatAgents.filter((a) => !a.internal);
-  const hasInternalOnly = userAgents.length === 0 && hasTierRoutingAgents(chatAgents);
+  const useProviderSelector = shouldUseChatProviderSelector(chatAgents, routingState);
   let knownCodeSessions = Array.isArray(codeSessionsState?.sessions) ? codeSessionsState.sessions : [];
   let currentCodeSessionId = typeof codeSessionsState?.currentSessionId === 'string'
     ? codeSessionsState.currentSessionId
@@ -126,59 +179,49 @@ export async function initChatPanel(container) {
   // Toolbar
   const toolbar = document.createElement('div');
   toolbar.className = 'chat-toolbar';
-  toolbar.style.flexWrap = 'wrap';
   toolbar.style.gap = '0.5rem';
 
-  // Agent selector OR mode toggle
+  const primaryControls = document.createElement('div');
+  primaryControls.style.cssText = 'display:flex;align-items:center;gap:0.5rem;width:100%;min-width:0;';
+  toolbar.appendChild(primaryControls);
+
+  // Agent selector OR provider selector
   let select = null;
-  let modeSelect = null;
+  let providerSelect = null;
   let activeAgentId = null;
   let approvalHandler = null;
 
-  if (hasInternalOnly) {
-    // Unified mode: show tier mode toggle instead of agent dropdown
-    const modeRow = document.createElement('div');
-    modeRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
+  if (useProviderSelector) {
+    // Unified mode: show provider-profile selector instead of agent dropdown.
+    const providerRow = document.createElement('div');
+    providerRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex:1 1 auto;min-width:0;';
 
-    const modeLabel = document.createElement('span');
-    modeLabel.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
-    modeLabel.textContent = 'Mode:';
+    const providerLabel = document.createElement('span');
+    providerLabel.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
+    providerLabel.textContent = 'Provider:';
 
-    modeSelect = document.createElement('select');
-    modeSelect.id = 'chat-mode-select';
-    modeSelect.style.cssText = 'font-size:0.7rem;';
-    modeSelect.innerHTML = getRoutingModeOptions(chatAgents, routingMode).map((option) => (
+    providerSelect = document.createElement('select');
+    providerSelect.id = 'chat-provider-select';
+    providerSelect.style.cssText = 'font-size:0.7rem;flex:1 1 auto;min-width:10rem;max-width:none;';
+    providerSelect.innerHTML = getChatProviderOptions(routingState).map((option) => (
       `<option value="${esc(option.value)}">${esc(option.label)}</option>`
     )).join('');
 
-    const currentMode = normalizeRoutingMode(
-      routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto',
-      chatAgents,
-      routingMode,
+    const currentSelection = normalizeChatProviderSelection(
+      sessionStorage.getItem(CHAT_PROVIDER_SELECTION_KEY) ?? 'auto',
+      routingState,
     );
-    modeSelect.value = currentMode;
-    sessionStorage.setItem(TIER_MODE_KEY, currentMode);
+    providerSelect.value = currentSelection;
+    sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, currentSelection);
 
-    modeSelect.addEventListener('change', async () => {
-      const mode = modeSelect.value;
-      try {
-        const result = await api.setRoutingMode(mode);
-        const nextRoutingState = result && typeof result === 'object' ? result : { tierMode: mode };
-        routingMode = nextRoutingState;
-        modeSelect.innerHTML = getRoutingModeOptions(chatAgents, nextRoutingState).map((option) => (
-          `<option value="${esc(option.value)}">${esc(option.label)}</option>`
-        )).join('');
-        const normalizedMode = normalizeRoutingMode(nextRoutingState.tierMode ?? mode, chatAgents, nextRoutingState);
-        modeSelect.value = normalizedMode;
-        sessionStorage.setItem(TIER_MODE_KEY, normalizedMode);
-      } catch (err) {
-        console.error('Failed to set routing mode', err);
-        sessionStorage.setItem(TIER_MODE_KEY, normalizeRoutingMode(mode, chatAgents, routingMode));
-      }
+    providerSelect.addEventListener('change', () => {
+      const nextSelection = normalizeChatProviderSelection(providerSelect.value, routingState);
+      providerSelect.value = nextSelection;
+      sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, nextSelection);
     });
 
-    modeRow.append(modeLabel, modeSelect);
-    toolbar.appendChild(modeRow);
+    providerRow.append(providerLabel, providerSelect);
+    primaryControls.appendChild(providerRow);
 
     // Use a single unified history key
     activeAgentId = '__guardian__';
@@ -186,32 +229,38 @@ export async function initChatPanel(container) {
     // Classic mode: user-visible agent dropdown
     select = document.createElement('select');
     select.id = 'chat-agent-select';
-    select.style.minWidth = '10rem';
+    select.style.cssText = 'min-width:10rem;flex:1 1 auto;';
     select.innerHTML = userAgents.map(a =>
       `<option value="${esc(a.id)}">${esc(a.name)}</option>`
     ).join('');
-    toolbar.appendChild(select);
+    primaryControls.appendChild(select);
     activeAgentId = resolveInitialAgent(select, userAgents);
   } else {
     // No agents at all
     const noAgents = document.createElement('div');
-    noAgents.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
+    noAgents.style.cssText = 'font-size:0.7rem;color:var(--text-muted);flex:1 1 auto;';
     noAgents.textContent = 'No agents available';
-    toolbar.appendChild(noAgents);
+    primaryControls.appendChild(noAgents);
   }
 
   const resetBtn = document.createElement('button');
   resetBtn.className = 'btn btn-secondary';
   resetBtn.textContent = 'Reset Chat';
-  resetBtn.style.fontSize = '0.7rem';
-  resetBtn.style.padding = '0.3rem 0.5rem';
+  resetBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
 
-  toolbar.appendChild(resetBtn);
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'btn btn-secondary';
+  stopBtn.textContent = 'Stop';
+  stopBtn.disabled = true;
+  stopBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
+
+  primaryControls.appendChild(stopBtn);
+  primaryControls.appendChild(resetBtn);
 
   let history = null;
 
   const getHistoryKey = () => {
-    const baseKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    const baseKey = useProviderSelector ? '__guardian__' : (select?.value || '');
     return resolveChatHistoryKey(baseKey);
   };
 
@@ -301,12 +350,85 @@ export async function initChatPanel(container) {
     });
   }
 
+  // ── Helpers ──────────────────────────────────────────────────
+
+  const getAgentId = () => resolveChatDispatchAgentId({
+    hasInternalOnly: useProviderSelector,
+    selectedAgentId: select?.value,
+  });
+  const getMessageMetadata = () => {
+    const providerName = normalizeChatProviderSelection(providerSelect?.value || 'auto', routingState);
+    if (providerName === 'auto') return undefined;
+    return {
+      [CHAT_PROVIDER_SELECTION_METADATA_KEY]: {
+        providerName,
+      },
+    };
+  };
+  const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
+
+  const restoreInput = () => {
+    input.disabled = false;
+    sendBtn.disabled = false;
+    autoResizeChatInput(input);
+    input.focus();
+  };
+
+  const setActiveRequest = (controller) => {
+    activeRequestController = controller;
+    stopBtn.disabled = !activeRequestController;
+  };
+  setActiveRequest(null);
+
+  const cancelActiveRequest = async (reason = 'Request canceled by operator.') => {
+    const active = activeRequestController;
+    if (!active || !active.requestId) return false;
+
+    setActiveRequest(null);
+    clearPersistedActiveRequest(active.requestId);
+    try {
+      active.cancelLocal?.(reason);
+    } catch (err) {
+      console.warn('Local request cancel cleanup failed', err);
+    }
+
+    try {
+      await api.cancelMessage(active.requestId, webUserId, 'web', active.agentId, reason);
+    } catch (err) {
+      console.warn('Remote request cancel failed', err);
+    }
+    return true;
+  };
+
+  stopBtn.addEventListener('click', async () => {
+    await cancelActiveRequest('Request canceled by operator.');
+  });
+
+  const cancelRecoveredRequestOnLoad = async () => {
+    const recovered = readPersistedActiveRequest();
+    if (!recovered?.requestId) return;
+    clearPersistedActiveRequest(recovered.requestId);
+    try {
+      await api.cancelMessage(
+        recovered.requestId,
+        recovered.userId || webUserId,
+        recovered.channel || 'web',
+        recovered.agentId,
+        'Page reloaded; canceled previous in-flight request.',
+      );
+    } catch (err) {
+      console.warn('Failed to cancel recovered in-flight request', err);
+    }
+  };
+  void cancelRecoveredRequestOnLoad();
+
   resetBtn.addEventListener('click', async () => {
     const resetId = getHistoryKey();
     if (!resetId) return;
+    await cancelActiveRequest('Chat reset requested by operator.');
     try {
-      const apiAgentId = (hasInternalOnly ? '__guardian__' : (select?.value || '')) === '__guardian__'
-        ? (getRoutingModeAgentId(chatAgents, modeSelect?.value) || chatAgents[0]?.id || 'default')
+      const apiAgentId = (useProviderSelector ? '__guardian__' : (select?.value || '')) === '__guardian__'
+        ? (getChatProviderAgentId(chatAgents, routingState, providerSelect?.value) || chatAgents[0]?.id || 'default')
         : (select?.value || '');
       if (currentCodeSessionId) {
         await api.codeSessionResetConversation(currentCodeSessionId, {
@@ -324,21 +446,6 @@ export async function initChatPanel(container) {
       console.error('Reset failed', err);
     }
   });
-
-  // ── Helpers ──────────────────────────────────────────────────
-
-  const getAgentId = () => resolveChatDispatchAgentId({
-    hasInternalOnly,
-    selectedAgentId: select?.value,
-  });
-  const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
-
-  const restoreInput = () => {
-    input.disabled = false;
-    sendBtn.disabled = false;
-    autoResizeChatInput(input);
-    input.focus();
-  };
 
   const beginApprovalProgress = (sessionId, requestId) => {
     if (!history) {
@@ -448,12 +555,13 @@ export async function initChatPanel(container) {
         try {
           const summary = results.join('; ');
           const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`;
+          const metadata = getMessageMetadata();
           const response = await api.sendMessage(
             msg,
             getAgentId(),
             webUserId,
             'web',
-            undefined,
+            metadata,
             GUARDIAN_CHAT_SURFACE_ID,
             continuationRequestId,
           );
@@ -585,6 +693,12 @@ export async function initChatPanel(container) {
       const focusedSessionId = currentCodeSessionId;
       let cleanedUp = false;
       let finalised = false;
+      const clearActiveRequestIfCurrent = () => {
+        if (activeRequestController?.requestId === requestId) {
+          setActiveRequest(null);
+        }
+        clearPersistedActiveRequest(requestId);
+      };
 
       const cleanup = () => {
         if (cleanedUp) return;
@@ -598,6 +712,7 @@ export async function initChatPanel(container) {
         if (finalised) return;
         finalised = true;
         cleanup();
+        clearActiveRequestIfCurrent();
         clearActiveChatIndicator();
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
@@ -631,6 +746,7 @@ export async function initChatPanel(container) {
         if (finalised) return;
         finalised = true;
         cleanup();
+        clearActiveRequestIfCurrent();
         clearActiveChatIndicator();
         restoreInput();
         history.appendChild(createMessageEl('error', message || 'Stream error'));
@@ -658,13 +774,27 @@ export async function initChatPanel(container) {
       onSSE('chat.done', onDone);
       onSSE('chat.error', onError);
 
+      setActiveRequest({
+        requestId,
+        agentId,
+        cancelLocal: () => {
+          if (finalised) return;
+          finalised = true;
+          cleanup();
+          clearActiveChatIndicator();
+          restoreInput();
+        },
+      });
+      persistActiveRequest({ requestId, agentId, userId: webUserId, channel: 'web' });
+
       try {
+        const metadata = getMessageMetadata();
         const streamResult = await api.sendMessageStream(
           contextPrefix + text,
           agentId,
           webUserId,
           'web',
-          undefined,
+          metadata,
           requestId,
           GUARDIAN_CHAT_SURFACE_ID,
         );
@@ -675,20 +805,27 @@ export async function initChatPanel(container) {
           finalizeSuccess(streamResult);
         }
       } catch {
+        if (finalised) {
+          return;
+        }
         cleanup();
+        const metadata = getMessageMetadata();
         const response = await api.sendMessage(
           contextPrefix + text,
           agentId,
           webUserId,
           'web',
-          undefined,
+          metadata,
           GUARDIAN_CHAT_SURFACE_ID,
           requestId,
         );
+        clearActiveRequestIfCurrent();
         clearActiveChatIndicator();
         addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       }
     } catch (err) {
+      setActiveRequest(null);
+      clearPersistedActiveRequest();
       clearActiveChatIndicator();
       const errorMsg = err.message === 'AUTH_FAILED' ? 'Auth failed' : (err.message || 'Error');
       history.appendChild(createMessageEl('error', errorMsg));
@@ -774,57 +911,6 @@ function createClientRequestId() {
     return globalThis.crypto.randomUUID();
   }
   return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function getRoutingLaneAgents(agents) {
-  const chatAgents = Array.isArray(agents) ? agents.filter((agent) => agent?.canChat !== false) : [];
-  return {
-    local: chatAgents.find((agent) => agent.routingRole === 'local') || null,
-    external: chatAgents.find((agent) => agent.routingRole === 'external') || null,
-  };
-}
-
-function hasTierRoutingAgents(agents) {
-  const { local, external } = getRoutingLaneAgents(agents);
-  return !!(local || external);
-}
-
-function getRoutingModeLabel(mode) {
-  if (mode === 'local-only') return 'Local';
-  if (mode === 'managed-cloud-only') return 'Managed Cloud';
-  if (mode === 'frontier-only') return 'Frontier';
-  return 'Auto';
-}
-
-function getAvailableRoutingModes(agents, routingState) {
-  if (Array.isArray(routingState?.availableModes) && routingState.availableModes.length > 0) {
-    return routingState.availableModes;
-  }
-  const { local, external } = getRoutingLaneAgents(agents);
-  return [
-    'auto',
-    ...(local ? ['local-only'] : []),
-    ...(external ? ['managed-cloud-only', 'frontier-only'] : []),
-  ];
-}
-
-function getRoutingModeOptions(agents, routingState) {
-  return getAvailableRoutingModes(agents, routingState).map((value) => ({
-    value,
-    label: getRoutingModeLabel(value),
-  }));
-}
-
-function normalizeRoutingMode(mode, agents, routingState) {
-  const availableModes = new Set(getAvailableRoutingModes(agents, routingState));
-  return availableModes.has(mode) ? mode : 'auto';
-}
-
-function getRoutingModeAgentId(agents, mode) {
-  const { local, external } = getRoutingLaneAgents(agents);
-  if (mode === 'local-only') return local?.id;
-  if (mode === 'managed-cloud-only' || mode === 'frontier-only') return external?.id;
-  return undefined;
 }
 
 function createThinkingEl(initialLabel = 'Starting…') {

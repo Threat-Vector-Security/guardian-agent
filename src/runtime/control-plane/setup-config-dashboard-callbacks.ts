@@ -259,6 +259,7 @@ export function createSetupConfigDashboardCallbacks(
             llm: {
               [providerName]: {
                 provider: providerType,
+                enabled: existingProvider?.enabled,
                 model,
                 credentialRef: providerCredentialRef,
                 baseUrl: input.baseUrl?.trim() || getDefaultBaseUrlForProviderType(providerType),
@@ -337,6 +338,8 @@ export function createSetupConfigDashboardCallbacks(
             provider: providerType,
             model,
           };
+          if (existingProvider?.enabled !== undefined) rawLLM[providerName].enabled = existingProvider.enabled;
+          else delete rawLLM[providerName].enabled;
           const baseUrl = input.baseUrl?.trim() || getDefaultBaseUrlForProviderType(providerType);
           if (baseUrl) rawLLM[providerName].baseUrl = baseUrl;
           delete rawLLM[providerName].apiKey;

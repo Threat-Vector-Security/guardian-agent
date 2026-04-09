@@ -6355,6 +6355,14 @@ function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string 
     const summary = summarizePerformanceActionRunPreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
   }
+  if (
+    toolName === 'second_brain_routine_create'
+    || toolName === 'second_brain_routine_update'
+    || toolName === 'second_brain_routine_delete'
+  ) {
+    const summary = summarizeSecondBrainRoutinePreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
   return sanitizePreview(JSON.stringify(redactedArgs));
 }
 
@@ -6426,6 +6434,52 @@ function summarizePerformanceActionRunPreview(args: Record<string, unknown>): st
   }
   const selectionMode = asString(args.selectionMode, 'checked_by_default').trim() || 'checked_by_default';
   return `run performance action ${actionId} using ${describePerformanceSelectionMode(selectionMode)}`;
+}
+
+function formatRoutineTemplateName(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return '';
+  return normalized
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function resolveSecondBrainRoutineDisplayName(args: Record<string, unknown>): string {
+  const explicitName = asString(args.name).trim();
+  if (explicitName) return explicitName;
+
+  const config = isRecord(args.config) ? args.config : null;
+  const id = asString(args.id).trim();
+  const templateId = asString(args.templateId).trim() || (id ? id.split(':')[0] : '');
+  const baseName = formatRoutineTemplateName(templateId);
+  const focusQuery = asString(config?.focusQuery).trim();
+  const topicQuery = asString(config?.topicQuery).trim();
+
+  if (templateId === 'topic-watch' && topicQuery) {
+    return `Topic Watch: ${topicQuery}`;
+  }
+  if (templateId === 'deadline-watch') {
+    const dueWithinHours = Number.isFinite(config?.dueWithinHours) ? Number(config?.dueWithinHours) : 24;
+    const overdueSuffix = config?.includeOverdue === false ? '' : ' + overdue';
+    return `Deadline Watch: next ${dueWithinHours} hour${dueWithinHours === 1 ? '' : 's'}${overdueSuffix}`;
+  }
+  if (baseName && focusQuery) {
+    return `${baseName}: ${focusQuery}`;
+  }
+  return baseName || id;
+}
+
+function summarizeSecondBrainRoutinePreview(args: Record<string, unknown>): string | null {
+  const id = asString(args.id).trim();
+  const templateId = asString(args.templateId).trim() || (id ? id.split(':')[0] : '');
+  const name = resolveSecondBrainRoutineDisplayName(args);
+  const summary: Record<string, unknown> = {};
+  if (id) summary.id = id;
+  if (templateId) summary.templateId = templateId;
+  if (name) summary.name = name;
+  return Object.keys(summary).length > 0 ? JSON.stringify(summary) : null;
 }
 
 function summarizeGwsPreview(args: Record<string, unknown>): string | null {

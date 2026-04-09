@@ -19,6 +19,10 @@ import {
   selectExecutionProfile,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
+import {
+  readChatProviderSelectionMetadata,
+  type RequestedChatProviderSelection,
+} from './chat-provider-selection.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from './intent-routing-trace.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
 import type { PendingActionStore } from './pending-actions.js';
@@ -152,6 +156,7 @@ export function createIncomingDispatchPreparer(args: {
   const classifyIntentForRouting = async (
     msg: IncomingDispatchMessage,
     stateAgentId: string,
+    requestedProviderName?: string,
   ): Promise<IntentGatewayRecord | null> => {
     const normalizedContent = stripLeadingContextPrefix(msg.content);
     const channel = msg.channel?.trim() || 'web';
@@ -167,7 +172,9 @@ export function createIncomingDispatchPreparer(args: {
       currentConfig,
       currentConfig.routing?.tierMode,
     );
-    const classifierProviders = listClassifierProvidersForMode(currentConfig, routingMode);
+    const classifierProviders = requestedProviderName?.trim()
+      ? [requestedProviderName.trim()]
+      : listClassifierProvidersForMode(currentConfig, routingMode);
     const recentHistory = args.conversations.getHistoryForContext({
       agentId: stateAgentId,
       userId: canonicalUserId,
@@ -262,6 +269,10 @@ export function createIncomingDispatchPreparer(args: {
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
     const requestedCodeContext = args.readCodeRequestMetadata(msg.metadata);
     const normalizedContent = stripLeadingContextPrefix(msg.content);
+    const requestedChatProvider = readChatProviderSelectionMetadata(msg.metadata, args.configRef.current);
+    const routingCfg = args.configRef.current.routing;
+    const tierMode = args.normalizeTierModeForRouter(args.router, args.configRef.current, routingCfg?.tierMode);
+    const threshold = routingCfg?.complexityThreshold ?? 0.5;
     const resolvedSurfaceId = args.getCodeSessionSurfaceId({
       surfaceId: msg.surfaceId ?? args.readMessageSurfaceId(msg.metadata),
       userId: canonicalUserId,
@@ -280,6 +291,13 @@ export function createIncomingDispatchPreparer(args: {
       gateway: IntentGatewayRecord | null,
       profile: SelectedExecutionProfile | null,
     ): void => {
+      const selectedProviderModel = profile
+        ? (
+            args.configRef.current.llm[profile.providerName]?.model?.trim()
+            || args.configRef.current.llm[profile.providerType]?.model?.trim()
+            || undefined
+          )
+        : undefined;
       if (gateway) {
         recordIntentRoutingTrace('gateway_classified', {
           msg,
@@ -319,6 +337,7 @@ export function createIncomingDispatchPreparer(args: {
           complexityScore: decision.complexityScore,
           tier: decision.tier,
           route: gateway?.decision.route,
+          ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
         },
       });
       if (profile) {
@@ -329,12 +348,18 @@ export function createIncomingDispatchPreparer(args: {
           details: {
             route: gateway?.decision.route,
             providerName: profile.providerName,
+            providerType: profile.providerType,
+            ...(profile.providerName !== profile.providerType
+              ? { providerProfileName: profile.providerName }
+              : {}),
+            ...(selectedProviderModel ? { providerModel: selectedProviderModel } : {}),
             providerTier: profile.providerTier,
             providerLocality: profile.providerLocality,
             executionProfileId: profile.id,
             requestedTier: profile.requestedTier,
             reason: profile.reason,
             fallbackProviderOrder: profile.fallbackProviderOrder,
+            ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
           },
         });
         recordIntentRoutingTrace('context_budget_decided', {
@@ -357,15 +382,59 @@ export function createIncomingDispatchPreparer(args: {
     const selectProfileForResolvedRoute = (
       decision: RouteDecision,
       gateway: IntentGatewayRecord | null,
-      tierMode: RoutingTierMode,
+      currentTierMode: RoutingTierMode,
+      forcedProviderName?: string,
     ): SelectedExecutionProfile | null => {
-      if (!gateway && !decision.tier) return null;
+      if (!gateway && !decision.tier && !forcedProviderName) return null;
       return selectExecutionProfile({
         config: args.configRef.current,
         routeDecision: decision,
         gatewayDecision: gateway?.decision ?? null,
-        mode: tierMode,
+        mode: currentTierMode,
+        forcedProviderName,
       });
+    };
+    const resolveForcedProviderDecision = (
+      selection: RequestedChatProviderSelection | null,
+    ): RouteDecision | null => {
+      if (!selection?.providerName || !selection.providerLocality) return null;
+      const localAgent = args.router.findAgentByRole('local');
+      const externalAgent = args.router.findAgentByRole('external');
+      if (selection.providerLocality === 'local') {
+        if (localAgent) {
+          return {
+            agentId: localAgent.id,
+            confidence: 'high',
+            reason: `request-scoped provider override: ${selection.providerName}`,
+            tier: 'local',
+          };
+        }
+        if (externalAgent) {
+          return {
+            agentId: externalAgent.id,
+            confidence: 'medium',
+            reason: `request-scoped provider override: ${selection.providerName}; local lane unavailable, using external lane`,
+            tier: 'local',
+          };
+        }
+      }
+      if (externalAgent) {
+        return {
+          agentId: externalAgent.id,
+          confidence: 'high',
+          reason: `request-scoped provider override: ${selection.providerName}`,
+          tier: 'external',
+        };
+      }
+      if (localAgent) {
+        return {
+          agentId: localAgent.id,
+          confidence: 'medium',
+          reason: `request-scoped provider override: ${selection.providerName}; external lane unavailable, using local lane`,
+          tier: 'external',
+        };
+      }
+      return null;
     };
     if (resolvedCodeSession) {
       const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
@@ -381,7 +450,13 @@ export function createIncomingDispatchPreparer(args: {
             ? 'explicit coding session pinned to a specific agent'
             : 'attached coding session pinned to a specific agent',
         };
-        recordResolvedRoute(decision, null, null);
+        const profile = selectProfileForResolvedRoute(
+          decision,
+          null,
+          tierMode,
+          requestedChatProvider?.providerName,
+        );
+        recordResolvedRoute(decision, null, profile);
         return {
           decision,
           gateway: null,
@@ -390,10 +465,7 @@ export function createIncomingDispatchPreparer(args: {
       const stateAgentId = resolveRoutingStateAgentId(channelDefault);
       const gateway = channelDefault
         ? null
-        : await classifyIntentForRouting(msg, stateAgentId);
-      const routingCfg = args.configRef.current.routing;
-      const tierMode = args.normalizeTierModeForRouter(args.router, args.configRef.current, routingCfg?.tierMode);
-      const threshold = routingCfg?.complexityThreshold ?? 0.5;
+        : await classifyIntentForRouting(msg, stateAgentId, requestedChatProvider?.providerName);
       const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
       const decision = channelDefault
         ? { agentId: channelDefault, confidence: 'high' as const, reason: 'channel default override' }
@@ -402,7 +474,12 @@ export function createIncomingDispatchPreparer(args: {
           : hasRoles
             ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
             : args.router.route(normalizedContent);
-      const profile = selectProfileForResolvedRoute(decision, gateway, tierMode);
+      const profile = selectProfileForResolvedRoute(
+        decision,
+        gateway,
+        tierMode,
+        requestedChatProvider?.providerName,
+      );
       const resolvedDecision = {
         ...decision,
         reason: requestedCodeContext?.sessionId
@@ -421,7 +498,13 @@ export function createIncomingDispatchPreparer(args: {
         confidence: 'high' as const,
         reason: 'code workspace context',
       };
-      recordResolvedRoute(decision, null, null);
+      const profile = selectProfileForResolvedRoute(
+        decision,
+        null,
+        tierMode,
+        requestedChatProvider?.providerName,
+      );
+      recordResolvedRoute(decision, null, profile);
       return {
         decision,
         gateway: null,
@@ -433,24 +516,34 @@ export function createIncomingDispatchPreparer(args: {
         confidence: 'high' as const,
         reason: 'channel default override',
       };
-      recordResolvedRoute(decision, null, null);
+      const profile = selectProfileForResolvedRoute(
+        decision,
+        null,
+        tierMode,
+        requestedChatProvider?.providerName,
+      );
+      recordResolvedRoute(decision, null, profile);
       return {
         decision,
         gateway: null,
       };
     }
-    const routingCfg = args.configRef.current.routing;
-    const tierMode = args.normalizeTierModeForRouter(args.router, args.configRef.current, routingCfg?.tierMode);
-    const threshold = routingCfg?.complexityThreshold ?? 0.5;
     const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
     const stateAgentId = resolveRoutingStateAgentId(channelDefault);
-    const gateway = await classifyIntentForRouting(msg, stateAgentId);
-    const decision = gateway?.available && hasRoles
-      ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
-      : hasRoles
-        ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
-        : args.router.route(normalizedContent);
-    const profile = selectProfileForResolvedRoute(decision, gateway, tierMode);
+    const gateway = await classifyIntentForRouting(msg, stateAgentId, requestedChatProvider?.providerName);
+    const forcedDecision = resolveForcedProviderDecision(requestedChatProvider);
+    const decision = forcedDecision
+      ?? (gateway?.available && hasRoles
+        ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
+        : hasRoles
+          ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+          : args.router.route(normalizedContent));
+    const profile = selectProfileForResolvedRoute(
+      decision,
+      gateway,
+      tierMode,
+      requestedChatProvider?.providerName,
+    );
     recordResolvedRoute(decision, gateway, profile);
     return { decision, gateway };
   };
@@ -460,12 +553,14 @@ export function createIncomingDispatchPreparer(args: {
     msg: IncomingDispatchMessage,
   ): Promise<PreparedIncomingDispatch> => {
     const requestId = msg.requestId?.trim() || randomUUID();
+    const requestedChatProvider = readChatProviderSelectionMetadata(msg.metadata, args.configRef.current);
     recordIntentRoutingTrace('incoming_dispatch', {
       msg,
       requestId,
       details: {
         hasMetadata: !!msg.metadata,
         channelDefault,
+        ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
       },
       contentPreview: stripLeadingContextPrefix(msg.content),
     });
@@ -475,12 +570,13 @@ export function createIncomingDispatchPreparer(args: {
           Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
         )
       : msg.metadata;
-    const selectedProfile = routed.gateway || routed.decision.tier
+    const selectedProfile = routed.gateway || routed.decision.tier || requestedChatProvider
       ? selectExecutionProfile({
           config: args.configRef.current,
           routeDecision: routed.decision,
           gatewayDecision: routed.gateway?.decision ?? null,
           mode: args.normalizeTierModeForRouter(args.router, args.configRef.current, args.configRef.current.routing?.tierMode),
+          forcedProviderName: requestedChatProvider?.providerName,
         })
       : null;
     const routedMetadata = attachSelectedExecutionProfileMetadata(
@@ -500,8 +596,20 @@ export function createIncomingDispatchPreparer(args: {
           ...(selectedProfile
             ? {
                 selectedProviderName: selectedProfile.providerName,
+                selectedProviderType: selectedProfile.providerType,
+                ...(selectedProfile.providerName !== selectedProfile.providerType
+                  ? { selectedProviderProfileName: selectedProfile.providerName }
+                  : {}),
+                ...(args.configRef.current.llm[selectedProfile.providerName]?.model?.trim()
+                  || args.configRef.current.llm[selectedProfile.providerType]?.model?.trim()
+                  ? {
+                      selectedProviderModel: args.configRef.current.llm[selectedProfile.providerName]?.model?.trim()
+                        || args.configRef.current.llm[selectedProfile.providerType]?.model?.trim(),
+                    }
+                  : {}),
                 selectedProviderTier: selectedProfile.providerTier,
                 executionProfileId: selectedProfile.id,
+                ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
               }
             : {}),
         },

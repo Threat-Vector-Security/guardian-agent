@@ -765,6 +765,18 @@ describe('Runtime', () => {
       })).rejects.toThrow('Simulated failure');
     });
 
+    it('should auto-recover Stalled agent on user message dispatch', async () => {
+      const agent = new EchoAgent();
+      runtime.registerAgent(createAgentDefinition({ agent }));
+
+      runtime.registry.transitionState('echo', AgentState.Running, 'test');
+      runtime.registry.transitionState('echo', AgentState.Stalled, 'test');
+
+      await expect(runtime.dispatchMessage('echo', {
+        id: '1', userId: 'u', channel: 'cli', content: 'recover me', timestamp: Date.now(),
+      })).resolves.toEqual({ content: 'Echo: recover me' });
+    });
+
     it('should silently skip event dispatch to Dead agent', async () => {
       const agent = new EchoAgent();
       runtime.registerAgent(createAgentDefinition({ agent }));

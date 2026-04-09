@@ -40,10 +40,10 @@ const AUTOMATION_HELP = {
     howLinks: 'This is the detailed evidence side of automation execution; the adjacent history and timeline tab keeps the chronological execution story.',
   },
   'History & Timeline': {
-    whatItIs: 'This tab combines the chronological run ledger with the higher-level execution timeline.',
-    whatSeeing: 'You are seeing recent automation runs as a compact history table plus the execution timeline that reconstructs what happened during each run.',
-    whatCanDo: 'Use it when you want the operational story of a run first, then drill into Output for the detailed result payload.',
-    howLinks: 'History shows when and how runs finished; Output shows what those runs actually produced.',
+    whatItIs: 'This tab combines the chronological automation run ledger with the automation execution timeline.',
+    whatSeeing: 'You are seeing recent automation runs as a compact history table plus the automation execution timeline that reconstructs what happened during each workflow run.',
+    whatCanDo: 'Use it when you want the operational story of an automation run first, then drill into Output for the detailed result payload.',
+    howLinks: 'History shows when and how automation runs finished; Output shows what those runs actually produced. System owns the broader assistant and routine execution detail outside automation runs.',
   },
   'Engine Settings': {
     whatItIs: 'This section contains the runtime-level controls for the automation engine itself rather than one specific automation.',
@@ -94,6 +94,7 @@ function buildAssistantRunQueryParams(limit = 15) {
   const activeExecutionRef = normalizeTimelineFilterValue(automationUiState.timelineFilters?.activeExecutionRef);
   return {
     limit,
+    kind: 'automation_run',
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
   };
@@ -174,11 +175,11 @@ export async function renderAutomations(container) {
     container.innerHTML = `
       ${renderGuidancePanel({
         kicker: 'Automation Guide',
-        title: 'Automations, output, history, and execution visibility',
+        title: 'Automations, output, history, and automation execution',
         whatItIs: 'Automations is the page where Guardian automations are defined, scheduled, executed, and reviewed.',
-        whatSeeing: 'You are seeing the saved automation catalog, a dedicated output view for recent runs, a history and execution timeline tab, engine-level settings, and the controls for creating or updating automations.',
+        whatSeeing: 'You are seeing the saved automation catalog, a dedicated output view for recent runs, a history and automation execution tab, engine-level settings, and the controls for creating or updating automations.',
         whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior output, and reconstruct execution history without leaving this page.',
-        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, run output, and execution history.',
+        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, run output, and automation execution history. System owns the broader assistant and routine runtime timeline.',
       })}
 
       <div class="intel-summary-grid">
@@ -371,8 +372,8 @@ function renderHistoryTabContent(history, recentAssistantRuns) {
 
     <div class="table-container">
       <div class="table-header">
-        <h3>Execution Timeline</h3>
-        <div class="ops-task-sub">Filter by continuity thread or active execution ref.</div>
+        <h3>Automation Execution</h3>
+        <div class="ops-task-sub">Filter automation runs by continuity thread or active execution ref.</div>
       </div>
       <form id="auto-execution-filter-form" style="padding:0 1rem 1rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
         <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
@@ -1129,7 +1130,7 @@ function renderCompactRunHistory(entries) {
 
 function renderExecutionTimeline(runs) {
   if (!Array.isArray(runs) || runs.length === 0) {
-    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent agent runs yet.</td></tr>';
+    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent automation execution runs yet.</td></tr>';
   }
 
   const requestedRunId = getRequestedAssistantRunId();
@@ -1207,7 +1208,7 @@ function renderExecutionTimelineItems(items, runId) {
 
 function normalizeAssistantRuns(runs, requestedRun) {
   const normalized = Array.isArray(runs) ? runs.slice() : [];
-  if (!requestedRun?.summary?.runId) return normalized;
+  if (!requestedRun?.summary?.runId || requestedRun?.summary?.kind !== 'automation_run') return normalized;
   if (normalized.some((entry) => entry?.summary?.runId === requestedRun.summary.runId)) {
     return normalized;
   }

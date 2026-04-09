@@ -61,7 +61,7 @@ export class AnthropicProvider implements LLMProvider {
 
     let response: Anthropic.Message;
     try {
-      response = await this.client.messages.create(params);
+      response = await this.client.messages.create(params, { signal: options?.signal });
     } catch (err) {
       throw wrapAnthropicError(err, params.model);
     }

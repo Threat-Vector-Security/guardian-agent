@@ -39,12 +39,12 @@ export class OpenAIProvider implements LLMProvider {
     let params = this.buildChatParams(messages, options, false, false);
     let response: OpenAI.ChatCompletion;
     try {
-      response = await this.client.chat.completions.create(params);
+      response = await this.client.chat.completions.create(params, { signal: options?.signal });
     } catch (err) {
       if (shouldRetryWithMaxCompletionTokens(err)) {
         params = this.buildChatParams(messages, options, false, true);
         try {
-          response = await this.client.chat.completions.create(params);
+          response = await this.client.chat.completions.create(params, { signal: options?.signal });
         } catch (retryErr) {
           throw wrapOpenAIError(retryErr, params.model as string);
         }

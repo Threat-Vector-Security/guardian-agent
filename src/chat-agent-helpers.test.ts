@@ -219,4 +219,13 @@ describe('redactConfig', () => {
       },
     });
   });
+
+  it('preserves provider enabled state in GET /api/config responses', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.ollama.enabled = false;
+
+    const redacted = redactConfig(config);
+
+    expect(redacted.llm.ollama.enabled).toBe(false);
+  });
 });

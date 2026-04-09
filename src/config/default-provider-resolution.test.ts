@@ -82,4 +82,26 @@ describe('resolveDerivedDefaultProvider', () => {
     delete config.llm.ollama;
     expect(resolveDerivedDefaultProvider(config)).toBe('anthropic');
   });
+
+  it('ignores disabled providers when deriving the primary provider', () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-general'].enabled = false;
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'ollama-cloud-general',
+      frontier: 'anthropic',
+    };
+    config.assistant.tools.modelSelection = {
+      ...config.assistant.tools.modelSelection,
+      managedCloudRouting: {
+        enabled: true,
+        roleBindings: {
+          general: 'ollama-cloud-general',
+          coding: 'ollama-cloud-coding',
+        },
+      },
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('ollama-cloud-coding');
+  });
 });

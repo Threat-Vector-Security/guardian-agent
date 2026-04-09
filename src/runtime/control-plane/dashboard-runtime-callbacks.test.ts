@@ -77,6 +77,7 @@ function createHarness(
     },
     orchestrator: {
       dispatch: vi.fn(async (_input, handler) => handler(dispatchCtx)),
+      cancelSession: vi.fn(),
     } as never,
     now: () => 1_700_000_000_000,
     createRequestId: () => 'req-1',
@@ -252,6 +253,156 @@ describe('createDashboardRuntimeCallbacks', () => {
         data: { requestId: 'req-1', runId: 'req-1', content: 'stream reply', metadata: { step: 'stream' } },
       },
     ]);
+  });
+
+  it('still prepares routing metadata for explicit-agent stream dispatches', async () => {
+    const dispatchDashboardMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ content: 'stream reply', metadata: { step: 'stream' } });
+    const prepareIncomingDispatch = vi.fn(async () => ({
+      requestId: 'prepared-2',
+      decision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 2,
+        decision: {
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Create a contact.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { personalItemType: 'person' },
+        },
+      },
+      routedMessage: {
+        content: 'Create a contact for Angela Lee',
+        userId: 'prepared-user',
+        channel: 'web',
+        metadata: {
+          __guardian_execution_profile: {
+            providerName: 'ollama-cloud-direct',
+          },
+        },
+      },
+    }));
+    const options = createHarness({
+      dispatchDashboardMessage,
+      prepareIncomingDispatch,
+    });
+    const callbacks = createDashboardRuntimeCallbacks(options);
+
+    await expect(callbacks.onStreamDispatch?.(
+      'default-agent',
+      { content: 'Create a contact for Angela Lee', userId: 'web-user', channel: 'web' },
+      () => undefined,
+    )).resolves.toEqual({
+      requestId: 'req-1',
+      runId: 'req-1',
+      content: 'stream reply',
+      metadata: { step: 'stream' },
+    });
+
+    expect(prepareIncomingDispatch).toHaveBeenCalledWith(undefined, {
+      content: 'Create a contact for Angela Lee',
+      userId: 'web-user',
+      channel: 'web',
+    });
+    expect(dispatchDashboardMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'default-agent',
+      precomputedIntentGateway: expect.objectContaining({
+        decision: expect.objectContaining({
+          route: 'personal_assistant_task',
+        }),
+      }),
+      msg: expect.objectContaining({
+        metadata: expect.objectContaining({
+          __guardian_execution_profile: expect.objectContaining({
+            providerName: 'ollama-cloud-direct',
+          }),
+        }),
+      }),
+    }));
+  });
+
+  it('supports canceling an active stream dispatch and suppresses late done events', async () => {
+    let resolveDispatch: ((value: { content: string; metadata?: Record<string, unknown> }) => void) | null = null;
+    const dispatchDashboardMessage = vi.fn(() => new Promise<{ content: string; metadata?: Record<string, unknown> }>((resolve) => {
+      resolveDispatch = resolve;
+    }));
+    const options = createHarness({
+      dispatchDashboardMessage,
+    });
+    const callbacks = createDashboardRuntimeCallbacks(options);
+    const sseEvents: Array<{ type: string; data: unknown }> = [];
+
+    const streamPromise = callbacks.onStreamDispatch?.(
+      undefined,
+      { content: 'stream this', userId: 'web-user', channel: 'web' },
+      (event) => sseEvents.push({ type: event.type, data: event.data }),
+    );
+
+    await Promise.resolve();
+
+    await expect(callbacks.onStreamCancel?.({
+      requestId: 'req-1',
+      userId: 'web-user',
+      channel: 'web',
+    })).resolves.toEqual({
+      success: true,
+      canceled: true,
+      message: 'Request canceled by operator.',
+      requestId: 'req-1',
+      runId: 'req-1',
+      errorCode: 'REQUEST_CANCELED',
+    });
+
+    resolveDispatch?.({ content: 'late reply', metadata: { step: 'stream' } });
+
+    await expect(streamPromise).resolves.toEqual({
+      requestId: 'req-1',
+      runId: 'req-1',
+      content: '',
+      error: 'Request canceled by operator.',
+      errorCode: 'REQUEST_CANCELED',
+    });
+
+    expect(sseEvents).toEqual([
+      {
+        type: 'chat.thinking',
+        data: { requestId: 'req-1', runId: 'req-1' },
+      },
+      {
+        type: 'chat.error',
+        data: {
+          requestId: 'req-1',
+          runId: 'req-1',
+          error: 'Request canceled by operator.',
+          errorCode: 'REQUEST_CANCELED',
+        },
+      },
+    ]);
+  });
+
+  it('returns a non-active result when canceling an unknown stream request', async () => {
+    const options = createHarness();
+    const callbacks = createDashboardRuntimeCallbacks(options);
+
+    await expect(callbacks.onStreamCancel?.({
+      requestId: 'missing-request',
+      userId: 'web-user',
+      channel: 'web',
+    })).resolves.toEqual({
+      success: false,
+      canceled: false,
+      message: "Request 'missing-request' is no longer active.",
+      requestId: 'missing-request',
+      runId: 'missing-request',
+      errorCode: 'REQUEST_NOT_ACTIVE',
+    });
   });
 
   it('runs quick actions through orchestrator dispatch and runtime message dispatch', async () => {

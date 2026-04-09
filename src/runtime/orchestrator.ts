@@ -9,6 +9,8 @@
  * - request-level traces with sub-step timing
  */
 
+import { readResponseSourceMetadata, type ResponseSourceMetadata } from './model-routing-ux.js';
+
 export type AssistantDispatchPriority = 'high' | 'normal' | 'low';
 
 export interface AssistantDispatchInput {
@@ -19,6 +21,8 @@ export interface AssistantDispatchInput {
   content: string;
   priority?: AssistantDispatchPriority;
   requestType?: string;
+  selectedResponseSource?: ResponseSourceMetadata;
+  abortSignal?: AbortSignal;
 }
 
 export type AssistantSessionStatus = 'idle' | 'queued' | 'running';
@@ -45,6 +49,7 @@ export interface AssistantSessionState {
   lastMessagePreview?: string;
   lastResponsePreview?: string;
   lastPriority?: AssistantDispatchPriority;
+  responseSource?: ResponseSourceMetadata;
 }
 
 export type AssistantTraceStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -125,6 +130,7 @@ export interface AssistantDispatchContext {
   sessionId: string;
   priority: AssistantDispatchPriority;
   requestType: string;
+  abortSignal?: AbortSignal;
   runStep<T>(name: string, run: () => Promise<T> | T, detail?: string): Promise<T>;
   markStep(name: string, detail?: string): void;
   addNode(node: Omit<WorkflowTraceNode, 'id'> & { id?: string }): void;
@@ -162,6 +168,7 @@ interface SessionRecord {
   lastMessagePreview?: string;
   lastResponsePreview?: string;
   lastPriority?: AssistantDispatchPriority;
+  responseSource?: ResponseSourceMetadata;
   processing: boolean;
   queue: PendingRequest[];
 }
@@ -191,6 +198,22 @@ const PRIORITY_SCORE: Record<AssistantDispatchPriority, number> = {
 let nextRequestId = 1;
 function createRequestId(now: number): string {
   return `req-${now}-${nextRequestId++}`;
+}
+
+function cloneResponseSourceMetadata(
+  source: ResponseSourceMetadata | undefined,
+): ResponseSourceMetadata | undefined {
+  if (!source) return undefined;
+  return {
+    ...source,
+    ...(source.usage
+      ? {
+          usage: {
+            ...source.usage,
+          },
+        }
+      : {}),
+  };
 }
 
 export class AssistantOrchestrator {
@@ -346,6 +369,24 @@ export class AssistantOrchestrator {
     }
   }
 
+  cancelSession(input: { userId: string; channel: string; agentId: string }, reason: string = 'Canceled by user'): void {
+    const key = this.buildSessionId(input as AssistantDispatchInput);
+    const session = this.sessions.get(key);
+    if (!session) return;
+
+    const error = new Error(reason);
+    const now = Date.now();
+    for (const pending of session.queue) {
+      pending.trace.status = 'failed';
+      pending.trace.queueWaitMs = Math.max(0, now - pending.enqueuedAt);
+      this.emitTrace(pending.trace);
+      pending.reject(error);
+    }
+    session.queue = [];
+    session.queueDepth = 0;
+    session.status = session.running ? 'running' : 'idle';
+  }
+
   private getOrCreateSession(input: AssistantDispatchInput): SessionRecord {
     const key = this.buildSessionId(input);
     const existing = this.sessions.get(key);
@@ -400,6 +441,7 @@ export class AssistantOrchestrator {
       lastMessagePreview: session.lastMessagePreview,
       lastResponsePreview: session.lastResponsePreview,
       lastPriority: session.lastPriority,
+      ...(session.responseSource ? { responseSource: cloneResponseSourceMetadata(session.responseSource) } : {}),
     };
   }
 
@@ -495,6 +537,16 @@ export class AssistantOrchestrator {
   }
 
   private async runPendingRequest(session: SessionRecord, pending: PendingRequest): Promise<void> {
+    if (pending.input.abortSignal?.aborted) {
+      session.running = false;
+      const queueWaitMs = Math.max(0, Date.now() - pending.enqueuedAt);
+      pending.trace.status = 'failed';
+      pending.trace.queueWaitMs = queueWaitMs;
+      this.emitTrace(pending.trace);
+      pending.reject(new Error(`Request '${pending.requestId}' canceled by user before execution.`));
+      return;
+    }
+
     const startedAt = Date.now();
     const queueWaitMs = Math.max(0, startedAt - pending.enqueuedAt);
     const trace = pending.trace;
@@ -504,6 +556,7 @@ export class AssistantOrchestrator {
     session.lastStartedAt = startedAt;
     session.lastQueueWaitMs = queueWaitMs;
     session.lastPriority = pending.input.priority ?? 'normal';
+    session.responseSource = cloneResponseSourceMetadata(pending.input.selectedResponseSource) ?? session.responseSource;
 
     trace.status = 'running';
     trace.startedAt = startedAt;
@@ -523,6 +576,7 @@ export class AssistantOrchestrator {
       sessionId: session.sessionId,
       priority: pending.input.priority ?? 'normal',
       requestType: pending.input.requestType ?? 'message',
+      abortSignal: pending.input.abortSignal,
       runStep: async <T>(name: string, run: () => Promise<T> | T, detail?: string): Promise<T> => {
         const stepStartedAt = Date.now();
         const step: AssistantTraceStep = {
@@ -565,10 +619,15 @@ export class AssistantOrchestrator {
         this.emitTrace(trace);
       },
       addNode: (node) => {
-        trace.nodes.push({
+        const normalizedNode = {
           ...node,
           id: node.id ?? `node-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-        });
+        };
+        trace.nodes.push(normalizedNode);
+        const responseSource = readResponseSourceMetadata(normalizedNode.metadata);
+        if (responseSource) {
+          session.responseSource = cloneResponseSourceMetadata(responseSource);
+        }
         this.emitTrace(trace);
       },
     };

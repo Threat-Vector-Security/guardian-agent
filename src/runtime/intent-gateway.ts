@@ -148,6 +148,12 @@ export interface IntentGatewayInput {
   availableCodingBackends?: string[];
 }
 
+interface IntentGatewayRepairContext {
+  sourceContent?: string;
+  pendingAction?: IntentGatewayInput['pendingAction'] | null;
+  continuity?: IntentGatewayInput['continuity'] | null;
+}
+
 export type IntentGatewayChatFn = (
   messages: ChatMessage[],
   options?: ChatOptions,
@@ -420,6 +426,8 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: follow-up "Delete that calendar event." -> route=personal_assistant_task, operation=delete, personalItemType=calendar, calendarTarget=local.',
   'Example: "Save a note that the Q3 offsite venue is River House." -> route=personal_assistant_task, operation=save, personalItemType=note.',
   'Example: "Create the Pre-Meeting Brief routine in Second Brain." -> route=personal_assistant_task, operation=create, personalItemType=routine.',
+  'Example: "Create a review for Board prep every Friday at 4 pm." -> route=personal_assistant_task, operation=create, personalItemType=routine.',
+  'Example: follow-up "Update that routine to run every Friday at 5 pm." -> route=personal_assistant_task, operation=update, personalItemType=routine.',
   'Example: "Create a task to send the follow-up deck tomorrow." -> route=personal_assistant_task, operation=create, personalItemType=task.',
   'Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task, operation=create, personalItemType=calendar, calendarTarget=local.',
   'Example: "Move my Guardian calendar event with Alex to Friday." -> route=personal_assistant_task, operation=update, personalItemType=calendar, calendarTarget=local.',
@@ -525,6 +533,8 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: follow-up "Delete that calendar event." -> route="personal_assistant_task", operation="delete", personalItemType="calendar", calendarTarget="local".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", personalItemType="overview".',
   'Examples: "Create the Pre-Meeting Brief routine in Second Brain." -> route="personal_assistant_task", operation="create", personalItemType="routine".',
+  'Examples: "Create a review for Board prep every Friday at 4 pm." -> route="personal_assistant_task", operation="create", personalItemType="routine".',
+  'Examples: follow-up "Update that routine to run every Friday at 5 pm." -> route="personal_assistant_task", operation="update", personalItemType="routine".',
   'Examples: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route="personal_assistant_task", operation="create", personalItemType="calendar", calendarTarget="local".',
   'Examples: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route="personal_assistant_task", operation="inspect", personalItemType="brief", emailProvider="m365".',
   'Examples: "Draft a follow-up email from my meeting notes and Gmail thread." -> route="personal_assistant_task", operation="draft", personalItemType="brief", emailProvider="gws".',
@@ -594,7 +604,11 @@ export class IntentGateway {
         temperature: 0,
         ...(options.useTools ? { tools: [INTENT_GATEWAY_TOOL] } : {}),
       });
-      const parsed = parseIntentGatewayDecision(response, input.content);
+      const parsed = parseIntentGatewayDecision(response, {
+        sourceContent: input.content,
+        pendingAction: input.pendingAction,
+        continuity: input.continuity,
+      });
       return {
         mode: options.mode,
         available: parsed.available,
@@ -863,7 +877,7 @@ function buildAutomationNameRepairMessages(
 
 function parseIntentGatewayDecision(
   response: ChatResponse,
-  sourceContent?: string,
+  repairContext?: IntentGatewayRepairContext,
 ): { decision: IntentGatewayDecision; available: boolean } {
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
@@ -888,7 +902,7 @@ function parseIntentGatewayDecision(
       available: false,
     };
   }
-  const decision = normalizeIntentGatewayDecision(parsed, sourceContent);
+  const decision = normalizeIntentGatewayDecision(parsed, repairContext);
   return {
     decision,
     available: decision.route !== 'unknown',
@@ -919,15 +933,21 @@ function parseStructuredContent(content: string): Record<string, unknown> | null
 
 function normalizeIntentGatewayDecision(
   parsed: Record<string, unknown>,
-  sourceContent?: string,
+  repairContext?: IntentGatewayRepairContext,
 ): IntentGatewayDecision {
-  const route = normalizeRoute(parsed.route);
+  const parsedOperation = normalizeOperation(parsed.operation);
   const confidence = normalizeConfidence(parsed.confidence);
-  const operation = normalizeOperation(parsed.operation);
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
     ? parsed.summary.trim()
     : 'No classification summary provided.';
   const turnRelation = normalizeTurnRelation(parsed.turnRelation);
+  const route = repairIntentGatewayRoute(
+    normalizeRoute(parsed.route),
+    parsedOperation,
+    turnRelation,
+    repairContext,
+  );
+  const operation = repairIntentGatewayOperation(parsedOperation, route, turnRelation, repairContext);
   const resolution = normalizeResolution(parsed.resolution);
   const missingFields = Array.isArray(parsed.missingFields)
     ? parsed.missingFields
@@ -952,20 +972,22 @@ function normalizeIntentGatewayDecision(
   const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
     ?? derivedWorkload.preferredAnswerPath;
 
-  const automationName = typeof parsed.automationName === 'string' && parsed.automationName.trim()
+  const uiSurface = normalizeUiSurface(parsed.uiSurface);
+  const automationName = shouldKeepAutomationEntities(route, uiSurface)
+    && typeof parsed.automationName === 'string' && parsed.automationName.trim()
     ? parsed.automationName.trim()
     : undefined;
-  const newAutomationName = typeof parsed.newAutomationName === 'string' && parsed.newAutomationName.trim()
+  const newAutomationName = shouldKeepAutomationEntities(route, uiSurface)
+    && typeof parsed.newAutomationName === 'string' && parsed.newAutomationName.trim()
     ? parsed.newAutomationName.trim()
     : undefined;
   const manualOnly = typeof parsed.manualOnly === 'boolean' ? parsed.manualOnly : undefined;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
   const personalItemType = normalizePersonalItemType(parsed.personalItemType)
-    ?? inferRoutinePersonalItemType(sourceContent, route);
+    ?? inferSecondBrainPersonalItemType(repairContext, route, operation);
   const enabled = typeof parsed.enabled === 'boolean'
     ? parsed.enabled
-    : inferRoutineEnabledFilter(sourceContent, route, operation, personalItemType);
-  const uiSurface = normalizeUiSurface(parsed.uiSurface);
+    : inferRoutineEnabledFilter(repairContext?.sourceContent, route, operation, personalItemType);
   const urls = Array.isArray(parsed.urls)
     ? parsed.urls
       .filter((value): value is string => typeof value === 'string')
@@ -974,7 +996,7 @@ function normalizeIntentGatewayDecision(
     : undefined;
   const query = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
-    : inferRoutineQuery(sourceContent, route, operation, personalItemType);
+    : inferRoutineQuery(repairContext?.sourceContent, route, operation, personalItemType);
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
@@ -1508,6 +1530,64 @@ function normalizeCalendarWindowDays(value: unknown): number | undefined {
   return normalized;
 }
 
+function shouldKeepAutomationEntities(
+  route: IntentGatewayRoute,
+  uiSurface: IntentGatewayEntities['uiSurface'] | undefined,
+): boolean {
+  return route === 'automation_authoring'
+    || route === 'automation_control'
+    || route === 'automation_output_task'
+    || (route === 'ui_control' && uiSurface === 'automations');
+}
+
+function repairIntentGatewayRoute(
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+  turnRelation: IntentGatewayTurnRelation,
+  repairContext: IntentGatewayRepairContext | undefined,
+): IntentGatewayRoute {
+  if (route === 'personal_assistant_task') {
+    return route;
+  }
+  const sourceContent = repairContext?.sourceContent?.trim() ?? '';
+  if (mentionsAutomationControlTerms(sourceContent)) {
+    return route;
+  }
+  if (isExplicitSecondBrainRoutineRequest(sourceContent, operation)) {
+    return 'personal_assistant_task';
+  }
+  if ((turnRelation === 'follow_up' || turnRelation === 'clarification_answer')
+    && (
+      pendingActionSuggestsPersonalAssistantTask(repairContext)
+      || pendingActionSuggestsRoutine(repairContext)
+      || continuitySuggestsRoutine(repairContext)
+    )) {
+    return 'personal_assistant_task';
+  }
+  return route;
+}
+
+function repairIntentGatewayOperation(
+  operation: IntentGatewayOperation,
+  route: IntentGatewayRoute,
+  turnRelation: IntentGatewayTurnRelation,
+  repairContext: IntentGatewayRepairContext | undefined,
+): IntentGatewayOperation {
+  if (turnRelation !== 'clarification_answer' && turnRelation !== 'correction') {
+    return operation;
+  }
+  const pendingAction = repairContext?.pendingAction;
+  if (!pendingAction) {
+    return operation;
+  }
+  const pendingRoute = normalizeRoute(pendingAction.route);
+  const pendingOperation = normalizeOperation(pendingAction.operation);
+  if (pendingRoute !== route || pendingOperation === 'unknown') {
+    return operation;
+  }
+  return pendingOperation;
+}
+
 function inferRoutineEnabledFilter(
   content: string | undefined,
   route: IntentGatewayRoute,
@@ -1528,24 +1608,102 @@ function inferRoutineEnabledFilter(
   return undefined;
 }
 
-function inferRoutinePersonalItemType(
-  content: string | undefined,
+function inferSecondBrainPersonalItemType(
+  repairContext: IntentGatewayRepairContext | undefined,
   route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
 ): IntentGatewayEntities['personalItemType'] | undefined {
   if (route !== 'personal_assistant_task') {
     return undefined;
   }
-  const normalized = content?.trim().toLowerCase() ?? '';
+  const routineItemType = inferRoutinePersonalItemType(repairContext, route, operation);
+  if (routineItemType) {
+    return routineItemType;
+  }
+  const primaryNormalized = repairContext?.sourceContent?.trim().toLowerCase() ?? '';
+  const primaryMatch = inferSecondBrainPersonalItemTypeFromText(primaryNormalized, operation);
+  if (primaryMatch) {
+    return primaryMatch;
+  }
+  const contextualNormalized = buildSecondBrainContextRepairText(repairContext);
+  return inferSecondBrainPersonalItemTypeFromText(contextualNormalized, operation);
+}
+
+function buildSecondBrainContextRepairText(
+  repairContext: IntentGatewayRepairContext | undefined,
+): string {
+  return [
+    repairContext?.pendingAction?.originalRequest,
+    repairContext?.pendingAction?.prompt,
+    repairContext?.continuity?.lastActionableRequest,
+    repairContext?.continuity?.focusSummary,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n')
+    .trim()
+    .toLowerCase();
+}
+
+function inferSecondBrainPersonalItemTypeFromText(
+  normalized: string,
+  operation: IntentGatewayOperation,
+): IntentGatewayEntities['personalItemType'] | undefined {
   if (!normalized) return undefined;
   if (
-    /\broutines?\b/.test(normalized)
-    || /\bmorning brief\b/.test(normalized)
-    || /\bpre[- ]meeting brief\b/.test(normalized)
-    || /\bfollow[- ]up watch\b/.test(normalized)
-    || /\bweekly review\b/.test(normalized)
-    || /\bmanual sync\b/.test(normalized)
-    || /\bnext 24 hours radar\b/.test(normalized)
+    /\bin second brain\s*>\s*briefs\b/.test(normalized)
+    || (/\b(?:generate|regenerate|prepare)\b/.test(normalized)
+      && (/\bbrief\b/.test(normalized) || /\bnext meeting\b/.test(normalized)))
   ) {
+    return 'brief';
+  }
+  if (
+    /\boverview of my second brain\b/.test(normalized)
+    || /\bsecond brain overview\b/.test(normalized)
+    || /\bgive me an overview of my second brain\b/.test(normalized)
+  ) {
+    return 'overview';
+  }
+  if (/\b(?:calendar|event|events|meeting|meetings|appointment|appointments)\b/.test(normalized)) {
+    return 'calendar';
+  }
+  if (/\b(?:library|link|links|url)\b/.test(normalized)) {
+    return 'library';
+  }
+  if (
+    /\b(?:person|people|contact|contacts)\b/.test(normalized)
+    || (/\bemail\b/.test(normalized) && /\b(?:company|title|notes?)\b/.test(normalized))
+  ) {
+    return 'person';
+  }
+  if (/\btask\b/.test(normalized) || (operation !== 'read' && /\bdue\b/.test(normalized))) {
+    return 'task';
+  }
+  if (/\bnotes?\b/.test(normalized)) {
+    return 'note';
+  }
+  if (/\bbrief\b/.test(normalized)) {
+    return 'brief';
+  }
+  if (/\boverview\b/.test(normalized)) {
+    return 'overview';
+  }
+  return undefined;
+}
+
+function inferRoutinePersonalItemType(
+  repairContext: IntentGatewayRepairContext | undefined,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+): IntentGatewayEntities['personalItemType'] | undefined {
+  if (route !== 'personal_assistant_task') {
+    return undefined;
+  }
+  const content = repairContext?.sourceContent;
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return undefined;
+  if (isExplicitSecondBrainRoutineRequest(normalized, operation)
+    || pendingActionSuggestsRoutine(repairContext)
+    || continuitySuggestsRoutine(repairContext)) {
     return 'routine';
   }
   return undefined;
@@ -1618,6 +1776,85 @@ function normalizeCodingBackend(value: unknown): string | undefined {
     default:
       return trimmed;
   }
+}
+
+function mentionsAutomationControlTerms(content: string | undefined): boolean {
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return false;
+  return /\bautomation\b/.test(normalized)
+    || /\bworkflow\b/.test(normalized)
+    || /\bautomations\b/.test(normalized);
+}
+
+function containsSecondBrainRoutineConcept(content: string): boolean {
+  return /\broutines?\b/.test(content)
+    || /\bmorning brief\b/.test(content)
+    || /\bpre[- ]meeting brief\b/.test(content)
+    || /\bfollow[- ]up (?:watch|draft)\b/.test(content)
+    || /\bweekly review\b/.test(content)
+    || /\bscheduled review\b/.test(content)
+    || /\btopic watch\b/.test(content)
+    || /\bdeadline watch\b/.test(content)
+    || /\bdaily agenda check\b/.test(content)
+    || /\bnext 24 hours radar\b/.test(content)
+    || /\bmanual sync\b/.test(content);
+}
+
+function hasRoutineSchedulePhrase(content: string): boolean {
+  return /\b(?:every|each|hourly|daily|weekdays|weekly|fortnightly|monthly|biweekly|bi-weekly|every 2 weeks)\b/.test(content)
+    || /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(content);
+}
+
+function isExplicitSecondBrainRoutineRequest(
+  content: string | undefined,
+  operation: IntentGatewayOperation,
+): boolean {
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return false;
+  if (containsSecondBrainRoutineConcept(normalized)) {
+    return true;
+  }
+  if (/\bmessage me when\b/.test(normalized) && /\b(?:mention|mentions|mentioned|due|overdue)\b/.test(normalized)) {
+    return true;
+  }
+  if ((operation === 'create' || operation === 'update' || operation === 'toggle' || operation === 'delete')
+    && /\b(?:that|this|my)\s+routine\b/.test(normalized)) {
+    return true;
+  }
+  if (operation === 'create' && /\breview\b/.test(normalized) && hasRoutineSchedulePhrase(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function pendingActionSuggestsRoutine(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const pendingAction = repairContext?.pendingAction;
+  if (!pendingAction) return false;
+  return isExplicitSecondBrainRoutineRequest(
+    `${pendingAction.prompt ?? ''}\n${pendingAction.originalRequest ?? ''}`,
+    normalizeOperation(pendingAction.operation),
+  );
+}
+
+function pendingActionSuggestsPersonalAssistantTask(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const pendingAction = repairContext?.pendingAction;
+  if (!pendingAction) return false;
+  return normalizeRoute(pendingAction.route) === 'personal_assistant_task';
+}
+
+function continuitySuggestsRoutine(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const continuity = repairContext?.continuity;
+  if (!continuity) return false;
+  return isExplicitSecondBrainRoutineRequest(
+    `${continuity.focusSummary ?? ''}\n${continuity.lastActionableRequest ?? ''}`,
+    'unknown',
+  );
 }
 
 function buildRawResponsePreview(response: ChatResponse): string | undefined {

@@ -1,0 +1,100 @@
+import { describe, expect, it } from 'vitest';
+
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import {
+  attachChatProviderSelectionMetadata,
+  buildChatProviderSelectorOptions,
+  normalizeChatProviderSelectionValue,
+  readChatProviderSelectionMetadata,
+} from './chat-provider-selection.js';
+
+function createConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm['ollama-cloud-direct'] = {
+    provider: 'ollama_cloud',
+    model: 'minimax-m2.1',
+    credentialRef: 'llm.ollama_cloud.direct',
+  };
+  config.llm['ollama-cloud-tools'] = {
+    provider: 'ollama_cloud',
+    model: 'qwen3:32b',
+    credentialRef: 'llm.ollama_cloud.tools',
+  };
+  config.llm.openai = {
+    provider: 'openai',
+    model: 'gpt-5.1',
+    credentialRef: 'llm.openai.primary',
+  };
+  config.assistant.tools.preferredProviders = {
+    local: 'ollama',
+    managedCloud: 'ollama-cloud-direct',
+    frontier: 'openai',
+  };
+  return config;
+}
+
+describe('chat provider selection', () => {
+  it('lists enabled provider profiles with automatic first', () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-tools'].enabled = false;
+
+    expect(buildChatProviderSelectorOptions(config)).toEqual([
+      {
+        value: 'auto',
+        label: 'Automatic',
+      },
+      {
+        value: 'ollama',
+        label: 'Ollama (local · llama3.2)',
+        providerName: 'ollama',
+        providerType: 'ollama',
+        providerTier: 'local',
+        providerLocality: 'local',
+        model: 'llama3.2',
+      },
+      {
+        value: 'ollama-cloud-direct',
+        label: 'ollama-cloud-direct (managed cloud · Ollama Cloud · minimax-m2.1)',
+        providerName: 'ollama-cloud-direct',
+        providerType: 'ollama_cloud',
+        providerTier: 'managed_cloud',
+        providerLocality: 'external',
+        model: 'minimax-m2.1',
+      },
+      {
+        value: 'openai',
+        label: 'OpenAI (frontier · gpt-5.1)',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerTier: 'frontier',
+        providerLocality: 'external',
+        model: 'gpt-5.1',
+      },
+    ]);
+  });
+
+  it('round-trips request-scoped provider selection metadata for enabled providers', () => {
+    const config = createConfig();
+    const metadata = attachChatProviderSelectionMetadata({ existing: true }, 'ollama-cloud-direct');
+
+    expect(normalizeChatProviderSelectionValue(config, 'ollama-cloud-direct')).toBe('ollama-cloud-direct');
+    expect(readChatProviderSelectionMetadata(metadata, config)).toEqual({
+      providerName: 'ollama-cloud-direct',
+      providerType: 'ollama_cloud',
+      providerTier: 'managed_cloud',
+      providerLocality: 'external',
+      model: 'minimax-m2.1',
+    });
+  });
+
+  it('falls back to automatic for missing or disabled providers', () => {
+    const config = createConfig();
+    config.llm.openai.enabled = false;
+
+    expect(normalizeChatProviderSelectionValue(config, 'openai')).toBe('auto');
+    expect(readChatProviderSelectionMetadata(
+      attachChatProviderSelectionMetadata({}, 'openai'),
+      config,
+    )).toBeNull();
+  });
+});

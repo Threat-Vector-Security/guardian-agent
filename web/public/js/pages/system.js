@@ -2,12 +2,20 @@ import { api } from '../api.js';
 import { createStatusCard, updateStatusCard } from '../components/status-card.js';
 import { renderGuidancePanel, renderInfoButton, activateContextHelp, enhanceSectionHelp } from '../components/context-help.js';
 import { onSSE, offSSE } from '../app.js';
+import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
+import { describeResponseSource } from '../response-source.js';
 
 let cards = {};
 let metricsHandler = null;
+let runTimelineHandler = null;
+let runTimelineRefreshTimer = null;
 let currentContainer = null;
 const systemUiState = {
   routingTraceFilters: {
+    continuityKey: '',
+    activeExecutionRef: '',
+  },
+  runtimeTimelineFilters: {
     continuityKey: '',
     activeExecutionRef: '',
   },
@@ -26,6 +34,120 @@ function buildRoutingTraceQueryParams(limit = 8) {
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
   };
+}
+
+function buildRuntimeTimelineQueryParams(limit = 8) {
+  const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
+  const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
+  return {
+    limit,
+    ...(continuityKey ? { continuityKey } : {}),
+    ...(activeExecutionRef ? { activeExecutionRef } : {}),
+  };
+}
+
+function getRequestedAssistantRunId() {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get('assistantRunId') || '';
+}
+
+function getRequestedAssistantRunItemId() {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get('assistantRunItemId') || '';
+}
+
+function normalizeProviderLocality(value) {
+  return value === 'local' || value === 'external' ? value : '';
+}
+
+function normalizeProviderTier(value) {
+  return value === 'local' || value === 'managed_cloud' || value === 'frontier' ? value : '';
+}
+
+function inferLocalityFromTier(tier, fallback = '') {
+  const normalizedFallback = normalizeProviderLocality(fallback);
+  if (tier === 'local') return 'local';
+  if (tier === 'managed_cloud' || tier === 'frontier') return 'external';
+  return normalizedFallback;
+}
+
+function normalizeSystemResponseSource(value) {
+  if (!value || typeof value !== 'object') return null;
+  const providerTier = normalizeProviderTier(value.providerTier);
+  const locality = inferLocalityFromTier(providerTier, value.locality);
+  if (!locality && !providerTier) return null;
+  return {
+    locality: locality || 'external',
+    ...(providerTier ? { providerTier } : {}),
+    ...(typeof value.providerName === 'string' && value.providerName.trim()
+      ? { providerName: value.providerName.trim() }
+      : {}),
+    ...(typeof value.providerProfileName === 'string' && value.providerProfileName.trim()
+      ? { providerProfileName: value.providerProfileName.trim() }
+      : {}),
+    ...(typeof value.model === 'string' && value.model.trim()
+      ? { model: value.model.trim() }
+      : {}),
+    ...(value.usedFallback === true ? { usedFallback: true } : {}),
+    ...(typeof value.notice === 'string' && value.notice.trim()
+      ? { notice: value.notice.trim() }
+      : {}),
+  };
+}
+
+function buildTraceResponseSource(details) {
+  if (!details || typeof details !== 'object') return null;
+  const responseSource = normalizeSystemResponseSource({
+    locality: details.responseLocality,
+    providerName: details.responseProviderName,
+    providerProfileName: details.responseProviderProfileName,
+    providerTier: details.responseProviderTier,
+    model: details.responseModel,
+  });
+  if (responseSource) return responseSource;
+  const selectedSource = normalizeSystemResponseSource({
+    locality: details.providerLocality,
+    providerName: details.providerType,
+    providerProfileName: details.providerProfileName,
+    providerTier: details.providerTier,
+    model: details.providerModel,
+  });
+  if (selectedSource) return selectedSource;
+  return normalizeSystemResponseSource({
+    locality: inferLocalityFromTier(details.selectedProviderTier),
+    providerName: details.selectedProviderType,
+    providerProfileName: details.selectedProviderProfileName,
+    providerTier: details.selectedProviderTier,
+    model: details.selectedProviderModel,
+  });
+}
+
+function formatSystemResponseSourceSummary(value, prefix = '', includeModel = true) {
+  const source = normalizeSystemResponseSource(value);
+  if (!source) return '';
+  const described = describeResponseSource(source);
+  const label = typeof described?.label === 'string' ? described.label.trim() : '';
+  const model = typeof source.model === 'string' ? source.model.trim() : '';
+  const notice = typeof described?.notice === 'string' ? described.notice.trim() : '';
+  const labelIncludesModel = !!label && !!model && label.toLowerCase().includes(model.toLowerCase());
+  return [
+    label ? (prefix ? `${prefix} ${label}` : label) : '',
+    includeModel && model && !labelIncludesModel ? `model ${model}` : '',
+    notice || '',
+  ].filter(Boolean).join(' • ');
+}
+
+function normalizeRequestedRunCollection(runs, requestedRun, kind) {
+  const normalized = Array.isArray(runs) ? runs.slice() : [];
+  if (!requestedRun?.summary?.runId || requestedRun?.summary?.kind !== kind) {
+    return normalized;
+  }
+  if (normalized.some((entry) => entry?.summary?.runId === requestedRun.summary.runId)) {
+    return normalized;
+  }
+  return [requestedRun, ...normalized];
 }
 
 async function renderSystemPreserveScroll(container) {
@@ -266,6 +388,8 @@ export async function renderSystem(container) {
   container.innerHTML = '<h2 class="page-title">System</h2><div class="loading">Loading...</div>';
 
   try {
+    const requestedAssistantRunId = getRequestedAssistantRunId();
+    const runtimeTimelineParams = buildRuntimeTimelineQueryParams(8);
     const [
       agents,
       providers,
@@ -284,6 +408,10 @@ export async function renderSystem(container) {
       networkThreats,
       config,
       routingTrace,
+      assistantDispatchRunsPayload,
+      scheduledTaskRunsPayload,
+      codeSessionRunsPayload,
+      requestedAssistantRun,
     ] = await Promise.all([
       api.agents().catch(() => []),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
@@ -302,6 +430,10 @@ export async function renderSystem(container) {
       api.networkThreats({ limit: 20 }).catch(() => ({ activeAlertCount: 0 })),
       api.config().catch(() => null),
       api.routingTrace(buildRoutingTraceQueryParams(8)).catch(() => ({ entries: [] })),
+      api.assistantRuns({ ...runtimeTimelineParams, kind: 'assistant_dispatch' }).catch(() => ({ runs: [] })),
+      api.assistantRuns({ ...runtimeTimelineParams, kind: 'scheduled_task' }).catch(() => ({ runs: [] })),
+      api.assistantRuns({ ...runtimeTimelineParams, kind: 'code_session' }).catch(() => ({ runs: [] })),
+      requestedAssistantRunId ? api.assistantRun(requestedAssistantRunId).catch(() => null) : Promise.resolve(null),
     ]);
 
     const defaultProviderName = assistantState?.defaultProvider || null;
@@ -320,6 +452,21 @@ export async function renderSystem(container) {
     const searchSummary = resolveSearchSummary(searchStatus, config);
     const networkSummary = resolveNetworkSummary(networkDevices, networkBaseline, networkThreats);
     const cloudSummary = resolveCloudSummary(config);
+    const assistantDispatchRuns = normalizeRequestedRunCollection(
+      Array.isArray(assistantDispatchRunsPayload?.runs) ? assistantDispatchRunsPayload.runs : [],
+      requestedAssistantRun,
+      'assistant_dispatch',
+    );
+    const scheduledTaskRuns = normalizeRequestedRunCollection(
+      Array.isArray(scheduledTaskRunsPayload?.runs) ? scheduledTaskRunsPayload.runs : [],
+      requestedAssistantRun,
+      'scheduled_task',
+    );
+    const codeSessionRuns = normalizeRequestedRunCollection(
+      Array.isArray(codeSessionRunsPayload?.runs) ? codeSessionRunsPayload.runs : [],
+      requestedAssistantRun,
+      'code_session',
+    );
 
     container.innerHTML = `
       <h2 class="page-title">System</h2>
@@ -328,9 +475,9 @@ export async function renderSystem(container) {
         title: 'Operations overview',
         compact: true,
         whatItIs: 'System is the cross-product operations overview for Guardian. It brings together runtime health, owner-surface status, and recent assistant activity without turning into a duplicate workflow page.',
-        whatSeeing: 'You are seeing the shared control-plane summary, linked status cards for the main operational surfaces, current assistant runtime activity, and the routing-trace inspector.',
+        whatSeeing: 'You are seeing the shared control-plane summary, linked status cards for the main operational surfaces, current assistant runtime activity, runtime execution detail for assistant and routine work, and the routing-trace inspector.',
         whatCanDo: 'Use it to confirm what is healthy, spot which owner surface needs attention next, and open the deeper page that actually owns the work.',
-        howLinks: 'System is not the alert queue, configuration editor, or workflow builder. Security owns incident attention, Configuration owns setup, and Automations owns repeatable workflows.',
+        howLinks: 'System is not the alert queue, configuration editor, or workflow builder. Security owns incident attention, Configuration owns setup, Automations owns repeatable workflows and their run output, and System owns the broader assistant and routine execution view.',
       })}
     `;
 
@@ -456,6 +603,11 @@ export async function renderSystem(container) {
       cloudSummary,
     }));
     container.appendChild(createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assistantState }));
+    container.appendChild(createRuntimeExecutionSection({
+      assistantDispatchRuns,
+      scheduledTaskRuns,
+      codeSessionRuns,
+    }));
     container.appendChild(createRoutingTraceSection({
       traceStatus: assistantState?.intentRoutingTrace || null,
       entries: Array.isArray(routingTrace?.entries) ? routingTrace.entries : [],
@@ -466,13 +618,19 @@ export async function renderSystem(container) {
         whatItIs: 'This section is the assistant runtime monitor for current sessions, queue pressure, and recent delegated or background work.',
         whatSeeing: 'You are seeing compact request and job metrics, the currently active or most recent assistant sessions, and the recent job queue with any held follow-up actions.',
         whatCanDo: 'Use it to determine whether Guardian is busy, stuck, or waiting on operator input, then jump into the owner surface that owns the deeper workflow.',
-        howLinks: 'System keeps only the bounded operational summary here. Full workflow history still lives in Automations, Code, and Security.',
+        howLinks: 'System keeps the bounded runtime summary here. Deeper execution detail lives in Runtime Execution, while full workflow output still lives in Automations, Code, and Security.',
+      },
+      'Runtime Execution': {
+        whatItIs: 'This section is the operator-facing execution timeline for assistant dispatches, scheduled routine work, and code-session activity that does not belong on the Automations page.',
+        whatSeeing: 'You are seeing separate recent run tables for normal assistant dispatches, scheduled tasks and Second Brain routine scans, and coding-session timeline entries.',
+        whatCanDo: 'Use it to reconstruct non-automation execution, follow a routing-trace handoff into the matching run, and inspect the timeline events that explain pauses, approvals, and completions.',
+        howLinks: 'Automations owns automation output and automation execution. System owns the broader assistant and routine runtime detail.',
       },
       'Routing Trace': {
         whatItIs: 'This section is a compact inspector for the durable intent-routing trace log.',
         whatSeeing: 'You are seeing recent gateway and tier-routing decisions, plus optional continuity and active-execution context when that request belonged to an existing thread.',
         whatCanDo: 'Use it to debug why a request was classified, routed, resumed, or answered the way it was without tailing the JSONL log by hand.',
-        howLinks: 'It complements the execution timeline and owner pages: the routing trace explains classification and routing decisions, while the owner pages explain what the chosen path then did.',
+        howLinks: 'It complements Runtime Execution and the owner pages: the routing trace explains classification and routing decisions, while Runtime Execution and the owner pages explain what the chosen path then did.',
       },
       'Operational Surfaces': {
         whatItIs: 'This section is the linked status strip for the major owner surfaces that operators routinely need after checking the global summary.',
@@ -483,6 +641,8 @@ export async function renderSystem(container) {
     });
     activateContextHelp(container);
     bindSystemEvents(container);
+    bindRunTimelineUpdates();
+    focusRequestedRuntimeRun(container);
 
     if (metricsHandler) offSSE('metrics', metricsHandler);
     metricsHandler = (data) => {
@@ -574,20 +734,25 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
               : session.status === 'queued'
               ? 'badge-queued'
               : 'badge-idle';
-            const providerSummary = agent?.provider
-              ? `${esc(agent.provider)}${agent.providerType ? ` (${esc(agent.providerType)})` : ''}`
-              : '-';
-            const modelSummary = agent?.providerModel
-              ? `${esc(agent.providerModel)}${agent.providerLocality ? ` • ${esc(agent.providerLocality)}` : ''}`
-              : '-';
+            const sessionResponseSource = normalizeSystemResponseSource(session.responseSource);
+            const providerSummary = sessionResponseSource
+              ? formatSystemResponseSourceSummary(sessionResponseSource, '', false)
+              : (agent?.provider
+                ? `${agent.provider}${agent.providerType ? ` (${agent.providerType})` : ''}`
+                : '-');
+            const modelSummary = sessionResponseSource?.model
+              ? `${sessionResponseSource.model}${sessionResponseSource.usedFallback ? ' • fallback' : ''}`
+              : (agent?.providerModel
+                ? `${agent.providerModel}${agent.providerLocality ? ` • ${agent.providerLocality}` : ''}`
+                : '-');
             const activityTs = session.lastStartedAt || session.lastQueuedAt || session.lastCompletedAt;
             return `
               <tr>
                 <td title="${escAttr(`${session.channel}:${session.userId}:${session.agentId}`)}">${esc(session.channel)}:${esc(session.userId)}</td>
                 <td><span class="badge ${statusBadgeClass}">${esc(session.status)}</span></td>
                 <td>${esc(agent?.name || session.agentId)}</td>
-                <td>${providerSummary}</td>
-                <td>${modelSummary}</td>
+                <td>${esc(providerSummary)}</td>
+                <td>${esc(modelSummary)}</td>
                 <td>${activityTs ? esc(formatTime(activityTs)) : '-'}</td>
               </tr>
             `;
@@ -614,6 +779,226 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
     ${renderAssistantJobFollowUpResult()}
   `;
   return section;
+}
+
+function createRuntimeExecutionSection({ assistantDispatchRuns, scheduledTaskRuns, codeSessionRuns }) {
+  const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
+  const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <div class="section-heading">
+        <h3>Runtime Execution</h3>
+        ${renderInfoButton('Runtime Execution', {
+          whatItIs: 'This section is the operator-facing execution timeline for assistant dispatches, scheduled routine work, and code-session activity.',
+          whatSeeing: 'You are seeing separate recent run tables for assistant dispatches, scheduled tasks and routines, and code-session timeline entries.',
+          whatCanDo: 'Use it to follow non-automation execution, reconstruct what happened in a run, and inspect event-level timeline detail.',
+          howLinks: 'Automations owns automation output and automation execution. System owns the broader assistant and routine runtime detail.',
+        })}
+      </div>
+      <div class="ops-task-sub">Automations shows automation execution only. Assistant, routine, and code-session runs live here.</div>
+    </div>
+    <form id="system-runtime-execution-filter-form" style="padding:0 1rem 1rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
+      <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+        <label for="system-runtime-continuity-key">Continuity Key</label>
+        <input id="system-runtime-continuity-key" type="text" placeholder="shared-tier:owner" value="${escAttr(continuityKey)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+        <label for="system-runtime-active-exec-ref">Active Execution Ref</label>
+        <input id="system-runtime-active-exec-ref" type="text" placeholder="code_session:Repo Fix" value="${escAttr(activeExecutionRef)}">
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
+        <button class="btn btn-secondary btn-sm" type="button" id="system-runtime-execution-filter-clear">Clear</button>
+      </div>
+    </form>
+    <div class="cards-grid" style="padding:0 1rem 1rem;">
+      ${renderMiniCard('Assistant', assistantDispatchRuns.length, 'Normal chat and assistant dispatch runs', assistantDispatchRuns.length > 0 ? 'info' : 'success', 'Recent assistant dispatch execution visible on the System page.')}
+      ${renderMiniCard('Scheduled', scheduledTaskRuns.length, 'Routines and other scheduled work', scheduledTaskRuns.length > 0 ? 'accent' : 'success', 'Recent scheduled-task execution, including Second Brain routine scans, visible on the System page.')}
+      ${renderMiniCard('Code', codeSessionRuns.length, 'Code-session timeline runs', codeSessionRuns.length > 0 ? 'warning' : 'success', 'Recent coding-session execution visible on the System page.')}
+    </div>
+    <div style="padding:0 1rem 1rem;display:flex;flex-direction:column;gap:1rem">
+      ${renderRuntimeExecutionTable('Assistant Dispatch', 'assistant_dispatch', assistantDispatchRuns, 'No recent assistant dispatch runs.')}
+      ${renderRuntimeExecutionTable('Scheduled Tasks & Routines', 'scheduled_task', scheduledTaskRuns, 'No recent scheduled-task or routine runs.')}
+      ${renderRuntimeExecutionTable('Code Sessions', 'code_session', codeSessionRuns, 'No recent code-session runs.')}
+    </div>
+  `;
+  return section;
+}
+
+function renderRuntimeExecutionTable(title, kind, runs, emptyMessage) {
+  return `
+    <div>
+      <div class="table-header" style="padding:0 0 0.5rem">
+        <h4 style="margin:0">${esc(title)}</h4>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Run</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
+        <tbody>
+          ${renderRuntimeExecutionRows(kind, runs, emptyMessage)}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderRuntimeExecutionRows(kind, runs, emptyMessage) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    return `<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">${esc(emptyMessage)}</td></tr>`;
+  }
+
+  const requestedRunId = getRequestedAssistantRunId();
+  return runs.slice(0, 8).map((entry) => {
+    const summary = entry?.summary || {};
+    const items = Array.isArray(entry?.items) ? entry.items : [];
+    const highlighted = summary.runId === requestedRunId;
+    return `
+      <tr id="system-execution-run-${escAttr(summary.runId || '')}" ${highlighted ? 'style="outline:2px solid var(--accent);outline-offset:-2px"' : ''}>
+        <td>${formatTime(summary.lastUpdatedAt || summary.startedAt || 0)}</td>
+        <td>
+          <div style="font-weight:600">${esc(summary.title || summary.runId || 'Run')}</div>
+          <div class="ops-task-sub">${esc(formatRuntimeExecutionSubtitle(kind, summary))}</div>
+        </td>
+        <td>
+          <span style="color:${statusColor(summary.status)}">${esc(summary.status || 'unknown')}</span>
+          <div class="ops-task-sub">
+            ${summary.pendingApprovalCount > 0 ? `${summary.pendingApprovalCount} approval${summary.pendingApprovalCount === 1 ? '' : 's'}` : formatDuration(summary.durationMs)}
+          </div>
+        </td>
+        <td>${esc(formatRuntimeExecutionOwner(kind, summary))}</td>
+        <td>${renderRuntimeExecutionTimelineItems(items, summary.runId || '')}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function formatRuntimeExecutionSubtitle(kind, summary) {
+  const subtitle = typeof summary?.subtitle === 'string' ? summary.subtitle.trim() : '';
+  if (subtitle) return subtitle;
+  if (kind === 'scheduled_task') {
+    const tags = Array.isArray(summary?.tags) ? summary.tags : [];
+    const taskType = typeof tags[1] === 'string' ? tags[1] : '';
+    const target = typeof tags[2] === 'string' ? tags[2] : '';
+    return [
+      target ? humanizeSystemToken(target) : '',
+      taskType ? `${taskType} task` : '',
+      summary.runId || '',
+    ].filter(Boolean).join(' • ');
+  }
+  if (kind === 'code_session') {
+    return [summary.codeSessionId || summary.sessionId || '', summary.runId || ''].filter(Boolean).join(' • ');
+  }
+  return summary.runId || '';
+}
+
+function formatRuntimeExecutionOwner(kind, summary) {
+  if (kind === 'scheduled_task') {
+    const tags = Array.isArray(summary?.tags) ? summary.tags : [];
+    const taskType = typeof tags[1] === 'string' ? tags[1] : '';
+    const target = typeof tags[2] === 'string' ? tags[2] : '';
+    if (target === 'second_brain_horizon_scan') {
+      return 'Second Brain routines and sync';
+    }
+    if (taskType === 'playbook') {
+      return target ? `Playbook • ${humanizeSystemToken(target)}` : 'Scheduled playbook';
+    }
+    if (taskType === 'agent') {
+      return target ? `Assistant task • ${humanizeSystemToken(target)}` : 'Scheduled assistant task';
+    }
+    return target ? `Tool task • ${humanizeSystemToken(target)}` : 'Scheduled tool task';
+  }
+  if (kind === 'code_session') {
+    return summary.codeSessionId || summary.sessionId || summary.agentId || '-';
+  }
+  return summary.agentId || summary.channel || '-';
+}
+
+function renderRuntimeExecutionTimelineItems(items, runId) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '<span class="ops-task-sub">No visible events.</span>';
+  }
+  const requestedRunId = getRequestedAssistantRunId();
+  const requestedItemId = requestedRunId === runId ? getRequestedAssistantRunItemId() : '';
+  const recent = selectRuntimeExecutionTimelineItems(items, requestedItemId);
+  return `
+    <details ${requestedItemId ? 'open' : ''}>
+      <summary>${recent.length} event${recent.length === 1 ? '' : 's'}</summary>
+      <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.45rem">
+        ${recent.map((item) => {
+          const contextAssembly = normalizeRunTimelineContextAssembly(item?.contextAssembly);
+          const highlighted = requestedItemId && item?.id === requestedItemId;
+          return `
+            <div
+              id="system-execution-item-${escAttr(item.id || '')}"
+              style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
+            >
+              <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between">
+                <strong>${esc(item.title || item.type || 'Event')}</strong>
+                <span style="color:${timelineStatusColor(item.status)}">${esc(item.status || 'info')}</span>
+              </div>
+              <div class="ops-task-sub">${esc(formatTime(item.timestamp))}</div>
+              ${item.detail ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(item.detail)}</div>` : ''}
+              ${renderRunTimelineContextAssembly(contextAssembly, esc)}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </details>
+  `;
+}
+
+function selectRuntimeExecutionTimelineItems(items, requestedItemId) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  if (!requestedItemId) return items.slice(-8);
+  const requestedIndex = items.findIndex((item) => item?.id === requestedItemId);
+  if (requestedIndex === -1) return items.slice(-8);
+  const windowSize = 8;
+  let start = Math.max(0, requestedIndex - 2);
+  let end = Math.min(items.length, start + windowSize);
+  start = Math.max(0, end - windowSize);
+  return items.slice(start, end);
+}
+
+function humanizeSystemToken(value) {
+  return String(value || '')
+    .replace(/[_:]+/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+    .trim();
+}
+
+function bindRunTimelineUpdates() {
+  if (runTimelineHandler) {
+    offSSE('run.timeline', runTimelineHandler);
+  }
+  runTimelineHandler = () => {
+    if (!currentContainer || !window.location.hash.startsWith('#/system')) return;
+    if (runTimelineRefreshTimer) {
+      window.clearTimeout(runTimelineRefreshTimer);
+    }
+    runTimelineRefreshTimer = window.setTimeout(() => {
+      runTimelineRefreshTimer = null;
+      void renderSystemPreserveScroll(currentContainer);
+    }, 400);
+  };
+  onSSE('run.timeline', runTimelineHandler);
+}
+
+function focusRequestedRuntimeRun(container) {
+  const assistantRunId = getRequestedAssistantRunId();
+  if (!assistantRunId) return;
+  const assistantRunItemId = getRequestedAssistantRunItemId();
+  if (assistantRunItemId) {
+    const itemEl = container.querySelector(`#system-execution-item-${CSS.escape(assistantRunItemId)}`);
+    if (itemEl instanceof HTMLElement) {
+      itemEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
+  const runRow = container.querySelector(`#system-execution-run-${CSS.escape(assistantRunId)}`);
+  if (runRow instanceof HTMLElement) {
+    runRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 function readDelegationJobMetadata(job) {
@@ -776,7 +1161,14 @@ function renderRoutingTraceRunCell(entry) {
 
 function formatRoutingTraceDetail(entry) {
   const details = entry?.details && typeof entry.details === 'object' ? entry.details : {};
+  const traceResponseSource = buildTraceResponseSource(details);
   const parts = [
+    traceResponseSource
+      ? formatSystemResponseSourceSummary(
+          traceResponseSource,
+          entry?.stage === 'dispatch_response' ? 'response' : 'selected',
+        )
+      : '',
     typeof details.route === 'string' ? `route ${details.route}` : '',
     typeof details.tier === 'string' ? `tier ${details.tier}` : '',
     typeof details.reason === 'string' ? details.reason : '',
@@ -814,6 +1206,28 @@ function bindSystemEvents(container) {
         void renderSystemPreserveScroll(container);
       }
     });
+  });
+
+  const runtimeExecutionForm = container.querySelector('#system-runtime-execution-filter-form');
+  runtimeExecutionForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    systemUiState.runtimeTimelineFilters = {
+      continuityKey: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-continuity-key')?.value),
+      activeExecutionRef: normalizeRoutingTraceFilterValue(container.querySelector('#system-runtime-active-exec-ref')?.value),
+    };
+    void renderSystemPreserveScroll(container);
+  });
+
+  container.querySelector('#system-runtime-execution-filter-clear')?.addEventListener('click', () => {
+    systemUiState.runtimeTimelineFilters = {
+      continuityKey: '',
+      activeExecutionRef: '',
+    };
+    const continuityInput = container.querySelector('#system-runtime-continuity-key');
+    const activeExecutionInput = container.querySelector('#system-runtime-active-exec-ref');
+    if (continuityInput) continuityInput.value = '';
+    if (activeExecutionInput) activeExecutionInput.value = '';
+    void renderSystemPreserveScroll(container);
   });
 
   const routingTraceForm = container.querySelector('#system-routing-trace-filter-form');
@@ -887,6 +1301,46 @@ function setCardTooltip(card, text) {
 function formatSecurityMode(mode) {
   if (!mode) return 'Unknown';
   return String(mode).replaceAll('_', ' ').replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function statusColor(status) {
+  switch (status) {
+    case 'completed':
+      return 'var(--success)';
+    case 'running':
+      return 'var(--info)';
+    case 'awaiting_approval':
+    case 'verification_pending':
+    case 'blocked':
+      return 'var(--warning)';
+    case 'failed':
+    case 'interrupted':
+      return 'var(--error)';
+    default:
+      return 'var(--text-secondary)';
+  }
+}
+
+function timelineStatusColor(status) {
+  switch (status) {
+    case 'succeeded':
+      return 'var(--success)';
+    case 'running':
+      return 'var(--info)';
+    case 'blocked':
+    case 'warning':
+      return 'var(--warning)';
+    case 'failed':
+      return 'var(--error)';
+    default:
+      return 'var(--text-secondary)';
+  }
+}
+
+function formatDuration(durationMs) {
+  if (!durationMs || durationMs < 1000) return `${Math.max(0, Math.round(durationMs || 0))}ms`;
+  if (durationMs < 60_000) return `${Math.round(durationMs / 1000)}s`;
+  return `${Math.round(durationMs / 60_000)}m`;
 }
 
 function formatTime(timestamp) {

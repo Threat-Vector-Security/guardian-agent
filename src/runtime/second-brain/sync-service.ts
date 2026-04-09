@@ -297,8 +297,10 @@ export class SyncService {
         for (const person of connections) {
           const names = asArray<Record<string, unknown>>(person.names);
           const emails = asArray<Record<string, unknown>>(person.emailAddresses);
+          const phoneNumbers = asArray<Record<string, unknown>>(person.phoneNumbers);
           const organizations = asArray<Record<string, unknown>>(person.organizations);
           const biographies = asArray<Record<string, unknown>>(person.biographies);
+          const locations = asArray<Record<string, unknown>>(person.locations);
           const email = textOrUndefined(emails[0]?.value);
           const name = textOrUndefined(names[0]?.displayName) ?? email;
           if (!name) continue;
@@ -306,8 +308,10 @@ export class SyncService {
             id: `google:person:${String(person.resourceName ?? person.etag ?? peopleSynced)}`,
             name,
             email,
+            phone: textOrUndefined(phoneNumbers[0]?.value),
             title: textOrUndefined(organizations[0]?.title),
             company: textOrUndefined(organizations[0]?.name),
+            location: textOrUndefined(locations[0]?.value),
             notes: textOrUndefined(biographies[0]?.value),
             relationship: 'work',
           });
@@ -443,15 +447,19 @@ export class SyncService {
         const contacts = asArray<Record<string, unknown>>((contactsResult.data as { value?: unknown })?.value);
         for (const contact of contacts) {
           const emailAddresses = asArray<Record<string, unknown>>(contact.emailAddresses);
+          const businessPhones = asArray<unknown>(contact.businessPhones);
           const email = textOrUndefined(emailAddresses[0]?.address);
+          const phone = textOrUndefined(contact.mobilePhone) ?? textOrUndefined(businessPhones[0]);
           const name = textOrUndefined(contact.displayName) ?? email;
           if (!name) continue;
           this.secondBrainService.upsertPerson({
             id: `microsoft:person:${String(contact.id ?? peopleSynced)}`,
             name,
             email,
+            phone,
             title: textOrUndefined(contact.jobTitle),
             company: textOrUndefined(contact.companyName),
+            location: textOrUndefined(contact.officeLocation),
             relationship: 'work',
           });
           peopleSynced += 1;

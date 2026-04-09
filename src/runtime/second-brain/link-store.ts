@@ -108,7 +108,7 @@ export class LinkStore {
     return existing;
   }
 
-  private getLink(id: string): SecondBrainLinkRecord | null {
+  getLink(id: string): SecondBrainLinkRecord | null {
     if (this.ctx.mode === 'memory') {
       const link = this.ctx.memory.links.get(id);
       return link ? clone(link) : null;

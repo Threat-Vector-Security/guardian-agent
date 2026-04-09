@@ -31,6 +31,7 @@ export interface SelectedExecutionProfile {
   id: ExecutionProfileId;
   providerName: string;
   providerType: string;
+  providerModel?: string;
   providerLocality: ProviderLocality;
   providerTier: ProviderTier;
   requestedTier: 'local' | 'external';
@@ -83,10 +84,10 @@ function isProviderTier(value: unknown): value is ProviderTier {
 }
 
 export function providerMatchesTier(
-  llmCfg: Pick<GuardianAgentConfig['llm'][string], 'provider'> | undefined,
+  llmCfg: Pick<GuardianAgentConfig['llm'][string], 'enabled' | 'provider'> | undefined,
   tier: ProviderTier,
 ): boolean {
-  if (!llmCfg?.provider) return false;
+  if (!llmCfg?.provider || llmCfg.enabled === false) return false;
   if (tier === 'local') {
     return getProviderLocality(llmCfg.provider) === 'local';
   }
@@ -156,12 +157,25 @@ function getManagedCloudRoutingRole(input: {
   decision: IntentGatewayDecision | null | undefined;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
 }): ManagedCloudRoutingRole {
+  if (!input.decision) return 'general';
+  if (
+    input.decision.confidence === 'low'
+    && (input.decision.route === 'unknown' || input.decision.route === 'general_assistant')
+  ) {
+    return 'general';
+  }
   if (
     input.decision?.route === 'coding_task'
     || input.decision?.executionClass === 'repo_grounded'
     || input.decision?.requiresRepoGrounding === true
   ) {
     return 'coding';
+  }
+  if (input.decision.executionClass === 'direct_assistant') {
+    return 'direct';
+  }
+  if (input.decision.confidence === 'low') {
+    return input.preferredAnswerPath === 'direct' ? 'direct' : 'general';
   }
   if (input.preferredAnswerPath === 'tool_loop') {
     return 'toolLoop';
@@ -475,6 +489,62 @@ function computeContextBudget(input: {
   return Math.max(12_000, Math.min(input.baseBudget, target));
 }
 
+function buildForcedProviderExecutionProfile(input: {
+  config: GuardianAgentConfig;
+  providerName: string;
+  gatewayDecision: IntentGatewayDecision | null | undefined;
+  policy: AssistantModelSelectionConfig;
+}): SelectedExecutionProfile | null {
+  const providerConfig = input.config.llm[input.providerName];
+  if (!providerConfig || providerConfig.enabled === false) return null;
+  const providerType = providerConfig.provider?.trim() || input.providerName;
+  const providerTier = getProviderTier(providerType);
+  const providerLocality = getProviderLocality(providerType);
+  if (!providerTier || !providerLocality) return null;
+
+  const expectedContextPressure = isExpectedContextPressure(input.gatewayDecision?.expectedContextPressure)
+    ? input.gatewayDecision.expectedContextPressure
+    : 'medium';
+  const preferredAnswerPath = isPreferredAnswerPath(input.gatewayDecision?.preferredAnswerPath)
+    ? input.gatewayDecision.preferredAnswerPath
+    : 'tool_loop';
+  const shape = buildProfileShape({
+    tier: providerTier,
+    expectedContextPressure,
+    preferredAnswerPath,
+  });
+  const contextBudget = computeContextBudget({
+    baseBudget: input.config.assistant.tools.contextBudget ?? 80_000,
+    tier: providerTier,
+    expectedContextPressure,
+    preferredAnswerPath,
+  });
+  const providerModel = providerConfig.model?.trim() || undefined;
+
+  return {
+    id: shape.id,
+    providerName: input.providerName,
+    providerType,
+    ...(providerModel ? { providerModel } : {}),
+    providerLocality,
+    providerTier,
+    requestedTier: providerLocality === 'local' ? 'local' : 'external',
+    preferredAnswerPath,
+    expectedContextPressure,
+    contextBudget,
+    toolContextMode: shape.toolContextMode,
+    maxAdditionalSections: shape.maxAdditionalSections,
+    maxRuntimeNotices: shape.maxRuntimeNotices,
+    fallbackProviderOrder: buildFallbackProviderOrder(
+      input.config,
+      input.providerName,
+      providerTier,
+      input.policy,
+    ),
+    reason: `request-scoped provider override selected provider '${input.providerName}'`,
+  };
+}
+
 function buildProfileShape(input: {
   tier: ProviderTier;
   expectedContextPressure: IntentGatewayExpectedContextPressure;
@@ -511,8 +581,21 @@ export function selectExecutionProfile(input: {
   routeDecision: Pick<RouteDecision, 'tier'> | null | undefined;
   gatewayDecision: IntentGatewayDecision | null | undefined;
   mode: RoutingTierMode;
+  forcedProviderName?: string | null;
 }): SelectedExecutionProfile | null {
   const policy = normalizeModelSelectionPolicy(input.config);
+  const forcedProviderName = input.forcedProviderName?.trim();
+  if (forcedProviderName) {
+    const forcedProfile = buildForcedProviderExecutionProfile({
+      config: input.config,
+      providerName: forcedProviderName,
+      gatewayDecision: input.gatewayDecision,
+      policy,
+    });
+    if (forcedProfile) {
+      return forcedProfile;
+    }
+  }
   const tierSelection = resolveSelectedTier({
     config: input.config,
     routeDecision: input.routeDecision,
@@ -540,6 +623,7 @@ export function selectExecutionProfile(input: {
     : null;
   const effectiveProviderName = providerSelection?.providerName ?? providerName;
   const effectiveProviderType = input.config.llm[effectiveProviderName]?.provider?.trim() || effectiveProviderName;
+  const effectiveProviderModel = input.config.llm[effectiveProviderName]?.model?.trim() || undefined;
   const shape = buildProfileShape({
     tier: tierSelection.tier,
     expectedContextPressure,
@@ -555,6 +639,7 @@ export function selectExecutionProfile(input: {
     id: shape.id,
     providerName: effectiveProviderName,
     providerType: effectiveProviderType,
+    ...(effectiveProviderModel ? { providerModel: effectiveProviderModel } : {}),
     providerLocality: getProviderLocality(effectiveProviderName) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
     providerTier: getProviderTier(effectiveProviderType) ?? tierSelection.tier,
     requestedTier: tierSelection.requestedTier,
@@ -583,6 +668,7 @@ export function serializeSelectedExecutionProfile(
     id: profile.id,
     providerName: profile.providerName,
     providerType: profile.providerType,
+    ...(profile.providerModel ? { providerModel: profile.providerModel } : {}),
     providerLocality: profile.providerLocality,
     providerTier: profile.providerTier,
     requestedTier: profile.requestedTier,
@@ -610,6 +696,9 @@ export function readSelectedExecutionProfileMetadata(
   const providerType = typeof record.providerType === 'string' && record.providerType.trim()
     ? record.providerType.trim()
     : '';
+  const providerModel = typeof record.providerModel === 'string' && record.providerModel.trim()
+    ? record.providerModel.trim()
+    : undefined;
   const providerLocality = record.providerLocality === 'local' || record.providerLocality === 'external'
     ? record.providerLocality
     : getProviderLocality(providerName);
@@ -645,6 +734,7 @@ export function readSelectedExecutionProfileMetadata(
           : 'frontier_deep'),
     providerName,
     providerType: providerType || providerName,
+    ...(providerModel ? { providerModel } : {}),
     providerLocality,
     providerTier,
     requestedTier: record.requestedTier === 'local' || record.requestedTier === 'external'

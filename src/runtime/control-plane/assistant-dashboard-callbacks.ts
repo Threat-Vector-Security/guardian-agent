@@ -43,6 +43,16 @@ const POLICY_EVENT_TYPES = new Set([
   'output_redacted',
 ]);
 
+function buildMatchedRunHref(
+  runId: string,
+  kind: import('../run-timeline.js').DashboardRunKind,
+  focusItemId?: string,
+): string {
+  const params = new URLSearchParams({ assistantRunId: runId });
+  if (focusItemId) params.set('assistantRunItemId', focusItemId);
+  return `${kind === 'automation_run' ? '#/automations' : '#/system'}?${params.toString()}`;
+}
+
 export function createAssistantDashboardCallbacks(
   options: AssistantDashboardCallbackOptions,
 ): AssistantDashboardCallbacks {
@@ -143,7 +153,7 @@ export function createAssistantDashboardCallbacks(
                   title: matchedRun.summary.title,
                   status: matchedRun.summary.status,
                   kind: matchedRun.summary.kind,
-                  href: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}`,
+                  href: buildMatchedRunHref(matchedRun.summary.runId, matchedRun.summary.kind),
                   ...(codeSessionId ? { codeSessionId } : {}),
                   ...(codeSessionId
                     ? {
@@ -153,7 +163,7 @@ export function createAssistantDashboardCallbacks(
                   ...(focusItem ? { focusItemId: focusItem.itemId, focusItemTitle: focusItem.title } : {}),
                   ...(focusItem
                     ? {
-                        focusItemHref: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}&assistantRunItemId=${encodeURIComponent(focusItem.itemId)}`,
+                        focusItemHref: buildMatchedRunHref(matchedRun.summary.runId, matchedRun.summary.kind, focusItem.itemId),
                       }
                     : {}),
                 },

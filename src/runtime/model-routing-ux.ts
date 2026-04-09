@@ -51,25 +51,14 @@ function formatProviderName(providerName: string): string {
   return providerName.replaceAll('_', ' ');
 }
 
-function simplifyProviderProfileName(providerName: string | undefined, providerProfileName: string | undefined): string {
+function normalizeProviderIdentity(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function formatProviderProfileName(providerName: string | undefined, providerProfileName: string | undefined): string {
   const raw = providerProfileName?.trim() ?? '';
   if (!raw) return '';
-  const normalizedProviderName = providerName?.trim() ?? '';
-  if (!normalizedProviderName) return raw.replaceAll('_', ' ');
-  const variants = [
-    normalizedProviderName,
-    normalizedProviderName.replaceAll('_', '-'),
-    normalizedProviderName.replaceAll('_', ' '),
-  ]
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  for (const variant of variants) {
-    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const simplified = raw.replace(new RegExp(`^${escaped}(?:[-_\\s]+)?`, 'i'), '').trim();
-    if (simplified && simplified.toLowerCase() !== raw.toLowerCase()) {
-      return simplified.replaceAll('_', ' ');
-    }
-  }
+  if (normalizeProviderIdentity(providerName) === normalizeProviderIdentity(raw)) return '';
   return raw.replaceAll('_', ' ');
 }
 
@@ -129,10 +118,11 @@ export function formatResponseSourceLabel(metadata?: Record<string, unknown>): s
   const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];
   const providerLabel = source.providerName ? formatProviderName(source.providerName) : '';
   if (providerLabel) parts.push(providerLabel);
-  const profileLabel = simplifyProviderProfileName(source.providerName, source.providerProfileName);
+  const profileLabel = formatProviderProfileName(source.providerName, source.providerProfileName);
   if (profileLabel && profileLabel.toLowerCase() !== providerLabel.toLowerCase()) {
     parts.push(profileLabel);
   }
+  if (source.model?.trim()) parts.push(source.model.trim());
   if (source.usedFallback) parts.push('fallback');
   return `[${parts.join(' · ')}]`;
 }

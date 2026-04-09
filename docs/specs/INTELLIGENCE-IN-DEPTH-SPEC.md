@@ -48,11 +48,9 @@ Current practical state:
   - direct answers
   - tool loops / provider CRUD
   - managed-cloud coding
-- Chat mode selection now exposes:
-  - auto
-  - local
-  - managed cloud
-  - frontier
+- Chat controls now expose:
+  - persistent tier routing such as `auto`, `local`, `managed cloud`, and `frontier`
+  - request-scoped web chat provider-profile selection from enabled provider profiles
 - Layer 1 and Layer 2 do **not** exist yet as shipped built-in runtimes.
 
 What this implementation phase added:
@@ -82,7 +80,7 @@ What is now implemented:
 - dedicated config UI/editor separation between local Ollama and Ollama Cloud
 - tier-aware routing, fallback, and response-source badging for local vs managed-cloud vs frontier
 - tier-specific routed defaults for local, managed-cloud, and frontier provider selection
-- explicit chat-mode forcing for local, managed-cloud, and frontier paths
+- explicit tier forcing for local, managed-cloud, and frontier paths plus request-scoped web provider-profile forcing
 - multiple named managed-cloud provider profiles under the Ollama Cloud provider family
 - deterministic managed-cloud role routing for direct answers, tool loops, managed-cloud coding, and general fallback
 

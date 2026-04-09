@@ -1121,12 +1121,22 @@ function renderPersonEditor(person) {
       </div>
       <div class="sb-form__row">
         <div class="sb-form__group">
+          <label class="sb-form__label" for="person-phone">Phone</label>
+          <input id="person-phone" name="phone" type="text" inputmode="tel" placeholder="Phone number" value="${escAttr(person?.phone ?? '')}">
+        </div>
+        <div class="sb-form__group">
           <label class="sb-form__label" for="person-title">Title</label>
           <input id="person-title" name="title" type="text" placeholder="Title" value="${escAttr(person?.title ?? '')}">
         </div>
+      </div>
+      <div class="sb-form__row">
         <div class="sb-form__group">
           <label class="sb-form__label" for="person-company">Company</label>
           <input id="person-company" name="company" type="text" placeholder="Company" value="${escAttr(person?.company ?? '')}">
+        </div>
+        <div class="sb-form__group">
+          <label class="sb-form__label" for="person-location">Location</label>
+          <input id="person-location" name="location" type="text" placeholder="Location" value="${escAttr(person?.location ?? '')}">
         </div>
       </div>
       <div class="sb-form__row">
@@ -2282,8 +2292,10 @@ function bindInteractions(container) {
         id: readString(target, 'id') || undefined,
         name: readString(target, 'name') || undefined,
         email: readString(target, 'email') || undefined,
+        phone: readString(target, 'phone') || undefined,
         title: readString(target, 'title') || undefined,
         company: readString(target, 'company') || undefined,
+        location: readString(target, 'location') || undefined,
         relationship: readString(target, 'relationship') || 'work',
         lastContactAt: readString(target, 'lastContactAt') ? new Date(readString(target, 'lastContactAt')).getTime() : undefined,
         notes: readString(target, 'notes') || undefined,
@@ -2468,8 +2480,10 @@ async function updatePersonLastContact(personId) {
     id: person.id,
     name: person.name,
     email: person.email,
+    phone: person.phone,
     title: person.title,
     company: person.company,
+    location: person.location,
     relationship: person.relationship,
     notes: person.notes,
     lastContactAt: Date.now(),
@@ -3029,8 +3043,10 @@ function matchesPersonFilter(person) {
   const haystack = [
     person.name,
     person.email,
+    person.phone,
     person.title,
     person.company,
+    person.location,
     person.notes,
     person.relationship,
   ]
@@ -3107,8 +3123,10 @@ function isPersonStale(person, now) {
 function renderPersonLine(person) {
   const parts = [
     person.email,
+    person.phone,
     person.title,
     person.company,
+    person.location,
     person.notes ? summarize(person.notes, 90) : '',
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(' · ') : 'No extra context yet.';
