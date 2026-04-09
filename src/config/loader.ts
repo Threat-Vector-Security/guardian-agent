@@ -151,6 +151,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     if (!SUPPORTED_LLM_PROVIDERS.has(llm.provider)) {
       errors.push(`llm.${name}.provider must be one of: ${SUPPORTED_LLM_PROVIDER_LIST}`);
     }
+    if (llm.enabled !== undefined && typeof llm.enabled !== 'boolean') {
+      errors.push(`llm.${name}.enabled must be a boolean when provided`);
+    }
     if (!llm.model) {
       errors.push(`llm.${name}.model is required`);
     }

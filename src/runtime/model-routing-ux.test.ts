@@ -59,9 +59,10 @@ describe('model-routing-ux', () => {
         providerName: 'ollama_cloud',
         providerProfileName: 'ollama-cloud-general',
         providerTier: 'managed_cloud',
+        model: 'gpt-oss:120b',
         usedFallback: true,
       },
-    })).toBe('[managed cloud · ollama cloud · general · fallback]');
+    })).toBe('[managed cloud · ollama cloud · ollama-cloud-general · gpt-oss:120b · fallback]');
   });
 
   it('returns the friendly local-model complexity message', () => {

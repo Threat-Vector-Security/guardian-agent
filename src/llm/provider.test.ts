@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createProvider, createProviders } from './provider.js';
+import { createFailoverProvider, createProvider, createProviders } from './provider.js';
 import { OllamaProvider } from './ollama.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAIProvider } from './openai.js';
@@ -52,6 +52,29 @@ describe('createProviders', () => {
     expect(providers.size).toBe(2);
     expect(providers.get('local')).toBeInstanceOf(OllamaProvider);
     expect(providers.get('cloud')).toBeInstanceOf(OpenAIProvider);
+  });
+
+  it('skips disabled provider profiles', () => {
+    const configs: Record<string, LLMConfig> = {
+      local: { provider: 'ollama', model: 'llama3.2' },
+      cloud: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test', enabled: false },
+    };
+
+    const providers = createProviders(configs);
+    expect(providers.size).toBe(1);
+    expect(providers.has('local')).toBe(true);
+    expect(providers.has('cloud')).toBe(false);
+  });
+});
+
+describe('createFailoverProvider', () => {
+  it('skips disabled provider profiles in failover order', () => {
+    const failover = createFailoverProvider({
+      local: { provider: 'ollama', model: 'llama3.2' },
+      cloud: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test', enabled: false },
+    });
+
+    expect(failover.getCircuitStates().map((state) => state.name)).toEqual(['local']);
   });
 });
 

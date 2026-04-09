@@ -19,6 +19,11 @@ function createConfig(): GuardianAgentConfig {
     model: 'qwen3:32b',
     credentialRef: 'llm.ollama_cloud.tools',
   };
+  config.llm['ollama-cloud-direct'] = {
+    provider: 'ollama_cloud',
+    model: 'minimax-m2.1',
+    credentialRef: 'llm.ollama_cloud.direct',
+  };
   config.llm['ollama-cloud-coding'] = {
     provider: 'ollama_cloud',
     model: 'qwen3-coder-next',
@@ -44,6 +49,7 @@ function createConfig(): GuardianAgentConfig {
       enabled: true,
       roleBindings: {
         general: 'ollama-cloud-general',
+        direct: 'ollama-cloud-direct',
         toolLoop: 'ollama-cloud-tools',
         coding: 'ollama-cloud-coding',
       },
@@ -93,6 +99,7 @@ describe('execution profiles', () => {
 
     expect(profile).toMatchObject({
       providerName: 'ollama-cloud-tools',
+      providerModel: 'qwen3:32b',
       providerTier: 'managed_cloud',
       id: 'managed_cloud_tool',
       toolContextMode: 'tight',
@@ -103,6 +110,7 @@ describe('execution profiles', () => {
       'ollama',
       'ollama-cloud-general',
       'ollama-cloud-coding',
+      'ollama-cloud-direct',
     ]);
   });
 
@@ -125,6 +133,7 @@ describe('execution profiles', () => {
       'anthropic',
       'ollama-cloud-general',
       'ollama-cloud-coding',
+      'ollama-cloud-direct',
       'ollama-cloud-tools',
       'ollama',
     ]);
@@ -140,6 +149,34 @@ describe('execution profiles', () => {
 
     expect(profile).toMatchObject({
       providerName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+  });
+
+  it('uses the managed-cloud direct profile for direct-assistant personal work even when the gateway prefers tool_loop', () => {
+    const config = createConfig();
+    config.llm.ollama.enabled = false;
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'local' },
+      gatewayDecision: createGatewayDecision({
+        route: 'personal_assistant_task',
+        operation: 'create',
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerModel: 'minimax-m2.1',
       providerTier: 'managed_cloud',
       id: 'managed_cloud_tool',
     });
@@ -242,6 +279,78 @@ describe('execution profiles', () => {
       providerName: 'ollama-cloud-general',
       providerTier: 'managed_cloud',
     });
+  });
+
+  it('falls back to the general managed-cloud profile for low-confidence unknown turns', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        route: 'unknown',
+        confidence: 'low',
+        operation: 'unknown',
+        executionClass: 'direct_assistant',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-general',
+      providerModel: 'gpt-oss:120b',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+  });
+
+  it('skips disabled managed-cloud providers when choosing the execution profile', () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-tools'].enabled = false;
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        route: 'email_task',
+        operation: 'read',
+        executionClass: 'provider_crud',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-general',
+      providerTier: 'managed_cloud',
+    });
+  });
+
+  it('honors an explicit provider override instead of auto tier/profile selection', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'auto',
+      forcedProviderName: 'ollama-cloud-direct',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerModel: 'minimax-m2.1',
+      providerTier: 'managed_cloud',
+      providerLocality: 'external',
+      requestedTier: 'external',
+      id: 'managed_cloud_tool',
+    });
+    expect(profile?.fallbackProviderOrder[0]).toBe('ollama-cloud-direct');
+    expect(profile?.reason).toContain("request-scoped provider override selected provider 'ollama-cloud-direct'");
   });
 
   it('round-trips execution profile metadata through message metadata', () => {

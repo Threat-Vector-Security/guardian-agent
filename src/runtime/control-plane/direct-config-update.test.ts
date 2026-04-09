@@ -144,4 +144,43 @@ describe('direct config update', () => {
       coding: 'ollama-cloud-coding',
     });
   });
+
+  it('persists provider enabled toggles and re-derives the primary provider from enabled profiles', async () => {
+    const { configRef, rawState, handler } = createHandlerHarness(createConfig());
+
+    const result = await handler({
+      llm: {
+        'ollama-cloud-general': { enabled: false },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.llm['ollama-cloud-general'].enabled).toBe(false);
+    expect(configRef.current.defaultProvider).toBe('ollama-cloud-coding');
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawLlm = rawConfig.llm as Record<string, Record<string, unknown>>;
+    expect(rawLlm['ollama-cloud-general']?.enabled).toBe(false);
+    expect(rawConfig.defaultProvider).toBe('ollama-cloud-coding');
+  });
+
+  it('rejects updates that would disable every AI provider', async () => {
+    const { configRef, handler } = createHandlerHarness(createConfig());
+
+    const result = await handler({
+      llm: {
+        ollama: { enabled: false },
+        'ollama-cloud-general': { enabled: false },
+        'ollama-cloud-coding': { enabled: false },
+        anthropic: { enabled: false },
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      message: 'At least one AI provider must stay enabled.',
+      statusCode: 400,
+    });
+    expect(configRef.current.defaultProvider).toBe('ollama-cloud-general');
+  });
 });

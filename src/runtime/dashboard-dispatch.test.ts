@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import {
+  attachSelectedExecutionProfileMetadata,
+  type SelectedExecutionProfile,
+} from './execution-profiles.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
 import { createDashboardMessageDispatcher } from './dashboard-dispatch.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
@@ -24,6 +28,28 @@ function createGatewayRecord(): IntentGatewayRecord {
       missingFields: [],
       entities: {},
     },
+  };
+}
+
+function createSelectedExecutionProfile(
+  overrides: Partial<SelectedExecutionProfile> = {},
+): SelectedExecutionProfile {
+  return {
+    id: 'managed_cloud_tool',
+    providerName: 'ollama-cloud-coding',
+    providerType: 'ollama_cloud',
+    providerLocality: 'external',
+    providerTier: 'managed_cloud',
+    requestedTier: 'external',
+    preferredAnswerPath: 'tool_loop',
+    expectedContextPressure: 'medium',
+    contextBudget: 80_000,
+    toolContextMode: 'tight',
+    maxAdditionalSections: 1,
+    maxRuntimeNotices: 2,
+    fallbackProviderOrder: ['ollama-cloud-coding'],
+    reason: 'test profile',
+    ...overrides,
   };
 }
 
@@ -228,5 +254,44 @@ describe('createDashboardMessageDispatcher', () => {
         primaryAgentId: 'local-agent',
       }),
     }));
+  });
+
+  it('passes the selected execution profile into orchestrator dispatch metadata', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-coding'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder-next',
+      credentialRef: 'llm.ollama-cloud-coding',
+    };
+    const options = createOptions({
+      configRef: { current: config },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'inspect the repo',
+        userId: 'web-user',
+        channel: 'web',
+        metadata: attachSelectedExecutionProfileMetadata(undefined, createSelectedExecutionProfile()),
+      },
+      routeDecision: {
+        agentId: 'external-agent',
+        confidence: 'high',
+        reason: 'tier route',
+        tier: 'external',
+      },
+    });
+
+    expect(options.orchestrator.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      selectedResponseSource: expect.objectContaining({
+        locality: 'external',
+        providerName: 'ollama_cloud',
+        providerProfileName: 'ollama-cloud-coding',
+        providerTier: 'managed_cloud',
+        model: 'qwen3-coder-next',
+      }),
+    }), expect.any(Function));
   });
 });

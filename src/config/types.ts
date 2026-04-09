@@ -201,6 +201,8 @@ export interface AssistantModelSelectionConfig {
 export interface LLMConfig {
   /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
   provider: string;
+  /** Whether this configured provider profile is active for runtime routing. Default: true. */
+  enabled?: boolean;
   /** Runtime-only resolved API key. Do not persist raw values in config files; use credentialRef instead. */
   apiKey?: string;
   /** Reference into assistant.credentials.refs (preferred over inline apiKey). */

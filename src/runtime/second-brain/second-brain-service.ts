@@ -8,6 +8,7 @@ import {
   type SecondBrainEventFilter,
   type SecondBrainEventRecord,
   type SecondBrainEventUpsertInput,
+  type SecondBrainDeliveryChannel,
   type SecondBrainLinkFilter,
   type SecondBrainLinkRecord,
   type SecondBrainLinkUpsertInput,
@@ -796,6 +797,56 @@ function buildRoutineView(
   };
 }
 
+function buildRoutineDeliverySignature(
+  deliveryDefaults: readonly SecondBrainDeliveryChannel[] | undefined,
+): string[] {
+  return [...new Set((deliveryDefaults ?? []).filter((value): value is SecondBrainDeliveryChannel => typeof value === 'string' && value.trim().length > 0))]
+    .sort();
+}
+
+function buildRoutineDedupSignature(
+  definition: BuiltInRoutineDefinition,
+  trigger: SecondBrainRoutineTrigger,
+  config: SecondBrainRoutineConfig | undefined,
+  deliveryDefaults: readonly SecondBrainDeliveryChannel[] | undefined,
+): string {
+  const timing = buildRoutineTimingView(definition, trigger);
+  return JSON.stringify({
+    templateId: definition.manifest.id,
+    timing: {
+      kind: timing.kind,
+      ...(timing.schedule ? { schedule: cloneRoutineSchedule(timing.schedule) } : {}),
+      ...(Number.isFinite(timing.minutes) ? { minutes: Number(timing.minutes) } : {}),
+    },
+    delivery: buildRoutineDeliverySignature(deliveryDefaults),
+    ...(supportsFocusQuery(definition) && config?.focusQuery?.trim()
+      ? { focusQuery: config.focusQuery.trim().toLowerCase() }
+      : {}),
+    ...(definition.manifest.id === 'topic-watch' && config?.topicQuery?.trim()
+      ? { topicQuery: config.topicQuery.trim().toLowerCase() }
+      : {}),
+    ...(definition.manifest.id === 'deadline-watch'
+      ? {
+          dueWithinHours: Number.isFinite(config?.dueWithinHours) ? Number(config?.dueWithinHours) : 24,
+          includeOverdue: config?.includeOverdue !== false,
+        }
+      : {}),
+  });
+}
+
+function findMatchingRoutineRecord(
+  definition: BuiltInRoutineDefinition,
+  configuredRoutines: SecondBrainRoutineRecord[],
+  trigger: SecondBrainRoutineTrigger,
+  config: SecondBrainRoutineConfig | undefined,
+  deliveryDefaults: readonly SecondBrainDeliveryChannel[] | undefined,
+): SecondBrainRoutineRecord | null {
+  const candidateSignature = buildRoutineDedupSignature(definition, trigger, config, deliveryDefaults);
+  return configuredRoutines.find((routine) => (
+    buildRoutineDedupSignature(definition, routine.trigger, routine.config, routine.deliveryDefaults) === candidateSignature
+  )) ?? null;
+}
+
 function normalizeRoutineTimingInput(
   value: SecondBrainRoutineTimingInput | undefined,
 ): SecondBrainRoutineTimingInput | undefined {
@@ -972,6 +1023,51 @@ function normalizeLinkUrl(rawValue: string): string {
     throw new Error('Library item URL must use http, https, or file.');
   }
   return parsed.toString();
+}
+
+function normalizeLinkKind(rawValue: unknown): SecondBrainLinkUpsertInput['kind'] {
+  const normalized = typeof rawValue === 'string' ? rawValue.trim().toLowerCase() : '';
+  if (!normalized) return undefined;
+  if (
+    normalized === 'document'
+    || normalized === 'article'
+    || normalized === 'reference'
+    || normalized === 'repo'
+    || normalized === 'file'
+    || normalized === 'other'
+  ) {
+    return normalized;
+  }
+  if (
+    normalized === 'link'
+    || normalized === 'url'
+    || normalized === 'website'
+    || normalized === 'web'
+    || normalized === 'resource'
+    || normalized === 'checklist'
+  ) {
+    return 'reference';
+  }
+  if (normalized === 'repository' || normalized === 'github') {
+    return 'repo';
+  }
+  if (
+    normalized === 'doc'
+    || normalized === 'docs'
+    || normalized === 'guide'
+    || normalized === 'runbook'
+    || normalized === 'manual'
+    || normalized === 'pdf'
+  ) {
+    return 'document';
+  }
+  if (normalized === 'blog' || normalized === 'news' || normalized === 'post') {
+    return 'article';
+  }
+  if (normalized === 'path') {
+    return 'file';
+  }
+  return undefined;
 }
 
 export class SecondBrainService {
@@ -1160,8 +1256,10 @@ export class SecondBrainService {
       ...input,
       name: resolvedName,
       email: input.email?.trim() || undefined,
+      phone: input.phone?.trim() || undefined,
       title: input.title?.trim() || undefined,
       company: input.company?.trim() || undefined,
+      location: input.location?.trim() || undefined,
       notes: input.notes?.trim() || undefined,
     });
   }
@@ -1185,6 +1283,7 @@ export class SecondBrainService {
       url: normalizedUrl,
       title: input.title?.trim() || undefined,
       summary: input.summary?.trim() || undefined,
+      kind: normalizeLinkKind(input.kind),
     });
   }
 
@@ -1255,15 +1354,26 @@ export class SecondBrainService {
 
     const timestamp = this.now();
     const config = inputConfig;
-    let routineId = resolveRoutineRecordId(definition, input.name, config);
-    while (this.getRoutineRecordById(routineId)) {
-      routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
-    }
     const trigger = input.timing
       ? resolveTriggerFromRoutineTimingInput(definition, input.timing, definition.manifest.trigger, definition.manifest.name, timestamp)
       : input.trigger
         ? resolveRoutineTriggerOverride(input.trigger, definition.manifest.trigger, definition.manifest.name)
         : cloneRoutineTrigger(definition.manifest.trigger);
+    const deliveryDefaults = input.delivery ?? input.deliveryDefaults ?? definition.manifest.deliveryDefaults;
+    const existingDuplicate = findMatchingRoutineRecord(
+      definition,
+      configuredRoutines,
+      trigger,
+      config,
+      deliveryDefaults,
+    );
+    if (existingDuplicate) {
+      return buildRoutineView(definition, existingDuplicate);
+    }
+    let routineId = resolveRoutineRecordId(definition, input.name, config);
+    while (this.getRoutineRecordById(routineId)) {
+      routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
+    }
     const routine = materializeRoutineRecord(definition, timestamp, {
       id: routineId,
       templateId: templateId as SecondBrainRoutineTemplateId,
@@ -1271,7 +1381,7 @@ export class SecondBrainService {
       enabled: input.enabled,
       trigger,
       config,
-      deliveryDefaults: input.delivery ?? input.deliveryDefaults,
+      deliveryDefaults,
       defaultRoutingBias: input.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId,
     });
@@ -1372,6 +1482,10 @@ export class SecondBrainService {
 
   getPersonById(id: string): SecondBrainPersonRecord | null {
     return this.store.people.getPerson(id);
+  }
+
+  getLinkById(id: string): SecondBrainLinkRecord | null {
+    return this.store.links.getLink(id);
   }
 
   listBriefs(filter: SecondBrainBriefFilter = {}): SecondBrainBriefRecord[] {

@@ -218,13 +218,17 @@ export class Runtime {
       throw new Error(`Agent '${agentId}' not found`);
     }
 
-    // Auto-recover errored agents on user messages so users aren't stuck
-    // waiting for the watchdog backoff. The actual error (if still present)
-    // will surface naturally on the next invocation attempt.
-    if (instance.state === AgentState.Errored) {
+    // Auto-recover errored/stalled agents on user messages so users aren't stuck
+    // waiting for watchdog retries or manual intervention. If the underlying
+    // issue still exists, it will surface naturally on this invocation attempt.
+    if (instance.state === AgentState.Errored || instance.state === AgentState.Stalled) {
+      const recoveringFrom = instance.state;
+      const recoveryTarget = recoveringFrom === AgentState.Stalled
+        ? AgentState.Running
+        : AgentState.Ready;
       try {
-        this.registry.transitionState(agentId, AgentState.Ready, 'user-message: auto-recover');
-        log.info({ agentId }, 'Auto-recovered errored agent on user message');
+        this.registry.transitionState(agentId, recoveryTarget, `user-message: auto-recover-from-${recoveringFrom}`);
+        log.info({ agentId, recoveringFrom, recoveryTarget }, 'Auto-recovered agent on user message');
       } catch {
         // Transition failed — fall through to assertExecutable which will throw
       }
@@ -606,6 +610,7 @@ export class Runtime {
     const primaryName = instance.definition.providerName ?? this.config.defaultProvider;
     // Look for any configured provider that is different from the primary
     for (const [name, config] of Object.entries(this.config.llm)) {
+      if (config.enabled === false) continue;
       if (name !== primaryName) return config;
     }
     return undefined;

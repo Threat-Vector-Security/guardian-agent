@@ -21,30 +21,14 @@ function formatProviderName(providerName) {
   return providerName.replaceAll('_', ' ');
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function normalizeProviderIdentity(value) {
+  return (typeof value === 'string' ? value : '').trim().toLowerCase().replace(/[\s_-]+/g, '');
 }
 
 function formatProviderProfileName(providerName, providerProfileName) {
   const raw = typeof providerProfileName === 'string' ? providerProfileName.trim() : '';
   if (!raw) return '';
-  const normalizedProviderName = typeof providerName === 'string' ? providerName.trim() : '';
-  if (!normalizedProviderName) {
-    return raw.replaceAll('_', ' ');
-  }
-  const variants = [
-    normalizedProviderName,
-    normalizedProviderName.replaceAll('_', '-'),
-    normalizedProviderName.replaceAll('_', ' '),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  for (const variant of variants) {
-    const simplified = raw.replace(new RegExp(`^${escapeRegExp(variant)}(?:[-_\\s]+)?`, 'i'), '').trim();
-    if (simplified && simplified.toLowerCase() !== raw.toLowerCase()) {
-      return simplified.replaceAll('_', ' ');
-    }
-  }
+  if (normalizeProviderIdentity(providerName) === normalizeProviderIdentity(raw)) return '';
   return raw.replaceAll('_', ' ');
 }
 
@@ -60,6 +44,9 @@ export function describeResponseSource(value) {
   const tier = value?.tier === 'local' || value?.tier === 'external'
     ? value.tier
     : '';
+  const model = typeof value?.model === 'string' && value.model.trim()
+    ? value.model.trim()
+    : '';
   const usedFallback = value?.usedFallback === true;
   const notice = typeof value?.notice === 'string' && value.notice.trim()
     ? value.notice.trim()
@@ -72,12 +59,16 @@ export function describeResponseSource(value) {
   if (profileLabel && profileLabel.toLowerCase() !== formatProviderName(providerName).toLowerCase()) {
     labelParts.push(profileLabel);
   }
+  if (model) {
+    labelParts.push(model);
+  }
   if (usedFallback) {
     labelParts.push('fallback');
   }
   const titleParts = [];
   if (notice) titleParts.push(notice);
   if (providerProfileName) titleParts.push(`Profile: ${providerProfileName}.`);
+  if (model) titleParts.push(`Model: ${model}.`);
   if (tier && tier !== locality) {
     titleParts.push(`Requested ${tier} route.`);
   }
@@ -86,6 +77,7 @@ export function describeResponseSource(value) {
     providerName,
     providerProfileName,
     providerTier,
+    model,
     tier,
     usedFallback,
     notice,

@@ -500,6 +500,15 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  cancelMessage: (requestId, userId = 'web-user', channel = 'web', agentId, reason) => {
+    const payload = { requestId, userId, channel };
+    if (agentId) payload.agentId = agentId;
+    if (reason) payload.reason = reason;
+    return request('/api/message/cancel', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
   currentPendingAction: (userId = 'web-user', channel = 'web', surfaceId = 'web-guardian-chat') => {
     const qs = new URLSearchParams({ userId, channel, surfaceId });
     return request(`/api/chat/pending-action?${qs.toString()}`);

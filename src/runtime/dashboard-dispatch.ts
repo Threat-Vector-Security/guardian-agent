@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig } from '../config/types.js';
 import type { AnalyticsService } from './analytics.js';
 import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
+import {
+  readSelectedExecutionProfileMetadata,
+  type SelectedExecutionProfile,
+} from './execution-profiles.js';
 import type { IdentityService } from './identity.js';
 import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
@@ -11,7 +15,7 @@ import {
 import type { IncomingDispatchMessage, ParsedCodeRequestMetadata } from './incoming-dispatch.js';
 import type { IntentRoutingTraceLog } from './intent-routing-trace.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
-import { readResponseSourceMetadata } from './model-routing-ux.js';
+import { readResponseSourceMetadata, type ResponseSourceMetadata } from './model-routing-ux.js';
 import type { AssistantDispatchContext, AssistantOrchestrator } from './orchestrator.js';
 import type { Runtime } from './runtime.js';
 
@@ -33,6 +37,7 @@ export interface DashboardDispatchInput {
     priority?: 'high' | 'normal' | 'low';
     requestType?: string;
     requestId?: string;
+    abortSignal?: AbortSignal;
   };
   resolvedCodeSession?: ResolvedCodeSessionContext | null;
   precomputedIntentGateway?: IntentGatewayRecord | null;
@@ -42,6 +47,23 @@ export type DashboardMessageDispatcher = (args: DashboardDispatchInput) => Promi
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildSelectedResponseSource(
+  profile: SelectedExecutionProfile | null,
+  config: GuardianAgentConfig,
+): ResponseSourceMetadata | undefined {
+  if (!profile) return undefined;
+  const providerConfig = config.llm[profile.providerName] ?? config.llm[profile.providerType];
+  const model = providerConfig?.model?.trim();
+  return {
+    locality: profile.providerLocality,
+    providerName: profile.providerType,
+    ...(profile.providerName !== profile.providerType ? { providerProfileName: profile.providerName } : {}),
+    providerTier: profile.providerTier,
+    ...(model ? { model } : {}),
+    usedFallback: false,
+  };
 }
 
 export function createDashboardMessageDispatcher(args: {
@@ -135,6 +157,9 @@ export function createDashboardMessageDispatcher(args: {
     const effectiveMetadata = precomputedIntentGateway
       ? attachPreRoutedIntentGatewayMetadata(baseMetadata, precomputedIntentGateway)
       : baseMetadata;
+    const effectiveMetadataRecord = isRecord(effectiveMetadata) ? effectiveMetadata : undefined;
+    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(effectiveMetadataRecord);
+    const selectedResponseSource = buildSelectedResponseSource(selectedExecutionProfile, args.configRef.current);
 
     args.analytics.track({
       type: 'message_sent',
@@ -183,6 +208,7 @@ export function createDashboardMessageDispatcher(args: {
       title: string;
       detail?: string;
       durationMs?: number;
+      responseSource: ResponseSourceMetadata;
     } | null => {
       const source = readResponseSourceMetadata(metadata);
       if (!source) return null;
@@ -215,6 +241,24 @@ export function createDashboardMessageDispatcher(args: {
         title: titleParts.length > 0 ? `Model response: ${titleParts.join(' • ')}` : 'Model response',
         ...(detailParts.length > 0 ? { detail: detailParts.join('; ') } : {}),
         ...(typeof source.durationMs === 'number' ? { durationMs: source.durationMs } : {}),
+        responseSource: {
+          locality: source.locality,
+          ...(source.providerName ? { providerName: source.providerName } : {}),
+          ...(source.providerProfileName ? { providerProfileName: source.providerProfileName } : {}),
+          ...(source.providerTier ? { providerTier: source.providerTier } : {}),
+          ...(source.model ? { model: source.model } : {}),
+          ...(source.tier ? { tier: source.tier } : {}),
+          ...(source.usedFallback ? { usedFallback: true } : {}),
+          ...(source.notice ? { notice: source.notice } : {}),
+          ...(typeof source.durationMs === 'number' ? { durationMs: source.durationMs } : {}),
+          ...(source.usage
+            ? {
+                usage: {
+                  ...source.usage,
+                },
+              }
+            : {}),
+        },
       };
     };
     const readContextAssemblyTraceDetails = (metadata: Record<string, unknown> | undefined): {
@@ -443,6 +487,7 @@ export function createDashboardMessageDispatcher(args: {
         completedAt,
         status: 'succeeded',
         metadata: {
+          responseSource: details.responseSource,
           ...(details.detail ? { detail: details.detail } : {}),
         },
       });
@@ -506,6 +551,8 @@ export function createDashboardMessageDispatcher(args: {
         content: msg.content,
         priority,
         requestType,
+        abortSignal: options?.abortSignal,
+        ...(selectedResponseSource ? { selectedResponseSource } : {}),
       },
       async (dispatchCtx) => {
         const message = {
@@ -518,6 +565,7 @@ export function createDashboardMessageDispatcher(args: {
           content: msg.content,
           metadata: effectiveMetadata,
           timestamp: now(),
+          abortSignal: dispatchCtx.abortSignal,
         };
 
         try {
@@ -557,6 +605,9 @@ export function createDashboardMessageDispatcher(args: {
               routeReason: routeDecision?.reason,
               responseLocality: responseSource?.locality,
               responseProviderName: responseSource?.providerName,
+              responseProviderProfileName: responseSource?.providerProfileName,
+              responseProviderTier: responseSource?.providerTier,
+              responseModel: responseSource?.model,
               ...(contextAssembly?.summary ? { contextAssemblySummary: contextAssembly.summary } : {}),
               ...(contextAssembly?.memoryScope ? { memoryScope: contextAssembly.memoryScope } : {}),
               ...(typeof contextAssembly?.knowledgeBaseLoaded === 'boolean'
@@ -666,6 +717,9 @@ export function createDashboardMessageDispatcher(args: {
                   routeReason: routeDecision?.reason,
                   responseLocality: responseSource?.locality,
                   responseProviderName: responseSource?.providerName,
+                  responseProviderProfileName: responseSource?.providerProfileName,
+                  responseProviderTier: responseSource?.providerTier,
+                  responseModel: responseSource?.model,
                   ...(contextAssembly?.summary ? { contextAssemblySummary: contextAssembly.summary } : {}),
                   ...(contextAssembly?.memoryScope ? { memoryScope: contextAssembly.memoryScope } : {}),
                   ...(typeof contextAssembly?.knowledgeBaseLoaded === 'boolean'

@@ -106,7 +106,10 @@ Required left-nav order:
 Notes:
 
 - the persistent chat panel remains part of the shell, not a left-nav page
-- the chat panel routing-mode selector persists to config, so `auto` / `local-only` / `managed-cloud-only` / `frontier-only` survive app restarts
+- the chat panel now exposes a request-scoped provider-profile selector sourced from enabled AI provider profiles; choosing a provider affects only that chat turn and does not persist to config
+- the chat toolbar keeps `Provider`, `Stop`, and `Reset Chat` on a single row; `Stop` cancels the active in-flight chat request (triggering a true backend abort and queue clearance) and `Reset Chat` clears conversation state after issuing a stop when needed
+- if the chat panel reloads mid-turn, the panel should recover the prior in-flight request ID and issue a cancel so stale work does not continue invisibly behind the refreshed UI
+- persistent tier-routing mode changes such as `auto` / `local-only` / `managed-cloud-only` / `frontier-only` remain a shared routing control, but they are not owned by the web chat toolbar
 - `System` is the dedicated cross-product status and activity monitoring surface
 - `Performance` remains a first-class workstation-operations page and must not be folded back into `Second Brain`
 - `Cloud` is a first-class operational area and must not live only inside Configuration
@@ -712,12 +715,15 @@ Owns:
 
 The AI Providers surface must support:
 
+- an enabled checkbox on each saved provider row so operators can remove a profile from live routing without deleting the saved model and credential settings
 - multiple named managed-cloud profiles under Ollama Cloud
 - deletion of existing provider profiles with cleanup of invalidated defaults and managed-cloud role bindings
 - a suggested starting model for new managed-cloud profiles based on the profile name, without locking the operator out of changing the model before save
 - an explicit managed-cloud role-routing editor for `general`, `direct answers`, `tool loops / provider CRUD`, and `managed-cloud coding`
 - guidance that unset managed-cloud role bindings use the explicit `general` profile first when set, otherwise can still be inferred from profile names before falling back to the routed managed-cloud default
 - guidance that managed-cloud role routing is about provider selection inside the managed-cloud tier, not about rearranging page layout or bypassing the shared broker/orchestration path
+- guidance that disabled profiles stay visible and editable but are excluded from routed defaults and automatic execution-profile selection until re-enabled
+- guidance that the web chat provider selector only lists enabled profiles and that choosing one forces that one request through the selected profile instead of using automatic provider selection
 
 ### `Search Providers`
 

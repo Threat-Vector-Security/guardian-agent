@@ -303,6 +303,41 @@ describe('SecondBrainService', () => {
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'scheduled-review')?.configured).toBe(true);
   });
 
+  it('reuses an existing matching scheduled review instead of creating a duplicate instance', () => {
+    const { service } = createService();
+
+    const first = service.createRoutine({
+      templateId: 'scheduled-review',
+      name: 'Friday Board Review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'friday',
+          time: '16:00',
+        },
+      },
+    });
+
+    const second = service.createRoutine({
+      templateId: 'scheduled-review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'friday',
+          time: '16:00',
+        },
+      },
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.name).toBe('Friday Board Review');
+    expect(service.listRoutines().filter((routine) => routine.templateId === 'scheduled-review')).toHaveLength(1);
+  });
+
   it('creates deadline watch routines with bounded deadline configuration', () => {
     const { service } = createService();
 
@@ -335,8 +370,10 @@ describe('SecondBrainService', () => {
     });
     const person = service.upsertPerson({
       email: 'alex.pm@example.com',
+      phone: '0409 555 123',
       title: 'Product Lead',
       company: 'Example Co',
+      location: 'Brisbane',
       relationship: 'work',
     });
 
@@ -349,6 +386,8 @@ describe('SecondBrainService', () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.title).toBe('Board prep');
     expect(person.name).toBe('Alex Pm');
+    expect(person.phone).toBe('0409 555 123');
+    expect(person.location).toBe('Brisbane');
     expect(people[0]?.id).toBe(person.id);
   });
 
@@ -536,6 +575,19 @@ describe('SecondBrainService', () => {
     expect(service.listPeople()).toEqual([]);
     expect(service.listLinks()).toEqual([]);
     expect(service.listBriefs()).toEqual([]);
+  });
+
+  it('normalizes generic library link kinds to supported stored kinds', () => {
+    const { service } = createService();
+
+    const link = service.upsertLink({
+      title: 'Harbor launch checklist',
+      url: 'https://example.test/harbor-launch',
+      kind: 'link' as never,
+    });
+
+    expect(link.kind).toBe('reference');
+    expect(service.getLinkById(link.id)?.kind).toBe('reference');
   });
 
   it('keeps deleted seeded routines removed across service restart until re-created', () => {

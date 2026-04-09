@@ -237,6 +237,7 @@ The current foundation now includes request-scoped execution profiles that shape
 Current implemented behavior:
 - smaller local and managed-cloud profiles receive tighter tool-context inventories and fewer optional sections
 - frontier profiles can keep a broader bounded context for higher-pressure synthesis
+- disabled provider profiles are excluded before execution-profile selection, so they cannot contribute context budgets or request-scoped fallback order until re-enabled
 - prompt assembly diagnostics expose the selected execution profile, provider tier, and effective context budget
 - brokered worker sessions reuse the same execution-profile metadata instead of inventing a separate worker-only prompt footprint
 

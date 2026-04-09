@@ -4676,6 +4676,77 @@ describe('WebChannel', () => {
       }]);
     });
 
+    it('POST /api/message/cancel forwards request cancel requests', async () => {
+      const calls: Array<{ requestId: string; userId?: string; channel?: string; agentId?: string; reason?: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onStreamCancel: async (input) => {
+          calls.push({
+            requestId: input.requestId,
+            userId: input.userId,
+            channel: input.channel,
+            agentId: input.agentId,
+            reason: input.reason,
+          });
+          return {
+            success: true,
+            canceled: true,
+            message: 'Request canceled by operator.',
+            requestId: input.requestId,
+            runId: input.requestId,
+            errorCode: 'REQUEST_CANCELED',
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 19020, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:19020/api/message/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          requestId: 'req-stream-1',
+          userId: 'web-user',
+          channel: 'web',
+          agentId: 'agent-1',
+          reason: 'Stop requested',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; canceled: boolean; requestId: string; errorCode?: string };
+      expect(body.success).toBe(true);
+      expect(body.canceled).toBe(true);
+      expect(body.requestId).toBe('req-stream-1');
+      expect(body.errorCode).toBe('REQUEST_CANCELED');
+      expect(calls).toEqual([{
+        requestId: 'req-stream-1',
+        userId: 'web-user',
+        channel: 'web',
+        agentId: 'agent-1',
+        reason: 'Stop requested',
+      }]);
+    });
+
+    it('POST /api/message/cancel returns 404 when callback is unavailable', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+      };
+      delete dashboard.onStreamCancel;
+
+      web = new WebChannel({ port: 19021, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:19021/api/message/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ requestId: 'req-stream-1' }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+
     it('does not expose internal error details from dashboard callbacks', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,

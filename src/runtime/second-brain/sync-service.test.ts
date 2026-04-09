@@ -44,6 +44,8 @@ describe('SyncService', () => {
               resourceName: 'people/c123',
               names: [{ displayName: 'Alex Google' }],
               emailAddresses: [{ value: 'alex.google@example.com' }],
+              phoneNumbers: [{ value: '+61 400 000 111' }],
+              locations: [{ value: 'Brisbane' }],
               organizations: [{ title: 'PM', name: 'Example Co' }],
             }],
           },
@@ -76,8 +78,10 @@ describe('SyncService', () => {
               id: 'ms-contact-1',
               displayName: 'Morgan Microsoft',
               emailAddresses: [{ address: 'morgan.microsoft@example.com' }],
+              mobilePhone: '+61 400 000 222',
               companyName: 'Contoso',
               jobTitle: 'Director',
+              officeLocation: 'Sydney',
             }],
           },
         };
@@ -105,6 +109,14 @@ describe('SyncService', () => {
       'Alex Google',
       'Morgan Microsoft',
     ]));
+    expect(service.listPeople({ limit: 10 }).find((person) => person.name === 'Alex Google')).toMatchObject({
+      phone: '+61 400 000 111',
+      location: 'Brisbane',
+    });
+    expect(service.listPeople({ limit: 10 }).find((person) => person.name === 'Morgan Microsoft')).toMatchObject({
+      phone: '+61 400 000 222',
+      location: 'Sydney',
+    });
     expect(service.getUsageSummary().totalConnectorCalls).toBe(4);
     expect(service.getSyncCursorById('google:calendar')?.lastSyncAt).toBe(now());
     expect(service.getSyncCursorById('microsoft:contacts')?.lastSyncAt).toBe(now());

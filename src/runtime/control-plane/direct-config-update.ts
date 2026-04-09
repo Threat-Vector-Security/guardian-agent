@@ -89,6 +89,7 @@ function buildNextLlmConfig(
     nextLlm[name] = {
       ...currentProvider,
       ...(providerUpdates.provider !== undefined ? { provider: providerUpdates.provider } : {}),
+      ...(providerUpdates.enabled !== undefined ? { enabled: providerUpdates.enabled } : {}),
       ...(providerUpdates.model !== undefined ? { model: providerUpdates.model } : {}),
       ...(providerUpdates.credentialRef !== undefined ? { credentialRef: providerUpdates.credentialRef } : {}),
       ...(providerUpdates.baseUrl !== undefined ? { baseUrl: providerUpdates.baseUrl } : {}),
@@ -102,6 +103,10 @@ function buildNextLlmConfig(
   }
 
   return nextLlm;
+}
+
+function countEnabledProviders(llm: GuardianAgentConfig['llm']): number {
+  return Object.values(llm).filter((provider) => provider.enabled !== false).length;
 }
 
 function pruneDeletedProviderReferences(
@@ -325,6 +330,13 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           pruneDeletedProviderReferences(nextConfig, removedProviderNames);
         }
         applyDerivedDefaultProvider(nextConfig);
+        if (countEnabledProviders(nextConfig.llm) === 0) {
+          return {
+            success: false,
+            message: 'At least one AI provider must stay enabled.',
+            statusCode: 400,
+          };
+        }
         const baselineViolations = options.previewSecurityBaselineViolations(nextConfig, 'web_api');
         if (baselineViolations.length > 0) {
           return options.buildSecurityBaselineRejection(
@@ -355,6 +367,7 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
               llmSection[name] = {};
             }
             if (providerUpdates.provider) llmSection[name].provider = providerUpdates.provider;
+            if (providerUpdates.enabled !== undefined) llmSection[name].enabled = providerUpdates.enabled;
             if (providerUpdates.model) llmSection[name].model = providerUpdates.model;
             delete llmSection[name].apiKey;
             if (providerUpdates.credentialRef !== undefined) {

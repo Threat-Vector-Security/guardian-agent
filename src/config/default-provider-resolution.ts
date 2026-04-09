@@ -1,37 +1,45 @@
 import type { GuardianAgentConfig } from './types.js';
 import { getProviderLocality, getProviderTier } from '../llm/provider-metadata.js';
 
+function isEnabledProvider(config: GuardianAgentConfig, providerName: string | undefined): providerName is string {
+  const trimmed = providerName?.trim();
+  return !!trimmed && config.llm[trimmed]?.enabled !== false;
+}
+
 function isManagedCloudProvider(config: GuardianAgentConfig, providerName: string | undefined): providerName is string {
   const trimmed = providerName?.trim();
-  return !!trimmed && getProviderTier(config.llm[trimmed]?.provider) === 'managed_cloud';
+  return isEnabledProvider(config, trimmed) && getProviderTier(config.llm[trimmed]?.provider) === 'managed_cloud';
 }
 
 function isLocalProvider(config: GuardianAgentConfig, providerName: string | undefined): providerName is string {
   const trimmed = providerName?.trim();
-  return !!trimmed && getProviderLocality(config.llm[trimmed]?.provider) === 'local';
+  return isEnabledProvider(config, trimmed) && getProviderLocality(config.llm[trimmed]?.provider) === 'local';
 }
 
 function isFrontierProvider(config: GuardianAgentConfig, providerName: string | undefined): providerName is string {
   const trimmed = providerName?.trim();
-  return !!trimmed && getProviderTier(config.llm[trimmed]?.provider) === 'frontier';
+  return isEnabledProvider(config, trimmed) && getProviderTier(config.llm[trimmed]?.provider) === 'frontier';
 }
 
 function listProvidersByTier(config: GuardianAgentConfig, tier: 'managed_cloud' | 'frontier'): string[] {
   return Object.entries(config.llm)
-    .filter(([, llmCfg]) => getProviderTier(llmCfg.provider) === tier)
+    .filter(([, llmCfg]) => llmCfg.enabled !== false && getProviderTier(llmCfg.provider) === tier)
     .map(([name]) => name)
     .sort((left, right) => left.localeCompare(right));
 }
 
 function listLocalProviders(config: GuardianAgentConfig): string[] {
   return Object.entries(config.llm)
-    .filter(([, llmCfg]) => getProviderLocality(llmCfg.provider) === 'local')
+    .filter(([, llmCfg]) => llmCfg.enabled !== false && getProviderLocality(llmCfg.provider) === 'local')
     .map(([name]) => name)
     .sort((left, right) => left.localeCompare(right));
 }
 
 export function resolveDerivedDefaultProvider(config: GuardianAgentConfig): string {
-  const providerNames = Object.keys(config.llm).sort((left, right) => left.localeCompare(right));
+  const providerNames = Object.entries(config.llm)
+    .filter(([, llmCfg]) => llmCfg.enabled !== false)
+    .map(([name]) => name)
+    .sort((left, right) => left.localeCompare(right));
   if (providerNames.length === 0) return '';
 
   const preferredProviders = config.assistant.tools?.preferredProviders;

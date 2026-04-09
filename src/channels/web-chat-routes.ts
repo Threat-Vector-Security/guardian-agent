@@ -53,6 +53,45 @@ function sendBadRequestError(res: ServerResponse, err: unknown): void {
 export async function handleWebChatRoutes(context: WebChatRoutesContext): Promise<boolean> {
   const { req, res, url, dashboard } = context;
 
+  if (req.method === 'POST' && url.pathname === '/api/message/cancel') {
+    if (!dashboard.onStreamCancel) {
+      sendJSON(res, 404, { error: 'Streaming cancel not available' });
+      return true;
+    }
+
+    try {
+      const parsed = await readJsonBody<{
+        requestId?: unknown;
+        userId?: string;
+        channel?: string;
+        agentId?: unknown;
+        reason?: unknown;
+      }>(req, context.maxBodyBytes);
+
+      const requestId = trimOptionalString(parsed.requestId);
+      if (!requestId) {
+        sendJSON(res, 400, { error: 'requestId is required' });
+        return true;
+      }
+
+      const result = await dashboard.onStreamCancel({
+        requestId,
+        userId: parsed.userId,
+        channel: parsed.channel,
+        agentId: trimOptionalString(parsed.agentId),
+        reason: trimOptionalString(parsed.reason),
+      });
+      const statusCode = result.success
+        ? 200
+        : (result.errorCode === 'REQUEST_NOT_ACTIVE' ? 404 : 409);
+      sendJSON(res, statusCode, result);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/message/stream') {
     if (!dashboard.onStreamDispatch) {
       sendJSON(res, 404, { error: 'Streaming not available' });

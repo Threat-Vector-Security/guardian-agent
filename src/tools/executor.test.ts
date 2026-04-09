@@ -4854,6 +4854,47 @@ describe('ToolExecutor', () => {
     expect(job.argsPreview).toContain('Company Homepage Collector');
   });
 
+  it('summarizes Second Brain routine approvals without leaking raw routine JSON', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'second_brain_routine_update',
+      args: {
+        id: 'scheduled-review:board-prep',
+        name: 'Friday Board Review',
+        enabled: true,
+        defaultRoutingBias: 'balanced',
+        budgetProfileId: 'weekly-medium',
+        delivery: ['web', 'telegram'],
+        deliveryDefaults: ['web', 'telegram'],
+        config: { focusQuery: 'Harbor launch' },
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeTruthy();
+
+    const job = executor.listJobs(1)[0];
+    expect(job.argsPreview).toBe('{"id":"scheduled-review:board-prep","templateId":"scheduled-review","name":"Friday Board Review"}');
+
+    const summaries = executor.getApprovalSummaries([run.approvalId!]);
+    expect(summaries.get(run.approvalId!)).toMatchObject({
+      toolName: 'second_brain_routine_update',
+      argsPreview: '{"id":"scheduled-review:board-prep","templateId":"scheduled-review","name":"Friday Board Review"}',
+      actionLabel: 'update Second Brain routine "Friday Board Review"',
+    });
+  });
+
   it('runs saved automations immediately through automation_run', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

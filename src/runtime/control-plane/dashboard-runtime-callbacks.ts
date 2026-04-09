@@ -20,6 +20,7 @@ type DashboardRuntimeCallbacks = Pick<
   | 'onSSESubscribe'
   | 'onDispatch'
   | 'onStreamDispatch'
+  | 'onStreamCancel'
   | 'onQuickActionRun'
 >;
 
@@ -41,23 +42,27 @@ interface DashboardRuntimeCallbackOptions {
   ) => Promise<PreparedIncomingDispatchResult>;
   identity: Pick<IdentityService, 'resolveCanonicalUserId'>;
   analytics: Pick<AnalyticsService, 'track'>;
-  orchestrator: Pick<AssistantOrchestrator, 'dispatch'>;
+  orchestrator: Pick<AssistantOrchestrator, 'dispatch' | 'cancelSession'>;
   now?: () => number;
   createRequestId?: () => string;
 }
 
-function toDirectDispatchMessage(
+interface ActiveStreamDispatch {
+  requestId: string;
+  channel: string;
+  canonicalUserId: string;
+  agentId: string;
+  emitSSE: Parameters<NonNullable<DashboardCallbacks['onStreamDispatch']>>[2];
+  canceled: boolean;
+  cancelMessage: string;
+  abortController?: AbortController;
+}
+
+async function prepareExplicitAgentDispatch(
+  prepareIncomingDispatch: DashboardRuntimeCallbackOptions['prepareIncomingDispatch'],
   msg: Parameters<NonNullable<DashboardCallbacks['onStreamDispatch']>>[1],
-) {
-  return {
-    content: msg.content,
-    userId: msg.userId,
-    surfaceId: msg.surfaceId,
-    principalId: msg.principalId,
-    principalRole: msg.principalRole,
-    channel: msg.channel,
-    metadata: msg.metadata,
-  };
+): Promise<PreparedIncomingDispatchResult> {
+  return prepareIncomingDispatch(undefined, msg);
 }
 
 function readStructuredRequestError(err: unknown): { error: string; errorCode?: string } | null {
@@ -78,6 +83,39 @@ export function createDashboardRuntimeCallbacks(
 ): DashboardRuntimeCallbacks {
   const now = options.now ?? Date.now;
   const createRequestId = options.createRequestId ?? randomUUID;
+  const activeStreamDispatches = new Map<string, ActiveStreamDispatch>();
+  const CANCELED_ERROR_CODE = 'REQUEST_CANCELED';
+  const REQUEST_NOT_ACTIVE_ERROR_CODE = 'REQUEST_NOT_ACTIVE';
+  const DEFAULT_CANCEL_MESSAGE = 'Request canceled by operator.';
+
+  const buildCanceledResult = (
+    requestId: string,
+    cancelMessage: string,
+  ): {
+    requestId: string;
+    runId: string;
+    content: string;
+    error: string;
+    errorCode: string;
+  } => ({
+    requestId,
+    runId: requestId,
+    content: '',
+    error: cancelMessage,
+    errorCode: CANCELED_ERROR_CODE,
+  });
+
+  const emitCanceledEvent = (active: ActiveStreamDispatch): void => {
+    active.emitSSE({
+      type: 'chat.error',
+      data: {
+        requestId: active.requestId,
+        runId: active.requestId,
+        error: active.cancelMessage,
+        errorCode: CANCELED_ERROR_CODE,
+      },
+    });
+  };
 
   return {
     onSSESubscribe: (listener) => {
@@ -149,6 +187,19 @@ export function createDashboardRuntimeCallbacks(
 
     onStreamDispatch: async (agentId, msg, emitSSE) => {
       const requestId = msg.requestId?.trim() || createRequestId();
+      const channel = msg.channel?.trim() || 'web';
+      const channelUserId = msg.userId?.trim() || `${channel}-user`;
+      const canonicalUserId = options.identity.resolveCanonicalUserId(channel, channelUserId);
+      const active: ActiveStreamDispatch = {
+        requestId,
+        channel,
+        canonicalUserId,
+        agentId: agentId?.trim() || '',
+        emitSSE,
+        canceled: false,
+        cancelMessage: DEFAULT_CANCEL_MESSAGE,
+      };
+      activeStreamDispatches.set(requestId, active);
       emitSSE({
         type: 'chat.thinking',
         data: {
@@ -159,17 +210,14 @@ export function createDashboardRuntimeCallbacks(
 
       try {
         const prepared = agentId?.trim()
-          ? {
-              decision: undefined,
-              gateway: null,
-              routedMessage: toDirectDispatchMessage(msg),
-            }
+          ? await prepareExplicitAgentDispatch(options.prepareIncomingDispatch, msg)
           : await options.prepareIncomingDispatch(options.configRef.current.channels.web?.defaultAgent, msg);
         const resolvedAgentId = agentId?.trim()
           || prepared.decision?.agentId
           || options.configRef.current.channels.web?.defaultAgent
           || options.configRef.current.agents[0]?.id
           || 'default';
+        active.agentId = resolvedAgentId;
         const response = await options.dispatchDashboardMessage({
           agentId: resolvedAgentId,
           msg: prepared.routedMessage,
@@ -179,8 +227,12 @@ export function createDashboardRuntimeCallbacks(
             priority: 'high',
             requestType: 'chat',
             requestId,
+            abortSignal: active.abortController?.signal,
           },
         });
+        if (active.canceled) {
+          return buildCanceledResult(requestId, active.cancelMessage);
+        }
         emitSSE({
           type: 'chat.done',
           data: {
@@ -197,6 +249,9 @@ export function createDashboardRuntimeCallbacks(
           metadata: response.metadata,
         };
       } catch (err) {
+        if (active.canceled) {
+          return buildCanceledResult(requestId, active.cancelMessage);
+        }
         const requestError = readStructuredRequestError(err);
         const error = requestError?.error ?? (err instanceof Error ? err.message : String(err));
         emitSSE({
@@ -215,7 +270,95 @@ export function createDashboardRuntimeCallbacks(
           error,
           ...(requestError?.errorCode ? { errorCode: requestError.errorCode } : {}),
         };
+      } finally {
+        activeStreamDispatches.delete(requestId);
       }
+    },
+
+    onStreamCancel: async ({ requestId, userId, channel, agentId, reason }) => {
+      const trimmedRequestId = requestId?.trim() || '';
+      if (!trimmedRequestId) {
+        return {
+          success: false,
+          canceled: false,
+          message: 'requestId is required.',
+          requestId: '',
+          runId: '',
+          errorCode: REQUEST_NOT_ACTIVE_ERROR_CODE,
+        };
+      }
+
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const active = activeStreamDispatches.get(trimmedRequestId);
+      if (!active) {
+        return {
+          success: false,
+          canceled: false,
+          message: `Request '${trimmedRequestId}' is no longer active.`,
+          requestId: trimmedRequestId,
+          runId: trimmedRequestId,
+          errorCode: REQUEST_NOT_ACTIVE_ERROR_CODE,
+        };
+      }
+
+      if (active.channel !== resolvedChannel || active.canonicalUserId !== canonicalUserId) {
+        return {
+          success: false,
+          canceled: false,
+          message: `Request '${trimmedRequestId}' is not active for this user/channel.`,
+          requestId: trimmedRequestId,
+          runId: trimmedRequestId,
+          errorCode: REQUEST_NOT_ACTIVE_ERROR_CODE,
+        };
+      }
+
+      const requestedAgentId = agentId?.trim() || '';
+      if (requestedAgentId && active.agentId && requestedAgentId !== active.agentId) {
+        return {
+          success: false,
+          canceled: false,
+          message: `Request '${trimmedRequestId}' is not active for agent '${requestedAgentId}'.`,
+          requestId: trimmedRequestId,
+          runId: trimmedRequestId,
+          errorCode: REQUEST_NOT_ACTIVE_ERROR_CODE,
+        };
+      }
+
+      if (!active.canceled) {
+        active.canceled = true;
+        active.cancelMessage = reason?.trim() || DEFAULT_CANCEL_MESSAGE;
+        active.abortController?.abort(new Error(active.cancelMessage));
+        options.orchestrator.cancelSession(
+          {
+            userId: active.canonicalUserId,
+            channel: active.channel,
+            agentId: active.agentId || requestedAgentId || 'default',
+          },
+          active.cancelMessage
+        );
+        emitCanceledEvent(active);
+        options.analytics.track({
+          type: 'message_canceled',
+          channel: resolvedChannel,
+          canonicalUserId,
+          channelUserId,
+          agentId: active.agentId || requestedAgentId || 'default',
+          metadata: {
+            requestId: trimmedRequestId,
+          },
+        });
+      }
+
+      return {
+        success: true,
+        canceled: true,
+        message: active.cancelMessage,
+        requestId: trimmedRequestId,
+        runId: trimmedRequestId,
+        errorCode: CANCELED_ERROR_CODE,
+      };
     },
 
     onQuickActionRun: async ({ actionId, details, agentId, userId, channel }) => {

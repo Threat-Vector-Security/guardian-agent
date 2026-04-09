@@ -246,7 +246,7 @@ const ROUTINE_QUERY_STOP_WORDS = new Set([
 ]);
 
 type SecondBrainFocusItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
-type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'brief' | 'routine';
+type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
 type DirectSecondBrainMutationAction = 'create' | 'update' | 'delete' | 'complete';
 type DirectSecondBrainMutationToolName =
   | 'second_brain_note_upsert'
@@ -257,6 +257,8 @@ type DirectSecondBrainMutationToolName =
   | 'second_brain_calendar_delete'
   | 'second_brain_person_upsert'
   | 'second_brain_person_delete'
+  | 'second_brain_library_upsert'
+  | 'second_brain_library_delete'
   | 'second_brain_brief_upsert'
   | 'second_brain_brief_delete'
   | 'second_brain_routine_create'
@@ -460,6 +462,155 @@ function summarizeRoutineTimingForUser(
 ): string {
   const label = typeof routine.timing?.label === 'string' ? routine.timing.label.trim() : '';
   return label || formatRoutineTriggerSummaryForUser(routine.trigger);
+}
+
+function buildRoutineDeliverySignature(
+  delivery: readonly string[] | undefined,
+): string[] {
+  return [...new Set((delivery ?? [])
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim().toLowerCase()))]
+    .sort();
+}
+
+function buildRoutineScheduleSignature(
+  schedule: unknown,
+): Record<string, unknown> | undefined {
+  if (!isRecord(schedule)) return undefined;
+  const cadence = toString(schedule.cadence).trim().toLowerCase();
+  if (!cadence) return undefined;
+  const time = toString(schedule.time).trim();
+  const dayOfWeek = toString(schedule.dayOfWeek).trim().toLowerCase();
+  return {
+    cadence,
+    ...(time ? { time } : {}),
+    ...(dayOfWeek ? { dayOfWeek } : {}),
+    ...(Number.isFinite(schedule.dayOfMonth) ? { dayOfMonth: Number(schedule.dayOfMonth) } : {}),
+    ...(Number.isFinite(schedule.minute) ? { minute: Number(schedule.minute) } : {}),
+  };
+}
+
+function buildRoutineTimingSignature(
+  timing: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(timing)) return null;
+  const kind = toString(timing.kind).trim().toLowerCase();
+  if (!kind) return null;
+  const schedule = buildRoutineScheduleSignature(timing.schedule);
+  const minutes = Number.isFinite(timing.minutes) ? Number(timing.minutes) : undefined;
+  return {
+    kind,
+    ...(schedule ? { schedule } : {}),
+    ...(minutes != null ? { minutes } : {}),
+  };
+}
+
+function buildRoutineCreateDedupSignature(input: {
+  templateId: string;
+  timing?: unknown;
+  defaultTiming?: unknown;
+  delivery?: readonly string[];
+  defaultDelivery?: readonly string[];
+  config?: unknown;
+}): string {
+  const config = isRecord(input.config) ? input.config : null;
+  return JSON.stringify({
+    templateId: input.templateId.trim(),
+    timing: buildRoutineTimingSignature(input.timing ?? input.defaultTiming),
+    delivery: buildRoutineDeliverySignature(input.delivery ?? input.defaultDelivery),
+    ...(toString(config?.focusQuery).trim()
+      ? { focusQuery: toString(config?.focusQuery).trim().toLowerCase() }
+      : {}),
+    ...(input.templateId === 'topic-watch' && toString(config?.topicQuery).trim()
+      ? { topicQuery: toString(config?.topicQuery).trim().toLowerCase() }
+      : {}),
+    ...(input.templateId === 'deadline-watch'
+      ? {
+          dueWithinHours: Number.isFinite(config?.dueWithinHours) ? Number(config?.dueWithinHours) : 24,
+          includeOverdue: config?.includeOverdue !== false,
+        }
+      : {}),
+  });
+}
+
+function buildRoutineViewDedupSignature(routine: {
+  id?: string;
+  templateId?: string;
+  timing?: unknown;
+  trigger?: { mode?: string; eventType?: string; lookaheadMinutes?: unknown };
+  delivery?: string[];
+  focusQuery?: string;
+  topicQuery?: string;
+  dueWithinHours?: number;
+  includeOverdue?: boolean;
+}): string {
+  const templateId = toString(routine.templateId).trim() || toString(routine.id).trim();
+  const timing = buildRoutineTimingSignature(routine.timing);
+  const fallbackTimingKind = deriveRoutineTimingKind({
+    timing: isRecord(routine.timing)
+      ? { kind: toString(routine.timing.kind).trim() || undefined }
+      : undefined,
+    trigger: routine.trigger,
+  });
+  const triggerLookaheadMinutes = routine.trigger?.lookaheadMinutes;
+  return JSON.stringify({
+    templateId,
+    timing: timing ?? (
+      fallbackTimingKind
+        ? {
+            kind: fallbackTimingKind,
+            ...(Number.isFinite(triggerLookaheadMinutes)
+              ? { minutes: Number(triggerLookaheadMinutes) }
+              : {}),
+          }
+        : null
+    ),
+    delivery: buildRoutineDeliverySignature(routine.delivery),
+    ...(toString(routine.focusQuery).trim()
+      ? { focusQuery: toString(routine.focusQuery).trim().toLowerCase() }
+      : {}),
+    ...(templateId === 'topic-watch' && toString(routine.topicQuery).trim()
+      ? { topicQuery: toString(routine.topicQuery).trim().toLowerCase() }
+      : {}),
+    ...(templateId === 'deadline-watch'
+      ? {
+          dueWithinHours: Number.isFinite(routine.dueWithinHours) ? Number(routine.dueWithinHours) : 24,
+          includeOverdue: routine.includeOverdue !== false,
+        }
+      : {}),
+  });
+}
+
+function findMatchingRoutineForCreate(
+  routines: ReadonlyArray<{
+    id?: string;
+    templateId?: string;
+    name?: string;
+    timing?: unknown;
+    trigger?: { mode?: string; eventType?: string; lookaheadMinutes?: unknown };
+    delivery?: string[];
+    focusQuery?: string;
+    topicQuery?: string;
+    dueWithinHours?: number;
+    includeOverdue?: boolean;
+  }>,
+  input: {
+    templateId: string;
+    timing?: unknown;
+    defaultTiming?: unknown;
+    delivery?: readonly string[];
+    defaultDelivery?: readonly string[];
+    config?: unknown;
+  },
+): {
+  id?: string;
+  name?: string;
+} | null {
+  const candidateSignature = buildRoutineCreateDedupSignature(input);
+  return routines.find((routine) => (
+    (toString(routine.templateId).trim() || toString(routine.id).trim()) === input.templateId
+    && buildRoutineViewDedupSignature(routine) === candidateSignature
+  )) ?? null;
 }
 
 function buildRoutineSemanticHints(
@@ -862,19 +1013,67 @@ function buildSecondBrainFocusRemovalMetadata(
 
 function buildDirectHandlerResponseSource(
   candidate: string,
+  selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+  llmProviderName: string | undefined,
 ): ResponseSourceMetadata | null {
+  const notice = candidate === 'personal_assistant'
+    ? 'Handled directly by Second Brain.'
+    : candidate === 'provider_read'
+      ? 'Handled directly by provider tools.'
+      : undefined;
+  const resolvedProviderName = selectedExecutionProfile?.providerType?.trim()
+    || llmProviderName?.trim()
+    || '';
+  const resolvedLocality = selectedExecutionProfile?.providerLocality
+    ?? (resolvedProviderName ? getProviderLocalityFromName(resolvedProviderName) : undefined);
+  const resolvedTier = selectedExecutionProfile?.providerTier
+    ?? (resolvedProviderName ? getProviderTier(resolvedProviderName) : undefined);
   switch (candidate) {
     case 'personal_assistant':
+      if (resolvedLocality) {
+        return {
+          locality: resolvedLocality,
+          ...(resolvedProviderName ? { providerName: resolvedProviderName } : {}),
+          ...(selectedExecutionProfile?.providerName
+            && selectedExecutionProfile.providerName !== resolvedProviderName
+            ? { providerProfileName: selectedExecutionProfile.providerName }
+            : {}),
+          ...(selectedExecutionProfile?.providerModel
+            ? { model: selectedExecutionProfile.providerModel }
+            : {}),
+          ...(resolvedTier ? { providerTier: resolvedTier } : {}),
+          usedFallback: false,
+          ...(notice ? { notice } : {}),
+        };
+      }
       return {
         locality: 'local',
         providerName: 'second_brain',
         usedFallback: false,
+        ...(notice ? { notice } : {}),
       };
     case 'provider_read':
+      if (resolvedLocality) {
+        return {
+          locality: resolvedLocality,
+          ...(resolvedProviderName ? { providerName: resolvedProviderName } : {}),
+          ...(selectedExecutionProfile?.providerName
+            && selectedExecutionProfile.providerName !== resolvedProviderName
+            ? { providerProfileName: selectedExecutionProfile.providerName }
+            : {}),
+          ...(selectedExecutionProfile?.providerModel
+            ? { model: selectedExecutionProfile.providerModel }
+            : {}),
+          ...(resolvedTier ? { providerTier: resolvedTier } : {}),
+          usedFallback: false,
+          ...(notice ? { notice } : {}),
+        };
+      }
       return {
         locality: 'local',
         providerName: 'control_plane',
         usedFallback: false,
+        ...(notice ? { notice } : {}),
       };
     default:
       return null;
@@ -921,6 +1120,77 @@ function extractEmailAddressFromText(text: string): string {
   return match?.[0]?.trim() ?? '';
 }
 
+function normalizePhoneNumber(text: string): string {
+  const trimmed = text.trim().replace(/^[("']+|[)"',.;:]+$/g, '');
+  if (!trimmed) return '';
+  const digitCount = trimmed.replace(/\D+/g, '').length;
+  if (digitCount < 6) return '';
+  if (!/^\+?[\d\s().-]+$/.test(trimmed)) return '';
+  return trimmed.replace(/\s+/g, ' ');
+}
+
+function extractPhoneNumberFromText(text: string): string {
+  const labeled = normalizePhoneNumber(extractQuotedLabeledValue(text, ['phone', 'phone number', 'mobile', 'mobile number', 'telephone', 'tel']));
+  if (labeled) {
+    return labeled;
+  }
+  const match = text.match(/\b(?:phone(?:\s+number)?|mobile(?:\s+number)?|telephone|tel)\b(?:\s+(?:is|to|as|for|with|include|including))?\s*:?[\s"']*([+()\d][\d\s().-]{4,}\d)/i);
+  return normalizePhoneNumber(match?.[1] ?? '');
+}
+
+function extractUrlFromText(text: string): string {
+  const labeled = extractQuotedLabeledValue(text, ['url', 'link']);
+  if (labeled) {
+    return labeled;
+  }
+  const match = text.match(/\bhttps?:\/\/[^\s"'`<>]+/i);
+  return match?.[0]?.replace(/[),.;]+$/, '').trim() ?? '';
+}
+
+const SECOND_BRAIN_PERSON_NAME_IGNORE = new Set([
+  'second brain',
+  'google workspace',
+  'microsoft 365',
+  'ollama cloud',
+  'guardian agent',
+  'guardian',
+]);
+
+function isPlausibleSecondBrainPersonName(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (SECOND_BRAIN_PERSON_NAME_IGNORE.has(lower)) return false;
+  const words = trimmed.split(/\s+/g).filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  return words.every((word) => /^[A-Z][A-Za-z'-]+$/.test(word));
+}
+
+function extractSecondBrainFallbackPersonName(text: string): string {
+  const labeled = extractQuotedLabeledValue(text, ['name']);
+  if (isPlausibleSecondBrainPersonName(labeled)) {
+    return labeled;
+  }
+
+  const patterns = [
+    /\b(?:named|called)\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
+    /\b(?:person|contact)\b(?:\s+in\s+my\s+second\s+brain\b)?(?:\s*(?:\.{3}|…|[-,:;()]|\s))+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
+    /^\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = match?.[1]?.trim() ?? '';
+    if (isPlausibleSecondBrainPersonName(candidate)) {
+      return candidate;
+    }
+  }
+
+  const candidates = Array.from(text.matchAll(/\b([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})\b/g))
+    .map((match) => match[1]?.trim() ?? '')
+    .filter(isPlausibleSecondBrainPersonName);
+  return candidates[candidates.length - 1] ?? '';
+}
+
 function extractSecondBrainPersonRelationship(
   text: string,
 ): 'work' | 'personal' | 'family' | 'vendor' | 'other' | undefined {
@@ -938,12 +1208,39 @@ function defaultSecondBrainItemLabel(itemType: DirectSecondBrainMutationItemType
       return 'Untitled event';
     case 'person':
       return 'Untitled person';
+    case 'library':
+      return 'Untitled library item';
     case 'brief':
       return 'Untitled brief';
     case 'routine':
       return 'Untitled routine';
     default:
       return 'Untitled item';
+  }
+}
+
+function resolveDirectSecondBrainMutationLabel(
+  itemType: DirectSecondBrainMutationItemType,
+  record: Record<string, unknown> | null,
+  fallbackLabel?: string,
+): string {
+  const resolvedFallback = toString(fallbackLabel).trim();
+  switch (itemType) {
+    case 'person':
+      return toString(record?.name).trim()
+        || toString(record?.title).trim()
+        || resolvedFallback
+        || defaultSecondBrainItemLabel(itemType);
+    case 'library':
+      return toString(record?.title).trim()
+        || toString(record?.url).trim()
+        || resolvedFallback
+        || defaultSecondBrainItemLabel(itemType);
+    default:
+      return toString(record?.title).trim()
+        || toString(record?.name).trim()
+        || resolvedFallback
+        || defaultSecondBrainItemLabel(itemType);
   }
 }
 
@@ -3322,10 +3619,11 @@ type DirectIntentShadowCandidate =
       ? this.resolveGwsProvider?.()
       : undefined;
     let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
+      const mergedOpts = { ...opts, signal: message.abortSignal };
       if (gwsProvider) {
         try {
           const startedAt = Date.now();
-          const response = await gwsProvider.chat(msgs, opts);
+          const response = await gwsProvider.chat(msgs, mergedOpts);
           responseSource = buildResponseSourceMetadata({
             locality: 'external',
             providerName: gwsProvider.name,
@@ -3337,7 +3635,7 @@ type DirectIntentShadowCandidate =
         } catch (err) {
           log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
             'GWS provider failed, falling back to default');
-          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
+          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
           responseSource = buildResponseSourceMetadata({
             locality: fallback.providerLocality,
             providerName: fallback.providerName,
@@ -3349,7 +3647,7 @@ type DirectIntentShadowCandidate =
           return fallback.response;
         }
       }
-      const routed = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
+      const routed = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
       responseSource = buildResponseSourceMetadata({
         locality: routed.providerLocality,
         providerName: routed.providerName,
@@ -3709,9 +4007,10 @@ type DirectIntentShadowCandidate =
           if (routed) {
             const { provider: routedProvider, locality: routedLocality } = routed;
             chatFn = async (msgs, opts) => {
+              const mergedOpts = { ...opts, signal: message.abortSignal };
               try {
                 const startedAt = Date.now();
-                const response = await routedProvider.chat(msgs, opts);
+                const response = await routedProvider.chat(msgs, mergedOpts);
                 responseSource = buildResponseSourceMetadata({
                   locality: routedLocality,
                   providerName: routedProvider.name,
@@ -3723,7 +4022,7 @@ type DirectIntentShadowCandidate =
               } catch (err) {
                 log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
                   'Routed provider failed, falling back to default');
-                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
+                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
                 responseSource = buildResponseSourceMetadata({
                   locality: fallback.providerLocality,
                   providerName: fallback.providerName,
@@ -4116,6 +4415,8 @@ type DirectIntentShadowCandidate =
         return this.tryDirectSecondBrainCalendarWrite(message, ctx, userKey, decision, continuityThread);
       case 'person':
         return this.tryDirectSecondBrainPersonWrite(message, ctx, userKey, decision, continuityThread);
+      case 'library':
+        return this.tryDirectSecondBrainLibraryWrite(message, ctx, userKey, decision, continuityThread);
       case 'brief':
         return this.tryDirectSecondBrainBriefWrite(message, ctx, userKey, decision, continuityThread);
       case 'routine':
@@ -4585,10 +4886,7 @@ type DirectIntentShadowCandidate =
   ): { content: string; metadata?: Record<string, unknown> } {
     const record = isRecord(output) ? output : null;
     const id = toString(record?.id).trim() || toString(descriptor.fallbackId).trim();
-    const label = toString(record?.title).trim()
-      || toString(record?.name).trim()
-      || toString(descriptor.fallbackLabel).trim()
-      || defaultSecondBrainItemLabel(descriptor.itemType);
+    const label = resolveDirectSecondBrainMutationLabel(descriptor.itemType, record, descriptor.fallbackLabel);
     switch (`${descriptor.itemType}:${descriptor.action}`) {
       case 'note:create':
         return {
@@ -4673,6 +4971,25 @@ type DirectIntentShadowCandidate =
           content: `Person deleted: ${label}`,
           metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'person'),
         };
+      case 'library:create':
+        return {
+          content: `Library item created: ${label}`,
+          metadata: id
+            ? buildSecondBrainFocusMetadata(focusState, 'library', [{ id, label }], { preferredFocusId: id })
+            : undefined,
+        };
+      case 'library:update':
+        return {
+          content: `Library item updated: ${label}`,
+          metadata: id
+            ? buildSecondBrainFocusMetadata(focusState, 'library', [{ id, label }], { preferredFocusId: id })
+            : undefined,
+        };
+      case 'library:delete':
+        return {
+          content: `Library item deleted: ${label}`,
+          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'library'),
+        };
       case 'brief:create':
         return {
           content: `Brief created: ${label}`,
@@ -4714,6 +5031,47 @@ type DirectIntentShadowCandidate =
       default:
         return { content: `${label}` };
     }
+  }
+
+  private buildDirectSecondBrainClarificationResponse(input: {
+    message: UserMessage;
+    decision: IntentGatewayDecision;
+    prompt: string;
+    field?: string;
+    missingFields?: string[];
+    entities?: Record<string, unknown>;
+  }): { content: string; metadata?: Record<string, unknown> } {
+    const pendingActionResult = this.setClarificationPendingAction(
+      input.message.userId,
+      input.message.channel,
+      input.message.surfaceId,
+      {
+        blockerKind: 'clarification',
+        ...(input.field ? { field: input.field } : {}),
+        prompt: input.prompt,
+        originalUserContent: input.message.content,
+        route: input.decision.route,
+        operation: input.decision.operation,
+        summary: input.decision.summary,
+        turnRelation: input.decision.turnRelation,
+        resolution: 'needs_clarification',
+        missingFields: input.missingFields ?? [],
+        entities: this.toPendingActionEntities({
+          ...input.decision.entities,
+          ...(input.entities ?? {}),
+        }),
+      },
+    );
+    return {
+      content: pendingActionResult.collisionPrompt ?? input.prompt,
+      metadata: this.buildImmediateResponseMetadata(
+        [],
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+        { includePendingAction: true },
+      ),
+    };
   }
 
   private async tryDirectSecondBrainNoteWrite(
@@ -5040,6 +5398,112 @@ type DirectIntentShadowCandidate =
     }
   }
 
+  private async tryDirectSecondBrainLibraryWrite(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    decision: IntentGatewayDecision,
+    continuityThread?: ContinuityThreadRecord | null,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.secondBrainService) return null;
+    const focused = readSecondBrainFocusContinuationState(continuityThread);
+    const libraryFocus = getSecondBrainFocusEntry(focused, 'library');
+    const focusItem = libraryFocus
+      ? libraryFocus.items.find((item) => item.id === libraryFocus.focusId) ?? null
+      : null;
+    const explicitTitle = extractQuotedLabeledValue(message.content, ['title']);
+    const explicitUrl = extractUrlFromText(message.content);
+    const explicitSummary = extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description']);
+
+    switch (decision.operation) {
+      case 'create':
+      case 'save': {
+        if (!explicitUrl) {
+          return 'To save a local library item, I need the URL.';
+        }
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_library_upsert',
+          args: {
+            url: explicitUrl,
+            ...(explicitTitle ? { title: explicitTitle } : {}),
+            ...(explicitSummary ? { summary: explicitSummary } : {}),
+          },
+          summary: 'Creates a local Second Brain library item.',
+          pendingIntro: 'I prepared a local library item save, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'library',
+            action: 'create',
+            fallbackLabel: explicitTitle || explicitUrl,
+          },
+          focusState: focused,
+        });
+      }
+      case 'update': {
+        if (!focusItem) {
+          return 'I need to know which local library item to update. Try "Show my library items." first.';
+        }
+        const existingLink = this.secondBrainService.getLinkById(focusItem.id);
+        if (!existingLink) {
+          return `Local library item "${focusItem.label ?? focusItem.id}" was not found.`;
+        }
+        if (!explicitTitle && !explicitUrl && !explicitSummary) {
+          return 'To update that local library item, tell me the new title, URL, or notes.';
+        }
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_library_upsert',
+          args: {
+            id: existingLink.id,
+            title: explicitTitle || existingLink.title,
+            url: explicitUrl || existingLink.url,
+            ...(explicitSummary || existingLink.summary ? { summary: explicitSummary || existingLink.summary } : {}),
+            ...(existingLink.kind ? { kind: existingLink.kind } : {}),
+          },
+          summary: 'Updates a local Second Brain library item.',
+          pendingIntro: 'I prepared a local library item update, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'library',
+            action: 'update',
+            fallbackId: existingLink.id,
+            fallbackLabel: existingLink.title || existingLink.url,
+          },
+          focusState: focused,
+        });
+      }
+      case 'delete': {
+        if (!focusItem) {
+          return 'I need to know which local library item to delete. Try "Show my library items." first.';
+        }
+        return this.executeDirectSecondBrainMutation({
+          message,
+          ctx,
+          userKey,
+          decision,
+          toolName: 'second_brain_library_delete',
+          args: { id: focusItem.id },
+          summary: 'Deletes a local Second Brain library item.',
+          pendingIntro: 'I prepared a local library item delete, but it needs approval first.',
+          successDescriptor: {
+            itemType: 'library',
+            action: 'delete',
+            fallbackId: focusItem.id,
+            fallbackLabel: focusItem.label,
+          },
+          focusState: focused,
+        });
+      }
+      default:
+        return null;
+    }
+  }
+
   private async tryDirectSecondBrainBriefWrite(
     message: UserMessage,
     ctx: AgentContext,
@@ -5154,10 +5618,12 @@ type DirectIntentShadowCandidate =
     const focusItem = personFocus
       ? personFocus.items.find((item) => item.id === personFocus.focusId) ?? null
       : null;
-    const explicitName = extractExplicitNamedSecondBrainTitle(message.content);
+    const explicitName = extractQuotedLabeledValue(message.content, ['name']) || extractExplicitNamedSecondBrainTitle(message.content);
     const explicitEmail = extractEmailAddressFromText(message.content);
+    const explicitPhone = extractPhoneNumberFromText(message.content);
     const explicitTitle = extractQuotedLabeledValue(message.content, ['title']);
     const explicitCompany = extractQuotedLabeledValue(message.content, ['company']);
+    const explicitLocation = extractQuotedLabeledValue(message.content, ['location']);
     const explicitNotes = /\b(?:note|notes|saying|say|says|write|content)\b/i.test(message.content)
       ? extractSecondBrainTextBody(message.content)
       : '';
@@ -5166,16 +5632,26 @@ type DirectIntentShadowCandidate =
     switch (decision.operation) {
       case 'create':
       case 'save': {
-        if (!explicitName && !explicitEmail) {
-          return 'To create a local person, I need at least a name or email address.';
+        const createName = explicitName || extractSecondBrainFallbackPersonName(message.content);
+        if (!createName && !explicitEmail) {
+          return this.buildDirectSecondBrainClarificationResponse({
+            message,
+            decision,
+            prompt: 'To create a local person, I need at least a name or email address.',
+            field: 'person_identity',
+            missingFields: ['person_name_or_email'],
+            entities: { personalItemType: 'person' },
+          });
         }
         const args = normalizeSecondBrainMutationArgs({
           toolName: 'second_brain_person_upsert',
           args: {
-            ...(explicitName ? { name: explicitName } : {}),
+            ...(createName ? { name: createName } : {}),
             ...(explicitEmail ? { email: explicitEmail } : {}),
+            ...(explicitPhone ? { phone: explicitPhone } : {}),
             ...(explicitTitle ? { title: explicitTitle } : {}),
             ...(explicitCompany ? { company: explicitCompany } : {}),
+            ...(explicitLocation ? { location: explicitLocation } : {}),
             ...(explicitNotes ? { notes: explicitNotes } : {}),
             ...(explicitRelationship ? { relationship: explicitRelationship } : {}),
           },
@@ -5195,7 +5671,7 @@ type DirectIntentShadowCandidate =
           successDescriptor: {
             itemType: 'person',
             action: 'create',
-            fallbackLabel: explicitName || explicitEmail,
+            fallbackLabel: createName || explicitEmail,
           },
           focusState: focused,
         });
@@ -5212,16 +5688,20 @@ type DirectIntentShadowCandidate =
           id: existingPerson.id,
           name: existingPerson.name,
           ...(existingPerson.email ? { email: existingPerson.email } : {}),
+          ...(existingPerson.phone ? { phone: existingPerson.phone } : {}),
           ...(existingPerson.title ? { title: existingPerson.title } : {}),
           ...(existingPerson.company ? { company: existingPerson.company } : {}),
+          ...(existingPerson.location ? { location: existingPerson.location } : {}),
           ...(existingPerson.notes ? { notes: existingPerson.notes } : {}),
           relationship: existingPerson.relationship,
           ...(existingPerson.lastContactAt != null ? { lastContactAt: existingPerson.lastContactAt } : {}),
         };
         if (explicitName) baseArgs.name = explicitName;
         if (explicitEmail) baseArgs.email = explicitEmail;
+        if (explicitPhone) baseArgs.phone = explicitPhone;
         if (explicitTitle) baseArgs.title = explicitTitle;
         if (explicitCompany) baseArgs.company = explicitCompany;
+        if (explicitLocation) baseArgs.location = explicitLocation;
         if (explicitNotes) baseArgs.notes = explicitNotes;
         if (explicitRelationship) baseArgs.relationship = explicitRelationship;
         const args = normalizeSecondBrainMutationArgs({
@@ -5240,14 +5720,16 @@ type DirectIntentShadowCandidate =
         const hasExplicitChange = Boolean(
           explicitName
           || explicitEmail
+          || explicitPhone
           || explicitTitle
           || explicitCompany
+          || explicitLocation
           || explicitNotes
           || explicitRelationship
           || nextLastContactAt !== existingLastContactAt,
         );
         if (!hasExplicitChange) {
-          return 'To update that local person, tell me what to change, such as the name, email, title, company, notes, relationship, or last-contact date.';
+          return 'To update that local person, tell me what to change, such as the name, email, phone, title, company, location, notes, relationship, or last-contact date.';
         }
         return this.executeDirectSecondBrainMutation({
           message,
@@ -5389,6 +5871,26 @@ type DirectIntentShadowCandidate =
         } else if (createCatalogEntry.supportsFocusQuery && explicitFocusQuery) {
           createArgs.config = { focusQuery: explicitFocusQuery };
         }
+        const matchingRoutine = findMatchingRoutineForCreate(configuredRoutines, {
+          templateId: createCatalogEntry.templateId,
+          timing: explicitScheduleTiming,
+          defaultTiming: createCatalogEntry.defaultTiming,
+          delivery: explicitDelivery,
+          defaultDelivery: createCatalogEntry.defaultDelivery,
+          config: createArgs.config,
+        });
+        if (matchingRoutine?.id) {
+          const label = toString(matchingRoutine.name).trim() || createCatalogEntry.name;
+          return {
+            content: `Routine already exists: ${label}`,
+            metadata: buildSecondBrainFocusMetadata(
+              focused,
+              'routine',
+              [{ id: matchingRoutine.id, label }],
+              { preferredFocusId: matchingRoutine.id },
+            ),
+          };
+        }
         return this.executeDirectSecondBrainMutation({
           message,
           ctx,
@@ -5397,7 +5899,7 @@ type DirectIntentShadowCandidate =
           toolName: 'second_brain_routine_create',
           args: createArgs,
           summary: 'Creates a Second Brain routine.',
-          pendingIntro: 'I prepared a Second Brain routine create, but it needs approval first.',
+          pendingIntro: 'I prepared that Second Brain routine, but it needs approval first.',
           successDescriptor: {
             itemType: 'routine',
             action: 'create',
@@ -5527,7 +6029,7 @@ type DirectIntentShadowCandidate =
           toolName: 'second_brain_routine_update',
           args: nextArgs,
           summary: 'Updates a Second Brain routine.',
-          pendingIntro: 'I prepared a Second Brain routine update, but it needs approval first.',
+          pendingIntro: 'I prepared that Second Brain routine change, but it needs approval first.',
           successDescriptor: {
             itemType: 'routine',
             action: 'update',
@@ -5555,7 +6057,7 @@ type DirectIntentShadowCandidate =
           toolName: 'second_brain_routine_delete',
           args: { id: existingRoutine.id },
           summary: 'Deletes a Second Brain routine.',
-          pendingIntro: 'I prepared a Second Brain routine delete, but it needs approval first.',
+          pendingIntro: 'I prepared that Second Brain routine removal, but it needs approval first.',
           successDescriptor: {
             itemType: 'routine',
             action: 'delete',
@@ -6784,13 +7286,16 @@ type DirectIntentShadowCandidate =
           metadata: {
             ...(baseMetadata ?? {}),
             responseSource: (
-              buildDirectHandlerResponseSource(input.candidate)
+              buildDirectHandlerResponseSource(input.candidate, selectedExecutionProfile, input.ctx.llm.name)
               ?? {
                 locality: selectedExecutionProfile?.providerLocality ?? getProviderLocalityFromName(input.ctx.llm.name),
                 providerName: selectedExecutionProfile?.providerType ?? input.ctx.llm.name.trim(),
                 ...(selectedExecutionProfile?.providerName
                   && selectedExecutionProfile.providerName !== (selectedExecutionProfile.providerType ?? input.ctx.llm.name.trim())
                   ? { providerProfileName: selectedExecutionProfile.providerName }
+                  : {}),
+                ...(selectedExecutionProfile?.providerModel
+                  ? { model: selectedExecutionProfile.providerModel }
                   : {}),
                 ...((selectedExecutionProfile?.providerTier ?? getProviderTier(input.ctx.llm.name))
                   ? { providerTier: selectedExecutionProfile?.providerTier ?? getProviderTier(input.ctx.llm.name) }
@@ -9623,7 +10128,7 @@ type DirectIntentShadowCandidate =
       (messages, options) => this.chatWithFallback(
         ctx,
         messages,
-        options,
+        { ...options, signal: message.abortSignal },
         readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder,
       ),
     );
@@ -11292,6 +11797,8 @@ type DirectIntentShadowCandidate =
       && toolName !== 'second_brain_calendar_delete'
       && toolName !== 'second_brain_person_upsert'
       && toolName !== 'second_brain_person_delete'
+      && toolName !== 'second_brain_library_upsert'
+      && toolName !== 'second_brain_library_delete'
       && toolName !== 'second_brain_brief_upsert'
       && toolName !== 'second_brain_brief_delete'
       && toolName !== 'second_brain_routine_create'
@@ -11305,6 +11812,7 @@ type DirectIntentShadowCandidate =
       && itemType !== 'task'
       && itemType !== 'calendar'
       && itemType !== 'person'
+      && itemType !== 'library'
       && itemType !== 'brief'
       && itemType !== 'routine'
     ) {

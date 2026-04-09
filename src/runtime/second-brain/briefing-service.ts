@@ -133,7 +133,7 @@ function renderNoteLine(note: SecondBrainNoteRecord): string {
 }
 
 function renderPersonLine(person: SecondBrainPersonRecord): string {
-  const details = [person.title, person.company, person.email].filter(Boolean).join(' · ');
+  const details = [person.title, person.company, person.email, person.phone, person.location].filter(Boolean).join(' · ');
   return details
     ? `- ${person.name} (${details})`
     : `- ${person.name}`;
@@ -337,7 +337,7 @@ export class BriefingService {
       .filter((note) => shouldIncludeByFocus(`${note.title} ${note.content}`, focusQuery))
       .slice(0, 5);
     const people = this.secondBrainService.listPeople({ limit: 25 })
-      .filter((person) => shouldIncludeByFocus([person.name, person.company, person.title, person.notes, person.email].filter(Boolean).join(' '), focusQuery))
+      .filter((person) => shouldIncludeByFocus([person.name, person.company, person.title, person.notes, person.email, person.phone, person.location].filter(Boolean).join(' '), focusQuery))
       .sort((left, right) => {
         const leftTimestamp = left.lastContactAt ?? left.updatedAt;
         const rightTimestamp = right.lastContactAt ?? right.updatedAt;
@@ -453,7 +453,7 @@ export class BriefingService {
       .filter((note) => shouldIncludeByFocus(`${note.title} ${note.content}`, focusQuery))
       .slice(0, 5);
     const people = this.secondBrainService.listPeople({ limit: 25 })
-      .filter((person) => shouldIncludeByFocus([person.name, person.company, person.title, person.notes, person.email].filter(Boolean).join(' '), focusQuery))
+      .filter((person) => shouldIncludeByFocus([person.name, person.company, person.title, person.notes, person.email, person.phone, person.location].filter(Boolean).join(' '), focusQuery))
       .sort((left, right) => {
         const leftTimestamp = left.lastContactAt ?? left.updatedAt;
         const rightTimestamp = right.lastContactAt ?? right.updatedAt;
@@ -550,7 +550,7 @@ export class BriefingService {
       .slice(0, 4);
     const relatedPeople = this.secondBrainService.listPeople({ limit: 25 })
       .filter((person) => {
-        const haystack = [person.name, person.company, person.title, person.notes].filter(Boolean).join(' ');
+        const haystack = [person.name, person.company, person.title, person.notes, person.email, person.phone, person.location].filter(Boolean).join(' ');
         return keywords.length === 0 || includesKeyword(haystack, keywords);
       })
       .slice(0, 4);
@@ -720,7 +720,7 @@ export class BriefingService {
       .filter((note) => matchesSince(note.updatedAt) && matchesTopic(`${note.title} ${note.content}`, topicQuery, keywords))
       .slice(0, 8);
     const relatedPeople = this.secondBrainService.listPeople({ limit: 50 })
-      .filter((person) => matchesSince(person.updatedAt) && matchesTopic([person.name, person.company, person.title, person.notes, person.email].filter(Boolean).join(' '), topicQuery, keywords))
+      .filter((person) => matchesSince(person.updatedAt) && matchesTopic([person.name, person.company, person.title, person.notes, person.email, person.phone, person.location].filter(Boolean).join(' '), topicQuery, keywords))
       .slice(0, 8);
     const relatedLinks = this.secondBrainService.listLinks({ limit: 50 })
       .filter((link) => matchesSince(link.updatedAt) && matchesTopic([link.title, link.summary, link.url].filter(Boolean).join(' '), topicQuery, keywords))

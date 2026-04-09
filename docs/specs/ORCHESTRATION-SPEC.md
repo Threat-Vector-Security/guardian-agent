@@ -131,6 +131,8 @@ It:
 - allows unrelated sessions to run in parallel
 - tracks queue depth, latency, and job state
 - owns request scheduling and observation, not automation definition shape
+- supports backend-enforced request cancellation by passing standard `AbortSignal` primitives from the channel endpoints through the orchestrator queue, agent handlers, and intent gateways down to the underlying LLM provider fetch calls
+- on cancellation, instantly kills the underlying execution, aborts in-flight network requests, clears any pending items queued behind the canceled request, and resets the orchestration session to prevent blocked queues and leaked execution context
 
 Current as-built delegation foundations:
 - brokered worker dispatch records delegated lineage into assistant job state rather than leaving it as ad hoc log-only state

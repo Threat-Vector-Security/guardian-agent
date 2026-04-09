@@ -67,8 +67,8 @@ const CONFIG_HELP = {
     },
     'Configured Providers': {
       whatItIs: 'This section is the runtime-facing inventory of provider profiles that Guardian currently knows about and can attempt to use.',
-      whatSeeing: 'You are seeing each configured provider name, provider family, locality, active model, connection status, base URL, and any live model metadata returned by the runtime.',
-      whatCanDo: 'Use it to confirm that saved config became a usable runtime provider, compare configured profiles, and troubleshoot why a provider is offline, mispointed, or missing.',
+      whatSeeing: 'You are seeing each configured provider name, provider family, locality, active model, connection status, base URL, any live model metadata returned by the runtime, and an enable checkbox on the saved profile list.',
+      whatCanDo: 'Use it to confirm that saved config became a usable runtime provider, compare configured profiles, temporarily disable a profile without deleting it, and troubleshoot why a provider is offline, mispointed, or missing.',
       howLinks: 'It validates whether the setup work done in AI Provider Configuration has actually produced a provider the rest of the system can call.',
     },
     'Web Search & Model Fallback': {
@@ -548,7 +548,7 @@ function createProviderPanel(config, providers, panel) {
       ...cfg,
       locality: live?.locality || typeMeta?.locality || 'external',
       tier: live?.tier || typeMeta?.tier || 'frontier',
-      connected: live?.connected,
+      connected: cfg.enabled === false ? false : (live?.connected ?? false),
       availableModels: live?.availableModels || [],
     };
     return acc;
@@ -1119,7 +1119,8 @@ function createProviderPanel(config, providers, panel) {
       const buttons = names.map(name => {
         const info = providerMap[name];
         const isActive = selectedProfile === name;
-        const tone = info.connected === false ? 'badge-errored' : 'badge-idle';
+        const isEnabled = isProviderConfigEnabled(info);
+        const tone = !isEnabled ? 'badge-queued' : info.connected === false ? 'badge-errored' : 'badge-idle';
         const tierLabel = getProviderTierLabel(info.tier);
         const roleBadges = [];
         const preferredBucket = getPreferredProviderBucketForEntry(info);
@@ -1137,17 +1138,55 @@ function createProviderPanel(config, providers, panel) {
           <div
             style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius:0; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
             data-provider-profile="${escAttr(name)}"
-            title="${escAttr(`${name} (${info.provider}, ${tierLabel}${badgeLabel})`)}"
+            title="${escAttr(`${name} (${info.provider}, ${tierLabel}${badgeLabel}${isEnabled ? '' : ', disabled'})`)}"
           >
-            <div style="display:flex; flex-direction:column; overflow:hidden;">
-              <span style="font-size: 0.85rem; font-weight: ${isActive ? '600' : '500'}; color: ${isActive ? 'var(--text-primary)' : 'var(--text-secondary)'}; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${esc(name)}</span>
-              <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)} • ${esc(tierLabel)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
+            <div style="display:flex; align-items:flex-start; gap:0.55rem; min-width:0; flex:1 1 auto;">
+              <label style="display:flex; align-items:center; margin-top:0.1rem; cursor:pointer;" title="Enable this provider for live routing and runtime use.">
+                <input type="checkbox" data-provider-enabled-toggle="${escAttr(name)}"${isEnabled ? ' checked' : ''}>
+              </label>
+              <div style="display:flex; flex-direction:column; overflow:hidden; min-width:0;">
+                <span style="font-size: 0.85rem; font-weight: ${isActive ? '600' : '500'}; color: ${isEnabled ? (isActive ? 'var(--text-primary)' : 'var(--text-secondary)') : 'var(--text-muted)'}; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${esc(name)}</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)} • ${esc(tierLabel)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
+              </div>
             </div>
-            <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${info.connected === false ? 'offline' : 'online'}</span>
+            <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${!isEnabled ? 'disabled' : info.connected === false ? 'offline' : 'online'}</span>
           </div>
         `;
       }).join('');
       profilesEl.innerHTML = buttons || '<span class="text-muted" style="font-size:0.78rem;">No configured providers yet.</span>';
+      profilesEl.querySelectorAll('[data-provider-enabled-toggle]').forEach((checkbox) => {
+        checkbox.addEventListener('click', (event) => {
+          event.stopPropagation();
+        });
+        checkbox.addEventListener('change', async (event) => {
+          event.stopPropagation();
+          const input = event.currentTarget;
+          const providerName = input?.getAttribute('data-provider-enabled-toggle');
+          if (!providerName) return;
+          const nextEnabled = input.checked;
+          input.disabled = true;
+          try {
+            const result = await api.updateConfig({
+              llm: {
+                [providerName]: {
+                  enabled: nextEnabled,
+                },
+              },
+            });
+            if (!result.success) {
+              input.checked = !nextEnabled;
+              alert(result.message || `Failed to update ${providerName}.`);
+              return;
+            }
+            await updateConfig();
+          } catch (err) {
+            input.checked = !nextEnabled;
+            alert(err instanceof Error ? err.message : String(err));
+          } finally {
+            input.disabled = false;
+          }
+        });
+      });
       profilesEl.querySelectorAll('[data-provider-profile]').forEach((btn) => {
         btn.addEventListener('click', () => {
           providerSides
@@ -1528,6 +1567,10 @@ function getProviderTierLabel(tier) {
   return 'system';
 }
 
+function isProviderConfigEnabled(entry) {
+  return entry?.enabled !== false;
+}
+
 function getPreferredProviderBucketForEntry(entry) {
   if (!entry) return 'frontier';
   if (entry.locality === 'local' || entry.tier === 'local') return 'local';
@@ -1537,10 +1580,10 @@ function getPreferredProviderBucketForEntry(entry) {
 
 function getPreferredProviderNameForBucket(preferredProviders, bucket, providerMap) {
   const explicit = preferredProviders?.[bucket];
-  if (explicit) return explicit;
+  if (explicit && providerMap?.[explicit] && isProviderConfigEnabled(providerMap[explicit])) return explicit;
   if (bucket === 'local') return null;
   const legacy = preferredProviders?.external;
-  if (!legacy || !providerMap?.[legacy]) return null;
+  if (!legacy || !providerMap?.[legacy] || !isProviderConfigEnabled(providerMap[legacy])) return null;
   return getPreferredProviderBucketForEntry(providerMap[legacy]) === bucket ? legacy : null;
 }
 
@@ -1810,7 +1853,7 @@ function createProviderStatusTable(config, providers, panel) {
       ...cfg,
       locality: live?.locality || typeMeta?.locality || 'external',
       tier: live?.tier || typeMeta?.tier || 'frontier',
-      connected: live?.connected,
+      connected: cfg.enabled === false ? false : (live?.connected ?? false),
       availableModels: live?.availableModels || [],
     };
     return acc;
@@ -1820,7 +1863,8 @@ function createProviderStatusTable(config, providers, panel) {
   const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
   const rows = providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
-    const connected = live ? (live.connected !== false) : true;
+    const enabled = isProviderConfigEnabled(cfg);
+    const connected = enabled ? (live ? (live.connected !== false) : false) : false;
     const typeMeta = getProviderTypeMeta(cfg.provider);
     const locality = live?.locality || typeMeta?.locality || 'external';
     const tier = live?.tier || typeMeta?.tier || 'frontier';
@@ -1831,12 +1875,16 @@ function createProviderStatusTable(config, providers, panel) {
         ? preferredManagedCloud === name
         : preferredFrontier === name;
     const preferredBucketLabel = getPreferredProviderBucketLabel(preferredBucket);
-    const statusBadge = '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>';
+    const statusBadge = enabled
+      ? '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>'
+      : '<span class="badge badge-queued">Disabled</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
     const defaultBadges = [
       isPreferredBucket ? ` <span class="badge badge-running">${esc(preferredBucketLabel.toLowerCase())} default</span>` : '',
     ].join('');
-    const preferredActionBtn = isPreferredBucket
+    const preferredActionBtn = !enabled
+      ? '<span class="config-provider-current" title="' + escAttr('Enable this provider before using it in model routing.') + '">Disabled for routing</span>'
+      : isPreferredBucket
       ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
       : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
     return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>';
@@ -1901,13 +1949,14 @@ function createProviderSelectionPolicyPanel(config, panel) {
   const providerMap = Object.entries(config?.llm || {}).reduce((acc, [name, cfg]) => {
     acc[name] = {
       provider: cfg.provider,
+      enabled: cfg.enabled,
       locality: getProviderLocalityForType(cfg.provider),
       tier: getProviderTypeMeta(cfg.provider)?.tier || 'frontier',
     };
     return acc;
   }, {});
   const managedCloudProviders = Object.keys(providerMap)
-    .filter((name) => providerMap[name].tier === 'managed_cloud')
+    .filter((name) => providerMap[name].tier === 'managed_cloud' && isProviderConfigEnabled(providerMap[name]))
     .sort((left, right) => left.localeCompare(right));
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
   const managedCloudDefault = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap) || '';

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
+import { attachChatProviderSelectionMetadata } from './chat-provider-selection.js';
 import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
 import type { IntentGatewayRecord } from './intent-gateway.js';
 import type { MessageRouter } from './message-router.js';
@@ -132,5 +134,36 @@ describe('createIncomingDispatchPreparer classifier provider selection', () => {
 
     expect(runtimeGetProvider).toHaveBeenCalledWith('ollama-cloud');
     expect(runtimeGetProvider).not.toHaveBeenCalledWith('ollama');
+  });
+
+  it('uses the request-scoped provider override for classification and execution profile selection', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-direct'] = {
+      provider: 'ollama_cloud',
+      model: 'minimax-m2.1',
+      credentialRef: 'llm.ollama_cloud.direct',
+    };
+    const { args, runtimeGetProvider } = createBaseArgs(config);
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(args);
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Give me a concise plan for organizing my week',
+      userId: 'alex',
+      channel: 'web',
+      metadata: attachChatProviderSelectionMetadata({}, 'ollama-cloud-direct'),
+    });
+
+    expect(runtimeGetProvider).toHaveBeenCalledWith('ollama-cloud-direct');
+    expect(args.router.routeWithTierFromIntent).not.toHaveBeenCalled();
+    expect(result.decision).toMatchObject({
+      agentId: 'external-agent',
+      tier: 'external',
+      reason: 'request-scoped provider override: ollama-cloud-direct',
+    });
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerModel: 'minimax-m2.1',
+      providerTier: 'managed_cloud',
+    });
   });
 });

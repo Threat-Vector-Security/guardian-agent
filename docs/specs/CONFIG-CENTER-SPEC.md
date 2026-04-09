@@ -133,6 +133,9 @@ Config: `assistant.tools.providerRoutingEnabled` (boolean, default `true`), `ass
 
 Configuration > AI Providers also owns the managed-cloud role-routing editor.
 
+- each configured provider row must expose an immediate-save enabled checkbox
+- disabling a provider keeps the saved profile editable but removes it from live routing, derived routed defaults, execution-profile selection, and fallback order until re-enabled
+- the config API must reject changes that would leave Guardian with zero enabled AI providers
 - Managed-cloud role routing binds named Ollama Cloud profiles to Guardian workload roles inside the managed-cloud tier.
 - Current roles are:
   - `general`
@@ -140,5 +143,7 @@ Configuration > AI Providers also owns the managed-cloud role-routing editor.
   - `tool loops / provider CRUD`
   - `managed-cloud coding`
 - These bindings only apply after normal tier selection has already decided that the request should run on the managed-cloud tier.
+- Direct-assistant workloads that leave the local tier, such as `Second Brain`, memory, and UI-control turns, should prefer the `direct answers` binding rather than the `tool loops` binding even when the operation is a create or update.
 - If a managed-cloud role binding is not set, Guardian should use the explicit `general` binding first when one exists for non-general work, otherwise it should infer a matching profile from the managed-cloud provider name and then fall back to the routed managed-cloud default.
+- Low-confidence or fallback-classified requests should avoid over-specializing into role-specific managed-cloud profiles when the route is uncertain; the general managed-cloud binding is the preferred safe fallback when available.
 - Guardian does not mirror Ollama Cloud plan concurrency limits in this config surface; upstream concurrency and queueing remain enforced by Ollama Cloud.

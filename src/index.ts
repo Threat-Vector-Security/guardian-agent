@@ -112,6 +112,7 @@ import {
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
 } from './runtime/security-controls.js';
+import { buildChatProviderSelectorOptions } from './runtime/chat-provider-selection.js';
 import { ContainmentService } from './runtime/containment-service.js';
 import { assessSecurityPosture } from './runtime/security-posture.js';
 import { SecurityActivityLogService } from './runtime/security-activity-log.js';
@@ -298,10 +299,10 @@ function getProviderLocality(
 }
 
 function providerMatchesTier(
-  llmCfg: Pick<LLMConfig, 'provider' | 'baseUrl'> | undefined,
+  llmCfg: Pick<LLMConfig, 'enabled' | 'provider' | 'baseUrl'> | undefined,
   tier: 'local' | 'managed_cloud' | 'frontier',
 ): boolean {
-  if (!llmCfg?.provider) return false;
+  if (!llmCfg?.provider || llmCfg.enabled === false) return false;
   if (tier === 'local') {
     return getProviderLocality(llmCfg) === 'local';
   }
@@ -1796,6 +1797,7 @@ function buildDashboardCallbacks(
         availableModes,
         complexityThreshold: r?.complexityThreshold ?? 0.5,
         fallbackOnFailure: r?.fallbackOnFailure !== false,
+        providerOptions: buildChatProviderSelectorOptions(configRef.current),
       };
     },
 

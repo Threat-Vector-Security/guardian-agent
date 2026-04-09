@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
+import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -104,6 +106,8 @@ async function startFakeProvider(workspaceRoot) {
   const examplePath = path.join(workspaceRoot, 'src', 'example.ts');
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
+    const isOpenAiCompatChat = req.method === 'POST' && url.pathname === '/v1/chat/completions';
 
     if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -111,27 +115,41 @@ async function startFakeProvider(workspaceRoot) {
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    if (isOllamaNativeChat || isOpenAiCompatChat) {
       await new Promise((resolve) => setTimeout(resolve, 150));
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+      const sendResponse = ({ content = '', finishReason = 'stop', toolCalls } = {}) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(
+          isOllamaNativeChat
+            ? createOllamaHarnessChatResponse({
+                model: 'code-ui-harness-model',
+                content,
+                doneReason: finishReason,
+                toolCalls,
+              })
+            : createChatCompletionResponse({
+                model: 'code-ui-harness-model',
+                content,
+                finishReason,
+                toolCalls,
+              }),
+        ));
+      };
 
       if (latestUser.includes('[Code Approval Continuation]')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'code-ui-harness-model',
+        sendResponse({
           content: 'The approved edit has been applied. Refresh the file view if you want to inspect the updated source.',
-        })));
+        });
         return;
       }
 
       if (/make the answer 42/i.test(latestUser)) {
         if (toolMessages.length === 0) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
-            model: 'code-ui-harness-model',
+          sendResponse({
             finishReason: 'tool_calls',
             toolCalls: [{
               id: 'code-ui-find-tools',
@@ -141,22 +159,16 @@ async function startFakeProvider(workspaceRoot) {
                 maxResults: 10,
               }),
             }],
-          })));
+          });
           return;
         }
 
         if (toolMessages.length >= 2) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(createChatCompletionResponse({
-            model: 'code-ui-harness-model',
-            content: 'Updated the selected file so answerValue is now 42.',
-          })));
+          sendResponse({ content: 'Updated the selected file so answerValue is now 42.' });
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'code-ui-harness-model',
+        sendResponse({
           finishReason: 'tool_calls',
           toolCalls: [{
             id: 'code-ui-edit',
@@ -167,34 +179,22 @@ async function startFakeProvider(workspaceRoot) {
               newString: 'const answerValue = 42;',
             }),
           }],
-        })));
+        });
         return;
       }
 
       if (latestUser.includes('answerValue')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'code-ui-harness-model',
-          content: 'I found `answerValue` in `src/example.ts` in the current coding workspace.',
-        })));
+        sendResponse({ content: 'I found `answerValue` in `src/example.ts` in the current coding workspace.' });
         return;
       }
 
       if (/slow repo summary/i.test(latestUser)) {
         await new Promise((resolve) => setTimeout(resolve, 5600));
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'code-ui-harness-model',
-          content: 'This repo contains a src directory with example.ts and a generated live-generated.ts file.',
-        })));
+        sendResponse({ content: 'This repo contains a src directory with example.ts and a generated live-generated.ts file.' });
         return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(createChatCompletionResponse({
-        model: 'code-ui-harness-model',
-        content: 'UI smoke harness response.',
-      })));
+      sendResponse({ content: 'UI smoke harness response.' });
       return;
     }
 
@@ -333,6 +333,8 @@ assistant:
     completed: true
   tools:
     enabled: true
+    preferredProviders:
+      local: local
     policyMode: approve_by_policy
     allowedPaths:
       - ${workspaceRoot}

@@ -136,6 +136,7 @@ const DEFAULT_TOOLTIPS = {
   '#quick-action-input': 'Plain-language details injected into the chosen quick action template.',
   '#quick-action-run': 'Runs the selected quick action immediately using the details you entered.',
   '#chat-agent-select': 'Pick which agent should answer in this chat. Useful when you want to force work through a specific persona or provider path.',
+  '#chat-provider-select': 'Choose Automatic to let Guardian route the request normally, or pick one enabled provider profile to force that chat turn through that exact profile.',
   '#chat-input': 'Message sent to the currently selected assistant agent. Tool calls, approvals, and streamed output all start from this field.',
   '[data-code-new-session]': 'Create a new coding session with its own workspace root and conversation.',
   '[data-code-reset-chat]': 'Clear the conversation and start fresh. Session and workspace remain intact.',

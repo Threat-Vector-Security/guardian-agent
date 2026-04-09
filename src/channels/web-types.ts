@@ -50,6 +50,7 @@ import type {
 import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type { RouteDecision } from '../runtime/message-router.js';
+import type { ProviderLocality, ProviderTier } from '../llm/provider-metadata.js';
 import type {
   AssistantConnectorPackConfig,
   AssistantConnectorPlaybookDefinition,
@@ -168,6 +169,16 @@ export interface DashboardMemoryArtifactSummary {
   contextFlushEntries: number;
   categories: string[];
   lastCreatedAt?: string;
+}
+
+export interface DashboardChatProviderOption {
+  value: string;
+  label: string;
+  providerName?: string;
+  providerType?: string;
+  providerTier?: ProviderTier;
+  providerLocality?: ProviderLocality;
+  model?: string;
 }
 
 export interface DashboardMemoryScopeView {
@@ -422,6 +433,7 @@ export interface RedactedCloudConfig {
 export interface RedactedConfig {
   llm: Record<string, {
     provider: string;
+    enabled?: boolean;
     model: string;
     baseUrl?: string;
     credentialRef?: string;
@@ -1630,6 +1642,20 @@ export interface DashboardCallbacks {
     error?: string;
     errorCode?: string;
   }>;
+  onStreamCancel?: (input: {
+    requestId: string;
+    userId?: string;
+    channel?: string;
+    agentId?: string;
+    reason?: string;
+  }) => Promise<{
+    success: boolean;
+    canceled: boolean;
+    message: string;
+    requestId: string;
+    runId: string;
+    errorCode?: string;
+  }>;
   onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
   onCloudTest?: (provider: string, profileId: string) => Promise<{ success: boolean; message: string }>;
   onKillswitch?: () => void;
@@ -1644,6 +1670,7 @@ export interface DashboardCallbacks {
     availableModes: RoutingTierMode[];
     complexityThreshold: number;
     fallbackOnFailure: boolean;
+    providerOptions: DashboardChatProviderOption[];
   };
   onRoutingModeUpdate?: (mode: RoutingTierMode) => {
     success: boolean;
@@ -1801,6 +1828,7 @@ export interface ConfigUpdate {
   llm?: Record<string, {
     remove?: boolean;
     provider?: string;
+    enabled?: boolean;
     model?: string;
     apiKey?: string;
     credentialRef?: string;

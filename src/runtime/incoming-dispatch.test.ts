@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
+import { attachChatProviderSelectionMetadata } from './chat-provider-selection.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
 import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
 import type { MessageRouter } from './message-router.js';
@@ -129,6 +130,43 @@ describe('createIncomingDispatchPreparer', () => {
     expect(routingIntentGateway.classify).not.toHaveBeenCalled();
   });
 
+  it('still attaches a forced provider profile when a coding session is pinned to a specific agent', async () => {
+    const config = createConfig();
+    config.llm.anthropic = {
+      provider: 'anthropic',
+      model: 'claude-opus-4.6',
+      apiKey: 'test-key',
+    };
+    const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
+    const codeSessionStore = {
+      resolveForRequest: vi.fn(() => ({
+        session: { agentId: 'pinned-worker' },
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      readCodeRequestMetadata,
+      codeSessionStore,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'continue the coding task',
+      userId: 'alex',
+      channel: 'web',
+      metadata: attachChatProviderSelectionMetadata({ codeContext: { sessionId: 'session-1' } }, 'anthropic'),
+    });
+
+    expect(result.decision).toEqual({
+      agentId: 'pinned-worker',
+      confidence: 'high',
+      reason: 'explicit coding session pinned to a specific agent',
+    });
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+    });
+  });
+
   it('attaches pre-routed gateway metadata and records routing trace entries when classification is available', async () => {
     const gatewayRecord = createGatewayRecord({
       route: 'browser_task',
@@ -216,6 +254,9 @@ describe('createIncomingDispatchPreparer', () => {
 
   it('attaches a frontier execution profile for heavier repo-grounded external work', async () => {
     const config = createConfig();
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
     config.llm['ollama-cloud'] = {
       provider: 'ollama_cloud',
       model: 'qwen3-coder-next',
@@ -255,6 +296,7 @@ describe('createIncomingDispatchPreparer', () => {
         routeWithTier: vi.fn(() => ({ agentId: 'external-agent', confidence: 'medium', reason: 'tier route', tier: 'external' })),
         routeWithTierFromIntent: vi.fn(() => ({ agentId: 'external-agent', confidence: 'high', reason: 'intent tier route', tier: 'external' })),
       } as unknown as MessageRouter,
+      intentRoutingTrace,
     }));
 
     const result = await prepareIncomingDispatch(undefined, {
@@ -269,5 +311,21 @@ describe('createIncomingDispatchPreparer', () => {
       id: 'frontier_deep',
       preferredAnswerPath: 'chat_synthesis',
     });
+    expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'profile_selection_decided',
+      details: expect.objectContaining({
+        providerType: 'anthropic',
+        providerModel: 'claude-opus-4.6',
+        providerTier: 'frontier',
+      }),
+    }));
+    expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'pre_routed_metadata_attached',
+      details: expect.objectContaining({
+        selectedProviderType: 'anthropic',
+        selectedProviderModel: 'claude-opus-4.6',
+        selectedProviderTier: 'frontier',
+      }),
+    }));
   });
 });

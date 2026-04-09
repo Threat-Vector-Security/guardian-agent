@@ -12,6 +12,7 @@ export type SecondBrainEntityKind =
 export type SecondBrainTaskStatus = 'todo' | 'in_progress' | 'done';
 export type SecondBrainTaskPriority = 'low' | 'medium' | 'high';
 export type SecondBrainPersonRelationship = 'work' | 'personal' | 'family' | 'vendor' | 'other';
+export type SecondBrainPersonPhoneNumber = string;
 export type SecondBrainBriefKind = 'manual' | 'morning' | 'weekly_review' | 'scheduled_review' | 'pre_meeting' | 'follow_up';
 export type SecondBrainGeneratedBriefKind = 'morning' | 'weekly_review' | 'scheduled_review' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
@@ -133,8 +134,10 @@ export interface SecondBrainPersonRecord {
   id: string;
   name: string;
   email?: string;
+  phone?: SecondBrainPersonPhoneNumber;
   title?: string;
   company?: string;
+  location?: string;
   notes?: string;
   relationship: SecondBrainPersonRelationship;
   lastContactAt?: number | null;
@@ -337,8 +340,10 @@ export interface SecondBrainPersonUpsertInput {
   id?: string;
   name?: string;
   email?: string;
+  phone?: SecondBrainPersonPhoneNumber;
   title?: string;
   company?: string;
+  location?: string;
   notes?: string;
   relationship?: SecondBrainPersonRelationship;
   lastContactAt?: number | null;
