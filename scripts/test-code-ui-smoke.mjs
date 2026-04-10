@@ -556,7 +556,7 @@ guardian:
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
     });
 
-    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').isVisible().catch(() => false), false, 'Code route should hide coding workspace context rows in Guardian chat');
+    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').count(), 0, 'Guardian chat should not render coding workspace chrome on the Code route');
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await openCodePanel('sessions');
@@ -707,19 +707,7 @@ guardian:
       && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.targetSessionId && String(session.workspaceRoot || '').includes(reviewedWorkspaceRoot)),
       `Expected Guardian chat to retain the explicit target workspace: ${JSON.stringify(dashboardFocus)}`,
     );
-    await page.waitForFunction(() => {
-      const strip = document.querySelector('#chat-panel-code-session-strip');
-      const clear = document.querySelector('#chat-panel [data-chat-code-session-target-clear]');
-      if (!(strip instanceof HTMLElement) || !(clear instanceof HTMLButtonElement)) {
-        return false;
-      }
-      return !strip.hidden && !clear.disabled;
-    });
-    await page.click('#chat-panel [data-chat-code-session-target-clear]');
-    await page.waitForFunction(() => {
-      const strip = document.querySelector('#chat-panel-code-session-strip');
-      return !!strip && strip.hidden;
-    });
+    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').count(), 0, 'Guardian chat should not render a coding workspace row on normal routes');
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await page.goto(`${baseUrl}/#/code`, { waitUntil: 'domcontentloaded' });
@@ -730,6 +718,13 @@ guardian:
       return (activeMeta?.textContent || '').includes(expected);
     }, workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await toggleWorkspaceTargetFromCodePanel(reviewedWorkspaceRoot);
+    await page.waitForFunction((expectedRoot) => {
+      return Array.from(document.querySelectorAll('.code-session')).every((node) => {
+        const text = node.textContent || '';
+        return !text.includes(expectedRoot) || !text.includes('TARGETED');
+      });
+    }, reviewedWorkspaceRoot);
 
     // Icon rail panel switching — switch to explorer
     await page.locator('[data-code-panel-switch="explorer"]').click();
@@ -1013,7 +1008,7 @@ guardian:
     if (!/answerValue = 42/.test(editedFileContent)) {
       const editDiagnostics = await page.evaluate(() => ({
         chatHistory: document.querySelector('#chat-history')?.textContent || '',
-        focusedSession: document.querySelector('[data-chat-code-session-target-summary]')?.textContent || 'no explicit target row',
+        focusedSession: 'Guardian chat does not render coding-session chrome',
         activitySummary: document.querySelector('[data-code-assistant-panel-host]')?.textContent || '',
       }));
       throw new assert.AssertionError({

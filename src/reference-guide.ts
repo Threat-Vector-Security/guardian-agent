@@ -419,7 +419,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'System now includes `Runtime Execution`, which is the operator-facing timeline for assistant dispatches, routine and scheduled-task runs, and code-session execution.',
                   'Use `Runtime Execution` when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed outside normal automation workflows.',
                   'Routing Trace gives you a quick explanation of how Guardian interpreted a request and where it sent the work.',
-                  'Configuration > Tools is where you manage tools and approvals. Security is where you review alerts, posture, and security activity.',
+                  'System shows the global pending-approval queue alongside runtime state. Configuration > Tools is where you manage tool routing and recent jobs. Security is where you review alerts, posture, and security activity.',
                 ],
               },
               {
@@ -446,7 +446,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Tool Governance',
                 items: [
-                  'Configuration > Tools is the main operator surface for tool enablement, approvals, and recent jobs.',
+                  'Configuration > Tools is the main operator surface for tool enablement, routing, and recent jobs, while System carries the global pending-approval queue.',
                   'Configuration > Security is where you review or change the main protection settings for browser, shell, and other higher-risk actions.',
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Treat allowed paths, commands, and domains as trust boundaries, not convenience toggles.',
@@ -510,7 +510,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Creating or attaching a code session authorizes repo-local work for that session. It does not widen general non-Code file access.',
                   'Guardian chat is the canonical coding chat in the web UI. CLI and Telegram can also attach to the same code session when you want to continue the work from another surface.',
                   'Guardian keeps one shared current coding session across web chat, CLI, and Telegram for the same user by default. Switching or attaching from one of those surfaces updates the default workspace the others see as current too.',
-                  'In the web UI, the Coding Workspace session cards in `#/code` own current-session switching, inspect-only references, and explicit non-primary targeting. Normal Guardian chat stays lightweight and only shows a small context row when an explicit non-primary coding target is active. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
+                  'In the web UI, the Coding Workspace session cards in `#/code` own current-session switching, inspect-only references, and explicit non-primary targeting. Guardian chat does not render separate coding-session controls or status rows; use the Code Sessions panel for that job. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
                   'Guardian chat can also switch, list, inspect, and detach Coding Workspace sessions directly from normal language requests such as "List the coding sessions", "What coding workspace is this chat attached to?", "Switch this chat to the coding workspace for TestApp", and "Detach this chat from the current coding workspace."',
                   'Repo-scoped search requests in an attached coding workspace stay inside that workspace and use Guardian’s guarded code search tools by default.',
                   'Repo-grounded inspect and review requests prefer Guardian’s built-in file and code search tools before shell or git output, unless you explicitly ask for shell or git output.',

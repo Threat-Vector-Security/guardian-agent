@@ -25,14 +25,8 @@ import {
 } from './chat-mode-selector.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import {
-  formatChatCodeSessionOptionLabel,
-  findReferencedCodeSessions,
   findTargetCodeSession,
   normalizeCodeSessionId,
-  shouldShowChatCodeSessionControls,
-  summarizeReferencedChatCodeSessions,
-  summarizeChatCodeSessionState,
-  summarizeTargetedChatCodeSession,
 } from './chat-code-sessions.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
@@ -172,9 +166,6 @@ export async function initChatPanel(container) {
   let currentCodeSessionId = typeof codeSessionsState?.currentSessionId === 'string'
     ? codeSessionsState.currentSessionId
     : null;
-  let referencedCodeSessionIds = Array.isArray(codeSessionsState?.referencedSessionIds)
-    ? codeSessionsState.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
-    : [];
   let targetCodeSessionId = normalizeCodeSessionId(codeSessionsState?.targetSessionId);
 
   container.innerHTML = '';
@@ -205,8 +196,6 @@ export async function initChatPanel(container) {
   let providerSelect = null;
   let activeAgentId = null;
   let approvalHandler = null;
-  let codeSessionUiBusy = false;
-  let codeSessionUiError = '';
 
   if (useProviderSelector) {
     // Unified mode: show provider-profile selector instead of agent dropdown.
@@ -281,8 +270,6 @@ export async function initChatPanel(container) {
     return resolveChatHistoryKey(baseKey);
   };
 
-  let renderCodeSessionStrip = () => {};
-
   const refreshCodeSessions = async () => {
     if (refreshCodeSessionsPromise) {
       return refreshCodeSessionsPromise;
@@ -296,11 +283,7 @@ export async function initChatPanel(container) {
     refreshCodeSessionsPromise = null;
     knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
     currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
-    referencedCodeSessionIds = Array.isArray(result?.referencedSessionIds)
-      ? result.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
-      : [];
     targetCodeSessionId = normalizeCodeSessionId(result?.targetSessionId);
-    renderCodeSessionStrip();
     if (history) {
       renderHistory(history, getHistoryKey(), approvalHandler);
       refreshVisiblePendingAction?.();
@@ -336,150 +319,7 @@ export async function initChatPanel(container) {
   });
 
   wrapper.appendChild(toolbar);
-
-  const codeSessionStrip = document.createElement('section');
-  codeSessionStrip.id = 'chat-panel-code-session-strip';
-  codeSessionStrip.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:0.65rem;margin:0 0 0.65rem;padding:0.45rem 0.65rem;border:1px solid var(--border);background:var(--bg-secondary);';
-
-  const codeSessionSummaryRow = document.createElement('div');
-  codeSessionSummaryRow.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:0.6rem;';
-
-  const codeSessionSummaryCopy = document.createElement('div');
-  codeSessionSummaryCopy.style.cssText = 'display:flex;flex-direction:column;gap:0.2rem;min-width:0;';
-
-  const codeSessionSummary = document.createElement('strong');
-  codeSessionSummary.dataset.chatCodeSessionSummary = 'true';
-  codeSessionSummary.style.cssText = 'font-size:0.72rem;color:var(--text-primary);';
-
-  const codeSessionDetail = document.createElement('div');
-  codeSessionDetail.dataset.chatCodeSessionDetail = 'true';
-  codeSessionDetail.style.cssText = 'font-size:0.65rem;color:var(--text-muted);word-break:break-word;';
-
-  codeSessionSummaryCopy.append(codeSessionSummary, codeSessionDetail);
-
-  const codeSessionBadge = document.createElement('span');
-  codeSessionBadge.dataset.chatCodeSessionStatus = 'true';
-  codeSessionBadge.style.cssText = 'flex:0 0 auto;align-self:flex-start;';
-
-  codeSessionSummaryRow.append(codeSessionSummaryCopy, codeSessionBadge);
-
-  const codeSessionControls = document.createElement('div');
-  codeSessionControls.style.cssText = 'display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;';
-
-  const codeSessionReferences = document.createElement('div');
-  codeSessionReferences.dataset.chatCodeSessionReferences = 'true';
-  codeSessionReferences.style.cssText = 'display:flex;flex-direction:column;gap:0.18rem;';
-
-  const codeSessionReferencesSummary = document.createElement('strong');
-  codeSessionReferencesSummary.dataset.chatCodeSessionReferencesSummary = 'true';
-  codeSessionReferencesSummary.style.cssText = 'font-size:0.68rem;color:var(--text-primary);';
-
-  const codeSessionReferencesDetail = document.createElement('div');
-  codeSessionReferencesDetail.dataset.chatCodeSessionReferencesDetail = 'true';
-  codeSessionReferencesDetail.style.cssText = 'font-size:0.63rem;color:var(--text-muted);word-break:break-word;';
-
-  codeSessionReferences.append(codeSessionReferencesSummary, codeSessionReferencesDetail);
-
-  const codeSessionTarget = document.createElement('div');
-  codeSessionTarget.dataset.chatCodeSessionTarget = 'true';
-  codeSessionTarget.style.cssText = 'display:flex;flex-direction:column;gap:0.12rem;min-width:0;flex:1 1 auto;';
-
-  const codeSessionTargetSummary = document.createElement('strong');
-  codeSessionTargetSummary.dataset.chatCodeSessionTargetSummary = 'true';
-  codeSessionTargetSummary.style.cssText = 'font-size:0.68rem;color:var(--text-primary);';
-
-  const codeSessionTargetDetail = document.createElement('div');
-  codeSessionTargetDetail.dataset.chatCodeSessionTargetDetail = 'true';
-  codeSessionTargetDetail.style.cssText = 'font-size:0.63rem;color:var(--text-muted);word-break:break-word;';
-
-  codeSessionTarget.append(codeSessionTargetSummary, codeSessionTargetDetail);
-
-  const codeSessionSelect = document.createElement('select');
-  codeSessionSelect.id = 'chat-panel-code-session-select';
-  codeSessionSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
-
-  const codeSessionDetachBtn = document.createElement('button');
-  codeSessionDetachBtn.className = 'btn btn-secondary';
-  codeSessionDetachBtn.dataset.chatCodeSessionDetach = 'true';
-  codeSessionDetachBtn.textContent = 'Detach';
-  codeSessionDetachBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
-
-  const codeSessionOpenBtn = document.createElement('button');
-  codeSessionOpenBtn.className = 'btn btn-secondary';
-  codeSessionOpenBtn.dataset.chatCodeSessionOpen = 'true';
-  codeSessionOpenBtn.textContent = 'Open Code';
-  codeSessionOpenBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
-
-  codeSessionControls.append(codeSessionSelect, codeSessionDetachBtn, codeSessionOpenBtn);
-
-  const codeSessionTargetControls = document.createElement('div');
-  codeSessionTargetControls.style.cssText = 'display:flex;align-items:center;gap:0.45rem;flex:0 0 auto;';
-
-  const codeSessionTargetSelect = document.createElement('select');
-  codeSessionTargetSelect.id = 'chat-panel-code-session-target-select';
-  codeSessionTargetSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
-
-  const codeSessionTargetClearBtn = document.createElement('button');
-  codeSessionTargetClearBtn.className = 'btn btn-secondary';
-  codeSessionTargetClearBtn.dataset.chatCodeSessionTargetClear = 'true';
-  codeSessionTargetClearBtn.textContent = 'Clear Target';
-  codeSessionTargetClearBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
-
-  const codeSessionTargetOpenBtn = document.createElement('button');
-  codeSessionTargetOpenBtn.className = 'btn btn-secondary';
-  codeSessionTargetOpenBtn.dataset.chatCodeSessionTargetOpen = 'true';
-  codeSessionTargetOpenBtn.textContent = 'Open In Code';
-  codeSessionTargetOpenBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
-
-  codeSessionTargetControls.append(codeSessionTargetSelect, codeSessionTargetOpenBtn, codeSessionTargetClearBtn);
-
-  const codeSessionError = document.createElement('div');
-  codeSessionError.dataset.chatCodeSessionError = 'true';
-  codeSessionError.style.cssText = 'font-size:0.65rem;color:var(--error);';
-  codeSessionError.hidden = true;
-
-  codeSessionStrip.append(
-    codeSessionSummaryRow,
-    codeSessionReferences,
-    codeSessionTarget,
-    codeSessionControls,
-    codeSessionTargetControls,
-    codeSessionError,
-  );
-  wrapper.appendChild(codeSessionStrip);
-  codeSessionSummaryRow.hidden = true;
-  codeSessionReferences.hidden = true;
-  codeSessionControls.hidden = true;
-  codeSessionTargetSelect.hidden = true;
-
-  renderCodeSessionStrip = () => {
-    const visible = shouldShowChatCodeSessionControls(currentChatContext, window.location?.hash || '');
-    const targetSummary = summarizeTargetedChatCodeSession(
-      knownCodeSessions,
-      targetCodeSessionId,
-      currentCodeSessionId,
-    );
-    codeSessionStrip.hidden = !visible || !targetSummary.pinned;
-    if (!visible || !targetSummary.pinned) {
-      return;
-    }
-
-    codeSessionBadge.className = 'badge badge-warn';
-    codeSessionBadge.textContent = 'TARGETED';
-    codeSessionSummary.textContent = 'Explicit coding target active';
-    codeSessionDetail.textContent = 'Manage coding workspace focus and references from the Code Sessions panel.';
-    codeSessionTarget.hidden = false;
-    codeSessionTargetSummary.textContent = targetSummary.summary;
-    codeSessionTargetDetail.textContent = `${targetSummary.detail} Guardian chat will explicitly target this workspace until you clear the pin.`;
-    codeSessionTargetDetail.title = targetSummary.targetSession?.workspaceRoot || targetSummary.detail;
-    codeSessionTargetControls.hidden = false;
-    codeSessionTargetOpenBtn.disabled = false;
-    codeSessionTargetClearBtn.disabled = codeSessionUiBusy || !targetCodeSessionId;
-
-    codeSessionError.hidden = !codeSessionUiError;
-    codeSessionError.textContent = codeSessionUiError;
-  };
-  refreshChatPanelChrome = renderCodeSessionStrip;
+  refreshChatPanelChrome = null;
 
   // Chat history
   history = document.createElement('div');
@@ -505,7 +345,6 @@ export async function initChatPanel(container) {
   sendBtn.style.padding = '0.5rem 0.8rem';
 
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
-  renderCodeSessionStrip();
 
   if (select) {
     select.addEventListener('change', () => {
@@ -518,41 +357,6 @@ export async function initChatPanel(container) {
       refreshVisiblePendingAction?.();
     });
   }
-
-  codeSessionSelect.addEventListener('change', () => {
-    void changeChatCodeSessionFocus(codeSessionSelect.value);
-  });
-
-  codeSessionDetachBtn.addEventListener('click', () => {
-    if (!currentCodeSessionId) return;
-    void changeChatCodeSessionFocus(null);
-  });
-
-  codeSessionOpenBtn.addEventListener('click', () => {
-    const requestedSessionId = targetCodeSessionId
-      || currentCodeSessionId
-      || normalizeCodeSessionId(codeSessionSelect.value)
-      || normalizeCodeSessionId(referencedCodeSessionIds[0]);
-    window.location.hash = requestedSessionId
-      ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
-      : '#/code';
-  });
-
-  codeSessionTargetSelect.addEventListener('change', () => {
-    void changeChatCodeSessionTarget(codeSessionTargetSelect.value);
-  });
-
-  codeSessionTargetClearBtn.addEventListener('click', () => {
-    if (!targetCodeSessionId) return;
-    void changeChatCodeSessionTarget(null);
-  });
-
-  codeSessionTargetOpenBtn.addEventListener('click', () => {
-    const requestedSessionId = targetCodeSessionId || currentCodeSessionId;
-    window.location.hash = requestedSessionId
-      ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
-      : '#/code';
-  });
 
   // ── Helpers ──────────────────────────────────────────────────
 
@@ -579,97 +383,6 @@ export async function initChatPanel(container) {
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   };
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
-
-  const changeChatCodeSessionFocus = async (nextSessionId) => {
-    const normalizedNextSessionId = normalizeCodeSessionId(nextSessionId);
-    if (normalizedNextSessionId === currentCodeSessionId) {
-      codeSessionUiError = '';
-      renderCodeSessionStrip();
-      return;
-    }
-
-    codeSessionUiBusy = true;
-    codeSessionUiError = '';
-    renderCodeSessionStrip();
-
-    try {
-      if (normalizedNextSessionId) {
-        const result = await api.codeSessionAttach(normalizedNextSessionId, {
-          userId: webUserId,
-          channel: 'web',
-          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-          mode: 'controller',
-        });
-        const attachedSessionId = normalizeCodeSessionId(result?.snapshot?.session?.id);
-        if (!result?.success || !attachedSessionId) {
-          throw new Error('Failed to switch the coding workspace.');
-        }
-        currentCodeSessionId = attachedSessionId;
-      } else {
-        const result = await api.codeSessionDetach({
-          userId: webUserId,
-          channel: 'web',
-          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-        });
-        if (!result?.success) {
-          throw new Error('Failed to detach the coding workspace.');
-        }
-        currentCodeSessionId = null;
-      }
-      notifyCodeSessionFocus(currentCodeSessionId);
-      notifyCodeSessionsChanged({
-        sessionId: currentCodeSessionId,
-        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-        origin: GUARDIAN_CHAT_SURFACE_ID,
-      });
-      await refreshCodeSessions();
-    } catch (err) {
-      codeSessionUiError = err instanceof Error ? err.message : String(err);
-    } finally {
-      codeSessionUiBusy = false;
-      renderCodeSessionStrip();
-    }
-  };
-
-  const changeChatCodeSessionTarget = async (nextSessionId) => {
-    const normalizedNextSessionId = normalizeCodeSessionId(nextSessionId);
-    if (normalizedNextSessionId === targetCodeSessionId) {
-      codeSessionUiError = '';
-      renderCodeSessionStrip();
-      return;
-    }
-
-    codeSessionUiBusy = true;
-    codeSessionUiError = '';
-    renderCodeSessionStrip();
-
-    try {
-      const result = await api.codeSessionSetTarget({
-        userId: webUserId,
-        channel: 'web',
-        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-        targetSessionId: normalizedNextSessionId,
-      });
-      knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : knownCodeSessions;
-      currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
-      referencedCodeSessionIds = Array.isArray(result?.referencedSessionIds)
-        ? result.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
-        : [];
-      targetCodeSessionId = normalizeCodeSessionId(result?.targetSessionId);
-      notifyCodeSessionsChanged({
-        sessionId: currentCodeSessionId,
-        targetSessionId: targetCodeSessionId,
-        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-        origin: GUARDIAN_CHAT_SURFACE_ID,
-      });
-      renderCodeSessionStrip();
-    } catch (err) {
-      codeSessionUiError = err instanceof Error ? err.message : String(err);
-    } finally {
-      codeSessionUiBusy = false;
-      renderCodeSessionStrip();
-    }
-  };
 
   const restoreInput = () => {
     input.disabled = false;

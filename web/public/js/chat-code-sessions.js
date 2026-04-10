@@ -45,10 +45,6 @@ export function formatChatCodeSessionOptionLabel(session) {
   return workspaceRoot ? `${title} - ${workspaceRoot}` : title;
 }
 
-export function shouldShowChatCodeSessionControls(context, locationHash = '') {
-  return trimString(context) !== 'code' && !trimString(locationHash).startsWith('#/code');
-}
-
 export function summarizeReferencedChatCodeSessions(sessions, referencedSessionIds, currentSessionId = null) {
   const referenced = findReferencedCodeSessions(sessions, referencedSessionIds, currentSessionId);
   if (referenced.length === 0) {

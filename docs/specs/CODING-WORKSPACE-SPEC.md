@@ -316,7 +316,7 @@ Behavior:
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch panels when approvals appear
 - the web chat surface should not become a duplicate session manager; primary-session switching, references, and explicit targeting belong to the workbench session rail
-- normal web chat may show a lightweight informational row when an explicit non-primary coding target is active, but it should not expose the full session portfolio controls inline
+- normal web chat should not render separate coding-session controls or status rows; the Code Sessions panel owns that product surface
 - session cards in the workbench can inspect any portfolio session locally without silently retargeting Guardian chat
 - explicit `Attach Chat` promotes a workbench session to the current mutable workspace for Guardian chat on the web surface
 - session cards can also mark another workspace as `REFERENCED` so Guardian can keep bounded inspect-only context for that surface
