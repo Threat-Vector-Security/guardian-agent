@@ -23,6 +23,7 @@ The correct shape is:
 - one logical workspace per paying customer or self-serve user
 - one or more logical agents per workspace
 - isolated execution workers per run, session, or browser job
+- container-backed by default, with an optional Firecracker-backed microVM tier for higher-risk Linux execution classes
 - a shared model gateway that fronts:
   - central local-model inference pools
   - Amazon Bedrock
@@ -47,6 +48,8 @@ For most tenants, the agent should be logically always-on but physically event-d
 - persistent state lives in platform storage
 - execution happens in isolated worker sandboxes
 - idle tenants do not hold dedicated compute
+
+Firecracker is a credible additional execution-plane option for this design, but only in the hosted Linux workload cells. It should be treated as a stronger isolation substrate for selected worker classes, not as a replacement for Guardian's control plane, auth, approval, or memory architecture.
 
 ## Problem Statement
 
@@ -307,6 +310,31 @@ Recommended AWS footprint per cell:
 - S3 bucket or prefix for cell-scoped artifacts
 - ECS on EC2 for execution and browser worker pools
 - ECS on EC2 GPU clusters for Ollama pools if colocated in-cell
+- optional EC2 worker hosts with KVM enabled for Firecracker-backed microVM pools
+
+### Optional Firecracker-backed worker pools
+
+For selected worker classes, a workload cell can add a Firecracker-backed execution tier instead of relying only on containers.
+
+Recommended use cases:
+
+- high-risk browser jobs
+- untrusted or customer-supplied automation code
+- coding or shell-like execution surfaces if those are later introduced in hosted tiers
+- package install, build, or test runs that materially increase breakout risk
+
+Recommended posture:
+
+- Guardian remains the control plane and queue owner
+- Firecracker is only an execution substrate inside Linux/KVM worker hosts
+- one microVM per run or short-lived bounded session
+- per-run ephemeral rootfs or scratch disk
+- no direct tenant access to the host or microVM control API
+- model access, secret brokerage, approvals, and audit remain Guardian-managed
+
+Important constraint:
+
+- this is a hosted Linux design option only; it is not the answer for Windows local installs or for the cross-platform managed endpoint client-agent mode
 
 ## Why use cells
 
@@ -541,6 +569,7 @@ Use separate worker pools by risk and workload type:
 - `browser_workers`
 - `cloud_tool_workers`
 - later: `coding_workers`
+- optional: `microvm_workers` for higher-risk run classes that justify stronger isolation than containers alone
 
 All tenant work runs through queues and isolated workers.
 
@@ -565,6 +594,23 @@ Recommended execution environment:
 - per-job ephemeral filesystem
 - network egress policy by worker class
 
+Additional execution option for stronger isolation:
+
+- Firecracker-backed microVMs on dedicated Linux/KVM worker hosts
+- one microVM per run or short-lived session for selected high-risk worker classes
+- jailed Firecracker processes with host-level cgroup, namespace, and privilege dropping
+- host-brokered access to models, secrets, and audit sinks rather than direct uncontrolled guest access
+- workspace snapshot plus patch/artifact return for later coding tiers instead of live host filesystem sharing
+- optional warm pools or snapshots to reduce startup latency for repeated run classes
+
+Design guardrails for this option:
+
+- Firecracker should strengthen the execution plane, not replace the control plane
+- tenancy, identity, approvals, policy, and routing stay in Guardian services
+- the guest should receive scoped job identity and scoped credentials, not platform-wide authority
+- high-risk network access should still flow through Guardian-defined egress policy and broker layers
+- this tier should be introduced first for hosted Linux cells, not for local desktop deployments
+
 ### Browser isolation
 
 Browser automation is a distinct high-risk tier.
@@ -577,6 +623,8 @@ Each browser run should use:
 - encrypted persisted cookies only when explicitly required
 - separate quotas and policy
 
+For stronger hosted tiers, browser workers are one of the best candidates for Firecracker-backed microVM execution because they combine complex parsers, network exposure, downloads, and artifact handling.
+
 ### Coding and shell access
 
 Hosted SaaS should **not** initially expose arbitrary shell or filesystem access to the Guardian platform hosts.
@@ -588,6 +636,8 @@ For advanced users, later options are:
 - scoped cloud or repo connectors
 
 This is safer than "SSH into the SaaS agent box."
+
+If hosted coding is introduced later, the preferred stronger-isolation shape is not "shell on the shared worker host." The better shape is a Firecracker-backed or otherwise equivalent isolated execution environment with explicit workspace snapshot input and patch or artifact return into Guardian's normal approval and audit flow.
 
 ## Always-On Behavior
 
