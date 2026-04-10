@@ -528,7 +528,7 @@ The next bounded slice is now partially landed:
 
 - the web workbench can pin an explicit non-primary `target` session without switching the current mutable workspace
 - explicit target requests flow through `metadata.codeContext.sessionId` instead of changing the shared attachment
-- normal Guardian chat should stay lightweight; any chat-side visibility for this state is informational only and should not duplicate the workbench session controls
+- normal Guardian chat should stay free of coding-session chrome; any session switching, references, and target control remain in the workbench
 
 Remaining work in this phase still includes typed cross-session links, richer portfolio summary surfaces, and the later `child/delegated` lane model.
 

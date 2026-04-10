@@ -5,7 +5,6 @@ import {
   findReferencedCodeSessions,
   findTargetCodeSession,
   formatChatCodeSessionOptionLabel,
-  shouldShowChatCodeSessionControls,
   summarizeReferencedChatCodeSessions,
   summarizeChatCodeSessionState,
   summarizeTargetedChatCodeSession,
@@ -107,11 +106,5 @@ describe('chat code session helpers', () => {
       detail: 'Guardian chat will mutate the current workspace by default. Pin another workspace when you want deliberate non-primary work.',
       targetSession: null,
     });
-  });
-
-  it('keeps coding workspace controls off the Code route only', () => {
-    expect(shouldShowChatCodeSessionControls('second-brain')).toBe(true);
-    expect(shouldShowChatCodeSessionControls('code')).toBe(false);
-    expect(shouldShowChatCodeSessionControls('second-brain', '#/code')).toBe(false);
   });
 });
