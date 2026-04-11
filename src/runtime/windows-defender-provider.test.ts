@@ -133,17 +133,17 @@ describe('WindowsDefenderProvider', () => {
 
     expect(runner).toHaveBeenCalledWith(
       'powershell.exe',
-      ['-NoProfile', '-Command', 'Start-MpScan -ScanType QuickScan'],
+      ['-NoProfile', '-Command', `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType QuickScan`],
       20_000,
     );
     expect(runner).toHaveBeenCalledWith(
       'powershell.exe',
-      ['-NoProfile', '-Command', "Start-MpScan -ScanType CustomScan -ScanPath 'C:\\temp'"],
+      ['-NoProfile', '-Command', `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType CustomScan -ScanPath 'C:\\temp'`],
       20_000,
     );
     expect(runner).toHaveBeenCalledWith(
       'powershell.exe',
-      ['-NoProfile', '-Command', 'Update-MpSignature'],
+      ['-NoProfile', '-Command', `$ProgressPreference = 'SilentlyContinue'; Update-MpSignature`],
       20_000,
     );
   });

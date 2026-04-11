@@ -38,6 +38,13 @@ export function buildApprovalContinuationScopeKey(scope: ApprovalContinuationSco
   return `${normalized.userId}:${normalized.channel}:${normalized.surfaceId}`;
 }
 
+export function shouldContinueConversationAfterApprovalDecision(input: {
+  decision: 'approved' | 'denied';
+  hasContinuation: boolean;
+}): boolean {
+  return input.decision === 'approved' && input.hasContinuation;
+}
+
 export function findSuspendedApprovalState<T extends SuspendedApprovalStateLike>(
   sessions: Iterable<T>,
   approvalId: string,

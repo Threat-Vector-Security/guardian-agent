@@ -259,6 +259,144 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
   });
 
+  it('keeps the current attachment when a coding-backend request only says "current attached coding session"', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-current-attached-coding-backend.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: '/tmp/guardian-agent',
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string) => {
+        if (toolName === 'coding_backend_run') {
+          return {
+            success: true,
+            output: {
+              backendName: 'Codex',
+              output: 'Test run completed in the current workspace.',
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${toolName}`);
+      }),
+      listToolDefinitions: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      getRuntimeNotices: vi.fn(() => []),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      listPendingApprovalsForCodeSession: vi.fn(() => []),
+      listJobsForCodeSession: vi.fn(() => []),
+      listJobs: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-current-attached-coding-backend',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'In the current attached coding session, use the Codex coding assistant to run the unit tests for the tools executor by executing npm test -- src/tools/executor.test.ts.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'coding_task',
+          operation: 'run',
+          summary: 'Run the requested test in the current coding session via Codex.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          entities: {
+            codingBackend: 'codex',
+            codingBackendRequested: true,
+            sessionTarget: 'current attached',
+          },
+        },
+      }),
+    };
+
+    const response = await agent.onMessage!(message, ctx);
+
+    expect(response.content).toContain('Test run completed in the current workspace.');
+    expect(response.metadata).toMatchObject({
+      codingBackendDelegated: true,
+      codingBackendId: 'codex',
+      codeSessionResolved: true,
+      codeSessionId: guardianSession.id,
+    });
+    expect(codeSessionStore.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      touchAttachment: false,
+    })?.session.id).toBe(guardianSession.id);
+    expect(tools.executeModelTool).toHaveBeenCalledTimes(1);
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'coding_backend_run',
+      {
+        task: 'In the current attached coding session, use the Codex coding assistant to run the unit tests for the tools executor by executing npm test -- src/tools/executor.test.ts.',
+        backend: 'codex',
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: guardianSession.id,
+          workspaceRoot: guardianSession.resolvedRoot,
+        },
+      }),
+    );
+  });
+
   it('auto-switches to an explicitly named coding workspace even when the gateway response is unstructured', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

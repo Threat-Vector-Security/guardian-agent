@@ -167,9 +167,9 @@ export function buildToolContext(input: ToolContextInput): string {
   const lines: string[] = [
     `Workspace root (default for file operations): ${input.workspaceRoot}`,
     `Policy mode: ${input.policyMode}`,
+    'Execution identity policy: package launchers (npx/npm exec) are blocked. Do not use update_tool_policy to unblock them; use a direct binary path or package script (e.g. npm test) instead.',
     buildRelevantInventoryLine('Allowed paths', input.allowedPaths, signalText, compactPathItems) || 'Allowed paths (0): (workspace root only)',
     buildRelevantInventoryLine('Allowed commands', input.allowedCommands, signalText, compactCommandItems) || 'Allowed commands (0): (none)',
-    'Execution identity policy: inline interpreter eval, shell-expression launchers, and package launchers such as npx/npm exec are blocked even when the base command prefix is allowlisted.',
     'Execution mode: simple direct-binary commands run without shell parsing when possible; shell fallback is reserved for shell-builtins, chained commands, redirects, and platform wrapper cases.',
     `Enabled tool categories: ${input.enabledCategories.join(', ') || '(none)'}`,
     input.policyUpdateActions,

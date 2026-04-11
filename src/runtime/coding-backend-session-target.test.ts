@@ -39,6 +39,17 @@ describe('resolveCodingBackendSessionTarget', () => {
     });
   });
 
+  it('treats generic "current attached" targets as referring to the current attachment', () => {
+    expect(resolveCodingBackendSessionTarget({
+      sessions: [...SESSIONS],
+      currentSessionId: 'guardian',
+      requestedSessionTarget: 'current attached',
+    })).toEqual({
+      status: 'none',
+      currentSession: SESSIONS[0],
+    });
+  });
+
   it('requires a switch when the mentioned workspace differs from the current attachment', () => {
     expect(resolveCodingBackendSessionTarget({
       sessions: [...SESSIONS],

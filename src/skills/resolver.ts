@@ -271,6 +271,15 @@ function scoreRouteMatches(
     specificity += 2;
   }
 
+  if (
+    route === 'coding_task'
+    && input.intentEntities?.codingBackend?.trim()
+    && skill.manifest.tools?.some((tool) => tool === 'coding_backend_run' || tool === 'coding_backend_status')
+  ) {
+    score += 3;
+    specificity += 6;
+  }
+
   if ((route === 'email_task' || route === 'workspace_task') && skill.manifest.requiredManagedProvider) {
     score += 1;
     specificity += 2;

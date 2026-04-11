@@ -1,0 +1,60 @@
+{
+  "id": "coding-backend-orchestration",
+  "name": "Coding Backend Orchestration",
+  "version": "0.1.0",
+  "description": "Use when the user explicitly asks Guardian to launch or check an external coding assistant such as Codex, Claude Code, Gemini CLI, or Aider inside the active coding session.",
+  "role": "process",
+  "tags": [
+    "coding backend",
+    "external coding assistant",
+    "codex",
+    "claude code",
+    "gemini cli",
+    "aider",
+    "delegate"
+  ],
+  "enabled": true,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "use codex",
+      "ask codex",
+      "run codex",
+      "use claude code",
+      "ask claude code",
+      "run claude code",
+      "use gemini cli",
+      "ask gemini cli",
+      "run gemini cli",
+      "use aider",
+      "ask aider",
+      "run aider",
+      "coding backend",
+      "external coding tool",
+      "did codex finish",
+      "did claude code finish",
+      "check coding backend status"
+    ]
+  },
+  "tools": [
+    "coding_backend_list",
+    "coding_backend_run",
+    "coding_backend_status",
+    "code_git_diff",
+    "code_test",
+    "code_build",
+    "code_lint",
+    "code_session_current",
+    "code_session_list"
+  ],
+  "risk": "operational"
+}

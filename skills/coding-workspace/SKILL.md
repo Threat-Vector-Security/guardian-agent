@@ -7,7 +7,9 @@ description: Use when the request is about a repo, codebase, implementation, bug
 
 ## Overview / When to Use
 
-Use this workflow for backend-owned coding sessions inside a project workspace.
+Use this workflow for backend-owned coding sessions inside a project workspace when Guardian should do the coding work directly with built-in tools.
+
+Explicit delegation to terminal-backed coding assistants such as Codex, Claude Code, Gemini CLI, or Aider belongs to the separate `coding-backend-orchestration` workflow.
 
 The coding session is the authoritative project context:
 - use the backend session’s workspace root, workspace profile, indexed repo map, working-set files, focus summary, selected file, and recent work as your default context

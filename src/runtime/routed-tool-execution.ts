@@ -169,6 +169,15 @@ function isSecondBrainMutationTool(toolName: string): boolean {
 
 function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
   if (decision.route === 'coding_task' && decision.requiresRepoGrounding) {
+    if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
+      return [
+        'This turn is a repo-grounded coding request.',
+        `The user explicitly requested the external coding backend "${decision.entities.codingBackend}".`,
+        'Use coding_backend_run for the main execution step instead of doing the requested coding work with built-in edit tools.',
+        'Keep the active coding session workspace as the anchor for the delegated run.',
+        'After the backend finishes, verify the result with code_git_diff, code_test, code_build, or code_lint before reporting success.',
+      ];
+    }
     const lines = [
       'This turn is a repo-grounded coding request.',
       'Prefer native repo tools first: fs_search, code_symbol_search, and fs_read for locating and reading code.',

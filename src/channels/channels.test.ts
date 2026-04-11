@@ -1503,7 +1503,11 @@ describe('CLIChannel with DashboardCallbacks', () => {
       },
       onToolsApprovalDecision: async ({ approvalId, decision }) => {
         decisions.push({ approvalId, decision });
-        return { success: false, message: "'content' must be a non-empty string." };
+        return {
+          success: false,
+          message: "'content' must be a non-empty string.",
+          continueConversation: true,
+        };
       },
     });
     await cli.start(async () => ({ content: 'ok' }));
@@ -1615,6 +1619,55 @@ describe('CLIChannel with DashboardCallbacks', () => {
       '[User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
     ]);
     expect(text).toContain('fs_write: Approved and executed');
+
+    await cli.stop();
+  });
+
+  it('treats "Approved." as an inline CLI approval confirmation', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<string> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (_agentId, msg) => {
+        dispatches.push(msg.content);
+        return { content: 'should not be called for inline approval confirmation' };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return { success: true, message: "Tool 'code_test' completed." };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+    readOutput(output);
+
+    (cli as unknown as {
+      pendingInlineApprovalState: {
+        approvals: Array<{ id: string; toolName: string; argsPreview: string }>;
+        agentId?: string;
+        depth: number;
+      } | null;
+      pendingPromptResolver: ((answer: string) => void) | null;
+    }).pendingInlineApprovalState = {
+      approvals: [
+        {
+          id: 'approval-code-test-1',
+          toolName: 'code_test',
+          argsPreview: '{"command":"npm test -- src/tools/executor.test.ts"}',
+        },
+      ],
+      agentId: 'agent-1',
+      depth: 0,
+    };
+    (cli as unknown as { pendingPromptResolver: ((answer: string) => void) | null }).pendingPromptResolver = null;
+
+    await sendCommand(input, 'Approved.');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const text = readOutput(output);
+    expect(decisions).toEqual([{ approvalId: 'approval-code-test-1', decision: 'approved' }]);
+    expect(dispatches).toEqual([
+      '[User approved the pending tool action(s). Result: ✓ code_test: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+    ]);
+    expect(text).toContain('code_test: Approved and executed');
 
     await cli.stop();
   });

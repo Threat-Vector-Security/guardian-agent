@@ -28,6 +28,7 @@ $scanPath = Convert-ToWindowsHostPath -PathValue $WorkspacePath
 $before = Get-MpThreatDetection |
   Select-Object InitialDetectionTime, ThreatName, Resources, ActionSuccess, SeverityID, ThreatID
 
+$ProgressPreference = 'SilentlyContinue'
 Start-MpScan -ScanType CustomScan -ScanPath $scanPath
 
 $after = Get-MpThreatDetection |
