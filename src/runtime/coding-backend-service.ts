@@ -39,9 +39,36 @@ export interface CodingBackendServiceOptions {
   terminalControl: CodingBackendTerminalControl;
 }
 
+export type CodingBackendProgressKind =
+  | 'started'
+  | 'progress'
+  | 'completed'
+  | 'failed'
+  | 'timed_out';
+
+export interface CodingBackendProgressEvent {
+  id: string;
+  kind: CodingBackendProgressKind;
+  runId: string;
+  requestId?: string;
+  codeSessionId: string;
+  sessionId: string;
+  terminalId: string;
+  backendId: string;
+  backendName: string;
+  task: string;
+  timestamp: number;
+  detail?: string;
+  exitCode?: number;
+}
+
+export type CodingBackendProgressListener = (event: CodingBackendProgressEvent) => void;
+
 const MAX_OUTPUT_BYTES = 1_048_576; // 1MB
 const MAX_TOOL_OUTPUT_CHARS = 8000;
+const MAX_PROGRESS_DETAIL_CHARS = 500;
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 min
+const OUTPUT_PROGRESS_THROTTLE_MS = 1_200;
 
 /** Strip ANSI escape codes from terminal output. */
 function stripAnsi(text: string): string {
@@ -75,18 +102,66 @@ function buildTerminalInput(backend: CodingBackendConfig, command: string): stri
   return `${command}\nexit\n`;
 }
 
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+function extractProgressDetail(output: string, command: string): string | undefined {
+  const normalizedCommand = command.trim();
+  const lines = stripAnsi(output)
+    .replace(/\r+/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line) continue;
+    if (normalizedCommand && line === normalizedCommand) continue;
+    if (line.toLowerCase() === 'exit') continue;
+    return truncateText(line, MAX_PROGRESS_DETAIL_CHARS);
+  }
+  return undefined;
+}
+
+function summarizeCompletionDetail(
+  status: 'succeeded' | 'failed' | 'timed_out',
+  output: string,
+  command: string,
+  exitCode?: number,
+): string | undefined {
+  const detail = extractProgressDetail(output, command);
+  if (detail) return detail;
+  if (status === 'timed_out') {
+    return 'The delegated coding assistant did not finish before the timeout.';
+  }
+  if (typeof exitCode === 'number' && Number.isFinite(exitCode) && exitCode !== 0) {
+    return `Exited with code ${exitCode}.`;
+  }
+  return undefined;
+}
+
+interface ActiveCodingBackendSession {
+  session: CodingBackendSession;
+  runId: string;
+  requestId?: string;
+  command: string;
+  outputBuffer: string;
+  progressSequence: number;
+  lastProgressDetail?: string;
+  lastProgressAt?: number;
+  unsubscribeOutput: () => void;
+  unsubscribeExit: () => void;
+  timeoutHandle?: ReturnType<typeof setTimeout>;
+  resolve?: (result: CodingBackendRunResult) => void;
+}
+
 export class CodingBackendService {
   private config: CodingBackendsConfig;
   private readonly terminalControl: CodingBackendTerminalControl;
-  private readonly activeSessions = new Map<string, {
-    session: CodingBackendSession;
-    outputBuffer: string;
-    unsubscribeOutput: () => void;
-    unsubscribeExit: () => void;
-    timeoutHandle?: ReturnType<typeof setTimeout>;
-    resolve?: (result: CodingBackendRunResult) => void;
-  }>();
+  private readonly activeSessions = new Map<string, ActiveCodingBackendSession>();
   private readonly recentSessions: CodingBackendSession[] = [];
+  private readonly progressListeners = new Set<CodingBackendProgressListener>();
   private sessionCounter = 0;
 
   constructor(options: CodingBackendServiceOptions) {
@@ -155,12 +230,56 @@ export class CodingBackendService {
     };
   }
 
+  subscribeProgress(listener: CodingBackendProgressListener): () => void {
+    this.progressListeners.add(listener);
+    return () => {
+      this.progressListeners.delete(listener);
+    };
+  }
+
+  private emitProgress(entry: ActiveCodingBackendSession, kind: CodingBackendProgressKind, timestamp: number, input: {
+    detail?: string;
+    exitCode?: number;
+  } = {}): void {
+    const event: CodingBackendProgressEvent = {
+      id: `coding-backend:${entry.session.id}:${++entry.progressSequence}`,
+      kind,
+      runId: entry.runId,
+      ...(entry.requestId ? { requestId: entry.requestId } : {}),
+      codeSessionId: entry.session.codeSessionId,
+      sessionId: entry.session.id,
+      terminalId: entry.session.terminalId,
+      backendId: entry.session.backendId,
+      backendName: entry.session.backendName,
+      task: entry.session.task,
+      timestamp,
+      ...(input.detail ? { detail: input.detail } : {}),
+      ...(typeof input.exitCode === 'number' ? { exitCode: input.exitCode } : {}),
+    };
+    for (const listener of this.progressListeners) {
+      listener({ ...event });
+    }
+  }
+
+  private maybeEmitOutputProgress(entry: ActiveCodingBackendSession): void {
+    const now = Date.now();
+    if (entry.lastProgressAt && now - entry.lastProgressAt < OUTPUT_PROGRESS_THROTTLE_MS) {
+      return;
+    }
+    const detail = extractProgressDetail(entry.outputBuffer, entry.command);
+    if (!detail || detail === entry.lastProgressDetail) return;
+    entry.lastProgressDetail = detail;
+    entry.lastProgressAt = now;
+    this.emitProgress(entry, 'progress', now, { detail });
+  }
+
   /** Launch a backend to run a task. Returns when the CLI completes or times out. */
   async run(params: {
     task: string;
     backendId?: string;
     codeSessionId: string;
     workspaceRoot: string;
+    requestId?: string;
   }): Promise<CodingBackendRunResult> {
     const backend = this.resolveBackend(params.backendId);
     if (!backend) {
@@ -210,6 +329,8 @@ export class CodingBackendService {
     const command = buildCommand(backend, params.task, params.workspaceRoot);
     const timeoutMs = backend.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const shell = backend.shell || (process.platform === 'win32' ? 'wsl' : 'bash');
+    const requestId = params.requestId?.trim() || undefined;
+    const runId = requestId || `code-session:${params.codeSessionId}:backend:${sessionId}`;
 
     log.info({ backendId: backend.id, sessionId, task: params.task.slice(0, 100) }, 'Launching coding backend');
 
@@ -234,8 +355,6 @@ export class CodingBackendService {
     };
 
     return new Promise<CodingBackendRunResult>((resolve) => {
-      let outputBuffer = '';
-
       const complete = (status: 'succeeded' | 'failed' | 'timed_out', exitCode?: number) => {
         const entry = this.activeSessions.get(sessionId);
         if (!entry) return; // already completed
@@ -260,6 +379,11 @@ export class CodingBackendService {
 
         log.info({ backendId: backend.id, sessionId, status, exitCode, durationMs }, 'Coding backend completed');
 
+        this.emitProgress(entry, status === 'succeeded' ? 'completed' : status, session.completedAt, {
+          detail: summarizeCompletionDetail(status, entry.outputBuffer, entry.command, exitCode),
+          ...(typeof exitCode === 'number' ? { exitCode } : {}),
+        });
+
         resolve({
           success: status === 'succeeded',
           backendId: backend.id,
@@ -274,13 +398,14 @@ export class CodingBackendService {
       };
 
       const unsubscribeOutput = this.terminalControl.onTerminalOutput(terminalId, (data) => {
-        outputBuffer += data;
-        // Cap buffer size
-        if (outputBuffer.length > MAX_OUTPUT_BYTES) {
-          outputBuffer = outputBuffer.slice(-MAX_OUTPUT_BYTES);
-        }
         const entry = this.activeSessions.get(sessionId);
-        if (entry) entry.outputBuffer = outputBuffer;
+        if (!entry) return;
+        entry.outputBuffer += data;
+        // Cap buffer size
+        if (entry.outputBuffer.length > MAX_OUTPUT_BYTES) {
+          entry.outputBuffer = entry.outputBuffer.slice(-MAX_OUTPUT_BYTES);
+        }
+        this.maybeEmitOutputProgress(entry);
       });
 
       const unsubscribeExit = this.terminalControl.onTerminalExit(terminalId, (exitCode) => {
@@ -295,12 +420,23 @@ export class CodingBackendService {
 
       this.activeSessions.set(sessionId, {
         session,
+        runId,
+        ...(requestId ? { requestId } : {}),
+        command,
         outputBuffer: '',
+        progressSequence: 0,
         unsubscribeOutput,
         unsubscribeExit,
         timeoutHandle,
         resolve,
       });
+
+      const entry = this.activeSessions.get(sessionId);
+      if (entry) {
+        this.emitProgress(entry, 'started', startedAt, {
+          detail: truncateText(params.task.trim(), MAX_PROGRESS_DETAIL_CHARS),
+        });
+      }
 
       // Write the command to the terminal and close one-shot shells afterwards.
       this.terminalControl.writeTerminalInput(terminalId, buildTerminalInput(backend, command));
@@ -331,5 +467,6 @@ export class CodingBackendService {
       this.terminalControl.closeTerminal(entry.session.terminalId);
     }
     this.activeSessions.clear();
+    this.progressListeners.clear();
   }
 }

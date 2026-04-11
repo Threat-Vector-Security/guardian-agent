@@ -179,7 +179,12 @@ describe('pending approval copy', () => {
     expect(buildPendingApprovalMetadata(
       ['approval-1', 'approval-2', 'approval-1', ''],
       new Map([
-        ['approval-1', { toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' }],
+        ['approval-1', {
+          toolName: 'coding_backend_run',
+          argsPreview: '{"backend":"codex"}',
+          requestId: 'req-1',
+          codeSessionId: 'session-1',
+        }],
       ]),
     )).toEqual([
       {
@@ -187,6 +192,8 @@ describe('pending approval copy', () => {
         toolName: 'coding_backend_run',
         argsPreview: '{"backend":"codex"}',
         actionLabel: 'run Codex',
+        requestId: 'req-1',
+        codeSessionId: 'session-1',
       },
       {
         id: 'approval-2',

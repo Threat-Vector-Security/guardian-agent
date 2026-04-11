@@ -6372,6 +6372,9 @@ async function main(): Promise<void> {
   });
   const cliChannel = startedChannels.cliChannel;
   activeWebChannel = startedChannels.webChannel;
+  codingBackendServiceRef.current?.subscribeProgress((event) => {
+    runTimeline.ingestCodingBackendProgress(event);
+  });
 
   wireScheduledAgentExecutor({
     scheduledTasks,

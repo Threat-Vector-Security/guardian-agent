@@ -141,10 +141,24 @@ describe('CodingBackendService', () => {
   });
 
   it('launches a backend and captures successful output', async () => {
+    const progressEvents: Array<{
+      kind: string;
+      runId: string;
+      detail?: string;
+    }> = [];
+    service.subscribeProgress((event) => {
+      progressEvents.push({
+        kind: event.kind,
+        runId: event.runId,
+        detail: event.detail,
+      });
+    });
+
     const runPromise = service.run({
       task: 'fix the bug',
       codeSessionId: 'session-1',
       workspaceRoot: '/workspace',
+      requestId: 'req-1',
     });
 
     // Let the async openTerminal resolve
@@ -173,6 +187,9 @@ describe('CodingBackendService', () => {
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain('Fixed the bug');
     expect(result.backendId).toBe('claude-code');
+    expect(progressEvents.map((event) => event.kind)).toEqual(['started', 'progress', 'completed']);
+    expect(progressEvents.every((event) => event.runId === 'req-1')).toBe(true);
+    expect(progressEvents[2]?.detail).toContain('Done! Fixed the bug.');
   });
 
   it('reports failure on non-zero exit code', async () => {

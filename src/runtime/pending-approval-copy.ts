@@ -2,6 +2,8 @@ export interface PendingApprovalSummary {
   toolName: string;
   argsPreview: string;
   actionLabel?: string;
+  requestId?: string;
+  codeSessionId?: string;
 }
 
 export interface PendingApprovalMetadata extends PendingApprovalSummary {
@@ -760,6 +762,8 @@ export function buildPendingApprovalMetadata(
         argsPreview: summary?.argsPreview ?? '',
         ...(summary?.actionLabel ? { actionLabel: summary.actionLabel } : {}),
       }),
+      ...(summary?.requestId ? { requestId: summary.requestId } : {}),
+      ...(summary?.codeSessionId ? { codeSessionId: summary.codeSessionId } : {}),
     });
   }
   return metadata;

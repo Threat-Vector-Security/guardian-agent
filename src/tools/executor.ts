@@ -2529,6 +2529,8 @@ export class ToolExecutor {
             toolName: approval.toolName,
             argsPreview,
           }),
+          ...(job?.requestId ? { requestId: job.requestId } : {}),
+          ...(job?.codeSessionId ? { codeSessionId: job.codeSessionId } : {}),
         });
       }
     }

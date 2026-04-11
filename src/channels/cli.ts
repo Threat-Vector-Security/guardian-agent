@@ -39,17 +39,20 @@ const HISTORY_DIR = join(homedir(), '.guardianagent');
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
-const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 15;
+const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
 
 interface PendingApprovalSummary {
   id: string;
   toolName: string;
   argsPreview: string;
   actionLabel?: string;
+  requestId?: string;
+  codeSessionId?: string;
 }
 
 interface CliLiveProgressState {
-  requestId: string;
+  requestId?: string;
+  codeSessionId?: string;
   lastSnapshotKey: string;
 }
 
@@ -118,6 +121,12 @@ function extractPendingAction(
           toolName: approval.toolName,
           argsPreview,
           ...(actionLabel ? { actionLabel } : {}),
+          ...(typeof approval.requestId === 'string' && approval.requestId.trim()
+            ? { requestId: approval.requestId.trim() }
+            : {}),
+          ...(typeof approval.codeSessionId === 'string' && approval.codeSessionId.trim()
+            ? { codeSessionId: approval.codeSessionId.trim() }
+            : {}),
         };
       })
     : undefined;
@@ -176,6 +185,8 @@ function isMeaningfulCliTimelineItem(item: DashboardRunTimelineItem | undefined)
 
 function humanizeCliRunStatus(status: DashboardRunStatus | string | undefined): string {
   switch (String(status || '')) {
+    case 'running':
+      return 'Working…';
     case 'awaiting_approval':
       return 'Waiting for approval';
     case 'verification_pending':
@@ -202,7 +213,9 @@ function mapCliProgressTone(
 function extractCliLiveProgressSnapshot(event: SSEEvent, requestId: string): CliLiveProgressSnapshot | null {
   if (event.type !== 'run.timeline' || !isDashboardRunDetail(event.data)) return null;
   const detail = event.data;
-  if (detail.summary.runId !== requestId) return null;
+  const normalizedRequestId = typeof requestId === 'string' ? requestId.trim() : '';
+  if (normalizedRequestId && detail.summary.runId !== normalizedRequestId) return null;
+  if (!normalizedRequestId) return null;
 
   const meaningfulItems = detail.items.filter(isMeaningfulCliTimelineItem);
   const latestItem = meaningfulItems[meaningfulItems.length - 1];
@@ -224,6 +237,56 @@ function extractCliLiveProgressSnapshot(event: SSEEvent, requestId: string): Cli
     title: summaryTitle,
     detail: '',
   };
+}
+
+function extractCliApprovalProgressSnapshot(
+  event: SSEEvent,
+  progressState: CliLiveProgressState,
+): CliLiveProgressSnapshot | null {
+  if (event.type !== 'run.timeline' || !isDashboardRunDetail(event.data)) return null;
+  const detail = event.data;
+  const requestId = typeof progressState.requestId === 'string' ? progressState.requestId.trim() : '';
+  const codeSessionId = typeof progressState.codeSessionId === 'string' ? progressState.codeSessionId.trim() : '';
+  const runId = typeof detail.summary.runId === 'string' ? detail.summary.runId.trim() : '';
+  const eventCodeSessionId = typeof detail.summary.codeSessionId === 'string'
+    ? detail.summary.codeSessionId.trim()
+    : '';
+
+  if (requestId) {
+    if (runId !== requestId) return null;
+    if (codeSessionId && eventCodeSessionId && eventCodeSessionId !== codeSessionId) return null;
+    return extractCliLiveProgressSnapshot(event, requestId);
+  }
+
+  if (!codeSessionId || eventCodeSessionId !== codeSessionId) return null;
+
+  const meaningfulItems = detail.items.filter(isMeaningfulCliTimelineItem);
+  const latestItem = meaningfulItems[meaningfulItems.length - 1];
+  if (latestItem && latestItem.title.trim()) {
+    const detailText = String(latestItem.detail || '').trim();
+    return {
+      key: `${detail.summary.runId}:${latestItem.id}:${latestItem.status}:${latestItem.title}:${detailText}`,
+      tone: mapCliProgressTone(latestItem.status, detail.summary.status),
+      title: latestItem.title.trim(),
+      detail: detailText,
+    };
+  }
+
+  const summaryTitle = humanizeCliRunStatus(detail.summary.status);
+  if (!summaryTitle) return null;
+  return {
+    key: `${detail.summary.runId}:summary:${detail.summary.status}`,
+    tone: mapCliProgressTone(undefined, detail.summary.status),
+    title: summaryTitle,
+    detail: '',
+  };
+}
+
+function readCodeSessionIdFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  const codeContext = metadata?.codeContext;
+  if (!codeContext || typeof codeContext !== 'object' || Array.isArray(codeContext)) return undefined;
+  const sessionId = (codeContext as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : undefined;
 }
 
 function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
@@ -334,6 +397,8 @@ export class CLIChannel implements ChannelAdapter {
   private pendingInlineApprovalState: InlineApprovalState | null = null;
   private pendingPastedMessageLines: string[] = [];
   private pendingPastedMessageTimer: ReturnType<typeof setTimeout> | null = null;
+  private liveProgressStates = new Set<CliLiveProgressState>();
+  private unsubscribeSse: (() => void) | null = null;
   private shutdownRequested = false;
 
   constructor(options: CLIChannelOptions = {}) {
@@ -359,6 +424,11 @@ export class CLIChannel implements ChannelAdapter {
   async start(onMessage: MessageCallback): Promise<void> {
     this.onMessage = onMessage;
     this.shutdownRequested = false;
+    this.liveProgressStates.clear();
+    this.unsubscribeSse?.();
+    this.unsubscribeSse = this.dashboard?.onSSESubscribe?.((event) => {
+      this.handleSubscribedProgressEvent(event);
+    }) ?? null;
 
     // Load persisted command history for Up/Down arrow recall
     let history: string[] = [];
@@ -432,6 +502,9 @@ export class CLIChannel implements ChannelAdapter {
   async stop(): Promise<void> {
     this.shutdownRequested = true;
     this.clearPendingPastedMessageTimer();
+    this.liveProgressStates.clear();
+    this.unsubscribeSse?.();
+    this.unsubscribeSse = null;
     const rl = this.rl;
     this.rl = null;
     if (rl) {
@@ -631,6 +704,12 @@ export class CLIChannel implements ChannelAdapter {
     let allSucceeded = true;
     let allMissingApprovals = decision === 'approved' && approvals.length > 0;
     for (const approval of approvals) {
+      const liveProgress = decision === 'approved'
+        ? this.beginLiveProgress({
+            requestId: approval.requestId,
+            codeSessionId: approval.codeSessionId,
+          })
+        : null;
       try {
         const result = await approvalDecisionHandler({
           approvalId: approval.id,
@@ -663,6 +742,8 @@ export class CLIChannel implements ChannelAdapter {
           success: false,
           message,
         });
+      } finally {
+        this.endLiveProgress(liveProgress);
       }
     }
 
@@ -730,29 +811,37 @@ export class CLIChannel implements ChannelAdapter {
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (this.dashboard?.onStreamDispatch) {
       const requestId = randomUUID();
-      const progressState: CliLiveProgressState = {
+      const progressState = this.beginLiveProgress({
         requestId,
-        lastSnapshotKey: '',
-      };
-      const response = await this.dashboard.onStreamDispatch(
-        input.agentId,
-        {
-          requestId,
-          content: input.content,
-          userId: this.defaultUserId,
-          surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
-          channel: 'cli',
-          metadata: input.metadata,
-        },
-        (event) => this.handleStreamProgressEvent(event, progressState),
-      );
-      if (typeof response.error === 'string' && response.error.trim()) {
-        throw new Error(response.error.trim());
+        codeSessionId: readCodeSessionIdFromMetadata(input.metadata),
+      });
+      try {
+        const response = await this.dashboard.onStreamDispatch(
+          input.agentId,
+          {
+            requestId,
+            content: input.content,
+            userId: this.defaultUserId,
+            surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+            channel: 'cli',
+            metadata: input.metadata,
+          },
+          (event) => {
+            if (progressState) {
+              this.handleStreamProgressEvent(event, progressState);
+            }
+          },
+        );
+        if (typeof response.error === 'string' && response.error.trim()) {
+          throw new Error(response.error.trim());
+        }
+        return {
+          content: response.content,
+          ...(response.metadata ? { metadata: response.metadata } : {}),
+        };
+      } finally {
+        this.endLiveProgress(progressState);
       }
-      return {
-        content: response.content,
-        ...(response.metadata ? { metadata: response.metadata } : {}),
-      };
     }
 
     if (input.agentId && this.dashboard?.onDispatch) {
@@ -780,19 +869,72 @@ export class CLIChannel implements ChannelAdapter {
     throw new Error('No CLI dispatch handler is available.');
   }
 
+  private beginLiveProgress(input: {
+    requestId?: string;
+    codeSessionId?: string;
+  }): CliLiveProgressState | null {
+    const requestId = typeof input.requestId === 'string' && input.requestId.trim()
+      ? input.requestId.trim()
+      : undefined;
+    const codeSessionId = typeof input.codeSessionId === 'string' && input.codeSessionId.trim()
+      ? input.codeSessionId.trim()
+      : undefined;
+    if (!requestId && !codeSessionId) return null;
+    const state: CliLiveProgressState = {
+      ...(requestId ? { requestId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+      lastSnapshotKey: '',
+    };
+    this.liveProgressStates.add(state);
+    return state;
+  }
+
+  private endLiveProgress(progressState: CliLiveProgressState | null): void {
+    if (!progressState) return;
+    this.liveProgressStates.delete(progressState);
+  }
+
+  private handleSubscribedProgressEvent(event: SSEEvent): void {
+    let snapshot: CliLiveProgressSnapshot | null = null;
+    for (const state of this.liveProgressStates) {
+      const next = extractCliApprovalProgressSnapshot(event, state);
+      if (!next) continue;
+      if (next.key === state.lastSnapshotKey) continue;
+      state.lastSnapshotKey = next.key;
+      snapshot = snapshot ?? next;
+    }
+    if (snapshot) {
+      this.renderLiveProgressSnapshot(snapshot);
+    }
+  }
+
   private handleStreamProgressEvent(event: SSEEvent, progressState: CliLiveProgressState): void {
-    const snapshot = extractCliLiveProgressSnapshot(event, progressState.requestId);
+    const snapshot = extractCliApprovalProgressSnapshot(event, progressState);
     if (!snapshot || snapshot.key === progressState.lastSnapshotKey) return;
     progressState.lastSnapshotKey = snapshot.key;
+    this.renderLiveProgressSnapshot(snapshot);
+  }
+
+  private renderLiveProgressSnapshot(snapshot: CliLiveProgressSnapshot): void {
     const badge = snapshot.tone === 'failed'
-      ? this.red('[progress]')
+      ? (this.useColor ? this.red('[progress]') : '[progress]')
       : snapshot.tone === 'warning'
-        ? this.yellow('[progress]')
+        ? (this.useColor ? this.yellow('[progress]') : '[progress]')
         : snapshot.tone === 'running'
-          ? this.cyan('[progress]')
-          : this.dim('[progress]');
+          ? (this.useColor ? this.cyan('[progress]') : '[progress]')
+          : (this.useColor ? this.dim('[progress]') : '[progress]');
     const suffix = snapshot.detail ? ` — ${snapshot.detail}` : '';
-    this.write(`\n${badge} ${snapshot.title}${suffix}\n`);
+    const line = `${badge} ${snapshot.title}${suffix}`;
+    
+    if (this.useColor) {
+      // Use \r to overwrite the current line, and pad with spaces to clear any old text.
+      const maxWidth = (process.stdout.columns || 80) - 1;
+      const displayLine = line.length > maxWidth ? line.substring(0, maxWidth - 3) + '...' : line;
+      this.output.write(`\r${displayLine}${' '.repeat(Math.max(0, maxWidth - displayLine.length))}\r`);
+    } else {
+      // Non-TTY: just write the line normally
+      this.write(`${line}\n`);
+    }
   }
 
   /**
