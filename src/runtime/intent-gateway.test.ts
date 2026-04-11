@@ -758,8 +758,8 @@ describe('IntentGateway', () => {
           field: 'person_identity',
           route: 'personal_assistant_task',
           operation: 'create',
-          prompt: 'To create a local person, I need at least a name or email address.',
-          originalRequest: 'Create a person in my Second Brain.',
+          prompt: 'To create a local contact, I need at least a name or email address.',
+          originalRequest: 'Create a contact in my Second Brain.',
           transferPolicy: 'origin_surface_only',
         },
       },
@@ -1088,12 +1088,12 @@ describe('IntentGateway', () => {
     expect(primaryPrompt).toContain('Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.');
     expect(primaryPrompt).toContain('Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.');
     expect(primaryPrompt).toContain('Example: "Show my library items about Harbor." -> route=personal_assistant_task, operation=read, personalItemType=library, query="Harbor".');
-    expect(primaryPrompt).toContain('Example: "Show the people in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.');
-    expect(primaryPrompt).toContain('Example: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Jordan Lee".');
+    expect(primaryPrompt).toContain('Example: "Show the contacts in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.');
+    expect(primaryPrompt).toContain('Example: "Find the contact \\"Jordan Lee\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Jordan Lee".');
     expect(primaryPrompt).toContain('Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.');
     expect(primaryPrompt).toContain('Example: "What routines are related to email or inbox processing?" -> route=personal_assistant_task, operation=read, personalItemType=routine, query="email or inbox processing".');
     expect(primaryPrompt).toContain('Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.');
-    expect(primaryPrompt).toContain('Example: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.');
+    expect(primaryPrompt).toContain('Example: "Create a contact in my Second Brain named Smoke Test Person with email smoke@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.');
     expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "List my configured AI providers." -> route=general_assistant, operation=read, uiSurface=config');
     expect(primaryPrompt).toContain('SharePoint');
@@ -1109,12 +1109,12 @@ describe('IntentGateway', () => {
     expect(fallbackPrompt).toContain('Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".');
     expect(fallbackPrompt).toContain('Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".');
     expect(fallbackPrompt).toContain('Examples: "Show my library items about Harbor." -> route="personal_assistant_task", operation="read", personalItemType="library", query="Harbor".');
-    expect(fallbackPrompt).toContain('Examples: "Show the people in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".');
-    expect(fallbackPrompt).toContain('Examples: "Find the person \\"Jordan Lee\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Jordan Lee".');
+    expect(fallbackPrompt).toContain('Examples: "Show the contacts in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".');
+    expect(fallbackPrompt).toContain('Examples: "Find the contact \\"Jordan Lee\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Jordan Lee".');
     expect(fallbackPrompt).toContain('Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.');
     expect(fallbackPrompt).toContain('Examples: "What routines are related to email or inbox processing?" -> route="personal_assistant_task", operation="read", personalItemType="routine", query="email or inbox processing".');
     expect(fallbackPrompt).toContain('Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.');
-    expect(fallbackPrompt).toContain('Examples: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".');
+    expect(fallbackPrompt).toContain('Examples: "Create a contact in my Second Brain named Smoke Test Person with email smoke@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {

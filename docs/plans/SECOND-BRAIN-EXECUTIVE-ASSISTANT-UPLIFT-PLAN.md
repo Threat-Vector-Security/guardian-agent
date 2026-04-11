@@ -244,14 +244,14 @@ Recommended public building blocks:
   - tasks
   - notes
   - briefs
-  - people
+  - contacts
   - calendar
   - library
   - cross-entity
 - `Condition`
   - mentions topic
   - overdue or due soon
-  - meeting with person
+  - meeting with contact
   - no follow-up exists
   - any new relevant item
 - `Action`
@@ -287,7 +287,7 @@ Sequence:
 1. gather today and near-term events
 2. gather open and due-soon tasks
 3. gather recent notes
-4. gather relevant people and follow-up pressure
+4. gather relevant contacts and follow-up pressure
 5. gather recent or relevant saved library items
 6. synthesize deterministic brief
 7. persist brief
@@ -322,7 +322,7 @@ User-facing settings:
 Sequence:
 
 1. identify upcoming events inside the configured meeting-prep window
-2. gather related tasks, notes, people, and library items
+2. gather related tasks, notes, contacts, and library items
 3. synthesize pre-meeting brief
 4. persist brief
 5. proactively notify the user with a short meeting-prep message
@@ -339,7 +339,7 @@ Sequence:
 
 1. identify recently ended events inside the configured follow-up window
 2. skip events that already have a follow-up artifact
-3. gather related tasks, notes, people, and library items
+3. gather related tasks, notes, contacts, and library items
 4. synthesize follow-up draft
 5. persist draft
 6. proactively notify the user that a draft is ready
@@ -396,10 +396,10 @@ Recommended categories:
 - retrieval modules
   - gather tasks
   - gather notes
-  - gather people
+  - gather contacts
   - gather events
   - gather library items
-  - gather related records about a topic or person
+  - gather related records about a topic or contact
 - condition modules
   - due soon
   - overdue

@@ -999,8 +999,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_people_list',
-      description: 'List people stored in Second Brain, ordered by recency.',
-      shortDescription: 'List Second Brain people.',
+      description: 'List contacts stored in Second Brain, ordered by recency.',
+      shortDescription: 'List Second Brain contacts.',
       risk: 'read_only',
       category: 'memory',
       deferLoading: true,
@@ -1029,8 +1029,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_person_upsert',
-      description: 'Create or update a person record in Second Brain.',
-      shortDescription: 'Create or update a person.',
+      description: 'Create or update a contact record in Second Brain.',
+      shortDescription: 'Create or update a contact.',
       risk: 'mutating',
       category: 'memory',
       deferLoading: true,
@@ -1081,8 +1081,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_person_delete',
-      description: 'Delete one person record from Second Brain.',
-      shortDescription: 'Delete a person.',
+      description: 'Delete one contact record from Second Brain.',
+      shortDescription: 'Delete a contact.',
       risk: 'mutating',
       category: 'memory',
       deferLoading: true,

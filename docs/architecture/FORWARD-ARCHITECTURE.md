@@ -257,8 +257,8 @@ Examples:
 Rules:
 - Capability modules should not reach back up into channel adapters or bootstrap code.
 - New capabilities should provide a service or registrar entrypoint that the composition root can wire once.
-- `Second Brain` should remain the canonical assistant-facing capability boundary for Guardian-owned personal context such as calendar, people / contacts context, notes, tasks, library items, briefs, and routines.
-- Google Workspace and Microsoft 365 should remain adapter modules for provider-owned data and operations. They may sync into `Second Brain`, but they should not become the default owner of generic personal-assistant calendar or people context.
+- `Second Brain` should remain the canonical assistant-facing capability boundary for Guardian-owned personal context such as calendar, contact context, notes, tasks, library items, briefs, and routines.
+- Google Workspace and Microsoft 365 should remain adapter modules for provider-owned data and operations. They may sync into `Second Brain`, but they should not become the default owner of generic personal-assistant calendar or contact context.
 - Email remains provider-owned even when `Second Brain` uses synced and derived mailbox context for retrieval, briefing, and drafting.
 
 ### 7. Infrastructure Adapters

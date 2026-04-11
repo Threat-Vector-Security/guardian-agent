@@ -479,7 +479,7 @@ function renderToday(panel, data) {
       <article class="sb-card">
         <div class="sb-card__header">
           <div>
-            <div class="sb-card__eyebrow">People</div>
+            <div class="sb-card__eyebrow">Contacts</div>
             <h3>Follow up soon</h3>
           </div>
         </div>
@@ -1663,7 +1663,7 @@ function renderRoutineFormFields(routine, options = {}) {
         placeholder="Harbor launch review"
         value="${escAttr(routine.topicQuery || '')}"
       >
-      <div class="sb-table-copy">Guardian will scan matching tasks, notes, people, library items, briefs, and events, then message you when new matching context appears.</div>
+      <div class="sb-table-copy">Guardian will scan matching tasks, notes, contacts, library items, briefs, and events, then message you when new matching context appears.</div>
     ` : templateId === 'deadline-watch' ? `
       <label class="sb-form__label" for="routine-due-within-hours">Alert me about tasks due within (hours)</label>
       <input

@@ -191,7 +191,7 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
   if (decision.route === 'personal_assistant_task') {
     const lines = [
       'This turn is already routed to Guardian Second Brain work.',
-      'Keep local notes, tasks, people, library items, briefs, routines, and local calendar mutations in the shared Second Brain store.',
+      'Keep local notes, tasks, contacts, library items, briefs, routines, and local calendar mutations in the shared Second Brain store.',
       'Do not mutate Google Workspace, Microsoft 365, Gmail, or Outlook objects unless the user explicitly targeted that provider.',
     ];
     if (decision.entities.personalItemType === 'calendar' && decision.entities.calendarTarget === 'local') {

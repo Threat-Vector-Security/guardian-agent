@@ -11,7 +11,7 @@
 This spec is authoritative for the current implementation of:
 - the `personal_assistant_task` route
 - the shared `Second Brain` storage model
-- provider-backed calendar and people sync into `Second Brain`
+- provider-backed calendar and contact sync into `Second Brain`
 - deterministic brief generation and routine scanning
 - the web, tool, and direct-read surfaces for `Second Brain`
 
@@ -46,7 +46,7 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Calendar`
 - `Tasks`
 - `Notes`
-- `People`
+- `Contacts`
 - `Library`
 - `Briefs`
 - `Routines`
@@ -57,8 +57,8 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Local events can be updated and deleted in-panel. Overflowed day tiles expose a `+N more` affordance that focuses the day, and entries in the selected-day agenda are directly selectable so the editor can switch to hidden events. Provider-backed events are visible in the calendar and remain read-only in this surface.
 - `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing and delete on the left and board content on the right.
 - `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing and delete on the left and list content on the right.
-- `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
-- the current person editor includes structured `phone` and `location` fields alongside name, email, title, company, relationship, notes, and last-contact state so contact details do not have to be stuffed into notes
+- `Contacts` exposes relationship filters, last-contact tracking, and a dedicated contact editor with create, update, and delete actions.
+- the current contact editor includes structured `phone` and `location` fields alongside name, email, title, company, relationship, notes, and last-contact state so contact details do not have to be stuffed into notes
 - `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
 - `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
 - `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses assistant capabilities as the creation model when the operator explicitly opens `Create routine`.
@@ -80,7 +80,7 @@ Current `personal_assistant_task` scope includes:
 - notes
 - tasks
 - local calendar planning, local calendar CRUD, and provider-backed event context
-- people context
+- contact context
 - routines
 - briefs and follow-up drafts
 - personal retrieval across notes, events, messages, and provider-backed context
@@ -99,7 +99,7 @@ Current route boundaries are:
 - tasks
 - notes
 - calendar
-- people
+- contacts
 - library
 - briefs
 - routines
@@ -145,7 +145,7 @@ Persisted and exposed:
 - notes
 - tasks
 - events
-- people
+- contacts
 - library/link records
 - routines
 - briefs
@@ -161,7 +161,7 @@ Not yet exposed as first-class runtime CRUD:
 
 `SecondBrainService` is the shared runtime façade for:
 - overview generation
-- create, update, and delete for notes, tasks, local calendar events, people, library items, briefs, and routines
+- create, update, and delete for notes, tasks, local calendar events, contacts, library items, briefs, and routines
 - provider-sync upsert for Google and Microsoft calendar events
 - routine-type catalog listing plus bounded routine creation, updates, and deletes
 - brief persistence, lookup, generation, update, and delete
@@ -171,8 +171,8 @@ Not yet exposed as first-class runtime CRUD:
 It also seeds the default assistant routine set at startup.
 
 Current mutation behavior note:
-- chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
-- chat-driven local people writes now extract labeled phone numbers into the structured contact record instead of forcing them into free-form notes
+- chat-driven local calendar, task, and contact writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
+- chat-driven local contact writes now extract labeled phone numbers into the structured contact record instead of forcing them into free-form notes
 - when a local Second Brain write needs one missing detail, the missing-detail reply is expected to stay bound to that same pending personal-assistant action rather than drifting back into generic chat
 - unqualified calendar CRUD still targets the local Guardian `Second Brain` calendar; explicit Google Calendar or Microsoft 365 calendar CRUD stays on the provider route
 
@@ -182,18 +182,18 @@ Current shipped ownership:
 - notes, tasks, library items, briefs, and routines are Guardian-owned records in the shared `Second Brain` store
 - local calendar events are Guardian-owned records in the shared `Second Brain` store
 - Google and Microsoft calendar events are synced into the shared store as provider-backed records and remain read-only in `Second Brain`
-- people records live in the shared `Second Brain` store, with Google and Microsoft contacts syncing into that same store
+- contact records live in the shared `Second Brain` store, with Google and Microsoft contacts syncing into that same store
 - direct mailbox work remains provider-owned and routes through Gmail / Google Workspace or Outlook / Microsoft 365 rather than `Second Brain`
 
 Documented target direction, not yet fully implemented:
-- Guardian should become the canonical assistant-facing source of truth for calendar and people / relationship context
-- generic assistant requests about calendar and people should resolve against Guardian-owned records by default, even when Google Workspace or Microsoft 365 is connected
+- Guardian should become the canonical assistant-facing source of truth for calendar and contact / relationship context
+- generic assistant requests about calendar and contacts should resolve against Guardian-owned records by default, even when Google Workspace or Microsoft 365 is connected
 - Google Calendar and Microsoft 365 calendar should act as sync adapters for Guardian-owned calendar state rather than peer destinations for generic chat CRUD
-- Google and Microsoft contacts should sync into Guardian-owned people records as enrichments or mirrors rather than acting as competing first-class context stores
+- Google and Microsoft contacts should sync into Guardian-owned contact records as enrichments or mirrors rather than acting as competing first-class context stores
 - email should remain provider-owned, with Guardian storing synced and derived context for retrieval, planning, and drafting rather than becoming a mailbox of record
 
 Planned ownership list:
-- Guardian canonical: calendar, people / contacts context, notes, tasks, library, briefs, routines
+- Guardian canonical: calendar, contact context, notes, tasks, library, briefs, routines
 - Provider canonical with Guardian-derived context layered on top: email, Drive / Docs / Sheets, OneDrive / SharePoint, and other provider-native files
 - Explicit provider routes remain valid for provider administration, provider-only maintenance, and direct provider CRUD where the user intentionally targets that provider
 
@@ -215,7 +215,7 @@ Current direct maintenance action on the Routines surface:
 - `Sync now` refreshes provider calendar and contact context without appearing as a visible assistant routine
 
 Current behavior note:
-- `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
+- `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, contacts, and library items.
 - the Routines table shows only configured routines; `Create routine` is the explicit path for adding or reconfiguring bounded assistant capabilities.
 - the create flow now shows the full assistant capability list, not just the unconfigured extras. Capabilities that already have a singleton starter instance are marked as already configured and route the operator back to editing that existing instance rather than silently disappearing from the picker.
 - scheduled routines now support `hourly`, `daily`, `weekdays`, `weekly`, `fortnightly`, and `monthly` cadence options in the shared routine timing model.
@@ -249,7 +249,7 @@ Microsoft 365:
 
 The current sync flow:
 1. reads provider data through the shared native provider services
-2. normalizes it into `Second Brain` events and people
+2. normalizes it into `Second Brain` events and contacts
 3. records connector usage in `sb_usage_records`
 4. stores a `lastSyncAt` record in `sb_sync_cursors`
 
@@ -258,7 +258,7 @@ Current limitations:
 - sync is pull-based only
 - no webhook or push-based provider change ingestion is implemented yet
 - provider-backed calendar events are still modeled as read-only remote-owned records; outbound calendar sync from Guardian-owned local events is not implemented yet
-- people / contact unification still uses one shared store today, but ownership and conflict semantics are not yet explicitly modeled as Guardian-canonical vs remote-mirror records
+- contact unification still uses one shared store today, but ownership and conflict semantics are not yet explicitly modeled as Guardian-canonical vs remote-mirror records
 
 ## Briefing Model
 
@@ -279,12 +279,12 @@ Current supported brief kinds:
 - persists the result under a day-stable brief id
 
 `weekly_review`
-- summarizes the next seven days of events plus current tasks, notes, people, and saved library references
+- summarizes the next seven days of events plus current tasks, notes, contacts, and saved library references
 - persists the result under a day-stable weekly review id
 
 `pre_meeting`
 - requires `eventId`
-- matches tasks, notes, and people using simple keyword overlap with the event title
+- matches tasks, notes, and contacts using simple keyword overlap with the event title
 - persists the result under an event-stable brief id
 
 `follow_up`
@@ -294,7 +294,7 @@ Current supported brief kinds:
 
 `topic watch` output
 - is currently stored as a `manual` brief artifact tied back to the triggering routine id
-- summarizes newly matched tasks, notes, people, library items, events, and briefs for the configured topic
+- summarizes newly matched tasks, notes, contacts, library items, events, and briefs for the configured topic
 
 `deadline watch` output
 - is currently stored as a `manual` brief artifact tied back to the triggering routine id

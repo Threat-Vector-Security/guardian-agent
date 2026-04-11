@@ -204,7 +204,7 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   },
   {
     capability: 'topic_watch',
-    description: 'Watch a topic across tasks, notes, briefs, people, library items, and events, then message you when new matches appear.',
+    description: 'Watch a topic across tasks, notes, contacts, library items, and events, then message you when new matches appear.',
     catalogCategory: 'watch',
     seedByDefault: false,
     allowMultiple: true,

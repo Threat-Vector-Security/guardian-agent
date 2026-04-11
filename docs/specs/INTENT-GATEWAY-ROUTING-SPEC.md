@@ -127,7 +127,7 @@ Current ownership includes:
 - notes
 - tasks
 - local calendar planning, local calendar CRUD, and provider-backed event context
-- people context
+- contact context
 - routines
 - briefs and follow-up drafts
 - personal retrieval across messages, docs, events, and notes
@@ -160,13 +160,13 @@ Current routing model:
 - direct mailbox work uses `email_task`
 
 Documented target direction, not yet fully implemented:
-- Guardian should become the canonical assistant-facing source of truth for calendar and people / relationship context
-- generic calendar and people / contact context requests should prefer `personal_assistant_task` even when provider integrations are enabled
+- Guardian should become the canonical assistant-facing source of truth for calendar and contact / relationship context
+- generic calendar and contact context requests should prefer `personal_assistant_task` even when provider integrations are enabled
 - explicit provider wording should remain the boundary for Google Workspace or Microsoft 365 calendar maintenance and administration
 - email should remain provider-owned, so mailbox reads, drafts, replies, sends, and forwards stay on `email_task`
 
 Ownership list for routing:
-- `personal_assistant_task`: Guardian-canonical calendar, people / contact context, notes, tasks, library, briefs, routines, and cross-source personal retrieval
+- `personal_assistant_task`: Guardian-canonical calendar, contact context, notes, tasks, library, briefs, routines, and cross-source personal retrieval
 - `workspace_task`: explicit Google Workspace or Microsoft 365 document, file, calendar-maintenance, and provider-admin operations
 - `email_task`: provider-owned Gmail / Outlook mailbox work
 
