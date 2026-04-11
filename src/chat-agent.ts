@@ -1260,6 +1260,7 @@ const SECOND_BRAIN_PERSON_NAME_IGNORE = new Set([
   'guardian agent',
   'guardian',
 ]);
+const SECOND_BRAIN_PERSON_NAME_FIELD_PATTERN = /^(?:with|phone|email|title|company|location|notes?)\b/i;
 
 function isPlausibleSecondBrainPersonName(value: string): boolean {
   const trimmed = value.trim();
@@ -1269,6 +1270,114 @@ function isPlausibleSecondBrainPersonName(value: string): boolean {
   const words = trimmed.split(/\s+/g).filter(Boolean);
   if (words.length < 2 || words.length > 4) return false;
   return words.every((word) => /^[A-Z][A-Za-z'-]+$/.test(word));
+}
+
+function skipSecondBrainWhitespace(text: string, start: number): number {
+  let index = start;
+  while (index < text.length && /\s/.test(text[index] ?? '')) {
+    index += 1;
+  }
+  return index;
+}
+
+function skipSecondBrainNameLeadSeparators(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    const char = text[index] ?? '';
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (text.startsWith('...', index)) {
+      index += 3;
+      continue;
+    }
+    if (char === '…') {
+      index += 1;
+      continue;
+    }
+    if ('-,:;()'.includes(char)) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function readSecondBrainPersonNameWord(
+  text: string,
+  start: number,
+): { word: string; nextIndex: number } | null {
+  const match = text.slice(start).match(/^[A-Z][A-Za-z'-]+/);
+  if (!match?.[0]) {
+    return null;
+  }
+  return {
+    word: match[0],
+    nextIndex: start + match[0].length,
+  };
+}
+
+function hasSecondBrainPersonNameBoundary(text: string, start: number): boolean {
+  const boundaryIndex = skipSecondBrainWhitespace(text, start);
+  if (boundaryIndex >= text.length) {
+    return true;
+  }
+  if (text.startsWith('...', boundaryIndex) || text.startsWith('…', boundaryIndex)) {
+    return true;
+  }
+  const boundaryChar = text[boundaryIndex] ?? '';
+  if (',.;:()'.includes(boundaryChar)) {
+    return true;
+  }
+  return SECOND_BRAIN_PERSON_NAME_FIELD_PATTERN.test(text.slice(boundaryIndex));
+}
+
+function extractSecondBrainLeadingPersonName(text: string, start = 0): string {
+  let index = skipSecondBrainWhitespace(text, start);
+  const words: string[] = [];
+  while (words.length < 4) {
+    const nextWord = readSecondBrainPersonNameWord(text, index);
+    if (!nextWord) {
+      break;
+    }
+    words.push(nextWord.word);
+    index = nextWord.nextIndex;
+    const nextIndex = skipSecondBrainWhitespace(text, index);
+    if (nextIndex === index) {
+      break;
+    }
+    index = nextIndex;
+    if (!readSecondBrainPersonNameWord(text, index)) {
+      break;
+    }
+  }
+  if (words.length < 2) {
+    return '';
+  }
+  return hasSecondBrainPersonNameBoundary(text, index) ? words.join(' ') : '';
+}
+
+function collectSecondBrainFallbackPersonNameCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? '';
+    if (char < 'A' || char > 'Z') {
+      continue;
+    }
+    const previous = text[index - 1] ?? '';
+    if ((previous >= 'A' && previous <= 'Z') || (previous >= 'a' && previous <= 'z') || previous === '\'' || previous === '-') {
+      continue;
+    }
+    const candidate = extractSecondBrainLeadingPersonName(text, index);
+    if (!candidate) {
+      continue;
+    }
+    candidates.push(candidate);
+    index += candidate.length - 1;
+  }
+  return candidates;
 }
 
 function extractSecondBrainFallbackPersonName(text: string): string {
@@ -1282,23 +1391,29 @@ function extractSecondBrainFallbackPersonName(text: string): string {
   if (collapsed && collapsed !== text) {
     candidateTexts.push(collapsed);
   }
-  const patterns = [
-    /\b(?:named|called)\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
-    /\b(?:person|contact)\b(?:\s+in\s+my\s+second\s+brain\b)?(?:\s*(?:\.{3}|…|[-,:;()]|\s))+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
-    /^\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})(?=\s*(?:\.{3}|…|[,.;:()]|with\b|phone\b|email\b|title\b|company\b|location\b|notes?\b|$))/,
-  ];
   for (const candidateText of candidateTexts) {
-    for (const pattern of patterns) {
-      const match = candidateText.match(pattern);
-      const candidate = match?.[1]?.trim() ?? '';
+    for (const match of candidateText.matchAll(/\b(?:named|called)\b/gi)) {
+      const candidate = extractSecondBrainLeadingPersonName(candidateText, (match.index ?? 0) + match[0].length);
       if (isPlausibleSecondBrainPersonName(candidate)) {
         return candidate;
       }
     }
+    for (const match of candidateText.matchAll(/\b(?:person|contact)\b(?:\s+in\s+my\s+second\s+brain\b)?/gi)) {
+      const candidate = extractSecondBrainLeadingPersonName(
+        candidateText,
+        skipSecondBrainNameLeadSeparators(candidateText, (match.index ?? 0) + match[0].length),
+      );
+      if (isPlausibleSecondBrainPersonName(candidate)) {
+        return candidate;
+      }
+    }
+    const leadingCandidate = extractSecondBrainLeadingPersonName(candidateText);
+    if (isPlausibleSecondBrainPersonName(leadingCandidate)) {
+      return leadingCandidate;
+    }
   }
 
-  const candidates = Array.from(candidateTexts.join('\n').matchAll(/\b([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})\b/g))
-    .map((match) => match[1]?.trim() ?? '')
+  const candidates = collectSecondBrainFallbackPersonNameCandidates(candidateTexts.join('\n'))
     .filter(isPlausibleSecondBrainPersonName);
   return candidates[candidates.length - 1] ?? '';
 }
