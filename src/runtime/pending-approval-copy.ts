@@ -325,10 +325,10 @@ function describeSecondBrainPersonAction(toolName: string, preview: string): str
   const name = asString(parsed.name);
   const lastContactAt = finiteNumber(parsed.lastContactAt);
   if (toolName === 'second_brain_person_delete') {
-    return name ? `delete local person ${quote(name)}` : 'delete local person';
+    return name ? `delete local contact ${quote(name)}` : 'delete local contact';
   }
   const parts = [
-    asString(parsed.id) ? 'update local person' : 'save local person',
+    asString(parsed.id) ? 'update local contact' : 'save local contact',
     name ? quote(name) : '',
     lastContactAt != null ? `last contacted ${formatDateTime(lastContactAt)}` : '',
   ].filter(Boolean);

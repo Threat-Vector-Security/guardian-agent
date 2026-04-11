@@ -5162,8 +5162,8 @@ type DirectIntentShadowCandidate =
         if (people.length === 0) {
           return {
             content: querySpec?.query
-              ? `Second Brain has no people matching "${querySpec.query}".`
-              : 'Second Brain has no saved people yet.',
+              ? `Second Brain has no contacts matching "${querySpec.query}".`
+              : 'Second Brain has no saved contacts yet.',
             metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'person'),
           };
         }
@@ -5173,8 +5173,8 @@ type DirectIntentShadowCandidate =
         return {
           content: [
           querySpec?.query
-            ? `${querySpec.exactMatch ? 'People in Second Brain matching' : 'People in Second Brain related to'} "${querySpec.query}":`
-            : 'People in Second Brain:',
+            ? `${querySpec.exactMatch ? 'Contacts in Second Brain matching' : 'Contacts in Second Brain related to'} "${querySpec.query}":`
+            : 'Contacts in Second Brain:',
           ...people.map((person) => {
             const parts = [
               person.email?.trim(),
@@ -5443,21 +5443,21 @@ type DirectIntentShadowCandidate =
         };
       case 'person:create':
         return {
-          content: `Person created: ${label}`,
+          content: `Contact created: ${label}`,
           metadata: id
             ? buildSecondBrainFocusMetadata(focusState, 'person', [{ id, label }], { preferredFocusId: id })
             : undefined,
         };
       case 'person:update':
         return {
-          content: `Person updated: ${label}`,
+          content: `Contact updated: ${label}`,
           metadata: id
             ? buildSecondBrainFocusMetadata(focusState, 'person', [{ id, label }], { preferredFocusId: id })
             : undefined,
         };
       case 'person:delete':
         return {
-          content: `Person deleted: ${label}`,
+          content: `Contact deleted: ${label}`,
           metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'person'),
         };
       case 'library:create':
@@ -6157,7 +6157,7 @@ type DirectIntentShadowCandidate =
           return this.buildDirectSecondBrainClarificationResponse({
             message,
             decision,
-            prompt: 'To create a local person, I need at least a name or email address.',
+            prompt: 'To create a local contact, I need at least a name or email address.',
             field: 'person_identity',
             missingFields: ['person_name_or_email'],
             entities: { personalItemType: 'person' },
@@ -6186,8 +6186,8 @@ type DirectIntentShadowCandidate =
           decision,
           toolName: 'second_brain_person_upsert',
           args,
-          summary: 'Creates a local Second Brain person.',
-          pendingIntro: 'I prepared a local person save, but it needs approval first.',
+          summary: 'Creates a local Second Brain contact.',
+          pendingIntro: 'I prepared a local contact save, but it needs approval first.',
           successDescriptor: {
             itemType: 'person',
             action: 'create',
@@ -6198,11 +6198,11 @@ type DirectIntentShadowCandidate =
       }
       case 'update': {
         if (!focusItem) {
-          return 'I need to know which local person to update. Try "Show the people in my Second Brain." first.';
+          return 'I need to know which local contact to update. Try "Show the contacts in my Second Brain." first.';
         }
         const existingPerson = this.secondBrainService.getPersonById(focusItem.id);
         if (!existingPerson) {
-          return `Local person "${focusItem.label ?? focusItem.id}" was not found.`;
+          return `Local contact "${focusItem.label ?? focusItem.id}" was not found.`;
         }
         const baseArgs: Record<string, unknown> = {
           id: existingPerson.id,
@@ -6249,7 +6249,7 @@ type DirectIntentShadowCandidate =
           || nextLastContactAt !== existingLastContactAt,
         );
         if (!hasExplicitChange) {
-          return 'To update that local person, tell me what to change, such as the name, email, phone, title, company, location, notes, relationship, or last-contact date.';
+          return 'To update that local contact, tell me what to change, such as the name, email, phone, title, company, location, notes, relationship, or last-contact date.';
         }
         return this.executeDirectSecondBrainMutation({
           message,
@@ -6258,8 +6258,8 @@ type DirectIntentShadowCandidate =
           decision,
           toolName: 'second_brain_person_upsert',
           args,
-          summary: 'Updates a local Second Brain person.',
-          pendingIntro: 'I prepared a local person update, but it needs approval first.',
+          summary: 'Updates a local Second Brain contact.',
+          pendingIntro: 'I prepared a local contact update, but it needs approval first.',
           successDescriptor: {
             itemType: 'person',
             action: 'update',
@@ -6271,7 +6271,7 @@ type DirectIntentShadowCandidate =
       }
       case 'delete': {
         if (!focusItem) {
-          return 'I need to know which local person to delete. Try "Show the people in my Second Brain." first.';
+          return 'I need to know which local contact to delete. Try "Show the contacts in my Second Brain." first.';
         }
         return this.executeDirectSecondBrainMutation({
           message,
@@ -6280,8 +6280,8 @@ type DirectIntentShadowCandidate =
           decision,
           toolName: 'second_brain_person_delete',
           args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain person.',
-          pendingIntro: 'I prepared a local person delete, but it needs approval first.',
+          summary: 'Deletes a local Second Brain contact.',
+          pendingIntro: 'I prepared a local contact delete, but it needs approval first.',
           successDescriptor: {
             itemType: 'person',
             action: 'delete',

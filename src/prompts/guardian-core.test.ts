@@ -53,7 +53,7 @@ describe('guardian-core prompt', () => {
   });
 
   it('distinguishes local Second Brain requests from explicit Google Workspace or Microsoft 365 requests', () => {
-    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Unqualified Guardian / Second Brain requests for notes, tasks, people, library items, briefs, routines, or calendar CRUD stay local');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Unqualified Guardian / Second Brain requests for notes, tasks, contacts, library items, briefs, routines, or calendar CRUD stay local');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly targets Google Workspace surfaces');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('When the user explicitly targets Microsoft 365 / Outlook surfaces');
   });

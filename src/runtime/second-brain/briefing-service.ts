@@ -374,10 +374,10 @@ export class BriefingService {
         ? recentNotes.map(renderNoteLine)
         : ['- No recent notes.']),
       '',
-      'People To Keep Warm',
+      'Contacts To Keep Warm',
       ...(people.length > 0
         ? people.map(renderPersonLine)
-        : ['- No people records need review right now.']),
+        : ['- No contact records need review right now.']),
       '',
       'Library Highlights',
       ...(libraryItems.length > 0
@@ -491,10 +491,10 @@ export class BriefingService {
         ? recentNotes.map(renderNoteLine)
         : ['- No recent notes in scope.']),
       '',
-      'People',
+      'Contacts',
       ...(people.length > 0
         ? people.map(renderPersonLine)
-        : ['- No people records in scope.']),
+        : ['- No contact records in scope.']),
       '',
       'Library',
       ...(libraryItems.length > 0
@@ -560,10 +560,10 @@ export class BriefingService {
       renderEventLine(event),
       ...(focusQuery ? ['', `Focus`, `- ${focusQuery}`] : []),
       '',
-      'Relevant People',
+      'Relevant Contacts',
       ...(relatedPeople.length > 0
         ? relatedPeople.map(renderPersonLine)
-        : ['- No linked people were inferred from the current data set.']),
+        : ['- No linked contacts were inferred from the current data set.']),
       '',
       'Relevant Tasks',
       ...(relatedTasks.length > 0
@@ -758,8 +758,8 @@ export class BriefingService {
       'Notes',
       ...(relatedNotes.length > 0 ? relatedNotes.map(renderNoteLine) : ['- No matching notes.']),
       '',
-      'People',
-      ...(relatedPeople.length > 0 ? relatedPeople.map(renderPersonLine) : ['- No matching people.']),
+      'Contacts',
+      ...(relatedPeople.length > 0 ? relatedPeople.map(renderPersonLine) : ['- No matching contacts.']),
       '',
       'Library',
       ...(relatedLinks.length > 0 ? relatedLinks.map(renderLinkLine) : ['- No matching library items.']),

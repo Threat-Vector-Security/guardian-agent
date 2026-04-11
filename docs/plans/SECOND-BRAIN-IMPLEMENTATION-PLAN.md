@@ -17,7 +17,7 @@ The target outcome is:
 
 - `Second Brain` replaces `Dashboard` as the main entry point in the web UI
 - personal productivity flows get a dedicated runtime lane
-- notes, tasks, people, calendar, routines, briefs, and library become first-class product objects
+- notes, tasks, contacts, calendar, routines, briefs, and library become first-class product objects
 - background assistant behavior is server-owned, deterministic where possible, and local-first when a local model exists
 - external spend is visible, attributable, capped, and graceful under budget pressure
 - web, CLI, and Telegram share one canonical `Second Brain` data model and continuity model
@@ -140,7 +140,7 @@ Layer 1: structured `Second Brain` entities
 
 - notes
 - tasks
-- people
+- contacts
 - reminders
 - calendar events and local calendar objects
 - routine definitions
@@ -260,7 +260,7 @@ Recommended manifest shape:
 interface SecondBrainRoutineManifest {
   id: string;
   name: string;
-  category: 'daily' | 'meeting' | 'follow_up' | 'people' | 'content' | 'maintenance';
+  category: 'daily' | 'meeting' | 'follow_up' | 'contacts' | 'content' | 'maintenance';
   enabledByDefault: boolean;
   trigger: {
     mode: 'cron' | 'event' | 'horizon' | 'manual' | 'hybrid';
@@ -282,7 +282,7 @@ Recommended built-in routine sets:
 - weekly: `Weekly Review`
 - meeting: `Pre-Meeting Brief`, `Post-Meeting Follow-Up`, `Travel / Event Prep`
 - follow-up: `Follow-Up Watch`, `Commitment Tracker`, `Deadline Guard`
-- people: `Relationship Nudge`, `Outreach Review`
+- contacts: `Relationship Nudge`, `Outreach Review`
 - content: `Content Calendar Review`, `Social Draft Queue`
 - maintenance: calendar horizon scan, reminder refresh, stale-thread scan
 
@@ -451,7 +451,7 @@ This route should own personal productivity intent regardless of whether the und
 
 | User intent | Route | Notes |
 |---|---|---|
-| manage tasks, reminders, notes, people, calendar | `personal_assistant_task` | primary `Second Brain` lane |
+| manage tasks, reminders, notes, contacts, calendar | `personal_assistant_task` | primary `Second Brain` lane |
 | prepare me for a meeting | `personal_assistant_task` | includes provider reads and optional research |
 | find context across my docs, emails, calendar, notes | `personal_assistant_task` | personal retrieval, not generic workspace CRUD |
 | draft a follow-up email from meeting notes | `personal_assistant_task` | outbound still approval-gated |
@@ -471,7 +471,7 @@ Send these through `personal_assistant_task` when the user is doing:
 - email follow-up
 - meeting prep
 - calendar planning
-- contact and people context
+- contact context
 - personal search across messages, docs, events, and notes
 - assistant routines and briefs
 
@@ -527,7 +527,7 @@ Tabs:
 - `Calendar`
 - `Tasks`
 - `Notes`
-- `People`
+- `Contacts`
 - `Library`
 - `Routines`
 
@@ -642,7 +642,7 @@ Explicit documentation goals:
 Deliver:
 
 - SQLite-backed `Second Brain` store
-- CRUD for notes, tasks, people, events, reminders, routines, briefs
+- CRUD for notes, tasks, contacts, events, reminders, routines, briefs
 - link table between entities
 - stable IDs and timestamps
 - in-memory fallback when SQLite is unavailable
@@ -708,11 +708,11 @@ Deliver:
 - routines settings UI
 - usage badge and reporting
 
-### Workstream 8: People, Outreach, And Social
+### Workstream 8: Contacts, Outreach, And Social
 
 Deliver:
 
-- broaden current contact/campaign substrate into `People`
+- broaden current contact/campaign substrate into `Contacts`
 - relationship reminders
 - follow-up queue
 - draft-only outreach review
@@ -781,11 +781,11 @@ Exit criteria:
 
 - at least `Morning Brief`, `Next 24 Hours Radar`, `Pre-Meeting Brief`, and `Weekly Review` are working end-to-end
 
-### Phase 4: People And Follow-Up Intelligence
+### Phase 4: Contacts And Follow-Up Intelligence
 
 Deliver:
 
-- `People` tab
+- `Contacts` tab
 - merged contact model
 - relationship reminders
 - follow-up queue
@@ -793,7 +793,7 @@ Deliver:
 
 Exit criteria:
 
-- the assistant can answer "what do I owe this person?" from structured data plus linked artifacts
+- the assistant can answer "what do I owe this contact?" from structured data plus linked artifacts
 
 ### Phase 5: Content, Outreach, And Advanced Budgeting
 
@@ -826,7 +826,7 @@ Exit criteria:
 
 - add `src/tools/builtin/second-brain-tools.ts`
 - integrate with `src/tools/executor.ts`
-- optionally refactor existing contacts/email tools to share `People` primitives
+- optionally refactor existing contacts/email tools to share `Contacts` primitives
 
 ### Skills and prompt material
 

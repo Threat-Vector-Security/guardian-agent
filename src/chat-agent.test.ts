@@ -1819,7 +1819,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     const content = typeof result === 'string' ? result : result?.content ?? '';
-    expect(content).toContain('People in Second Brain matching "Jordan Lee":');
+    expect(content).toContain('Contacts in Second Brain matching "Jordan Lee":');
     expect(content).toContain('Jordan Lee - jordan.lee@example.com · Design Lead · Harbor Labs');
     expect(content).not.toContain('VentraIP Australia');
   });
@@ -3922,7 +3922,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-person-create',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a person in my Second Brain named "Smoke Test Person" with email "smoke@example.com".',
+        content: 'Create a contact in my Second Brain named "Smoke Test Person" with email "smoke@example.com".',
         timestamp: Date.now(),
       },
       ctx,
@@ -3931,7 +3931,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         confidence: 'high',
-        summary: 'Creates a local person.',
+        summary: 'Creates a local contact.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -3940,7 +3940,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Person created: Smoke Test Person');
+    expect((result as { content: string }).content).toBe('Contact created: Smoke Test Person');
     expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
       kind: 'second_brain_focus',
       payload: {
@@ -3995,7 +3995,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-person-create-unquoted',
         userId: 'owner',
         channel: 'web',
-        content: `Create a person in my Second Brain${longWhitespace}Angela Lee ... phone number 0887 895 687`,
+        content: `Create a contact in my Second Brain${longWhitespace}Angela Lee ... phone number 0887 895 687`,
         timestamp: Date.now(),
       },
       ctx,
@@ -4004,7 +4004,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         confidence: 'high',
-        summary: 'Creates a local person.',
+        summary: 'Creates a local contact.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4013,7 +4013,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Person created: Angela Lee');
+    expect((result as { content: string }).content).toBe('Contact created: Angela Lee');
   });
 
   it('creates a local Second Brain person with structured phone and location fields', async () => {
@@ -4063,7 +4063,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-person-create-structured',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a person in my Second Brain named "Jordan Lee" with email "jordan.lee@example.com", phone "+61 409 555 111", title "Design Lead", company "Harbor Labs", and location "Brisbane".',
+        content: 'Create a contact in my Second Brain named "Jordan Lee" with email "jordan.lee@example.com", phone "+61 409 555 111", title "Design Lead", company "Harbor Labs", and location "Brisbane".',
         timestamp: Date.now(),
       },
       ctx,
@@ -4072,7 +4072,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         confidence: 'high',
-        summary: 'Creates a local person.',
+        summary: 'Creates a local contact.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4081,7 +4081,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Person created: Jordan Lee');
+    expect((result as { content: string }).content).toBe('Contact created: Jordan Lee');
   });
 
   it('creates a local Second Brain person directly from pasted multiline fields', async () => {
@@ -4130,7 +4130,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-person-create-multiline',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a person in my Second Brain named "Jordan Lee" with  \n  email "jordan.lee@example.com", title "Design Lead", company   \n  "Harbor Labs", and notes "Owner for the Harbor launch review."',
+        content: 'Create a contact in my Second Brain named "Jordan Lee" with  \n  email "jordan.lee@example.com", title "Design Lead", company   \n  "Harbor Labs", and notes "Owner for the Harbor launch review."',
         timestamp: Date.now(),
       },
       ctx,
@@ -4139,7 +4139,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         confidence: 'high',
-        summary: 'Creates a local person.',
+        summary: 'Creates a local contact.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4148,7 +4148,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Person created: Jordan Lee');
+    expect((result as { content: string }).content).toBe('Contact created: Jordan Lee');
   });
 
   it('creates a clarification pending action when person create is missing both name and email', async () => {
@@ -4187,7 +4187,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-person-create-missing',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a person in my Second Brain.',
+        content: 'Create a contact in my Second Brain.',
         surfaceId: 'owner',
         timestamp: Date.now(),
       },
@@ -4197,7 +4197,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         confidence: 'high',
-        summary: 'Creates a local person.',
+        summary: 'Creates a local contact.',
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
@@ -4206,7 +4206,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('To create a local person, I need at least a name or email address.');
+    expect((result as { content: string }).content).toBe('To create a local contact, I need at least a name or email address.');
     expect((result as { metadata?: Record<string, unknown> }).metadata?.pendingAction).toMatchObject({
       blocker: {
         kind: 'clarification',
@@ -4419,7 +4419,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'update',
         confidence: 'high',
-        summary: 'Updates a local person.',
+        summary: 'Updates a local contact.',
         turnRelation: 'follow_up',
         resolution: 'ready',
         missingFields: [],
@@ -4444,7 +4444,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Person updated: Smoke Test Person');
+    expect((result as { content: string }).content).toBe('Contact updated: Smoke Test Person');
     expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
       kind: 'second_brain_focus',
       payload: {
