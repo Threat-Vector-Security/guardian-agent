@@ -7,6 +7,7 @@ import {
   findSuspendedApprovalState,
   normalizeApprovalContinuationScope,
   readApprovalOutcomeContinuationMetadata,
+  shouldContinueConversationAfterApprovalDecision,
   selectSuspendedOriginalMessage,
 } from './approval-continuations.js';
 
@@ -80,5 +81,22 @@ describe('approval continuations', () => {
       decision: 'approved',
       resultMessage: 'Search completed.',
     });
+  });
+
+  it('continues approved suspended work even when the approved tool later reports failure', () => {
+    expect(shouldContinueConversationAfterApprovalDecision({
+      decision: 'approved',
+      hasContinuation: true,
+    })).toBe(true);
+
+    expect(shouldContinueConversationAfterApprovalDecision({
+      decision: 'denied',
+      hasContinuation: true,
+    })).toBe(false);
+
+    expect(shouldContinueConversationAfterApprovalDecision({
+      decision: 'approved',
+      hasContinuation: false,
+    })).toBe(false);
   });
 });

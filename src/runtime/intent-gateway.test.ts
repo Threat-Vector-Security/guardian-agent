@@ -195,6 +195,83 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
+  it('recovers explicit coding-backend requests when the user says "use the Codex coding assistant"', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'In the current attached coding session, use the Codex coding assistant to run the unit tests for the tools executor by executing npm test -- src/tools/executor.test.ts.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'This looks like coding work, but I need approval first.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('recovers explicit code-test execution requests from an unstructured gateway response without requiring an external backend', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'In the current attached coding session, run the unit tests for the tools executor by executing npm test -- src/tools/executor.test.ts.',
+        channel: 'cli',
+      },
+      async () => ({
+        content: 'This seems like coding work.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.codingBackend).toBeUndefined();
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('drops generic "current attached" session targets from structured gateway output', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'In the current attached coding session, use the Codex coding assistant to run the unit tests for the tools executor by executing npm test -- src/tools/executor.test.ts.',
+        channel: 'cli',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          operation: 'run',
+          confidence: 'high',
+          resolution: 'ready',
+          sessionTarget: 'current attached',
+          codingBackend: 'codex',
+          codingBackendRequested: true,
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
+  });
+
   it('recovers local Second Brain calendar reads from an unstructured gateway response', async () => {
     const gateway = new IntentGateway();
 

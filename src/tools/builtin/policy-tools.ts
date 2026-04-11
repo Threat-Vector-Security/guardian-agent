@@ -49,7 +49,8 @@ export function registerBuiltinPolicyTools(context: PolicyToolRegistrarContext):
       name: 'update_tool_policy',
       description: `Update tool sandbox policy (allowed paths, commands, or domains). Always requires user approval regardless of policy mode. ` +
         `Enabled actions: ${enabledActions.join(', ')}. ` +
-        `Use this when the user asks to grant access to a directory, allow a command, or add a domain.`,
+        `Use this when the user asks to grant access to a directory, allow a command, or add a domain. ` +
+        `DO NOT use this to unblock package launchers like 'npx' or 'npm exec'; those are permanently blocked. Use direct binaries or package scripts instead.`,
       shortDescription: 'Update tool sandbox policy (paths, commands, domains).',
       risk: 'external_post',
       category: 'system',

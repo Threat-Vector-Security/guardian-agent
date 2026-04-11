@@ -369,10 +369,10 @@ export class WindowsDefenderProvider {
       return { success: false, message: 'Windows Defender scans are only available on Windows hosts.' };
     }
     const command = input.type === 'quick'
-      ? 'Start-MpScan -ScanType QuickScan'
+      ? `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType QuickScan`
       : input.type === 'full'
-        ? 'Start-MpScan -ScanType FullScan'
-        : `Start-MpScan -ScanType CustomScan -ScanPath ${escapePowerShellString(input.path ?? '')}`;
+        ? `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType FullScan`
+        : `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType CustomScan -ScanPath ${escapePowerShellString(input.path ?? '')}`;
     await this.runPowerShell(command);
     return { success: true, message: `Windows Defender ${input.type} scan requested.` };
   }
@@ -381,7 +381,7 @@ export class WindowsDefenderProvider {
     if (this.platform !== 'win32') {
       return { success: false, message: 'Windows Defender signature updates are only available on Windows hosts.' };
     }
-    await this.runPowerShell('Update-MpSignature');
+    await this.runPowerShell(`$ProgressPreference = 'SilentlyContinue'; Update-MpSignature`);
     return { success: true, message: 'Windows Defender signature update requested.' };
   }
 

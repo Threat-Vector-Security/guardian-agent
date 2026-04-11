@@ -212,11 +212,11 @@ import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
 import { normalizeCodeSessionAgentId, resolveConfiguredAgentId } from './runtime/agent-target-resolution.js';
 import {
-  clearApprovalIdFromPendingAction,
   PendingActionStore,
   reconcilePendingApprovalAction,
   summarizePendingActionForGateway,
 } from './runtime/pending-actions.js';
+import { shouldContinueConversationAfterApprovalDecision } from './runtime/approval-continuations.js';
 import {
   ContinuityThreadStore,
   summarizeContinuityThreadForGateway,
@@ -1592,9 +1592,7 @@ function buildDashboardCallbacks(
       input.actorRole ?? 'owner',
       input.reason,
     );
-    if (result.success || input.decision === 'denied') {
-      clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId);
-    } else if (pendingActionForApproval?.blocker.kind === 'approval' && /not found/i.test(result.message ?? '')) {
+    if (pendingActionForApproval?.blocker.kind === 'approval') {
       const liveApprovalIds = toolExecutor.listPendingApprovalIdsForUser(
         pendingActionForApproval.scope.userId,
         pendingActionForApproval.scope.channel,
@@ -1629,7 +1627,10 @@ function buildDashboardCallbacks(
     const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
       || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
     const shouldContinue = continueConversation || continueAutomation;
-    const allowContinuation = result.success && shouldContinue;
+    const allowContinuation = shouldContinueConversationAfterApprovalDecision({
+      decision: input.decision,
+      hasContinuation: shouldContinue,
+    });
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
     if (allowContinuation) {
       continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;

@@ -40,6 +40,8 @@ const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
 const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
+const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;
+const APPROVAL_DENY_PATTERN = /^(?:deny|denied|no|n|reject|decline|cancel)\b/i;
 
 interface PendingApprovalSummary {
   id: string;
@@ -570,7 +572,7 @@ export class CLIChannel implements ChannelAdapter {
   // ─── Message handling ────────────────────────────────────────
 
   private async handleUserMessage(text: string): Promise<void> {
-    if (this.pendingInlineApprovalState && /^(y|yes|approve|ok|sure|go ahead|n|no|deny)\b/i.test(text.trim())) {
+    if (this.pendingInlineApprovalState && (APPROVAL_CONFIRM_PATTERN.test(text.trim()) || APPROVAL_DENY_PATTERN.test(text.trim()))) {
       const inlineState = this.pendingInlineApprovalState;
       this.pendingInlineApprovalState = null;
       this.pendingPromptResolver = null;
@@ -688,7 +690,7 @@ export class CLIChannel implements ChannelAdapter {
     agentId?: string,
     depth = 0,
   ): Promise<void> {
-    const decision = /^(y|yes|approve|ok|sure|go ahead)\b/i.test(answer.trim()) ? 'approved' : 'denied';
+    const decision = APPROVAL_CONFIRM_PATTERN.test(answer.trim()) ? 'approved' : 'denied';
     const approvalDecisionHandler = this.dashboard?.onToolsApprovalDecision;
     if (!approvalDecisionHandler) return;
 

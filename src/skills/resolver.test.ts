@@ -804,4 +804,22 @@ This should not load.
     expect(resolved[0]?.id).toBe('writing-plans');
     expect(resolvedIds).toContain('coding-workspace');
   });
+
+  it('separates explicit external coding backend requests from repo-local coding workspace guidance', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Use the Codex coding assistant to run the unit tests for src/tools/executor.test.ts in the current coding session.',
+      codeSessionAttached: true,
+      intentRoute: 'coding_task',
+      intentEntities: { codingBackend: 'codex' },
+    }));
+    const resolvedIds = resolved.map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('coding-backend-orchestration');
+    expect(resolvedIds).toContain('coding-workspace');
+    expect(resolved[0]?.id).toBe('coding-backend-orchestration');
+  });
 });

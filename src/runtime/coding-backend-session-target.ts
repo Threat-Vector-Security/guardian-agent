@@ -3,6 +3,28 @@ import {
   type CodeSessionTargetRecord,
 } from './code-session-targets.js';
 
+const GENERIC_SESSION_TARGET_TOKENS = new Set([
+  'a',
+  'active',
+  'an',
+  'attached',
+  'code',
+  'coding',
+  'current',
+  'currently',
+  'my',
+  'project',
+  'repo',
+  'repository',
+  'session',
+  'sessions',
+  'that',
+  'the',
+  'this',
+  'workspace',
+  'workspaces',
+]);
+
 export type CodingBackendSessionTargetResolution =
   | {
       status: 'none';
@@ -31,7 +53,7 @@ export function resolveCodingBackendSessionTarget(input: {
   currentSessionId?: string | null;
   sessions: CodeSessionTargetRecord[];
 }): CodingBackendSessionTargetResolution {
-  const requestedSessionTarget = input.requestedSessionTarget?.trim();
+  const requestedSessionTarget = normalizeRequestedSessionTarget(input.requestedSessionTarget);
   const currentSession = input.currentSessionId
     ? input.sessions.find((session) => session.id === input.currentSessionId)
     : undefined;
@@ -67,4 +89,22 @@ export function resolveCodingBackendSessionTarget(input: {
     targetSession: resolved.session,
     ...(currentSession ? { currentSession } : {}),
   };
+}
+
+function normalizeRequestedSessionTarget(value?: string | null): string | undefined {
+  if (!value) return undefined;
+  const cleaned = value
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/^[Tt]he\s+/, '')
+    .replace(/[.,!?;:]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return undefined;
+  const semanticTokens = cleaned
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean)
+    .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
+  return semanticTokens.length > 0 ? cleaned : undefined;
 }

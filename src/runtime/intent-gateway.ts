@@ -1035,9 +1035,9 @@ function normalizeIntentGatewayDecision(
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
-  const sessionTarget = typeof parsed.sessionTarget === 'string' && parsed.sessionTarget.trim()
-    ? parsed.sessionTarget.trim()
-    : undefined;
+  const sessionTarget = cleanInferredSessionTarget(
+    typeof parsed.sessionTarget === 'string' ? parsed.sessionTarget : undefined,
+  );
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
   const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
@@ -1720,7 +1720,11 @@ function repairUnavailableIntentGatewayDecision(
 
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
   'a',
+  'active',
   'an',
+  'attached',
+  'current',
+  'currently',
   'the',
   'my',
   'this',
@@ -1763,16 +1767,16 @@ function inferExplicitCodingBackendRequest(
 
 function inferRequestedCodingBackend(normalized: string): string | undefined {
   if (!normalized) return undefined;
-  if (/\b(?:use|using|with|via|run|launch|start)\s+(?:openai\s+)?codex(?:\s+cli)?\b/.test(normalized)) {
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?(?:openai\s+)?codex(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
     return 'codex';
   }
-  if (/\b(?:use|using|with|via|run|launch|start)\s+claude(?:\s+code)?\b/.test(normalized)) {
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?claude(?:\s+code)?(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
     return 'claude-code';
   }
-  if (/\b(?:use|using|with|via|run|launch|start)\s+gemini(?:\s+cli)?\b/.test(normalized)) {
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?gemini(?:\s+cli)?(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
     return 'gemini-cli';
   }
-  if (/\b(?:use|using|with|via|run|launch|start)\s+aider\b/.test(normalized)) {
+  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?aider(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
     return 'aider';
   }
   return undefined;
@@ -1847,6 +1851,18 @@ function inferExplicitCodingTaskOperation(
 ): IntentGatewayOperation | null {
   if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
   if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  if (
+    /\b(?:run|execute|start|watch)\b/.test(normalized)
+    && /\b(?:tests?|test suite|unit tests?|build|compile|lint|check)\b/.test(normalized)
+  ) {
+    return 'run';
+  }
+  if (
+    /\b(?:npm|pnpm|yarn|bun|npx|vitest|jest|pytest|cargo|go|dotnet|mvn|gradle)\b/.test(normalized)
+    && /\b(?:test|build|lint|check|run)\b/.test(normalized)
+  ) {
+    return 'run';
+  }
   if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
     return 'search';
   }

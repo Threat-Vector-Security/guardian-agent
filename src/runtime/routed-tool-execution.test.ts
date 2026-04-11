@@ -36,6 +36,22 @@ describe('routed tool execution', () => {
     expect(section?.content).toContain('Do not use shell_safe for grep, git grep, cat, sed');
   });
 
+  it('adds external-backend guidance for explicit coding backend requests', () => {
+    const section = buildRoutedIntentAdditionalSection(repoDecision({
+      operation: 'run',
+      preferredTier: 'local',
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        codingBackend: 'codex',
+        codingBackendRequested: true,
+      },
+    }));
+
+    expect(section?.content).toContain('external coding backend "codex"');
+    expect(section?.content).toContain('Use coding_backend_run for the main execution step');
+    expect(section?.content).toContain('verify the result with code_git_diff, code_test, code_build, or code_lint');
+  });
+
   it('denies grep-style shell inspection during repo-grounded coding review turns', () => {
     const prepared = prepareToolExecutionForIntent({
       toolName: 'shell_safe',
