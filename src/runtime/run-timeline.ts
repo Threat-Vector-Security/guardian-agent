@@ -1,4 +1,5 @@
 import type { PlaybookRunRecord } from './connectors.js';
+import type { CodingBackendProgressEvent } from './coding-backend-service.js';
 import type {
   CodeSessionPendingApproval,
   CodeSessionRecentJob,
@@ -352,6 +353,29 @@ export class RunTimelineStore {
     }
   }
 
+  ingestCodingBackendProgress(event: CodingBackendProgressEvent): void {
+    const runId = nonEmptyText(event.runId) ?? resolveRunId(event.codeSessionId, event.requestId);
+    const existing = this.runs.get(runId);
+    const shouldSetBaseStatus = shouldUseCodeSessionBaseStatus(existing);
+    const summary = existing?.detail.summary;
+
+    this.commitRun(runId, {
+      ...(shouldSetBaseStatus
+        ? { baseStatus: mapCodingBackendProgressStatus(event.kind) }
+        : {}),
+      summary: {
+        codeSessionId: event.codeSessionId,
+        groupId: summary?.groupId ?? `code-session:${event.codeSessionId}`,
+        kind: summary?.kind ?? 'code_session',
+        title: summary?.title ?? `Coding backend: ${event.backendName}`,
+        subtitle: summary?.subtitle ?? truncateText(event.task, 160),
+        startedAt: summary?.startedAt ?? event.timestamp,
+        tags: ['coding-backend', event.backendId],
+      },
+      items: [buildCodingBackendProgressItem(runId, event)],
+    });
+  }
+
   syncPlaybookRuns(runs: PlaybookRunRecord[]): void {
     for (const run of Array.isArray(runs) ? runs : []) {
       this.commitRun(run.runId, {
@@ -688,6 +712,72 @@ function buildVerificationItem(runId: string, entry: CodeSessionVerificationEntr
   };
 }
 
+function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgressEvent): DashboardRunTimelineItem {
+  switch (event.kind) {
+    case 'started':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_started',
+        status: 'running',
+        source: 'code_session',
+        title: `Delegated to ${event.backendName}`,
+        detail: nonEmptyText(event.detail),
+        toolName: 'coding_backend_run',
+      };
+    case 'progress':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'note',
+        status: 'running',
+        source: 'code_session',
+        title: `${event.backendName} is working`,
+        detail: nonEmptyText(event.detail),
+        toolName: 'coding_backend_run',
+      };
+    case 'completed':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_completed',
+        status: 'succeeded',
+        source: 'code_session',
+        title: `${event.backendName} completed`,
+        detail: nonEmptyText(event.detail),
+        toolName: 'coding_backend_run',
+      };
+    case 'timed_out':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_completed',
+        status: 'failed',
+        source: 'code_session',
+        title: `${event.backendName} timed out`,
+        detail: nonEmptyText(event.detail),
+        toolName: 'coding_backend_run',
+      };
+    case 'failed':
+    default:
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_completed',
+        status: 'failed',
+        source: 'code_session',
+        title: `${event.backendName} failed`,
+        detail: nonEmptyText(event.detail),
+        toolName: 'coding_backend_run',
+      };
+  }
+}
+
 function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTimelineItem[] {
   const items: DashboardRunTimelineItem[] = [{
     id: `trace:${trace.requestId}:queued`,
@@ -995,6 +1085,20 @@ function mapScheduledTaskStatus(status: 'succeeded' | 'failed' | 'pending_approv
     case 'succeeded':
     default:
       return 'completed';
+  }
+}
+
+function mapCodingBackendProgressStatus(kind: CodingBackendProgressEvent['kind']): DashboardRunStatus {
+  switch (kind) {
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    case 'timed_out':
+      return 'failed';
+    case 'started':
+    case 'progress':
+    default:
+      return 'running';
   }
 }
 

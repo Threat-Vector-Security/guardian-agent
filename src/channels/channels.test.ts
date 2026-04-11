@@ -10,7 +10,13 @@ import type { UserMessage, AgentResponse } from '../agent/types.js';
 import { randomUUID } from 'node:crypto';
 
 function approvalPendingActionMetadata(
-  approvals: Array<{ id: string; toolName: string; argsPreview: string }>,
+  approvals: Array<{
+    id: string;
+    toolName: string;
+    argsPreview: string;
+    requestId?: string;
+    codeSessionId?: string;
+  }>,
 ): Record<string, unknown> {
   return {
     pendingAction: {
@@ -54,7 +60,7 @@ describe('CLIChannel', () => {
     input.write('Hello world\n');
 
     // Give async handler time to process
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     expect(received.length).toBe(1);
     expect(received[0].content).toBe('Hello world');
@@ -106,7 +112,7 @@ describe('CLIChannel', () => {
     }));
 
     input.write('create it\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('[external] Created the workflow.');
@@ -205,7 +211,7 @@ describe('CLIChannel', () => {
     output.read();
 
     input.write('inspect repo\n');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('[progress] Inspecting workspace — fs_list');
@@ -214,6 +220,152 @@ describe('CLIChannel', () => {
     expect(text).not.toContain('Started chat');
     expect(text.match(/\[progress\] Inspecting workspace — fs_list/g)?.length ?? 0).toBe(1);
     expect(text).toContain('[frontier] Completed.');
+
+    await cli.stop();
+  });
+
+  it('shows shared run.timeline progress from dashboard SSE subscriptions in CLI', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let sseListener: ((event: { type: string; data: unknown }) => void) | null = null;
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onSSESubscribe: (listener) => {
+          sseListener = listener as typeof sseListener;
+          return () => {
+            sseListener = null;
+          };
+        },
+        onStreamDispatch: async (_agentId, msg) => {
+          const runId = msg.requestId || 'cli-progress-run';
+          setTimeout(() => {
+            sseListener?.({
+              type: 'run.timeline',
+              data: {
+                summary: { runId, status: 'running' },
+                items: [{
+                  id: 'inspect',
+                  runId,
+                  type: 'tool_call_started',
+                  status: 'running',
+                  source: 'system',
+                  timestamp: Date.now(),
+                  title: 'Inspecting workspace',
+                  detail: 'fs_list',
+                }],
+              },
+            });
+          }, 5);
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return {
+            requestId: runId,
+            runId,
+            content: 'Completed.',
+            metadata: {
+              responseSource: {
+                locality: 'external',
+                providerName: 'anthropic',
+              },
+            },
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 175));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[progress] Inspecting workspace — fs_list');
+    expect(text).toContain('[frontier] Completed.');
+
+    await cli.stop();
+  });
+
+  it('shows live progress while an approved CLI tool continuation is running', async () => {
+    let sseListener: ((event: { type: string; data: unknown }) => void) | null = null;
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const sendCliCommand = async (cmd: string) => {
+      input.write(`${cmd}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    };
+    const cli = new CLIChannel({
+      input,
+      output,
+      defaultAgent: 'agent-1',
+      dashboard: {
+        onAgents: () => [{
+          id: 'agent-1',
+          name: 'Agent 1',
+          state: 'ready',
+          capabilities: [],
+        }],
+        onSSESubscribe: (listener) => {
+          sseListener = listener as typeof sseListener;
+          return () => {
+            sseListener = null;
+          };
+        },
+        onDispatch: async () => ({
+          content: 'Waiting for approval to run codex.',
+          metadata: approvalPendingActionMetadata([
+            {
+              id: 'approval-codex-1',
+              toolName: 'coding_backend_run',
+              argsPreview: '{"backend":"codex"}',
+              requestId: 'req-codex-1',
+              codeSessionId: 'session-1',
+            },
+          ]),
+        }),
+        onToolsApprovalDecision: async () => {
+          sseListener?.({
+            type: 'run.timeline',
+            data: {
+              summary: { runId: 'req-codex-1', codeSessionId: 'session-1', status: 'running' },
+              items: [{
+                id: 'delegate',
+                runId: 'req-codex-1',
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'code_session',
+                timestamp: Date.now(),
+                title: 'Delegated to OpenAI Codex CLI',
+                detail: 'Create demo file',
+              }],
+            },
+          });
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return {
+            success: true,
+            message: "Tool 'coding_backend_run' completed.",
+            displayMessage: 'OpenAI Codex CLI completed.',
+            continuedResponse: {
+              content: 'Created demo file.',
+            },
+          };
+        },
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCliCommand('/chat agent-1');
+    output.read();
+    await sendCliCommand('Use Codex to create the demo file.');
+    await sendCliCommand('y');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('Waiting for approval to run codex.');
+    expect(text).toContain('[progress] Delegated to OpenAI Codex CLI — Create demo file');
+    expect(text).toContain('✓ coding_backend_run: OpenAI Codex CLI completed.');
+    expect(text).toContain('Created demo file.');
 
     await cli.stop();
   });
@@ -230,7 +382,7 @@ describe('CLIChannel', () => {
     await cli.start(async () => ({ content: 'ok' }));
 
     input.write('/agents\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('ChatAgent');
@@ -256,7 +408,7 @@ describe('CLIChannel', () => {
     output.read();
 
     input.write('/kill\n');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(onKillswitch).toHaveBeenCalledTimes(1);
@@ -280,7 +432,7 @@ describe('CLIChannel', () => {
     await cli.start(async () => ({ content: 'ok' }));
 
     input.write('/status\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('yes');
@@ -305,7 +457,7 @@ describe('CLIChannel', () => {
     await cli.start(handler);
 
     input.write('/help\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     // /help should not be sent as a message
     expect(received.length).toBe(0);
@@ -327,9 +479,9 @@ describe('CLIChannel', () => {
     await cli.start(handler);
 
     input.write('/approve abc-123\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
     input.write('/deny abc-456\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     expect(received.length).toBe(2);
     expect(received[0].content).toBe('/approve abc-123');
@@ -347,7 +499,7 @@ describe('CLIChannel', () => {
     await cli.start(async () => ({ content: 'ok' }));
 
     input.write('/exit\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('Shutting down');
@@ -363,7 +515,7 @@ describe('CLIChannel', () => {
     await cli.start(async () => ({ content: 'ok' }));
 
     input.write('/foobar\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('Unknown command');
@@ -401,7 +553,7 @@ describe('CLIChannel', () => {
 
     input.write('hello world\n');
     input.write('/status\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const saved = readFileSync(historyPath, 'utf-8');
     expect(saved).toBe('/status\n');
@@ -679,7 +831,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
 
   const sendCommand = async (input: PassThrough, cmd: string) => {
     input.write(`${cmd}\n`);
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
   };
 
   const connectorState = () => ({
@@ -1242,7 +1394,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await sendCommand(input, 'Create a new test file called test50.txt in the s Drive Development Directory.');
     await sendCommand(input, 'y');
     await sendCommand(input, 'y');
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
 
     const text = readOutput(output);
     expect(text).toContain('Waiting for approval to write S:/Development/test50.txt.');
@@ -1307,7 +1459,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await sendCommand(input, 'Create a test file called Test60 in the S Drive development directory.');
     await sendCommand(input, 'y');
     await sendCommand(input, 'y');
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
 
     const text = readOutput(output);
     expect(text).toContain('Waiting for approval to write S:/Development/Test60.txt.');
@@ -1360,9 +1512,9 @@ describe('CLIChannel with DashboardCallbacks', () => {
     readOutput(output);
     await sendCommand(input, 'Create an empty file called Test100 in the S Drive development directory.');
     await sendCommand(input, 'y');
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
     await sendCommand(input, 'What exact tool did you use?');
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
 
     const text = readOutput(output);
     expect(text).toContain('Waiting for approval to write S:/Development/Test100.');
@@ -1406,7 +1558,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     readOutput(output);
     await sendCommand(input, 'Use Codex to create the smoke test file.');
     await sendCommand(input, 'y');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     const text = readOutput(output);
     expect(text).toContain('Waiting for approval to run codex.');
@@ -1455,7 +1607,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     (cli as unknown as { pendingPromptResolver: ((answer: string) => void) | null }).pendingPromptResolver = null;
 
     await sendCommand(input, 'y');
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
 
     const text = readOutput(output);
     expect(decisions).toEqual([{ approvalId: 'approval-leaked-1', decision: 'approved' }]);
@@ -2565,14 +2717,14 @@ describe('CLIChannel with DashboardCallbacks', () => {
 
     // /agents should use legacy format
     input.write('/agents\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
     const text1 = output.read()?.toString() ?? '';
     expect(text1).toContain('ChatAgent');
     expect(text1).toContain('chat');
 
     // /status should use legacy format
     input.write('/status\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
     const text2 = output.read()?.toString() ?? '';
     expect(text2).toContain('yes');
     expect(text2).toContain('enabled');
@@ -2588,7 +2740,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.start(async () => ({ content: 'ok' }));
 
     input.write('/budget\n');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('not available');
 
@@ -4947,7 +5099,7 @@ describe('WebChannel', () => {
 
       // Cleanup
       controller.abort();
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 150));
     });
 
     it('GET /sse should require auth via bearer header or session cookie', async () => {
@@ -4974,7 +5126,7 @@ describe('WebChannel', () => {
       });
       expect(res3.status).toBe(200);
       controller.abort();
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 150));
     });
 
     it('WebChannel.send should emit assistant.notice over SSE', async () => {
@@ -5007,7 +5159,7 @@ describe('WebChannel', () => {
       expect(payload).toContain('Scheduled assistant report');
 
       controller.abort();
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 150));
     });
   });
 

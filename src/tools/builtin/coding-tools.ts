@@ -1271,6 +1271,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         backendId,
         codeSessionId,
         workspaceRoot,
+        requestId: request.requestId,
       });
       return {
         success: result.success,

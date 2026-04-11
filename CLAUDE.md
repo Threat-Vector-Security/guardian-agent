@@ -31,6 +31,8 @@ npx tsx examples/multi-agent.ts      # Multi-agent communication demo
 npx tsx examples/llm-chat.ts         # LLM provider demo
 ```
 
+**Integration Testing (CRITICAL):** Review `docs/guides/INTEGRATION-TEST-HARNESS.md` for full-stack API regression testing, including guidance for cross-platform (Windows/Ubuntu/WSL) execution and detailed Ollama configurations (Local vs. Managed Cloud).
+
 **Requirements:** Node.js >= 20.0.0, ESM (`"type": "module"` in package.json).
 
 ## Architecture

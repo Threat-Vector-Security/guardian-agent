@@ -1470,6 +1470,8 @@ export interface DashboardCallbacks {
     toolName: string;
     argsPreview: string;
     actionLabel?: string;
+    requestId?: string;
+    codeSessionId?: string;
   }>;
   onPendingActionCurrent?: (args: {
     userId: string;

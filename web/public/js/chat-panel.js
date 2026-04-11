@@ -513,7 +513,13 @@ export async function initChatPanel(container) {
     }
   });
 
-  const beginApprovalProgress = (sessionId, requestId) => {
+  const beginApprovalProgress = (tracking) => {
+    const sessionId = typeof tracking?.codeSessionId === 'string' && tracking.codeSessionId.trim()
+      ? tracking.codeSessionId.trim()
+      : '';
+    const requestId = typeof tracking?.requestId === 'string' && tracking.requestId.trim()
+      ? tracking.requestId.trim()
+      : '';
     if (!history) {
       return {
         setLabel: () => {},
@@ -536,7 +542,10 @@ export async function initChatPanel(container) {
     history.scrollTop = history.scrollHeight;
 
     const onRunTimeline = (data) => {
-      if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: sessionId })) return;
+      const matches = sessionId
+        ? matchesRunTimelineRequest(data, { codeSessionId: sessionId })
+        : matchesRunTimelineRequest(data, { requestId });
+      if (!matches) return;
       updateActiveChatIndicatorTimeline(data);
       history.scrollTop = history.scrollHeight;
     };
@@ -567,7 +576,14 @@ export async function initChatPanel(container) {
     const chatHistory = getHistory(historyKey);
     const focusedSessionId = currentCodeSessionId;
     const continuationRequestId = decision === 'approved' ? createClientRequestId() : '';
-    const progress = decision === 'approved' ? beginApprovalProgress(focusedSessionId, continuationRequestId) : null;
+    const progress = decision === 'approved'
+      ? beginApprovalProgress(resolveApprovalProgressTracking(
+        chatHistory.filter((entry) => entry?.pendingAction).flatMap((entry) => extractPendingActionApprovals(entry.pendingAction))
+          .filter((approval) => approvalIds.includes(approval.id)),
+        focusedSessionId,
+        continuationRequestId,
+      ))
+      : null;
 
     try {
       const results = [];
@@ -1129,7 +1145,24 @@ function extractPendingActionApprovals(pendingAction) {
       toolName: approval.toolName,
       argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
       actionLabel: typeof approval.actionLabel === 'string' ? approval.actionLabel : '',
+      requestId: typeof approval.requestId === 'string' ? approval.requestId : '',
+      codeSessionId: typeof approval.codeSessionId === 'string' ? approval.codeSessionId : '',
     }));
+}
+
+function resolveApprovalProgressTracking(approvals, fallbackCodeSessionId, fallbackRequestId) {
+  const codeSessionId = approvals
+    .map((approval) => typeof approval?.codeSessionId === 'string' ? approval.codeSessionId.trim() : '')
+    .find(Boolean)
+    || (typeof fallbackCodeSessionId === 'string' ? fallbackCodeSessionId.trim() : '');
+  const requestId = approvals
+    .map((approval) => typeof approval?.requestId === 'string' ? approval.requestId.trim() : '')
+    .find(Boolean)
+    || (typeof fallbackRequestId === 'string' ? fallbackRequestId.trim() : '');
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(codeSessionId ? { codeSessionId } : {}),
+  };
 }
 
 function buildSourceBadge(responseSource) {

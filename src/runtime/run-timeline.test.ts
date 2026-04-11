@@ -151,6 +151,53 @@ describe('RunTimelineStore', () => {
     expect(run?.items.some((item) => item.type === 'tool_call_completed' && item.status === 'blocked')).toBe(true);
   });
 
+  it('adds live delegated-coding progress to the correlated run timeline', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-backend',
+      runId: 'req-backend',
+      status: 'running',
+      completedAt: undefined,
+      responsePreview: undefined,
+      nodes: [],
+    }));
+
+    store.ingestCodingBackendProgress({
+      id: 'cb-1',
+      kind: 'started',
+      runId: 'req-backend',
+      requestId: 'req-backend',
+      codeSessionId: 'code-1',
+      sessionId: 'cb-session-1',
+      terminalId: 'term-1',
+      backendId: 'codex',
+      backendName: 'OpenAI Codex CLI',
+      task: 'Inspect the repo and fix the failing tests',
+      timestamp: 120,
+      detail: 'Inspect the repo and fix the failing tests',
+    });
+    store.ingestCodingBackendProgress({
+      id: 'cb-2',
+      kind: 'progress',
+      runId: 'req-backend',
+      requestId: 'req-backend',
+      codeSessionId: 'code-1',
+      sessionId: 'cb-session-1',
+      terminalId: 'term-1',
+      backendId: 'codex',
+      backendName: 'OpenAI Codex CLI',
+      task: 'Inspect the repo and fix the failing tests',
+      timestamp: 135,
+      detail: 'Running targeted tests for auth helpers.',
+    });
+
+    const run = store.getRun('req-backend');
+    expect(run?.summary.codeSessionId).toBe('code-1');
+    expect(run?.summary.status).toBe('running');
+    expect(run?.items.some((item) => item.title === 'Delegated to OpenAI Codex CLI')).toBe(true);
+    expect(run?.items.some((item) => item.title === 'OpenAI Codex CLI is working' && item.detail === 'Running targeted tests for auth helpers.')).toBe(true);
+  });
+
   it('strips the web-ui context prefix from assistant run titles and details', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({
