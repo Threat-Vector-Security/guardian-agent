@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+## Branching (CRITICAL)
+Do not create or switch to a new branch unless the user explicitly asks for it. Default to staying on the current branch, including `main`, unless the user directs otherwise.
+
 ## Project Structure & Module Organization
 `src/` holds the TypeScript app; `src/index.ts` bootstraps the runtime. Subsystems live in `src/runtime/`, `src/guardian/`, `src/tools/`, `src/channels/`, `src/llm/`, and `src/search/`. Keep tests beside the code they cover as `*.test.ts`. The web UI is in `web/public/`. Use `scripts/` for verification harnesses, `docs/` for architecture and specs, `policies/` for rule files, `skills/` for bundled skills, and `native/windows-helper/` for the Rust helper.
 

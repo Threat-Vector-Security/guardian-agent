@@ -3813,7 +3813,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
-  it('creates a local Second Brain person from loose unquoted phrasing', async () => {
+  it('creates a local Second Brain person from loose unquoted phrasing with long whitespace', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
         debug: vi.fn(),
@@ -3850,13 +3850,14 @@ describe('LLMChatAgent direct intent metadata', () => {
       checkAction: vi.fn(),
       capabilities: [],
     };
+    const longWhitespace = ' '.repeat(2048);
 
     const result = await (agent as any).tryDirectSecondBrainWrite(
       {
         id: 'msg-person-create-unquoted',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a person ... Angela Lee ... phone number 0887 895 687',
+        content: `Create a person in my Second Brain${longWhitespace}Angela Lee ... phone number 0887 895 687`,
         timestamp: Date.now(),
       },
       ctx,

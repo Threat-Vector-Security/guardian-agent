@@ -24,6 +24,7 @@ import {
   shouldRefreshChatProviderOptions,
   shouldUseChatProviderSelector,
 } from './chat-mode-selector.js';
+import { createClientRequestId } from './chat-request-id.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import {
   findTargetCodeSession,
@@ -982,13 +983,6 @@ function renderHistory(historyEl, agentId, onApproval) {
   }
   syncActiveChatIndicator(historyEl, agentId);
   historyEl.scrollTop = historyEl.scrollHeight;
-}
-
-function createClientRequestId() {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function createThinkingEl(initialLabel = 'Starting…') {
