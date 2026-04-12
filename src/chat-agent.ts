@@ -7374,7 +7374,7 @@ type DirectIntentShadowCandidate =
         session.workState.workspaceTrust,
         session.workState.workspaceTrustReview,
       ) ?? session.workState.workspaceTrust?.state ?? null,
-      remoteExecutionTargets: this.tools?.getRemoteExecutionTargets(),
+      remoteExecutionTargets: this.tools?.getRemoteExecutionTargets?.(),
     });
     const nextCompactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
       || (
