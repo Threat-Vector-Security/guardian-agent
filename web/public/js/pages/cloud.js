@@ -121,49 +121,67 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'id', label: 'Profile ID', type: 'text', placeholder: 'vercel-prod' },
       { key: 'name', label: 'Name', type: 'text', placeholder: 'Production Vercel' },
       { key: 'credentialRef', label: 'Credential Ref', type: 'text', placeholder: 'cloud.vercel.prod' },
-      { key: 'apiToken', label: 'API Token', type: 'password', configuredKey: 'apiTokenConfigured', placeholder: 'Leave blank to keep existing token' },
-      { key: 'teamId', label: 'Team ID', type: 'text', placeholder: 'team_123' },
-      { key: 'slug', label: 'Default Team/Project Slug', type: 'text', placeholder: 'my-team' },
-      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.vercel.com', help: 'Full root URL for the API. Trailing slash is fine; queries and fragments are not.' },
+      { key: 'apiToken', label: 'Access Token', type: 'password', configuredKey: 'apiTokenConfigured', placeholder: 'Leave blank to keep existing token' },
+      {
+        key: 'teamId',
+        label: 'Team ID',
+        type: 'text',
+        placeholder: 'team_xxx',
+        help: 'Use the Vercel Team ID from the team Settings > General page. Do not enter the team name or slug here.',
+      },
       {
         key: 'sandbox.enabled',
-        label: 'Allow Guardian To Use Vercel Sandbox',
+        label: 'Enable Vercel Sandbox',
         type: 'checkbox',
         help: 'Lets Guardian run bounded higher-risk repo jobs such as dependency install, build, and targeted verification inside a Vercel sandbox instead of on your host.',
       },
       {
         key: 'sandbox.projectId',
-        label: 'Sandbox Project ID',
+        label: 'Project ID',
         type: 'text',
-        placeholder: 'prj_123',
-        help: 'Required for access-token sandbox authentication when Guardian is running locally.',
+        placeholder: 'prj_xxx',
+        help: 'Use the Vercel Project ID of the sandbox project. The project name or slug such as guardian-sandbox will not work here.',
       },
       {
         key: 'sandbox.defaultTimeoutMs',
-        label: 'Sandbox Timeout (ms)',
+        label: 'Default Sandbox Timeout (ms)',
         type: 'number',
         placeholder: '300000',
         help: 'Default sandbox lifetime for one bounded job. Vercel Sandbox currently defaults to 5 minutes and supports up to 5 hours depending on plan.',
       },
       {
         key: 'sandbox.defaultVcpus',
-        label: 'Sandbox vCPUs',
+        label: 'Default vCPUs',
         type: 'number',
         placeholder: '2',
         help: 'Optional default vCPU allocation for the sandbox. Vercel currently supports up to 8 vCPUs.',
       },
       {
         key: 'sandbox.allowNetwork',
-        label: 'Allow Sandbox Network Egress',
+        label: 'Allow Outbound Network',
         type: 'checkbox',
         help: 'Disable this for no-network verification runs. Leave it on for package install or remote dependency verification jobs.',
       },
       {
         key: 'sandbox.allowedDomains',
-        label: 'Sandbox Allowed Domains (JSON)',
+        label: 'Outbound Domain Allowlist (JSON)',
         type: 'json',
         placeholder: '[\n  "registry.npmjs.org",\n  "api.anthropic.com"\n]',
         help: 'Optional outbound domain allowlist when sandbox network egress is enabled. Leave blank to let the sandbox use its normal network posture.',
+      },
+      {
+        key: 'slug',
+        label: 'Team Slug (optional, advanced)',
+        type: 'text',
+        placeholder: 'my-team-slug',
+        help: 'Advanced fallback for non-sandbox Vercel API scope selection. Leave blank for the normal sandbox setup, and do not fill this when Team ID is set.',
+      },
+      {
+        key: 'apiBaseUrl',
+        label: 'API Base URL (advanced)',
+        type: 'text',
+        placeholder: 'https://api.vercel.com',
+        help: 'Full root URL for the API. Trailing slash is fine; queries and fragments are not. Leave the default unless you have a deliberate reason to override it.',
       },
     ],
   },
@@ -695,6 +713,9 @@ function createCloudConnectionSection(def, cloud) {
     const introText = isCreateMode
       ? `Create a new ${def.label} profile here. Stored secret fields are optional on first pass and can be rotated later.`
       : `Editing ${profileLabel}. Leaving secret fields blank preserves any stored values already attached to this profile.`;
+    const providerNotice = def.key === 'vercelProfiles'
+      ? 'For the normal Vercel sandbox setup, enter an Access Token, Team ID (`team_xxx`), enable Vercel Sandbox, and the sandbox Project ID (`prj_xxx`). Leave Team Slug blank unless you are intentionally using the advanced Vercel REST scope mode.'
+      : null;
 
     editorEl.innerHTML = `
       <div class="table-header" style="padding-left:0;padding-right:0;">
@@ -702,6 +723,7 @@ function createCloudConnectionSection(def, cloud) {
         <span class="cfg-header-note">${esc(isCreateMode ? 'Create mode' : 'Edit mode')}</span>
       </div>
       <div class="ops-inline-help cloud-profile-editor-copy">${esc(introText)}</div>
+      ${providerNotice ? `<div class="ops-inline-help cloud-profile-editor-copy" style="margin-top:0.5rem;">${esc(providerNotice)}</div>` : ''}
       <div class="cfg-form-grid" data-fields-grid>
         ${def.fields.map((field) => renderCloudField(def, field, profile)).join('')}
       </div>
@@ -909,6 +931,23 @@ function collectCloudProfile(section, def, existingProfile) {
   }
   if (!nextProfile.name) {
     nextProfile.name = nextProfile.id;
+  }
+  if (def.key === 'vercelProfiles') {
+    const teamId = typeof nextProfile.teamId === 'string' ? nextProfile.teamId.trim() : '';
+    const teamSlug = typeof nextProfile.slug === 'string' ? nextProfile.slug.trim() : '';
+    const sandboxEnabled = nextProfile.sandbox?.enabled === true;
+    const projectId = typeof nextProfile.sandbox?.projectId === 'string'
+      ? nextProfile.sandbox.projectId.trim()
+      : '';
+    if (teamId && teamSlug) {
+      throw new Error('Vercel: use either Team ID or Team Slug, not both. Team ID + Project ID is the recommended sandbox setup.');
+    }
+    if (sandboxEnabled && !teamId) {
+      throw new Error('Vercel sandbox requires Team ID. Leave Team Slug blank and enter the Vercel Team ID (`team_xxx`).');
+    }
+    if (sandboxEnabled && !projectId) {
+      throw new Error('Vercel sandbox requires the Vercel Project ID (`prj_xxx`).');
+    }
   }
 
   return nextProfile;
