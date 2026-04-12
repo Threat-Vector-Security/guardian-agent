@@ -533,6 +533,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The activity rail now also shows the active coding workflow recipe, current stage, and whether verification is still missing, running, failing, or complete.',
                   'When a ready isolated execution target exists, the workflow card can also flag that bounded jobs such as dependency install, build, or targeted verification should run through the configured sandbox instead of on the host.',
                   'When you want that isolated lane explicitly, Guardian can run one bounded repo command in the configured remote sandbox instead of on the host, and the normal code test/build/lint actions can use that same remote lane when requested.',
+                  'Configure the current shipped remote sandbox lane from Cloud > Connections > Vercel. The normal setup is Access Token + Team ID + Project ID with Team Slug left blank.',
                   'Workspace Activity cards now show the same response-source badge treatment as the main chat rail, so delegated coding replies keep their provenance when you inspect them from the workbench.',
                   'Recent session timeline events can also show which answer source produced the final coding reply, so you can tell whether the result came from the local, managed-cloud, or frontier path.',
                   'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',
@@ -810,6 +811,52 @@ export function getReferenceGuide(): ReferenceGuide {
                   'OneDrive — list files, search, get metadata, storage quota.',
                   'Contacts — list, create, update, delete contacts.',
                   'User — get current user profile (display name, email address).',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'vercel-remote-sandbox',
+            title: 'Vercel Remote Sandbox',
+            summary: 'Configure an isolated Vercel sandbox target so Guardian can run bounded coding jobs away from the host.',
+            sections: [
+              {
+                title: 'What This Adds',
+                items: [
+                  'Vercel remote sandboxing is optional. Normal repo browsing and editing can stay local, while higher-risk bounded jobs such as install, build, test, lint, or targeted verification can be pushed into the remote sandbox.',
+                  'Guardian uses the existing Vercel cloud profile model for this. You do not need a separate connector family just for sandboxing.',
+                  'For the normal local Guardian setup, use a Vercel access token plus the Vercel Team ID and the Project ID of the sandbox project.',
+                ],
+              },
+              {
+                title: 'Values To Collect From Vercel',
+                items: [
+                  'Create or choose a dedicated Vercel project for sandbox work, for example `guardian-sandbox`. The project name or slug is not the same thing as the Project ID.',
+                  'Use the current Vercel dashboard left sidebar. First choose the correct team or account scope from the left side, then open Settings > General to copy the Team ID.',
+                  'Open the sandbox project from the left sidebar, then open that project\'s Settings > General to copy the Project ID.',
+                  'Create a Vercel access token from your account settings and make sure it has access to the team that owns the sandbox project.',
+                  'If you also see a team slug or project slug in Vercel, treat those as different identifiers. Guardian\'s normal sandbox setup uses Team ID and Project ID, not the slug.',
+                ],
+              },
+              {
+                title: 'Guardian Setup',
+                items: [
+                  'Open Cloud > Connections > Vercel in Guardian.',
+                  'Enter a Profile ID and Name for the saved Vercel profile.',
+                  'Paste the Vercel access token into Access Token, or use a Credential Ref if you keep the token outside Guardian.',
+                  'Enter the Team ID exactly as shown by Vercel, enable Vercel Sandbox, and paste the Project ID of the sandbox project.',
+                  'Leave Team Slug blank for the normal sandbox setup. Only use Team Slug for advanced non-sandbox Vercel API scope cases where you intentionally are not using Team ID.',
+                  'Leave the default API base URL unless you have a deliberate reason to point Guardian at a different compatible endpoint.',
+                  'If you want bounded package install or dependency verification inside the sandbox, keep outbound network enabled and optionally add a small domain allowlist.',
+                ],
+              },
+              {
+                title: 'Validation',
+                items: [
+                  'Save the Vercel profile from Cloud > Connections first and make sure the profile no longer shows configuration errors.',
+                  'Open Code and attach the repo session you want to work in.',
+                  'Use an explicitly isolated coding action when you want Guardian to verify that the remote sandbox path is live.',
+                  'If a save fails, re-check that Team ID looks like `team_xxx`, Project ID looks like `prj_xxx`, and Team Slug is blank unless you intentionally chose the advanced slug path.',
                 ],
               },
             ],
