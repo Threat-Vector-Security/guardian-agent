@@ -65,6 +65,18 @@ function sanitizeExecutableMode(mode: number): number | undefined {
   return (normalized & 0o111) !== 0 ? normalized : undefined;
 }
 
+function inferExecutableMode(mode: number, content: Buffer): number | undefined {
+  const sanitized = sanitizeExecutableMode(mode);
+  if (sanitized !== undefined) {
+    return sanitized;
+  }
+  const firstLine = content.subarray(0, Math.min(content.length, 256)).toString('utf8');
+  if (firstLine.startsWith('#!')) {
+    return 0o755;
+  }
+  return undefined;
+}
+
 export class RemoteExecutionService implements RemoteExecutionServiceLike {
   private readonly providers = new Map<RemoteExecutionProvider['backendKind'], RemoteExecutionProvider>();
   private readonly defaultMaxFiles: number;
@@ -148,7 +160,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
         localPath: absolutePath,
         remotePath,
         content,
-        mode: sanitizeExecutableMode(stats.mode),
+        mode: inferExecutableMode(stats.mode, content),
       });
     };
 
