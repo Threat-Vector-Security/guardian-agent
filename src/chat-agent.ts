@@ -8677,11 +8677,23 @@ type DirectIntentShadowCandidate =
     const plan = await planner.plan(message.content, decision);
     if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
 
+    const reflector = new (await import('./runtime/planner/reflection.js')).SemanticReflector(
+      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
+    );
+
+    const learningQueue = new (await import('./runtime/planner/learning-queue.js')).ReflectiveLearningQueue(
+      async (type, details) => {
+        console.log(`Proposed ${type}: ${JSON.stringify(details)}`);
+      }
+    );
+
     const orchestrator = new (await import('./runtime/planner/orchestrator.js')).AssistantOrchestrator(
       async (node) => {
         // Just mock execution for Phase 1 as per the plan spec
         return { status: 'mock_success', node: node.id };
-      }
+      },
+      reflector,
+      learningQueue
     );
 
     // Normally we wouldn't await the whole DAG execution synchronously in the chat loop without feedback,
