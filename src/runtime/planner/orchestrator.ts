@@ -1,8 +1,12 @@
 import type { ExecutionPlan, PlanNode } from './types.js';
+import type { SemanticReflector } from './reflection.js';
+import type { ReflectiveLearningQueue } from './learning-queue.js';
 
 export class AssistantOrchestrator {
   constructor(
-    private readonly executeNode: (node: PlanNode) => Promise<unknown>
+    private readonly executeNode: (node: PlanNode) => Promise<unknown>,
+    private readonly reflector?: SemanticReflector,
+    private readonly learningQueue?: ReflectiveLearningQueue
   ) {}
 
   async executePlan(plan: ExecutionPlan): Promise<void> {
@@ -36,6 +40,18 @@ export class AssistantOrchestrator {
           progressMade = true;
           try {
             node.result = await this.executeNode(node);
+
+            // Phase 2: Semantic Reflection
+            if (this.reflector) {
+              const reflection = await this.reflector.evaluateNode(plan.originalObjective, node);
+              if (!reflection.success) {
+                node.status = 'failed';
+                node.result = { originalResult: node.result, reflectionReason: reflection.reason };
+                hasFailures = true;
+                break; // Stop on first semantic failure
+              }
+            }
+
             node.status = 'success';
           } catch (err) {
             node.status = 'failed';
@@ -58,6 +74,14 @@ export class AssistantOrchestrator {
       plan.status = 'failed';
     } else if (allCompleted) {
       plan.status = 'completed';
+    }
+
+    // Phase 2: Post-trajectory evaluation via Learning Queue
+    if (this.learningQueue) {
+      // Fire and forget, or await depending on whether we want to block response
+      await this.learningQueue.evaluateTrajectory(plan).catch(err => {
+        console.error('ReflectiveLearningQueue: Failed to evaluate trajectory:', err);
+      });
     }
   }
 }
