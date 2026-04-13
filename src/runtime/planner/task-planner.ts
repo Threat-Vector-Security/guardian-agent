@@ -46,12 +46,12 @@ PlanNode structure:
   id: string,
   description: string,
   dependencies: string[] // Array of node IDs that must complete first
-  actionType: "tool_call" | "skill_delegation" | "routine_execution",
-  target: string // The specific tool name or skill ID
-  inputPrompt: string // The detailed instruction for this node
+  actionType: "tool_call" | "skill_delegation" | "routine_execution" | "execute_code" | "delegate_task",
+  target: string // The specific tool name, skill ID, language runtime (for execute_code), or worker profile (for delegate_task)
+  inputPrompt: string // The detailed instruction, code payload, or subagent prompt
 }
 
-Remember to delegate complex tasks (like coding) to specific skills rather than trying to micromanage the execution.
+Remember to delegate complex tasks (like coding) to specific skills via "skill_delegation", or spawn a subagent via "delegate_task" with specific bounds. For programmatic transformations or scripts that call managed tools, use "execute_code" instead of trying to chain dozens of tool calls.
 Return ONLY valid JSON.
 `;
     return prompt;

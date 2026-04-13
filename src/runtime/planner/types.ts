@@ -2,7 +2,7 @@ export interface PlanNode {
   id: string;
   description: string;
   dependencies: string[]; // IDs of nodes that must complete first
-  actionType: 'tool_call' | 'skill_delegation' | 'routine_execution';
+  actionType: 'tool_call' | 'skill_delegation' | 'routine_execution' | 'execute_code' | 'delegate_task';
   target: string; // Tool name, skill ID, or routine ID
   inputPrompt: string; // The specific instruction for this node
   status: 'pending' | 'running' | 'success' | 'failed';
