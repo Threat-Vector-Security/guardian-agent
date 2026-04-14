@@ -157,6 +157,7 @@ export async function handleApprovalMessage(input: {
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -398,6 +399,7 @@ export async function handleApprovalMessage(input: {
         turnRelation: pendingAction?.intent.turnRelation,
         resolution: pendingAction?.intent.resolution,
         missingFields: pendingAction?.intent.missingFields,
+        provenance: pendingAction?.intent.provenance,
         entities: pendingAction?.intent.entities,
         resume: pendingAction?.resume,
         codeSessionId: pendingAction?.codeSessionId,

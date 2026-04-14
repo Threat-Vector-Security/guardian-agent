@@ -292,7 +292,15 @@ describe('PendingActionStore', () => {
         route: 'coding_task',
         operation: 'create',
         summary: 'Runs Codex in the current coding workspace.',
+        provenance: {
+          route: 'classifier.primary',
+          operation: 'classifier.primary',
+          entities: {
+            codingBackend: 'resolver.coding',
+          },
+        },
         originalUserContent: 'Use Codex to create a file.',
+        entities: { codingBackend: 'codex' },
       },
       codeSessionId: 'session-1',
     }));
@@ -307,6 +315,12 @@ describe('PendingActionStore', () => {
       operation: 'create',
       summary: 'Runs Codex in the current coding workspace.',
       transferPolicy: 'origin_surface_only',
+      provenance: {
+        route: 'classifier.primary',
+        entities: {
+          codingBackend: 'resolver.coding',
+        },
+      },
     });
     expect(clientMetadata).toMatchObject({
       status: 'pending',
@@ -314,6 +328,14 @@ describe('PendingActionStore', () => {
       codeSessionId: 'session-1',
       blocker: {
         kind: 'approval',
+      },
+      intent: {
+        provenance: {
+          route: 'classifier.primary',
+          entities: {
+            codingBackend: 'resolver.coding',
+          },
+        },
       },
     });
   });
@@ -332,6 +354,13 @@ describe('PendingActionStore', () => {
         summary: 'Lists Google Calendar events for the next 7 days.',
         resolution: 'needs_clarification',
         missingFields: ['provider_auth'],
+        provenance: {
+          route: 'classifier.primary',
+          operation: 'classifier.primary',
+          entities: {
+            calendarTarget: 'resolver.personal_assistant',
+          },
+        },
         originalUserContent: 'List my Google Calendar entries for the next 7 days.',
         entities: {
           calendarTarget: 'gws',
@@ -347,6 +376,12 @@ describe('PendingActionStore', () => {
       summary: 'Lists Google Calendar events for the next 7 days.',
       resolution: 'needs_clarification',
       missingFields: ['provider_auth'],
+      provenance: {
+        route: 'classifier.primary',
+        entities: {
+          calendarTarget: 'resolver.personal_assistant',
+        },
+      },
       entities: {
         calendarTarget: 'gws',
       },

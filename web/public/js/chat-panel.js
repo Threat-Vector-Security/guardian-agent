@@ -615,6 +615,7 @@ export async function initChatPanel(container) {
       const allSucceeded = approvalResponses.every((result) => result?.success !== false);
 
       if (continuedResponses.length > 0) {
+        let activitySummary = captureActiveChatActivitySummary();
         if (allSucceeded) {
           markApprovalUiResolved(approvalIds, decision);
         } else {
@@ -624,7 +625,13 @@ export async function initChatPanel(container) {
           addAgentMessage(immediateMessages.join('\n'));
         }
         for (const response of continuedResponses) {
-          addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+          addAgentMessage(
+            response.content,
+            response.metadata?.pendingAction,
+            response.metadata?.responseSource,
+            activitySummary,
+          );
+          activitySummary = null;
         }
         history.scrollTop = history.scrollHeight;
         return;
@@ -652,7 +659,12 @@ export async function initChatPanel(container) {
           } else {
             markApprovalUiError(approvalIds, summary);
           }
-          addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+          addAgentMessage(
+            response.content,
+            response.metadata?.pendingAction,
+            response.metadata?.responseSource,
+            captureActiveChatActivitySummary(),
+          );
         } catch (err) {
           markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
           history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
@@ -695,10 +707,15 @@ export async function initChatPanel(container) {
    * Append an agent message to the chat, with approval buttons when the
    * response includes structured pending approval data.
    */
-  const addAgentMessage = (content, pendingAction, responseSource) => {
+  const addAgentMessage = (content, pendingAction, responseSource, activitySummary = null) => {
     const chatHistory = getHistory(getHistoryKey());
-    chatHistory.push({ role: 'agent', content, responseSource, pendingAction });
-    history.appendChild(createMessageEl('agent', content, { pendingAction, responseSource, onApproval: handleApproval }));
+    chatHistory.push({ role: 'agent', content, responseSource, pendingAction, activitySummary });
+    history.appendChild(createMessageEl('agent', content, {
+      pendingAction,
+      responseSource,
+      activitySummary,
+      onApproval: handleApproval,
+    }));
   };
 
   const resolvePendingActionForDisplay = async (metadata) => {
@@ -826,16 +843,17 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         clearActiveRequestIfCurrent();
+        const activitySummary = captureActiveChatActivitySummary();
         clearActiveChatIndicator();
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
           .then((pendingAction) => {
-            addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource);
+            addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource, activitySummary);
             notifyTouchedCodeSessions(data?.metadata);
             history.scrollTop = history.scrollHeight;
           })
           .catch(() => {
-            addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource);
+            addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource, activitySummary);
           });
       };
 
@@ -844,9 +862,10 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         clearActiveRequestIfCurrent();
+        const activitySummary = captureActiveChatActivitySummary();
         clearActiveChatIndicator();
         restoreInput();
-        history.appendChild(createMessageEl('error', message || 'Stream error'));
+        history.appendChild(createMessageEl('error', message || 'Stream error', { activitySummary }));
       };
 
       const onRunTimeline = (data) => {
@@ -917,16 +936,18 @@ export async function initChatPanel(container) {
           requestId,
         );
         clearActiveRequestIfCurrent();
+        const activitySummary = captureActiveChatActivitySummary();
         clearActiveChatIndicator();
-        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource, activitySummary);
         notifyTouchedCodeSessions(response?.metadata);
       }
     } catch (err) {
       setActiveRequest(null);
       clearPersistedActiveRequest();
+      const activitySummary = captureActiveChatActivitySummary();
       clearActiveChatIndicator();
       const errorMsg = err.message === 'AUTH_FAILED' ? 'Auth failed' : (err.message || 'Error');
-      history.appendChild(createMessageEl('error', errorMsg));
+      history.appendChild(createMessageEl('error', errorMsg, { activitySummary }));
     }
 
     history.scrollTop = history.scrollHeight;
@@ -994,6 +1015,7 @@ function renderHistory(historyEl, agentId, onApproval) {
     historyEl.appendChild(createMessageEl(msg.role, msg.content, {
       pendingAction: msg.pendingAction,
       responseSource: msg.responseSource,
+      activitySummary: msg.activitySummary,
       onApproval,
     }));
   }
@@ -1016,6 +1038,81 @@ function createThinkingEl(initialLabel = 'Starting…') {
   return el;
 }
 
+function createLiveActivityItemEl(item) {
+  const itemEl = document.createElement('div');
+  itemEl.className = 'chat-live-activity__item';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'chat-live-activity__title';
+  titleEl.textContent = String(item?.title || '').trim();
+  itemEl.appendChild(titleEl);
+
+  const detail = String(item?.detail || '').trim();
+  if (detail) {
+    const detailEl = document.createElement('div');
+    detailEl.className = 'chat-live-activity__detail';
+    detailEl.textContent = detail;
+    itemEl.appendChild(detailEl);
+  }
+
+  return itemEl;
+}
+
+function renderLiveActivityEl(activityEl, activitySummary) {
+  if (!activityEl) return;
+  const items = Array.isArray(activitySummary?.items)
+    ? activitySummary.items.filter((item) => String(item?.title || '').trim())
+    : [];
+  activityEl.replaceChildren();
+  if (items.length === 0) {
+    activityEl.hidden = true;
+    return;
+  }
+  activityEl.hidden = false;
+  for (const item of items) {
+    activityEl.appendChild(createLiveActivityItemEl(item));
+  }
+}
+
+function createPersistedLiveActivityEl(activitySummary) {
+  const items = Array.isArray(activitySummary?.items)
+    ? activitySummary.items.filter((item) => String(item?.title || '').trim())
+    : [];
+  if (items.length === 0) return null;
+
+  const container = document.createElement('div');
+  container.className = 'chat-live-activity chat-live-activity--persisted';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'chat-live-activity__label';
+  labelEl.textContent = 'Recent activity';
+  container.appendChild(labelEl);
+
+  for (const item of items) {
+    container.appendChild(createLiveActivityItemEl(item));
+  }
+
+  return container;
+}
+
+function captureActiveChatActivitySummary() {
+  if (!activeChatIndicator?.timeline) return null;
+  const summary = summarizeTimelineRun(activeChatIndicator.timeline);
+  const items = Array.isArray(summary?.items)
+    ? summary.items
+      .filter((item) => String(item?.title || '').trim())
+      .map((item) => ({
+        title: String(item.title || '').trim(),
+        detail: String(item.detail || '').trim(),
+      }))
+    : [];
+  if (items.length === 0) return null;
+  return {
+    label: String(summary?.label || '').trim(),
+    items,
+  };
+}
+
 function setThinkingLabel(el, label) {
   const labelEl = el?.querySelector?.('.chat-thinking__label');
   if (labelEl) {
@@ -1031,26 +1128,14 @@ function updateThinkingEl(el, run) {
 
   const summary = summarizeTimelineRun(run);
   labelEl.textContent = summary.label;
-  if (summary.items.length === 0) {
-    activityEl.hidden = true;
-    activityEl.innerHTML = '';
-    return;
-  }
-
-  activityEl.hidden = false;
-  activityEl.innerHTML = summary.items.map((item) => `
-    <div class="chat-live-activity__item">
-      <div class="chat-live-activity__title">${esc(item.title)}</div>
-      ${item.detail ? `<div class="chat-live-activity__detail">${esc(item.detail)}</div>` : ''}
-    </div>
-  `).join('');
+  renderLiveActivityEl(activityEl, summary);
 }
 
 function summarizeTimelineRun(run) {
   const items = Array.isArray(run?.items) ? run.items : [];
   const recentItems = [];
   let lastKey = '';
-  for (let index = items.length - 1; index >= 0 && recentItems.length < 4; index -= 1) {
+  for (let index = items.length - 1; index >= 0 && recentItems.length < 6; index -= 1) {
     const item = items[index];
     if (!isMeaningfulLiveItem(item)) continue;
     const normalized = {
@@ -1129,6 +1214,11 @@ function createMessageEl(role, content, opts) {
     body.appendChild(sourceEl);
   }
   body.appendChild(contentEl);
+
+  const activityEl = role === 'user' ? null : createPersistedLiveActivityEl(opts?.activitySummary);
+  if (activityEl) {
+    body.appendChild(activityEl);
+  }
 
   // Render approval buttons from structured metadata (not text parsing)
   const approvals = extractPendingActionApprovals(opts?.pendingAction);

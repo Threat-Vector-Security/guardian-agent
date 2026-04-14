@@ -609,6 +609,7 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
         ...(input.pendingAction.summary ? [`summary: ${input.pendingAction.summary}`] : []),
         ...(input.pendingAction.resolution ? [`resolution: ${input.pendingAction.resolution}`] : []),
         ...(input.pendingAction.missingFields?.length ? [`missing fields: ${input.pendingAction.missingFields.join(', ')}`] : []),
+        ...(input.pendingAction.provenance ? [`provenance: ${JSON.stringify(input.pendingAction.provenance)}`] : []),
         ...(input.pendingAction.entities && Object.keys(input.pendingAction.entities).length > 0
           ? [`entities: ${JSON.stringify(input.pendingAction.entities)}`]
           : []),

@@ -403,7 +403,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian chat can work against one focused coding session at a time on each surface, while still carrying additional referenced workspaces for inspect-only context. In the web UI, use the session cards in `#/code` to choose the current coding session and manage referenced workspaces. In CLI, use `/code current`, `/code attach <sessionId-or-match>`, `/code detach`, and `/code create <workspaceRoot> [| title]`.',
                   'You can also ask Guardian to switch, attach, or detach a coding session in normal chat. The web chat surface stays lightweight by default; session management belongs to the Code Sessions panel.',
                 ],
-                note: 'Web chat and CLI show live request progress while the assistant is working. Delegated coding assistants can surface their latest activity there before the final reply arrives.',
+                note: 'Web chat and CLI show live request progress while the assistant is working. Recent activity is now kept visible alongside the final reply so operators can reconstruct what happened without opening a separate trace first.',
               },
             ],
           },

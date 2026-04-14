@@ -60,6 +60,16 @@ export interface ChatAgentOrchestrationStateDeps {
   tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listPendingApprovalIdsForUser'> | null;
 }
 
+function clonePendingActionIntentProvenance(
+  provenance: PendingActionRecord['intent']['provenance'],
+): PendingActionRecord['intent']['provenance'] {
+  if (!provenance) return undefined;
+  return {
+    ...provenance,
+    ...(provenance.entities ? { entities: { ...provenance.entities } } : {}),
+  };
+}
+
 export class ChatAgentOrchestrationState {
   private readonly stateAgentId: string;
   private pendingActionStore?: PendingActionStore;
@@ -608,6 +618,7 @@ export class ChatAgentOrchestrationState {
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -649,6 +660,7 @@ export class ChatAgentOrchestrationState {
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -677,6 +689,7 @@ export class ChatAgentOrchestrationState {
         ...(input.resolution ? { resolution: input.resolution } : {}),
         ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
         originalUserContent: input.originalUserContent,
+        ...(input.provenance ? { provenance: clonePendingActionIntentProvenance(input.provenance) } : {}),
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
       ...(input.resume ? { resume: input.resume } : {}),
@@ -702,6 +715,7 @@ export class ChatAgentOrchestrationState {
       resolution?: string;
       missingFields?: string[];
       resolvedContent?: string;
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       codeSessionId?: string;
       currentSessionId?: string;
@@ -736,6 +750,7 @@ export class ChatAgentOrchestrationState {
         ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
         originalUserContent: input.originalUserContent,
         ...(input.resolvedContent?.trim() ? { resolvedContent: input.resolvedContent.trim() } : {}),
+        ...(input.provenance ? { provenance: clonePendingActionIntentProvenance(input.provenance) } : {}),
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
       ...(input.resume ? { resume: input.resume } : {}),

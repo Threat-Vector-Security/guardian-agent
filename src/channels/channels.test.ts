@@ -29,6 +29,10 @@ function approvalPendingActionMetadata(
   };
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 describe('CLIChannel', () => {
   it('should start and stop without errors', async () => {
     const input = new PassThrough();
@@ -96,6 +100,30 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('does not coalesce distinct quick turns that are separated beyond the paste gap', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+    const received: UserMessage[] = [];
+
+    await cli.start(async (msg) => {
+      received.push(msg);
+      return { content: `Echo: ${msg.content}` };
+    });
+
+    input.write('First request\n');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    input.write('Second request\n');
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(received.map((msg) => msg.content)).toEqual([
+      'First request',
+      'Second request',
+    ]);
+
+    await cli.stop();
+  });
+
   it('shows response source labels for chat replies', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -116,6 +144,64 @@ describe('CLIChannel', () => {
 
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('[external] Created the workflow.');
+
+    await cli.stop();
+  });
+
+  it('supports legacy pendingApprovals metadata in CLI approval prompts', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const cli = new CLIChannel({
+      input,
+      output,
+      defaultAgent: 'agent-1',
+      dashboard: {
+        onAgents: () => [{
+          id: 'agent-1',
+          name: 'Agent 1',
+          state: 'ready',
+          capabilities: [],
+        }],
+        onDispatch: async () => ({
+          content: 'Waiting for approval to add S:\\Development to allowed paths.',
+          metadata: {
+            pendingApprovals: [
+              {
+                id: 'approval-path-legacy-1',
+                toolName: 'update_tool_policy',
+                argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+              },
+            ],
+          },
+        }),
+        onToolsApprovalDecision: async ({ approvalId, decision }) => {
+          decisions.push({ approvalId, decision });
+          return {
+            success: true,
+            message: "Tool 'update_tool_policy' completed.",
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'ok' }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    input.write('/chat agent-1\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    output.read();
+
+    input.write('Add S Drive Development to the allowed directories.\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    input.write('y\n');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    const text = output.read()?.toString() ?? '';
+    expect(decisions).toEqual([
+      { approvalId: 'approval-path-legacy-1', decision: 'approved' },
+    ]);
+    expect(text).toContain('Waiting for approval to add S:\\Development to allowed paths.');
+    expect(text).toContain('update_tool_policy');
 
     await cli.stop();
   });
@@ -283,6 +369,72 @@ describe('CLIChannel', () => {
     const text = output.read()?.toString() ?? '';
     expect(text).toContain('[progress] Inspecting workspace — fs_list');
     expect(text).toContain('[frontier] Completed.');
+
+    await cli.stop();
+  });
+
+  it('keeps live progress as durable commentary lines in TTY mode', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    Object.assign(output, { isTTY: true });
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onStreamDispatch: async (_agentId, msg, emitSSE) => {
+          const runId = msg.requestId || 'cli-progress-run';
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'inspect',
+                runId,
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Inspecting workspace',
+                detail: 'fs_list',
+              }],
+            },
+          });
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'awaiting_approval' },
+              items: [{
+                id: 'approval',
+                runId,
+                type: 'approval_requested',
+                status: 'warning',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Waiting for approval',
+                detail: 'fs_write',
+              }],
+            },
+          });
+          return {
+            requestId: runId,
+            runId,
+            content: 'Completed.',
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const text = stripAnsi(output.read()?.toString() ?? '');
+    const normalized = text.replace(/\r\n/g, '\n');
+    expect(normalized).toContain('\n[progress] Inspecting workspace — fs_list\n');
+    expect(normalized).toContain('[progress] Waiting for approval — fs_write\n');
+    expect(normalized).toContain('guardian-agent> Completed.');
 
     await cli.stop();
   });

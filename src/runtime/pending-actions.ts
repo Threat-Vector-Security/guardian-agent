@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { normalizeIntentGatewayDecisionProvenance } from './intent/provenance.js';
+import type { IntentGatewayDecisionProvenance } from './intent/types.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 import {
   hasSQLiteDriver,
@@ -67,6 +69,7 @@ export interface PendingActionIntent {
   missingFields?: string[];
   originalUserContent: string;
   resolvedContent?: string;
+  provenance?: IntentGatewayDecisionProvenance;
   entities?: Record<string, unknown>;
 }
 
@@ -171,6 +174,7 @@ function cloneIntent(intent: PendingActionIntent): PendingActionIntent {
   return {
     ...intent,
     ...(intent.missingFields ? { missingFields: [...intent.missingFields] } : {}),
+    ...(intent.provenance ? { provenance: { ...intent.provenance, ...(intent.provenance.entities ? { entities: { ...intent.provenance.entities } } : {}) } } : {}),
     ...(intent.entities ? { entities: { ...intent.entities } } : {}),
   };
 }
@@ -354,6 +358,9 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
       ...(typeof value.intent.resolvedContent === 'string' && value.intent.resolvedContent.trim()
         ? { resolvedContent: value.intent.resolvedContent.trim() }
         : {}),
+      ...(normalizeIntentGatewayDecisionProvenance(value.intent.provenance)
+        ? { provenance: normalizeIntentGatewayDecisionProvenance(value.intent.provenance) }
+        : {}),
       ...(isRecord(value.intent.entities) ? { entities: { ...value.intent.entities } } : {}),
     },
     ...(isRecord(value.resume) && normalizeResumeKind(value.resume.kind)
@@ -385,6 +392,7 @@ export function summarizePendingActionForGateway(
   summary?: string;
   resolution?: string;
   missingFields?: string[];
+  provenance?: IntentGatewayDecisionProvenance;
   entities?: Record<string, unknown>;
   field?: string;
 } | null {
@@ -401,6 +409,7 @@ export function summarizePendingActionForGateway(
     ...(record.intent.summary ? { summary: record.intent.summary } : {}),
     ...(record.intent.resolution ? { resolution: record.intent.resolution } : {}),
     ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
+    ...(record.intent.provenance ? { provenance: cloneIntent(record.intent).provenance } : {}),
     ...(record.intent.entities ? { entities: { ...record.intent.entities } } : {}),
     ...(record.blocker.field ? { field: record.blocker.field } : {}),
   };
@@ -444,6 +453,7 @@ export function toPendingActionClientMetadata(
       ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
       originalUserContent: record.intent.originalUserContent,
       ...(record.intent.resolvedContent ? { resolvedContent: record.intent.resolvedContent } : {}),
+      ...(record.intent.provenance ? { provenance: cloneIntent(record.intent).provenance } : {}),
       ...(record.intent.entities ? { entities: { ...record.intent.entities } } : {}),
     },
   };

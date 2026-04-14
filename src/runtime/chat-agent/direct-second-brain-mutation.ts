@@ -194,6 +194,7 @@ export function buildDirectSecondBrainClarificationResponse(input: {
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
     },
     nowMs?: number,
@@ -221,6 +222,7 @@ export function buildDirectSecondBrainClarificationResponse(input: {
       turnRelation: input.decision.turnRelation,
       resolution: 'needs_clarification',
       missingFields: input.missingFields ?? [],
+      provenance: input.decision.provenance,
       entities: input.toPendingActionEntities({
         ...input.decision.entities,
         ...(input.entities ?? {}),
@@ -279,6 +281,7 @@ export async function executeDirectSecondBrainMutation<TFocusState>(input: {
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -346,6 +349,7 @@ export async function executeDirectSecondBrainMutation<TFocusState>(input: {
         summary: input.summary,
         turnRelation: input.decision.turnRelation,
         resolution: input.decision.resolution,
+        provenance: input.decision.provenance,
         entities: input.toPendingActionEntities(input.decision.entities),
         resume: {
           kind: 'direct_route',

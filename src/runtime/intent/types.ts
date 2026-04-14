@@ -171,6 +171,7 @@ export interface IntentGatewayInput {
     summary?: string;
     resolution?: string;
     missingFields?: string[];
+    provenance?: IntentGatewayDecisionProvenance;
     entities?: Record<string, unknown>;
     prompt: string;
     originalRequest: string;
