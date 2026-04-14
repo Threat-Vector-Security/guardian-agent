@@ -261,6 +261,7 @@ Gateway behavior:
 - short answers like `Use Outlook`, `Codex`, `switch to Test Tactical Game App`, or `okay, now do that` are interpreted against that active pending action before ordinary bounded-history repair logic
 - an active pending action does not automatically make the next turn a follow-up; a clearly different request such as `Check my email.` must still classify as a fresh `new_request`
 - clarification and correction repair run through the shared clarification resolver stage instead of bespoke per-route follow-up handling
+- pending-action summaries now also carry the prior intent provenance so clarification and correction turns can retain source attribution across blocked-work boundaries
 
 Current implementation details:
 - pending action state is a single active slot per logical assistant context, canonical user id, channel, and surface
@@ -494,6 +495,7 @@ The durable routing trace is distinct from the existing run timeline:
 - the routing trace is the low-level decision log for gateway classification, clarification prompts, tier selection, direct-intent candidates, direct tool execution, and final response locality
 - `gateway_classified` entries now carry structured provenance such as route source, operation source, workload-source attribution, and per-entity sources when those were repaired or derived after the initial classifier output
 - `direct_candidates_evaluated` entries are the current capability-resolution trace point for direct lanes and record the routed candidates alongside the gateway provenance that shaped them
+- `clarification_requested` entries now include the routed decision provenance that produced the blocker so operators can correlate the pending field with its route and entity sources
 
 Current routing trace stages include:
 - `incoming_dispatch`

@@ -1513,6 +1513,17 @@ tr:hover td {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.chat-live-activity--persisted {
+  margin-top: 0.85rem;
+}
+
+.chat-live-activity__label {
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .chat-live-activity__item {
   display: flex;
   flex-direction: column;

@@ -41,6 +41,7 @@ const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
 const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
+const CLI_PASTED_MESSAGE_CONTINUATION_GAP_MS = 25;
 const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:deny|denied|no|n|reject|decline|cancel)\b/i;
 
@@ -141,6 +142,39 @@ function extractPendingAction(
   };
 }
 
+function extractLegacyPendingApprovals(response: { content: string; metadata?: Record<string, unknown> }): PendingApprovalSummary[] {
+  return Array.isArray(response.metadata?.pendingApprovals)
+    ? response.metadata.pendingApprovals
+      .filter((approval): approval is PendingApprovalSummary => {
+        return !!approval
+          && typeof approval === 'object'
+          && typeof (approval as Record<string, unknown>).id === 'string'
+          && typeof (approval as Record<string, unknown>).toolName === 'string';
+      })
+      .map((approval) => {
+        const argsPreview = typeof approval.argsPreview === 'string' ? approval.argsPreview : '';
+        const actionLabel = typeof approval.actionLabel === 'string' && approval.actionLabel.trim()
+          ? approval.actionLabel
+          : describePendingApproval({
+              toolName: approval.toolName,
+              argsPreview,
+            });
+        return {
+          id: approval.id,
+          toolName: approval.toolName,
+          argsPreview,
+          ...(actionLabel ? { actionLabel } : {}),
+          ...(typeof approval.requestId === 'string' && approval.requestId.trim()
+            ? { requestId: approval.requestId.trim() }
+            : {}),
+          ...(typeof approval.codeSessionId === 'string' && approval.codeSessionId.trim()
+            ? { codeSessionId: approval.codeSessionId.trim() }
+            : {}),
+        };
+      })
+    : [];
+}
+
 function buildApprovalPendingActionMetadata(approvals: PendingApprovalSummary[]): Record<string, unknown> {
   return {
     pendingAction: {
@@ -157,6 +191,10 @@ function extractPendingApprovals(response: { content: string; metadata?: Record<
   const pendingAction = extractPendingAction(response);
   if (pendingAction?.blocker?.kind === 'approval' && pendingAction.blocker.approvalSummaries?.length) {
     return pendingAction.blocker.approvalSummaries.map((approval) => ({ ...approval }));
+  }
+  const legacyMetadataApprovals = extractLegacyPendingApprovals(response);
+  if (legacyMetadataApprovals.length > 0) {
+    return legacyMetadataApprovals;
   }
   return parseLegacyPendingApprovalContent(response.content);
 }
@@ -400,6 +438,7 @@ export class CLIChannel implements ChannelAdapter {
   private pendingInlineApprovalState: InlineApprovalState | null = null;
   private pendingPastedMessageLines: string[] = [];
   private pendingPastedMessageTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingPastedMessageLastQueuedAt = 0;
   private liveProgressStates = new Set<CliLiveProgressState>();
   private unsubscribeSse: (() => void) | null = null;
   private shutdownRequested = false;
@@ -505,6 +544,8 @@ export class CLIChannel implements ChannelAdapter {
   async stop(): Promise<void> {
     this.shutdownRequested = true;
     this.clearPendingPastedMessageTimer();
+    this.pendingPastedMessageLines = [];
+    this.pendingPastedMessageLastQueuedAt = 0;
     this.liveProgressStates.clear();
     this.unsubscribeSse?.();
     this.unsubscribeSse = null;
@@ -535,22 +576,36 @@ export class CLIChannel implements ChannelAdapter {
     }
   }
 
+  private flushQueuedUserMessage(): void {
+    const lines = [...this.pendingPastedMessageLines];
+    this.pendingPastedMessageLines = [];
+    this.pendingPastedMessageLastQueuedAt = 0;
+    this.clearPendingPastedMessageTimer();
+    const content = lines.join('\n').trim();
+    if (!content) {
+      this.promptIfReady();
+      return;
+    }
+    void this.handleUserMessage(content)
+      .finally(() => {
+        this.promptIfReady();
+      });
+  }
+
   private queueUserMessage(text: string): void {
+    const now = Date.now();
+    if (
+      this.pendingPastedMessageLines.length > 0
+      && this.pendingPastedMessageLastQueuedAt > 0
+      && (now - this.pendingPastedMessageLastQueuedAt) > CLI_PASTED_MESSAGE_CONTINUATION_GAP_MS
+    ) {
+      this.flushQueuedUserMessage();
+    }
     this.pendingPastedMessageLines.push(text);
+    this.pendingPastedMessageLastQueuedAt = now;
     this.clearPendingPastedMessageTimer();
     this.pendingPastedMessageTimer = setTimeout(() => {
-      this.pendingPastedMessageTimer = null;
-      const lines = [...this.pendingPastedMessageLines];
-      this.pendingPastedMessageLines = [];
-      const content = lines.join('\n').trim();
-      if (!content) {
-        this.promptIfReady();
-        return;
-      }
-      void this.handleUserMessage(content)
-        .finally(() => {
-          this.promptIfReady();
-        });
+      this.flushQueuedUserMessage();
     }, CLI_PASTED_MESSAGE_DEBOUNCE_MS);
   }
 
@@ -928,16 +983,7 @@ export class CLIChannel implements ChannelAdapter {
           : (this.useColor ? this.dim('[progress]') : '[progress]');
     const suffix = snapshot.detail ? ` — ${snapshot.detail}` : '';
     const line = `${badge} ${snapshot.title}${suffix}`;
-    
-    if (this.useColor) {
-      // Use \r to overwrite the current line, and pad with spaces to clear any old text.
-      const maxWidth = (process.stdout.columns || 80) - 1;
-      const displayLine = line.length > maxWidth ? line.substring(0, maxWidth - 3) + '...' : line;
-      this.output.write(`\r${displayLine}${' '.repeat(Math.max(0, maxWidth - displayLine.length))}\r`);
-    } else {
-      // Non-TTY: just write the line normally
-      this.write(`${line}\n`);
-    }
+    this.write(`${line}\n`);
   }
 
   /**

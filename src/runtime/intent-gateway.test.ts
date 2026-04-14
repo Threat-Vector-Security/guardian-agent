@@ -1741,6 +1741,13 @@ describe('IntentGateway', () => {
           summary: 'Lists Google Calendar events for the next 7 days.',
           resolution: 'needs_clarification',
           missingFields: ['provider_auth'],
+          provenance: {
+            route: 'classifier.primary',
+            operation: 'classifier.primary',
+            entities: {
+              calendarTarget: 'resolver.personal_assistant',
+            },
+          },
           entities: { calendarTarget: 'gws' },
           prompt: 'Google Workspace is not connected yet. Connect it and then continue.',
           originalRequest: 'List my Google Calendar entries for the next 7 days.',
@@ -1768,6 +1775,7 @@ describe('IntentGateway', () => {
     expect(capturedUser).toContain('summary: Lists Google Calendar events for the next 7 days.');
     expect(capturedUser).toContain('resolution: needs_clarification');
     expect(capturedUser).toContain('missing fields: provider_auth');
+    expect(capturedUser).toContain('provenance: {"route":"classifier.primary","operation":"classifier.primary","entities":{"calendarTarget":"resolver.personal_assistant"}}');
     expect(capturedUser).toContain('entities: {"calendarTarget":"gws"}');
   });
 

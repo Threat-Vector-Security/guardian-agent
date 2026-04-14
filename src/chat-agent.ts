@@ -42,7 +42,6 @@ import { isResponseDegraded as _isResponseDegraded } from './util/response-quali
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
   isDirectMemorySaveRequest,
-  resolveAffirmativeMemoryContinuationFromHistory,
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
 import type { ConversationKey } from './runtime/conversation.js';
@@ -99,10 +98,6 @@ import {
   formatSkillInventoryResponse,
   isSkillInventoryQuery,
 } from './runtime/skills-query.js';
-import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
-import { tryAutomationControlPreRoute } from './runtime/automation-control-prerouter.js';
-import { tryAutomationOutputPreRoute } from './runtime/automation-output-prerouter.js';
-import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
 import {
   resolveDirectIntentRoutingCandidates,
   shouldAllowBoundedDegradedMemorySaveFallback,
@@ -162,6 +157,12 @@ import {
   type DirectSecondBrainMutationToolName,
 } from './runtime/chat-agent/direct-second-brain-mutation.js';
 import {
+  tryDirectAutomationAuthoring as tryDirectAutomationAuthoringHelper,
+  tryDirectAutomationControl as tryDirectAutomationControlHelper,
+  tryDirectAutomationOutput as tryDirectAutomationOutputHelper,
+  tryDirectBrowserAutomation as tryDirectBrowserAutomationHelper,
+} from './runtime/chat-agent/direct-automation.js';
+import {
   tryDirectSecondBrainRead as tryDirectSecondBrainReadHelper,
 } from './runtime/chat-agent/direct-second-brain-read.js';
 import {
@@ -202,10 +203,18 @@ import {
 } from './runtime/chat-agent/tool-loop-runtime.js';
 import {
   ChatAgentOrchestrationState,
-  PENDING_ACTION_SWITCH_CONFIRM_PATTERN,
-  PENDING_ACTION_SWITCH_DENY_PATTERN,
   PENDING_APPROVAL_TTL_MS,
 } from './runtime/chat-agent/orchestration-state.js';
+import {
+  buildGatewayClarificationResponse as buildGatewayClarificationResponseHelper,
+  resolveIntentGatewayContent as resolveIntentGatewayContentHelper,
+  resolvePendingActionContinuationContent as resolvePendingActionContinuationContentHelper,
+  resolveRetryAfterFailureContinuationContent as resolveRetryAfterFailureContinuationContentHelper,
+  shouldClearPendingActionAfterTurn as shouldClearPendingActionAfterTurnHelper,
+  toPendingActionEntities,
+  tryHandlePendingActionSwitchDecision as tryHandlePendingActionSwitchDecisionHelper,
+  tryHandleWorkspaceSwitchContinuation as tryHandleWorkspaceSwitchContinuationHelper,
+} from './runtime/chat-agent/intent-gateway-orchestration.js';
 import {
   PendingActionStore,
   summarizePendingActionForGateway,
@@ -233,10 +242,6 @@ import {
 import {
   buildRoutedIntentAdditionalSection,
 } from './runtime/routed-tool-execution.js';
-import {
-  isGenericPendingActionContinuationRequest,
-  isWorkspaceSwitchPendingActionSatisfied,
-} from './runtime/pending-action-resume.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import {
   readSelectedExecutionProfileMetadata,
@@ -274,8 +279,6 @@ import {
 import { recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
-const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
-const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
 const ROUTINE_QUERY_STOP_WORDS = new Set([
   'a',
   'about',
@@ -323,65 +326,6 @@ interface SecondBrainFocusContinuationEntry {
 interface SecondBrainFocusContinuationPayload {
   activeItemType?: SecondBrainFocusItemType;
   byType: Partial<Record<SecondBrainFocusItemType, SecondBrainFocusContinuationEntry>>;
-}
-
-interface DirectAutomationClarificationMetadata {
-  blockerKind: PendingActionBlocker['kind'];
-  field?: string;
-  prompt: string;
-  route?: string;
-  operation?: string;
-  summary?: string;
-  resolution?: string;
-  missingFields?: string[];
-  entities?: Record<string, unknown>;
-  options?: PendingActionBlocker['options'];
-}
-
-function readDirectAutomationClarificationMetadata(
-  metadata: Record<string, unknown> | undefined,
-): DirectAutomationClarificationMetadata | null {
-  if (!metadata || !isRecord(metadata.clarification)) return null;
-  const clarification = metadata.clarification;
-  const prompt = toString(clarification.prompt).trim();
-  if (!prompt) return null;
-  return {
-    blockerKind: clarification.blockerKind === 'workspace_switch'
-      ? 'workspace_switch'
-      : clarification.blockerKind === 'auth'
-        ? 'auth'
-        : clarification.blockerKind === 'policy'
-          ? 'policy'
-          : clarification.blockerKind === 'missing_context'
-            ? 'missing_context'
-            : 'clarification',
-    ...(toString(clarification.field).trim() ? { field: toString(clarification.field).trim() } : {}),
-    prompt,
-    ...(toString(clarification.route).trim() ? { route: toString(clarification.route).trim() } : {}),
-    ...(toString(clarification.operation).trim() ? { operation: toString(clarification.operation).trim() } : {}),
-    ...(toString(clarification.summary).trim() ? { summary: toString(clarification.summary).trim() } : {}),
-    ...(toString(clarification.resolution).trim() ? { resolution: toString(clarification.resolution).trim() } : {}),
-    ...(Array.isArray(clarification.missingFields)
-      ? {
-          missingFields: clarification.missingFields
-            .filter((value): value is string => typeof value === 'string')
-            .map((value) => value.trim())
-            .filter(Boolean),
-        }
-      : {}),
-    ...(isRecord(clarification.entities) ? { entities: { ...clarification.entities } } : {}),
-    ...(Array.isArray(clarification.options)
-      ? {
-          options: clarification.options
-            .filter((value): value is Record<string, unknown> => isRecord(value) && toString(value.value).trim().length > 0)
-            .map((value) => ({
-              value: toString(value.value).trim(),
-              label: toString(value.label).trim() || toString(value.value).trim(),
-              ...(toString(value.description).trim() ? { description: toString(value.description).trim() } : {}),
-            })),
-        }
-      : {}),
-  };
 }
 
 function normalizeRoutineQueryTokens(query: string | undefined): string[] {
@@ -831,15 +775,6 @@ function formatBriefKindLabelForUser(kind: string): string {
   return kind
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function stripDirectAutomationClarificationMetadata(
-  metadata: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!metadata) return undefined;
-  const next = { ...metadata };
-  delete next.clarification;
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function isDirectMailboxReplyTarget(value: unknown): value is { to: string; subject: string } {
@@ -1814,28 +1749,6 @@ function buildToolSafeRoutineTrigger(
   };
 }
 
-function isRetryAfterFailureRequest(content: string): boolean {
-  const normalized = content.trim();
-  return RETRY_AFTER_FAILURE_PATTERN.test(normalized)
-    || PREREQUISITE_RECOVERY_PATTERN.test(normalized);
-}
-
-function isRetryableProviderFailureMessage(content: string): boolean {
-  const normalized = content.trim();
-  if (!normalized) return false;
-  return /^Could not reach Ollama(?: Cloud)?\b/i.test(normalized)
-    || /\brate limit exceeded or quota depleted\. Please try again shortly\./i.test(normalized)
-    || /\b(?:internal server error|service unavailable|gateway timeout|bad gateway)\b/i.test(normalized)
-    || /\bnot authenticated\b/i.test(normalized)
-    || /\bplease connect your\b/i.test(normalized)
-    || /\b(?:integration|provider).*\b(?:isn['’]?t|is not)\b.*\bconnected\b/i.test(normalized)
-    || /\b(?:isn['’]?t|is not)\s+currently connected\b/i.test(normalized)
-    || /\baccess denied\b/i.test(normalized)
-    || /\bdisconnected\b/i.test(normalized)
-    || /\bmodel not found\b/i.test(normalized)
-    || /\bmodel\b.+\bnot available\b/i.test(normalized);
-}
-
 const GMAIL_UNREAD_CONTINUATION_KIND = 'gmail_unread_list';
 const GMAIL_RECENT_SENDERS_CONTINUATION_KIND = 'gmail_recent_senders_list';
 const GMAIL_RECENT_SUMMARY_CONTINUATION_KIND = 'gmail_recent_summary_list';
@@ -2757,10 +2670,15 @@ type DirectIntentShadowCandidate =
       ? preRoutedGateway
       : null;
     const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
-    const workspaceSwitchContinuation = await this.tryHandleWorkspaceSwitchContinuation({
+    const workspaceSwitchContinuation = await tryHandleWorkspaceSwitchContinuationHelper({
       message,
       ctx,
       pendingAction,
+      handleCodeSessionAttach: (nextMessage, nextCtx, targetSessionId) => this.handleCodeSessionAttach(
+        nextMessage,
+        nextCtx,
+        targetSessionId,
+      ),
     });
     if (workspaceSwitchContinuation) {
       if (this.conversationService) {
@@ -2775,18 +2693,19 @@ type DirectIntentShadowCandidate =
       }
       return workspaceSwitchContinuation;
     }
-    const resolvedPendingActionContinuation = this.resolvePendingActionContinuationContent(
+    const resolvedPendingActionContinuation = resolvePendingActionContinuationContentHelper(
       groundedScopedMessage.content,
       pendingAction,
       effectiveCodeContext?.sessionId,
     );
     const resolvedRetryAfterFailureContinuation = resolvedPendingActionContinuation
       ? null
-      : this.resolveRetryAfterFailureContinuationContent(
-          groundedScopedMessage.content,
+      : resolveRetryAfterFailureContinuationContentHelper({
+          content: groundedScopedMessage.content,
           continuityThread,
           conversationKey,
-        );
+          readLatestAssistantOutput: (nextConversationKey) => this.readLatestAssistantOutput(nextConversationKey),
+        });
     let routedScopedMessage = resolvedPendingActionContinuation
       ? {
           ...groundedScopedMessage,
@@ -2810,7 +2729,7 @@ type DirectIntentShadowCandidate =
         continuityThread,
         priorActiveSkills: preResolvedSkills,
       }));
-      const pendingActionSwitchDecision = await this.tryHandlePendingActionSwitchDecision({
+      const pendingActionSwitchDecision = await tryHandlePendingActionSwitchDecisionHelper({
         message,
         pendingAction,
         gateway: earlyGateway,
@@ -2818,6 +2737,21 @@ type DirectIntentShadowCandidate =
         surfaceUserId: pendingActionUserId,
         surfaceChannel: pendingActionChannel,
         surfaceId: pendingActionSurfaceId,
+        readPendingActionSwitchCandidatePayload: (nextPendingAction) => this.readPendingActionSwitchCandidatePayload(nextPendingAction),
+        replacePendingAction: (userId, channel, surfaceId, replacement) => this.replacePendingAction(
+          userId,
+          channel,
+          surfaceId,
+          replacement,
+        ),
+        updatePendingAction: (actionId, patch) => this.updatePendingAction(actionId, patch),
+        buildImmediateResponseMetadata: (activeSkills, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
+          activeSkills,
+          userId,
+          channel,
+          surfaceId,
+          options,
+        ),
       });
       if (pendingActionSwitchDecision) {
         if (this.conversationService) {
@@ -2832,14 +2766,30 @@ type DirectIntentShadowCandidate =
         }
         return pendingActionSwitchDecision;
       }
-      const clarificationResponse = this.buildGatewayClarificationResponse({
+      const clarificationResponse = buildGatewayClarificationResponseHelper({
         gateway: earlyGateway,
         surfaceUserId: pendingActionUserId,
         surfaceChannel: pendingActionChannel,
         message,
         activeSkills: preResolvedSkills,
         surfaceId: pendingActionSurfaceId,
-        pendingAction,
+      }, {
+        enabledManagedProviders: this.enabledManagedProviders,
+        buildImmediateResponseMetadata: (activeSkills, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
+          activeSkills,
+          userId,
+          channel,
+          surfaceId,
+          options,
+        ),
+        setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+          userId,
+          channel,
+          surfaceId,
+          action,
+        ),
+        recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+        toPendingActionEntities,
       });
       if (clarificationResponse) {
         if (this.conversationService) {
@@ -2895,7 +2845,7 @@ type DirectIntentShadowCandidate =
           },
         };
       }
-      const resolvedGatewayContent = this.resolveIntentGatewayContent({
+      const resolvedGatewayContent = resolveIntentGatewayContentHelper({
         gateway: earlyGateway,
         currentContent: groundedScopedMessage.content,
         pendingAction,
@@ -2916,7 +2866,7 @@ type DirectIntentShadowCandidate =
         routingContent: routedScopedMessage.content,
         codeSessionId: effectiveCodeContext?.sessionId,
       });
-      if (pendingAction && this.shouldClearPendingActionAfterTurn(earlyGateway?.decision, pendingAction)) {
+      if (pendingAction && shouldClearPendingActionAfterTurnHelper(earlyGateway?.decision, pendingAction)) {
         this.completePendingAction(pendingAction.id);
       }
 
@@ -4495,6 +4445,7 @@ type DirectIntentShadowCandidate =
             turnRelation: directIntent?.decision.turnRelation,
             resolution: directIntent?.decision.resolution,
             missingFields: directIntent?.decision.missingFields,
+            provenance: directIntent?.decision.provenance,
             entities: directIntent?.decision.entities as Record<string, unknown> | undefined,
             ...(toolLoopPendingResume ? { resume: toolLoopPendingResume } : {}),
             ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
@@ -4901,7 +4852,7 @@ type DirectIntentShadowCandidate =
   }): { content: string; metadata?: Record<string, unknown> } {
     return buildDirectSecondBrainClarificationResponseHelper({
       ...input,
-      toPendingActionEntities: (entities) => this.toPendingActionEntities(
+      toPendingActionEntities: (entities) => toPendingActionEntities(
         entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
       ),
       setClarificationPendingAction: (userId, channel, surfaceId, action, nowMs) => this.setClarificationPendingAction(
@@ -4955,7 +4906,7 @@ type DirectIntentShadowCandidate =
         result,
         fallbackContent,
       ),
-      toPendingActionEntities: (entities) => this.toPendingActionEntities(
+      toPendingActionEntities: (entities) => toPendingActionEntities(
         entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
       ),
       buildDirectSecondBrainMutationSuccessResponse: (descriptor, output, focusState) => this.buildDirectSecondBrainMutationSuccessResponse(
@@ -5477,407 +5428,6 @@ type DirectIntentShadowCandidate =
     return Array.isArray(metadata.pendingApprovals);
   }
 
-  private buildGatewayClarificationResponse(input: {
-    gateway: IntentGatewayRecord | null;
-    surfaceUserId: string;
-    surfaceChannel: string;
-    message: UserMessage;
-    activeSkills: ResolvedSkill[];
-    surfaceId?: string;
-    pendingAction: PendingActionRecord | null;
-  }): AgentResponse | null {
-    const decision = input.gateway?.decision;
-    if (!decision) return null;
-
-    const missingFields = new Set(decision.missingFields);
-    const needsEmailProvider = (decision.route === 'email_task')
-      && this.enabledManagedProviders?.has('gws')
-      && this.enabledManagedProviders.has('m365')
-      && !decision.entities.emailProvider
-      && (decision.resolution === 'needs_clarification' || missingFields.has('email_provider'));
-    if (needsEmailProvider) {
-      const prompt = 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?';
-      const pendingActionResult = this.setClarificationPendingAction(
-        input.surfaceUserId,
-        input.surfaceChannel,
-        input.surfaceId,
-        {
-          blockerKind: 'clarification',
-          field: 'email_provider',
-          prompt,
-          originalUserContent: input.message.content,
-          route: decision.route,
-          operation: decision.operation,
-          summary: decision.summary,
-          turnRelation: decision.turnRelation,
-          resolution: decision.resolution,
-          missingFields: decision.missingFields,
-          entities: this.toPendingActionEntities(decision.entities),
-          options: [
-            { value: 'gws', label: 'Gmail / Google Workspace' },
-            { value: 'm365', label: 'Outlook / Microsoft 365' },
-          ],
-        },
-      );
-      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
-      this.recordIntentRoutingTrace('clarification_requested', {
-        message: input.message,
-        details: {
-          kind: 'email_provider',
-          route: decision.route,
-          missingFields: [...missingFields],
-          prompt: responseContent,
-        },
-      });
-      return {
-        content: responseContent,
-        metadata: {
-          ...(this.buildImmediateResponseMetadata(
-            input.activeSkills,
-            input.surfaceUserId,
-            input.surfaceChannel,
-            input.surfaceId,
-            { includePendingAction: true },
-          ) ?? {}),
-          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
-        },
-      };
-    }
-
-    if (decision.resolution === 'needs_clarification' && missingFields.has('coding_backend')) {
-      const prompt = 'Which coding backend do you want me to use: Codex, Claude Code, Gemini CLI, or Aider?';
-      const pendingActionResult = this.setClarificationPendingAction(
-        input.surfaceUserId,
-        input.surfaceChannel,
-        input.surfaceId,
-        {
-          blockerKind: 'clarification',
-          field: 'coding_backend',
-          prompt,
-          originalUserContent: input.message.content,
-          route: decision.route,
-          operation: decision.operation,
-          summary: decision.summary,
-          turnRelation: decision.turnRelation,
-          resolution: decision.resolution,
-          missingFields: decision.missingFields,
-          entities: this.toPendingActionEntities(decision.entities),
-          options: [
-            { value: 'codex', label: 'Codex' },
-            { value: 'claude-code', label: 'Claude Code' },
-            { value: 'gemini-cli', label: 'Gemini CLI' },
-            { value: 'aider', label: 'Aider' },
-          ],
-        },
-      );
-      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
-      this.recordIntentRoutingTrace('clarification_requested', {
-        message: input.message,
-        details: {
-          kind: 'coding_backend',
-          route: decision.route,
-          missingFields: [...missingFields],
-          prompt: responseContent,
-        },
-      });
-      return {
-        content: responseContent,
-        metadata: {
-          ...(this.buildImmediateResponseMetadata(
-            input.activeSkills,
-            input.surfaceUserId,
-            input.surfaceChannel,
-            input.surfaceId,
-            { includePendingAction: true },
-          ) ?? {}),
-          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
-        },
-      };
-    }
-
-    if (decision.resolution === 'needs_clarification' && decision.summary.trim()) {
-      const prompt = decision.summary.trim();
-      const pendingActionResult = this.setClarificationPendingAction(
-        input.surfaceUserId,
-        input.surfaceChannel,
-        input.surfaceId,
-        {
-          blockerKind: 'clarification',
-          prompt,
-          originalUserContent: input.message.content,
-          route: decision.route,
-          operation: decision.operation,
-          summary: decision.summary,
-          turnRelation: decision.turnRelation,
-          resolution: decision.resolution,
-          missingFields: decision.missingFields,
-          entities: this.toPendingActionEntities(decision.entities),
-        },
-      );
-      const responseContent = pendingActionResult.collisionPrompt ?? prompt;
-      this.recordIntentRoutingTrace('clarification_requested', {
-        message: input.message,
-        details: {
-          kind: 'generic',
-          route: decision.route,
-          missingFields: [...missingFields],
-          prompt: responseContent,
-        },
-      });
-      return {
-        content: responseContent,
-        metadata: {
-          ...(this.buildImmediateResponseMetadata(
-            input.activeSkills,
-            input.surfaceUserId,
-            input.surfaceChannel,
-            input.surfaceId,
-            { includePendingAction: true },
-          ) ?? {}),
-          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
-        },
-      };
-    }
-
-    return null;
-  }
-
-  private resolveIntentGatewayContent(input: {
-    gateway: IntentGatewayRecord | null;
-    currentContent: string;
-    pendingAction: PendingActionRecord | null;
-    priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
-  }): string | null {
-    const decision = input.gateway?.decision;
-    if (!decision) return null;
-    const memoryContinuation = resolveAffirmativeMemoryContinuationFromHistory(
-      stripLeadingContextPrefix(input.currentContent),
-      input.priorHistory,
-    );
-    if (memoryContinuation) {
-      return memoryContinuation;
-    }
-    if (decision.resolvedContent?.trim()) {
-      return decision.resolvedContent.trim();
-    }
-
-    if (input.pendingAction?.blocker.kind === 'clarification'
-      && input.pendingAction.blocker.field === 'email_provider'
-      && decision.entities.emailProvider) {
-      const providerLabel = decision.entities.emailProvider === 'm365'
-        ? 'Outlook / Microsoft 365'
-        : 'Gmail / Google Workspace';
-      return `Use ${providerLabel} for this request: ${input.pendingAction.intent.originalUserContent}`;
-    }
-
-    if (input.pendingAction?.blocker.kind === 'workspace_switch'
-      && decision.route === 'coding_task'
-      && decision.turnRelation !== 'new_request') {
-      return input.pendingAction.intent.originalUserContent;
-    }
-
-    if (input.pendingAction?.blocker.kind === 'clarification'
-      && input.pendingAction.blocker.field === 'coding_backend'
-      && decision.entities.codingBackend) {
-      return `Use ${decision.entities.codingBackend} for this request: ${input.pendingAction.intent.originalUserContent}`;
-    }
-
-    if (input.pendingAction?.blocker.kind === 'clarification'
-      && input.pendingAction.blocker.field === 'automation_name'
-      && decision.entities.automationName
-      && decision.turnRelation !== 'new_request') {
-      return input.pendingAction.intent.originalUserContent;
-    }
-
-    if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
-      const priorRequest = this.findLatestActionableUserRequest(input.priorHistory);
-      if (priorRequest) {
-        if (priorRequest.toLowerCase().includes(decision.entities.codingBackend.toLowerCase())) {
-          return priorRequest;
-        }
-        return `Use ${decision.entities.codingBackend} for this request: ${priorRequest}`;
-      }
-    }
-
-    return null;
-  }
-
-  private resolvePendingActionContinuationContent(
-    content: string,
-    pendingAction: PendingActionRecord | null,
-    currentCodeSessionId?: string,
-  ): string | null {
-    if (!pendingAction) return null;
-    const normalized = stripLeadingContextPrefix(content);
-    const genericContinuation = isGenericPendingActionContinuationRequest(normalized);
-    const affirmativeContinuation = isAffirmativeContinuation(normalized);
-    if (!genericContinuation && !affirmativeContinuation) {
-      return null;
-    }
-    if (pendingAction.blocker.kind === 'clarification' && pendingAction.intent.resolvedContent?.trim()) {
-      return pendingAction.intent.resolvedContent.trim();
-    }
-    if (isWorkspaceSwitchPendingActionSatisfied(pendingAction, currentCodeSessionId)) {
-      return pendingAction.intent.originalUserContent;
-    }
-    return null;
-  }
-
-  private resolveRetryAfterFailureContinuationContent(
-    content: string,
-    continuityThread: ContinuityThreadRecord | null | undefined,
-    conversationKey: ConversationKey,
-  ): string | null {
-    const normalized = stripLeadingContextPrefix(content).trim();
-    if (!isRetryAfterFailureRequest(normalized)) {
-      return null;
-    }
-    const lastActionableRequest = continuityThread?.lastActionableRequest?.trim();
-    if (!lastActionableRequest) {
-      return null;
-    }
-    const latestAssistantOutput = this.readLatestAssistantOutput(conversationKey).trim();
-    if (!isRetryableProviderFailureMessage(latestAssistantOutput)) {
-      return null;
-    }
-    return lastActionableRequest;
-  }
-
-  private async tryHandleWorkspaceSwitchContinuation(input: {
-    message: UserMessage;
-    ctx: AgentContext;
-    pendingAction: PendingActionRecord | null;
-  }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const pendingAction = input.pendingAction;
-    if (!pendingAction || pendingAction.blocker.kind !== 'workspace_switch') {
-      return null;
-    }
-    const targetSessionId = pendingAction.blocker.targetSessionId?.trim();
-    if (!targetSessionId) {
-      return null;
-    }
-    const normalized = stripLeadingContextPrefix(input.message.content).trim();
-    if (!normalized) {
-      return null;
-    }
-    if (!isAffirmativeContinuation(normalized)
-      && !isGenericPendingActionContinuationRequest(normalized)) {
-      return null;
-    }
-    return this.handleCodeSessionAttach(input.message, input.ctx, targetSessionId);
-  }
-
-  private async tryHandlePendingActionSwitchDecision(input: {
-    message: UserMessage;
-    pendingAction: PendingActionRecord | null;
-    gateway: IntentGatewayRecord | null;
-    activeSkills: ResolvedSkill[];
-    surfaceUserId: string;
-    surfaceChannel: string;
-    surfaceId?: string;
-  }): Promise<AgentResponse | null> {
-    const switchCandidate = this.readPendingActionSwitchCandidatePayload(input.pendingAction);
-    if (!input.pendingAction || !switchCandidate) return null;
-    const trimmed = stripLeadingContextPrefix(input.message.content).trim();
-    if (!trimmed) return null;
-
-    if (PENDING_ACTION_SWITCH_CONFIRM_PATTERN.test(trimmed)) {
-      const replacement = this.replacePendingAction(
-        input.surfaceUserId,
-        input.surfaceChannel,
-        input.surfaceId,
-        {
-          id: input.pendingAction.id,
-          ...switchCandidate.replacement,
-        },
-      );
-      return {
-        content: replacement
-          ? `Switched the active blocked request.\n\n${replacement.blocker.prompt}`
-          : 'I could not switch the active blocked request.',
-        metadata: {
-          ...(this.buildImmediateResponseMetadata(
-            input.activeSkills,
-            input.surfaceUserId,
-            input.surfaceChannel,
-            input.surfaceId,
-            { includePendingAction: true },
-          ) ?? {}),
-          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
-        },
-      };
-    }
-
-    if (PENDING_ACTION_SWITCH_DENY_PATTERN.test(trimmed)) {
-      const restored = this.updatePendingAction(input.pendingAction.id, {
-        resume: switchCandidate.previousResume ?? undefined,
-      });
-      return {
-        content: restored
-          ? `Kept the current blocked request active.\n\n${restored.blocker.prompt}`
-          : 'Kept the current blocked request active.',
-        metadata: {
-          ...(this.buildImmediateResponseMetadata(
-            input.activeSkills,
-            input.surfaceUserId,
-            input.surfaceChannel,
-            input.surfaceId,
-            { includePendingAction: true },
-          ) ?? {}),
-          ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
-        },
-      };
-    }
-
-    return null;
-  }
-
-  private shouldClearPendingActionAfterTurn(
-    decision: IntentGatewayDecision | undefined,
-    pendingAction: PendingActionRecord | null,
-  ): boolean {
-    if (!decision || !pendingAction || decision.resolution !== 'ready') return false;
-    if (pendingAction.blocker.kind === 'approval') return false;
-    if (pendingAction.blocker.kind === 'workspace_switch') return false;
-    if (decision.turnRelation === 'new_request') return false;
-    if (pendingAction.intent.route && decision.route !== pendingAction.intent.route) return false;
-    if (pendingAction.blocker.field === 'email_provider') {
-      return Boolean(decision.entities.emailProvider);
-    }
-    if (pendingAction.blocker.field === 'coding_backend') {
-      return Boolean(decision.entities.codingBackend);
-    }
-    return true;
-  }
-
-  private toPendingActionEntities(
-    entities?: Record<string, unknown> | IntentGatewayDecision['entities'],
-  ): Record<string, unknown> | undefined {
-    if (!entities) return undefined;
-    const normalized = Object.entries(entities).reduce<Record<string, unknown>>((acc, [key, value]) => {
-      if (value === undefined) return acc;
-      acc[key] = Array.isArray(value) ? [...value] : value;
-      return acc;
-    }, {});
-    return Object.keys(normalized).length > 0 ? normalized : undefined;
-  }
-
-  private findLatestActionableUserRequest(
-    history: Array<{ role: 'user' | 'assistant'; content: string }>,
-  ): string | null {
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-      const entry = history[index];
-      if (entry.role !== 'user') continue;
-      const text = entry.content.trim();
-      if (!text || text.length < 16) continue;
-      if (/^(?:no|yes|yeah|yep|gmail|outlook|codex|claude code|gemini|aider)\b/i.test(text)) {
-        continue;
-      }
-      return text;
-    }
-    return null;
-  }
-
   private async buildDirectIntentResponse(input: DirectIntentResponseInput): Promise<AgentResponse> {
     const normalizedBase = typeof input.result === 'string'
       ? { content: input.result }
@@ -6292,7 +5842,8 @@ type DirectIntentShadowCandidate =
           turnRelation: decision.turnRelation,
           resolution: decision.resolution,
           missingFields: decision.missingFields,
-          entities: this.toPendingActionEntities(decision.entities),
+          provenance: decision.provenance,
+          entities: toPendingActionEntities(decision.entities),
           codeSessionId: effectiveCodeContext?.sessionId,
         },
       );
@@ -6716,6 +6267,7 @@ type DirectIntentShadowCandidate =
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -6747,6 +6299,7 @@ type DirectIntentShadowCandidate =
       turnRelation?: string;
       resolution?: string;
       missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
       codeSessionId?: string;
@@ -6773,6 +6326,7 @@ type DirectIntentShadowCandidate =
       resolution?: string;
       missingFields?: string[];
       resolvedContent?: string;
+      provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       codeSessionId?: string;
       currentSessionId?: string;
@@ -7161,84 +6715,41 @@ type DirectIntentShadowCandidate =
       intentDecision?: IntentGatewayDecision | null;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const codeWorkspaceRoot = codeContext?.workspaceRoot?.trim();
-    const allowedPaths = codeWorkspaceRoot
-      ? [codeWorkspaceRoot]
-      : this.tools.getPolicy().sandbox.allowedPaths;
-    const trackedPendingApprovalIds: string[] = [];
-    const result = await tryAutomationPreRoute({
-      agentId: this.id,
+    return tryDirectAutomationAuthoringHelper({
       message,
-      checkAction: ctx.checkAction,
-      preflightTools: (requests) => this.tools!.preflightTools(requests),
-      workspaceRoot: allowedPaths[0] || process.cwd(),
-      allowedPaths,
-      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
-      trackPendingApproval: (approvalId) => {
-        trackedPendingApprovalIds.push(approvalId);
-      },
-      onPendingApproval: ({ approvalId, automationName, artifactLabel, verb }) => {
-        this.setApprovalFollowUp(approvalId, {
-          approved: `I ${verb} the ${artifactLabel} '${automationName}'.`,
-          denied: `I did not ${verb === 'updated' ? 'update' : 'create'} the ${artifactLabel} '${automationName}'.`,
-        });
-      },
-      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
-      resolvePendingApprovalMetadata: (ids, fallback) => {
-        const summaries = this.tools?.getApprovalSummaries(ids);
-        if (!summaries) return fallback;
-        return ids.map((id) => {
-          const summary = summaries.get(id);
-          const fallbackItem = fallback.find((item) => item.id === id);
-          return {
-            id,
-            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
-            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
-            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
-          };
-        });
-      },
-    }, options);
-    if (!result) {
-      this.clearAutomationApprovalContinuation(userKey);
-      return null;
-    }
-    if (trackedPendingApprovalIds.length > 0) {
-      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
-        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
-        ? result.metadata.pendingAction.blocker.prompt
-        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
-      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
-      const pendingActionResult = this.setPendingApprovalActionForRequest(
-        userKey,
-        message.surfaceId,
-        {
-          prompt,
-          approvalIds: trackedPendingApprovalIds,
-          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
-          originalUserContent: message.content,
-          route: options?.intentDecision?.route ?? 'automation_authoring',
-          operation: options?.intentDecision?.operation ?? 'create',
-          summary: options?.intentDecision?.summary ?? 'Creates or updates a Guardian automation.',
-          turnRelation: options?.intentDecision?.turnRelation ?? 'new_request',
-          resolution: options?.intentDecision?.resolution ?? 'ready',
-          entities: this.toPendingActionEntities(options?.intentDecision?.entities),
-        },
-      );
-      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
-      result.content = mergedResult.content;
-      result.metadata = {
-        ...(result.metadata ?? {}),
-        ...(mergedResult.metadata ?? {}),
-      };
-    }
-    if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
-      this.setAutomationApprovalContinuation(userKey, message, ctx, trackedPendingApprovalIds);
-    } else {
-      this.clearAutomationApprovalContinuation(userKey);
-    }
-    return result;
+      ctx,
+      userKey,
+      codeContext,
+      options,
+    }, {
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
+      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
+        nextUserKey,
+        originalMessage,
+        nextCtx,
+        pendingApprovalIds,
+      ),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
   }
 
   private async tryDirectAutomationControl(
@@ -7248,107 +6759,41 @@ type DirectIntentShadowCandidate =
     intentDecision?: IntentGatewayDecision | null,
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const trackedPendingApprovalIds: string[] = [];
-    const result = await tryAutomationControlPreRoute({
-      agentId: this.id,
+    return tryDirectAutomationControlHelper({
       message,
+      ctx,
+      userKey,
+      intentDecision,
       continuityThread,
-      checkAction: ctx.checkAction,
-      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
-      trackPendingApproval: (approvalId) => {
-        trackedPendingApprovalIds.push(approvalId);
-      },
-      onPendingApproval: ({ approvalId, approved, denied }) => {
-        this.setApprovalFollowUp(approvalId, { approved, denied });
-      },
-      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
-      resolvePendingApprovalMetadata: (ids, fallback) => {
-        const summaries = this.tools?.getApprovalSummaries(ids);
-        if (!summaries) return fallback;
-        return ids.map((id) => {
-          const summary = summaries.get(id);
-          const fallbackItem = fallback.find((item) => item.id === id);
-          return {
-            id,
-            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
-            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
-            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
-          };
-        });
-      },
-    }, { intentDecision });
-    if (!result) return null;
-    const resultMetadata = result.metadata;
-    const clarification = readDirectAutomationClarificationMetadata(result.metadata);
-    if (clarification) {
-      const { userId, channel } = this.parsePendingActionUserKey(userKey);
-      const pendingActionResult = this.setClarificationPendingAction(
+    }, {
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
+      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
+        nextUserKey,
+        originalMessage,
+        nextCtx,
+        pendingApprovalIds,
+      ),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
         userId,
         channel,
-        message.surfaceId,
-        {
-          blockerKind: clarification.blockerKind,
-          ...(clarification.field ? { field: clarification.field } : {}),
-          prompt: clarification.prompt,
-          originalUserContent: message.content,
-          route: clarification.route ?? intentDecision?.route ?? 'automation_control',
-          operation: clarification.operation ?? intentDecision?.operation ?? 'update',
-          summary: clarification.summary ?? intentDecision?.summary ?? clarification.prompt,
-          turnRelation: intentDecision?.turnRelation ?? 'new_request',
-          resolution: clarification.resolution ?? intentDecision?.resolution ?? 'needs_clarification',
-          missingFields: clarification.missingFields ?? intentDecision?.missingFields,
-          entities: this.toPendingActionEntities(clarification.entities ?? intentDecision?.entities),
-          options: clarification.options,
-        },
-      );
-      return {
-        content: pendingActionResult.collisionPrompt ?? clarification.prompt,
-        metadata: {
-          ...(stripDirectAutomationClarificationMetadata(resultMetadata) ?? {}),
-          ...(pendingActionResult.action ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
-        },
-      };
-    }
-    if (trackedPendingApprovalIds.length > 0) {
-      const prompt = isRecord(resultMetadata?.pendingAction) && isRecord(resultMetadata?.pendingAction.blocker)
-        && typeof resultMetadata.pendingAction.blocker.prompt === 'string'
-        ? resultMetadata.pendingAction.blocker.prompt
-        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
-      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
-      const pendingActionResult = this.setPendingApprovalActionForRequest(
-        userKey,
-        message.surfaceId,
-        {
-          prompt,
-          approvalIds: trackedPendingApprovalIds,
-          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
-          originalUserContent: message.content,
-          route: intentDecision?.route ?? 'automation_control',
-          operation: intentDecision?.operation ?? 'run',
-          summary: intentDecision?.summary ?? 'Runs or updates an existing automation.',
-          turnRelation: intentDecision?.turnRelation ?? 'new_request',
-          resolution: intentDecision?.resolution ?? 'ready',
-          entities: this.toPendingActionEntities(intentDecision?.entities),
-        },
-      );
-      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
-      return {
-        content: mergedResult.content,
-        metadata: {
-          ...(resultMetadata ?? {}),
-          ...(mergedResult.metadata ?? {}),
-        },
-      };
-    }
-    return resultMetadata
-      ? {
-          ...result,
-          metadata: resultMetadata,
-        }
-      : {
-          content: result.content,
-        };
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
   }
 
   private async tryDirectAutomationOutput(
@@ -7356,14 +6801,38 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     intentDecision?: IntentGatewayDecision | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    return tryAutomationOutputPreRoute({
-      agentId: this.id,
+    return tryDirectAutomationOutputHelper({
       message,
-      checkAction: ctx.checkAction,
-      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
-    }, {
+      ctx,
       intentDecision,
+    }, {
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
+      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
+        nextUserKey,
+        originalMessage,
+        nextCtx,
+        pendingApprovalIds,
+      ),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
     });
   }
 
@@ -7375,77 +6844,42 @@ type DirectIntentShadowCandidate =
     intentDecision?: IntentGatewayDecision | null,
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const scopedCodeContext = codeContext?.workspaceRoot
-      ? { workspaceRoot: codeContext.workspaceRoot, ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}) }
-      : undefined;
-
-    const trackedPendingApprovalIds: string[] = [];
-    const result = await tryBrowserPreRoute({
-      agentId: this.id,
+    return tryDirectBrowserAutomationHelper({
       message,
+      ctx,
+      userKey,
+      codeContext,
+      intentDecision,
       continuityThread,
-      checkAction: ctx.checkAction,
-      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, {
-        ...request,
-        ...(scopedCodeContext ? { codeContext: scopedCodeContext } : {}),
-      }),
-      trackPendingApproval: (approvalId) => {
-        trackedPendingApprovalIds.push(approvalId);
-      },
-      onPendingApproval: ({ approvalId, approved, denied }) => {
-        this.setApprovalFollowUp(approvalId, { approved, denied });
-      },
-      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
-      resolvePendingApprovalMetadata: (ids, fallback) => {
-        const summaries = this.tools?.getApprovalSummaries(ids);
-        if (!summaries) return fallback;
-        return ids.map((id) => {
-          const summary = summaries.get(id);
-          const fallbackItem = fallback.find((item) => item.id === id);
-          return {
-            id,
-            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
-            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
-            actionLabel: summary?.actionLabel ?? fallbackItem?.actionLabel ?? '',
-          };
-        });
-      },
-    }, { intentDecision });
-    if (!result) return null;
-    if (trackedPendingApprovalIds.length > 0) {
-      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
-        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
-        ? result.metadata.pendingAction.blocker.prompt
-        : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
-      const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
-      const pendingActionResult = this.setPendingApprovalActionForRequest(
-        userKey,
-        message.surfaceId,
-        {
-          prompt,
-          approvalIds: trackedPendingApprovalIds,
-          approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
-          originalUserContent: message.content,
-          route: intentDecision?.route ?? 'browser_task',
-          operation: intentDecision?.operation ?? 'navigate',
-          summary: intentDecision?.summary ?? 'Runs a direct browser action.',
-          turnRelation: intentDecision?.turnRelation ?? 'new_request',
-          resolution: intentDecision?.resolution ?? 'ready',
-          entities: this.toPendingActionEntities(intentDecision?.entities),
-          ...(scopedCodeContext?.sessionId ? { codeSessionId: scopedCodeContext.sessionId } : {}),
-        },
-      );
-      const mergedResult = this.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
-      return {
-        content: mergedResult.content,
-        metadata: {
-          ...(result.metadata ?? {}),
-          ...(mergedResult.metadata ?? {}),
-        },
-      };
-    }
-    return result;
+    }, {
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
+      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
+        nextUserKey,
+        originalMessage,
+        nextCtx,
+        pendingApprovalIds,
+      ),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
   }
 
   private async classifyIntentGateway(
