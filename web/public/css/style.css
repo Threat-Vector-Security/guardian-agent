@@ -1469,8 +1469,8 @@ tr:hover td {
 }
 
 .chat-message.is-thinking {
-  width: fit-content;
-  max-width: min(88%, 32rem);
+  width: min(96%, 44rem);
+  max-width: min(96%, 44rem);
 }
 
 .chat-message.is-thinking .msg-body {
@@ -1501,6 +1501,7 @@ tr:hover td {
 
 .chat-thinking__label {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-live-activity {
@@ -1522,6 +1523,7 @@ tr:hover td {
   color: var(--text-primary);
   font-size: 0.72rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .chat-live-activity__detail {

@@ -1021,6 +1021,12 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
                 } else if (typeof currentSandbox?.projectId === 'string') {
                   nextSandbox.projectId = currentSandbox.projectId;
                 }
+                if (options.hasOwn(rawSandbox, 'baseSnapshotId')) {
+                  const trimmed = options.trimOrUndefined(rawSandbox.baseSnapshotId);
+                  if (trimmed) nextSandbox.baseSnapshotId = trimmed;
+                } else if (typeof currentSandbox?.baseSnapshotId === 'string') {
+                  nextSandbox.baseSnapshotId = currentSandbox.baseSnapshotId;
+                }
                 if (options.hasOwn(rawSandbox, 'defaultTimeoutMs')) {
                   if (typeof rawSandbox.defaultTimeoutMs === 'number' && Number.isFinite(rawSandbox.defaultTimeoutMs)) {
                     nextSandbox.defaultTimeoutMs = rawSandbox.defaultTimeoutMs;
@@ -1144,6 +1150,12 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
                 if (trimmed) next.language = trimmed;
               } else if (typeof current?.language === 'string') {
                 next.language = current.language;
+              }
+              if (options.hasOwn(profile, 'snapshot')) {
+                const trimmed = options.trimOrUndefined(profile.snapshot);
+                if (trimmed) next.snapshot = trimmed;
+              } else if (typeof current?.snapshot === 'string') {
+                next.snapshot = current.snapshot;
               }
               if (options.hasOwn(profile, 'enabled')) {
                 if (typeof profile.enabled === 'boolean') next.enabled = profile.enabled;

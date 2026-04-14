@@ -163,6 +163,7 @@ async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<
   const leaseMode = input.leaseMode ?? 'ephemeral';
   const baseCreateParams = {
     language: input.runtime ?? input.target.language ?? DEFAULT_LANGUAGE,
+    snapshot: input.target.snapshot,
     ephemeral: leaseMode !== 'managed',
     autoStopInterval: leaseMode === 'managed' ? 0 : undefined,
     autoDeleteInterval: leaseMode === 'managed' ? -1 : undefined,

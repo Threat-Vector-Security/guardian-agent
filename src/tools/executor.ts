@@ -1664,8 +1664,15 @@ export class ToolExecutor {
           family: 'vercel' as const,
           id: profile.id,
           label: profile.name,
-          keywords: [profile.id, profile.name, profile.slug, profile.teamId, 'vercel_status'].filter((value): value is string => Boolean(value)),
-          line: `- ${profile.id}: provider=vercel label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=vercel_status`,
+          keywords: [
+            profile.id,
+            profile.name,
+            profile.slug,
+            profile.teamId,
+            profile.sandbox?.baseSnapshotId,
+            'vercel_status',
+          ].filter((value): value is string => Boolean(value)),
+          line: `- ${profile.id}: provider=vercel label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} baseSnapshot=${profile.sandbox?.baseSnapshotId?.trim() || 'none'} suggestedReadOnlyTest=vercel_status`,
         };
       }),
       ...(this.cloudConfig.daytonaProfiles ?? []).map((profile) => {
@@ -1675,8 +1682,9 @@ export class ToolExecutor {
           family: 'daytona' as const,
           id: profile.id,
           label: profile.name,
-          keywords: [profile.id, profile.name, profile.target, profile.language, 'daytona_status'].filter((value): value is string => Boolean(value)),
-          line: `- ${profile.id}: provider=daytona label="${profile.name}" endpoint=${endpoint} credential=${profile.apiKey?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} target=${profile.target?.trim() || 'default'} language=${profile.language?.trim() || 'typescript'} isolation=${profile.enabled === true ? 'enabled' : 'disabled'} suggestedReadOnlyTest=daytona_status`,
+          keywords: [profile.id, profile.name, profile.target, profile.language, profile.snapshot, 'daytona_status']
+            .filter((value): value is string => Boolean(value)),
+          line: `- ${profile.id}: provider=daytona label="${profile.name}" endpoint=${endpoint} credential=${profile.apiKey?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} target=${profile.target?.trim() || 'default'} language=${profile.language?.trim() || 'typescript'} snapshot=${profile.snapshot?.trim() || 'default'} isolation=${profile.enabled === true ? 'enabled' : 'disabled'} suggestedReadOnlyTest=daytona_status`,
         };
       }),
       ...(this.cloudConfig.cloudflareProfiles ?? []).map((profile) => {
@@ -5989,6 +5997,7 @@ export class ToolExecutor {
       token: profile.apiToken,
       teamId,
       projectId,
+      baseSnapshotId: rawProfile.sandbox.baseSnapshotId?.trim() || undefined,
       apiBaseUrl: profile.apiBaseUrl,
       defaultTimeoutMs: typeof rawProfile.sandbox.defaultTimeoutMs === 'number'
         ? rawProfile.sandbox.defaultTimeoutMs
@@ -6041,6 +6050,7 @@ export class ToolExecutor {
       apiUrl: normalizeHttpUrlInput(apiUrl.toString()),
       target: profile.target?.trim() || undefined,
       language: profile.language?.trim() || undefined,
+      snapshot: profile.snapshot?.trim() || undefined,
       defaultTimeoutMs: typeof profile.defaultTimeoutMs === 'number'
         ? profile.defaultTimeoutMs
         : undefined,

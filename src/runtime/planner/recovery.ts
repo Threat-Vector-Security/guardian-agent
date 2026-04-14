@@ -1,5 +1,6 @@
 import type { PlanNode } from './types.js';
 import { parseStructuredJsonObject } from '../../util/structured-json.js';
+import { BROKER_SAFE_PLANNER_ACTION_TYPES } from './task-planner.js';
 
 export interface RecoveryPlan {
   success: boolean;
@@ -9,7 +10,10 @@ export interface RecoveryPlan {
 
 export class RecoveryPlanner {
   constructor(
-    private readonly chatFn: (messages: any[], options?: any) => Promise<any>
+    private readonly chatFn: (messages: any[], options?: any) => Promise<any>,
+    private readonly options: {
+      allowedActionTypes?: PlanNode['actionType'][];
+    } = {},
   ) {}
 
   async attemptRecovery(
@@ -17,6 +21,7 @@ export class RecoveryPlanner {
     failedNode: PlanNode,
     errorOrReflectionReason: unknown
   ): Promise<RecoveryPlan> {
+    const allowedActionTypes = this.options.allowedActionTypes ?? BROKER_SAFE_PLANNER_ACTION_TYPES;
     const prompt = `
 You are the Guardian Agent Recovery Planner.
 A sub-task within a complex Execution Plan has failed either technically or semantically.
@@ -42,10 +47,15 @@ PlanNode structure:
   "id": "string",
   "description": "string",
   "dependencies": ["string"],
-  "actionType": "tool_call" | "skill_delegation" | "routine_execution" | "execute_code" | "delegate_task",
+  "actionType": ${allowedActionTypes.map((actionType) => `"${actionType}"`).join(' | ')},
   "target": "string",
   "inputPrompt": "string"
 }
+
+This brokered runtime only supports the action types listed above.
+- Prefer "tool_call" for brokered file and tool operations.
+- Use "execute_code" only for one bounded remote command string.
+- Do not emit unsupported actions like "skill_delegation", "routine_execution", or "delegate_task".
 `;
 
     try {

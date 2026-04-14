@@ -101,6 +101,13 @@ Current recovery order:
 2. full JSON fallback using `response_format: { type: "json_object" }`
 3. route-only JSON fallback using the same strict JSON-object response format
 
+Primary prompt profiles:
+- the native primary classification step may use either a `compact` or `full` system prompt profile
+- profile selection is gateway-owned and only narrows prompt footprint; it does **not** choose the route or bypass the Intent Gateway contract
+- `compact` is reserved for short, flat turns without active pending-action context, continuity context, or recent-history dependence
+- `full` remains the default for richer, ambiguous, repo-like, multi-step, or context-heavy turns
+- the JSON and route-only fallback stages always use the full recovery prompts so compact-mode misses still recover through the existing bounded fallback chain
+
 Shared recovery rules:
 - fenced JSON, malformed object text, and tool-call argument blobs flow through the shared structured JSON recovery helpers
 - the repair path is bounded and schema-shaped; it exists to recover a valid structured decision, not to reinterpret the user turn heuristically

@@ -1258,6 +1258,8 @@ export interface AssistantCloudVercelSandboxConfig {
   enabled?: boolean;
   /** Vercel project id used for sandbox authentication from a local Guardian runtime. */
   projectId?: string;
+  /** Optional Vercel snapshot id used to prewarm new sandboxes with a prepared base image. */
+  baseSnapshotId?: string;
   /** Optional default sandbox timeout in milliseconds. */
   defaultTimeoutMs?: number;
   /** Optional default vCPU allocation. Vercel currently supports up to 8. */
@@ -1304,6 +1306,8 @@ export interface AssistantCloudDaytonaProfileConfig {
   target?: string;
   /** Optional sandbox language. Defaults to typescript in Guardian. */
   language?: string;
+  /** Optional Daytona snapshot name or id used to prewarm new sandboxes. */
+  snapshot?: string;
   /** Whether Guardian may use this profile for bounded remote execution. */
   enabled?: boolean;
   /** Optional default sandbox timeout in milliseconds. */

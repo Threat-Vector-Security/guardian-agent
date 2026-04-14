@@ -731,6 +731,7 @@ describe('validateConfig', () => {
               sandbox: {
                 enabled: true,
                 projectId: 'prj_123',
+                baseSnapshotId: 'snap_vercel_base',
                 defaultTimeoutMs: 300_000,
                 defaultVcpus: 2,
                 allowNetwork: true,
@@ -779,8 +780,16 @@ describe('validateConfig', () => {
               sandbox: {
                 enabled: true,
                 projectId: 'prj_123',
+                baseSnapshotId: ' snap_vercel_base ',
                 allowedDomains: ['Registry.Npmjs.org', 'api.anthropic.com '],
               },
+            }],
+            daytonaProfiles: [{
+              id: 'daytona-main',
+              name: 'Daytona Main',
+              credentialRef: 'cloud.daytona.primary',
+              enabled: true,
+              snapshot: ' snapshot-main ',
             }],
             awsProfiles: [{
               id: 'aws-main',
@@ -812,6 +821,7 @@ describe('validateConfig', () => {
             ...DEFAULT_CONFIG.assistant.credentials.refs,
             'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
             'cloud.vercel.primary': { source: 'env', env: 'VERCEL_TOKEN' },
+            'cloud.daytona.primary': { source: 'env', env: 'DAYTONA_API_KEY' },
             'cloud.aws.access': { source: 'env', env: 'AWS_ACCESS_KEY_ID' },
             'cloud.aws.secret': { source: 'env', env: 'AWS_SECRET_ACCESS_KEY' },
             'cloud.gcp.service': { source: 'env', env: 'GCP_SERVICE_ACCOUNT_JSON' },
@@ -839,7 +849,9 @@ describe('validateConfig', () => {
     expect(loaded.assistant.tools.cloud?.cpanelProfiles?.[0]?.ssl).toBe(true);
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.apiBaseUrl).toBe('https://api.vercel.com');
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.projectId).toBe('prj_123');
+    expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.baseSnapshotId).toBe('snap_vercel_base');
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.allowedDomains).toEqual(['registry.npmjs.org', 'api.anthropic.com']);
+    expect(loaded.assistant.tools.cloud?.daytonaProfiles?.[0]?.snapshot).toBe('snapshot-main');
     expect(loaded.assistant.tools.cloud?.awsProfiles?.[0]?.endpoints?.s3).toBe('http://localhost:4566');
     expect(loaded.assistant.tools.cloud?.gcpProfiles?.[0]?.endpoints?.storage).toBe('https://storage.googleapis.com');
     expect(loaded.assistant.tools.cloud?.azureProfiles?.[0]?.blobBaseUrl).toBe('https://account.blob.core.windows.net');

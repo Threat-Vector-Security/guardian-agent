@@ -149,6 +149,13 @@ const CLOUD_PROVIDER_DEFS = [
         help: 'Use the Vercel Project ID of the sandbox project. The project name or slug such as guardian-sandbox will not work here.',
       },
       {
+        key: 'sandbox.baseSnapshotId',
+        label: 'Base Snapshot ID (optional)',
+        type: 'text',
+        placeholder: 'snap_xxx',
+        help: 'Optional Vercel snapshot ID for a prewarmed sandbox image. Use this when you already built a base snapshot with dependencies or repo bootstrap work baked in.',
+      },
+      {
         key: 'sandbox.defaultTimeoutMs',
         label: 'Default Sandbox Timeout (ms)',
         type: 'number',
@@ -218,6 +225,13 @@ const CLOUD_PROVIDER_DEFS = [
         type: 'text',
         placeholder: 'typescript',
         help: 'Guardian defaults to typescript. Change this only if your Daytona workspace expects a different toolbox language.',
+      },
+      {
+        key: 'snapshot',
+        label: 'Snapshot (optional)',
+        type: 'text',
+        placeholder: 'my-snapshot-id',
+        help: 'Optional Daytona snapshot name or id for prewarmed sandboxes. Use this when you want Guardian to start from a prepared sandbox image instead of a cold workspace.',
       },
       {
         key: 'defaultTimeoutMs',

@@ -1161,6 +1161,83 @@ describe('BrokeredWorkerSession automation control', () => {
     ]);
   });
 
+  it('constrains the brokered planner prompt to broker-safe action types', async () => {
+    let plannerPrompt = '';
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        plannerPrompt = lastContent;
+        return {
+          content: JSON.stringify({
+            nodes: {
+              mkdir: {
+                id: 'mkdir',
+                description: 'Create the target directory.',
+                dependencies: [],
+                actionType: 'tool_call',
+                target: 'fs_mkdir',
+                inputPrompt: JSON.stringify({ path: 'tmp/manual-dag-smoke' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The requested file operation completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 120)}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_mkdir',
+          description: 'Create a directory.',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          risk: 'mutating',
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-mkdir-safe',
+        message: 'Created directory.',
+        output: { path: 'tmp/manual-dag-smoke' },
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-broker-safe-prompt',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create a directory.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    expect(plannerPrompt).toContain('"tool_call" | "execute_code"');
+    expect(plannerPrompt).not.toContain('"skill_delegation"');
+    expect(plannerPrompt).not.toContain('"delegate_task"');
+    expect(plannerPrompt).toContain('Do not emit unsupported action types');
+  });
+
   it('propagates taint from earlier planner nodes into later node tool requests', async () => {
     const llmChat = vi.fn(async (messages) => {
       const lastMessage = messages[messages.length - 1];

@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
+import { scoreAutomationOrchestration, scoreComplexity } from './complexity-scorer.js';
 import { parseStructuredJsonObject } from '../util/structured-json.js';
 export type IntentGatewayRoute =
   | 'automation_authoring'
@@ -117,6 +118,7 @@ export interface IntentGatewayRecord {
   available: boolean;
   model: string;
   latencyMs: number;
+  promptProfile?: IntentGatewayPromptProfile;
   decision: IntentGatewayDecision;
   rawResponsePreview?: string;
 }
@@ -159,6 +161,8 @@ interface IntentGatewayRepairContext {
   pendingAction?: IntentGatewayInput['pendingAction'] | null;
   continuity?: IntentGatewayInput['continuity'] | null;
 }
+
+type IntentGatewayPromptProfile = 'compact' | 'full';
 
 export type IntentGatewayChatFn = (
   messages: ChatMessage[],
@@ -485,8 +489,67 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: active pending action is an email-provider clarification, then the user says "Use Codex to say hello and confirm you are working." -> route=coding_task, turnRelation=new_request, codingBackend=codex, codingBackendRequested=true.',
 ];
 
+const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
+  'This is the compact primary routing profile for short, flat turns. The schema and route taxonomy are unchanged.',
+  'Route definitions:',
+  '- automation_authoring: create a new automation or change automation definition content from freeform requirements.',
+  '- automation_control: operate on an existing automation definition or run such as rename, delete, toggle, clone, inspect, or run.',
+  '- automation_output_task: search, read, summarize, compare, or investigate stored output from an automation run.',
+  '- ui_control: requests about Guardian pages or internal catalog surfaces.',
+  '- browser_task: external website navigation, reading, extraction, or interaction.',
+  '- personal_assistant_task: Second Brain notes, tasks, routines, briefs, contacts, calendar planning, meeting prep, and personal retrieval.',
+  '- workspace_task: explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Google Calendar, OneDrive, SharePoint, Teams, or Outlook Calendar.',
+  '- email_task: direct Gmail or Outlook mailbox work.',
+  '- search_task: generic web or document search.',
+  '- memory_task: explicit remember, recall, or memory search requests.',
+  '- filesystem_task: filesystem lookup or read/write operations.',
+  '- coding_task: code work inside a workspace, including explicit backend delegation and remote sandbox command execution.',
+  '- coding_session_control: list, inspect, switch, attach, detach, or create coding sessions/workspaces.',
+  '- security_task: security triage, containment, or security-control operations.',
+  '- complex_planning_task: explicitly use Guardian\'s brokered complex-planning / DAG path. Do not use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
+  '- general_assistant: everything else.',
+  'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
+  'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
+  'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
+  'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
+  'Also classify executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, expectedContextPressure, and preferredAnswerPath.',
+  'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
+  'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. Prefer general_assistant with uiSurface=config and provider/tool orchestration workload metadata for those requests.',
+  'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct provider CRUD. Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, or personal retrieval across email/docs/calendar/notes.',
+  'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
+  'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
+  'Do not use automation_control for explicit built-in tool execution requests or direct tool names such as whm_status, vercel_status, aws_status, gcp_status, azure_status, or cf_status. If the user explicitly names a built-in tool, set entities.toolName to that exact tool name.',
+  'Prefer coding_session_control over coding_task when the user asks which workspace is active, lists sessions, switches workspaces, attaches, detaches, or creates a session.',
+  'Requests to inspect, explain, review, or plan changes against specific repo files, diffs, PRs, patches, or source paths are coding_task.',
+  'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider. Set codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work.',
+  'Set codingRemoteExecRequested=true only when the user is explicitly asking to run a command in the remote sandbox, isolated sandbox, or cloud sandbox for the current workspace. When codingRemoteExecRequested=true, extract the exact shell command into entities.command.',
+  'Set codingRunStatusCheck=true only when the user is explicitly asking whether the most recent coding backend run completed, failed, timed out, exited with a code, or otherwise asking for recent-run status. Questions asking why a backend produced a file, diff, permission, executable bit, mode bit, output, or artifact are explanation or investigation requests, not status checks.',
+  'If both Google Workspace and Microsoft 365 are available and the user asks for direct mailbox work without specifying one, keep route=email_task and set resolution=needs_clarification, missingFields=["email_provider"].',
+  'Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.',
+  'Example: "What do I have due today?" -> route=personal_assistant_task, operation=inspect, personalItemType=overview.',
+  'Example: "Check my unread Outlook mail." -> route=email_task, operation=read, emailProvider=m365, mailboxReadMode=unread.',
+  'Example: "Add this meeting to my Google Calendar." -> route=workspace_task, operation=create, calendarTarget=gws.',
+  'Example: "Run Browser Read Smoke now." -> route=automation_control, operation=run, automationName="Browser Read Smoke".',
+  'Example: "Analyze the output from the last HN Snapshot Smoke automation run." -> route=automation_output_task, operation=inspect, automationName="HN Snapshot Smoke".',
+  'Example: "List my configured AI providers." -> route=general_assistant, operation=read, uiSurface=config.',
+  'Example: "Use Codex to say hello." -> route=coding_task, operation=run, codingBackend=codex, codingBackendRequested=true.',
+  'Example: "What session am I on?" -> route=coding_session_control, operation=inspect.',
+  'Example: "Run pwd in the remote sandbox for this workspace." -> route=coding_task, operation=run, codingRemoteExecRequested=true, command="pwd".',
+  'Example: "Use your complex-planning path for this request. Create three files and synthesize them into a summary." -> route=complex_planning_task, operation=run.',
+];
+
+const INTENT_GATEWAY_COMPACT_SYSTEM_PROMPT = [
+  'You are Guardian\'s intent gateway.',
+  'Prompt profile: compact. Use the compact route guide for short, flat turns. The route taxonomy and output schema are unchanged.',
+  'Your job is to classify the top-level route for a user request and determine whether the current turn is a new request, a follow-up, a clarification answer, or a correction.',
+  'Never plan, explain, or execute the request.',
+  'You must call the route_intent tool exactly once.',
+  ...INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES,
+].join(' ');
+
 const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
+  'Prompt profile: full. Use the full route guide for richer, ambiguous, or context-heavy turns.',
   'Your job is to classify the top-level route for a user request and determine whether the current turn is a new request, a follow-up, a clarification answer, or a correction.',
   'Never plan, explain, or execute the request.',
   'You must call the route_intent tool exactly once.',
@@ -609,11 +672,14 @@ export class IntentGateway {
     chat: IntentGatewayChatFn,
   ): Promise<IntentGatewayRecord> {
     const startedAt = Date.now();
+    const primaryPromptProfile = selectIntentGatewayPromptProfile(input);
+    const primarySystemPrompt = selectIntentGatewayPrimarySystemPrompt(primaryPromptProfile);
     const primary = await this.classifyOnce(input, chat, {
       mode: 'primary',
-      systemPrompt: INTENT_GATEWAY_SYSTEM_PROMPT,
+      systemPrompt: primarySystemPrompt,
       useTools: true,
       startedAt,
+      promptProfile: primaryPromptProfile,
     });
     if (primary.available) {
       return this.repairAutomationNameIfNeeded(input, primary, chat);
@@ -625,6 +691,7 @@ export class IntentGateway {
       useTools: false,
       responseFormat: { type: 'json_object' },
       startedAt,
+      promptProfile: primaryPromptProfile,
     });
     if (fallback.available) {
       return this.repairAutomationNameIfNeeded(input, fallback, chat);
@@ -636,6 +703,7 @@ export class IntentGateway {
       useTools: false,
       responseFormat: { type: 'json_object' },
       startedAt,
+      promptProfile: primaryPromptProfile,
     });
     if (routeOnly.available || routeOnly.rawResponsePreview || routeOnly.model !== 'unknown') {
       return this.repairAutomationNameIfNeeded(input, routeOnly, chat);
@@ -655,6 +723,7 @@ export class IntentGateway {
       useTools: boolean;
       responseFormat?: ChatOptions['responseFormat'];
       startedAt: number;
+      promptProfile: IntentGatewayPromptProfile;
     },
   ): Promise<IntentGatewayRecord> {
     try {
@@ -674,6 +743,7 @@ export class IntentGateway {
         available: parsed.available,
         model: response.model,
         latencyMs: Date.now() - options.startedAt,
+        promptProfile: options.promptProfile,
         decision: parsed.decision,
         rawResponsePreview: buildRawResponsePreview(response),
       };
@@ -683,6 +753,7 @@ export class IntentGateway {
         available: false,
         model: 'unknown',
         latencyMs: Date.now() - options.startedAt,
+        promptProfile: options.promptProfile,
         decision: {
           route: 'unknown',
           confidence: 'low',
@@ -737,6 +808,7 @@ export function toIntentGatewayClientMetadata(
     available: record.available,
     model: record.model,
     latencyMs: record.latencyMs,
+    ...(record.promptProfile ? { promptProfile: record.promptProfile } : {}),
     route: record.decision.route,
     confidence: record.decision.confidence,
     operation: record.decision.operation,
@@ -763,6 +835,7 @@ export function serializeIntentGatewayRecord(
     available: record.available,
     model: record.model,
     latencyMs: record.latencyMs,
+    ...(record.promptProfile ? { promptProfile: record.promptProfile } : {}),
     ...(record.rawResponsePreview ? { rawResponsePreview: record.rawResponsePreview } : {}),
     decision: {
       route: record.decision.route,
@@ -800,6 +873,9 @@ export function deserializeIntentGatewayRecord(
     latencyMs: typeof value.latencyMs === 'number' && Number.isFinite(value.latencyMs)
       ? value.latencyMs
       : 0,
+    ...(normalizeIntentGatewayPromptProfile(value.promptProfile)
+      ? { promptProfile: normalizeIntentGatewayPromptProfile(value.promptProfile) }
+      : {}),
     ...(typeof value.rawResponsePreview === 'string' && value.rawResponsePreview.trim()
       ? { rawResponsePreview: value.rawResponsePreview }
       : {}),
@@ -904,6 +980,50 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
       ].filter(Boolean).join('\n'),
     },
   ];
+}
+
+function selectIntentGatewayPrimarySystemPrompt(profile: IntentGatewayPromptProfile): string {
+  return profile === 'compact'
+    ? INTENT_GATEWAY_COMPACT_SYSTEM_PROMPT
+    : INTENT_GATEWAY_SYSTEM_PROMPT;
+}
+
+function selectIntentGatewayPromptProfile(input: IntentGatewayInput): IntentGatewayPromptProfile {
+  const request = collapseIntentGatewayWhitespace(input.content ?? '');
+  if (!request) return 'full';
+  if (input.pendingAction) return 'full';
+  if ((input.continuity || (input.recentHistory?.length ?? 0) > 0)
+    && looksLikeContextDependentPromptSelectionTurn(request)) {
+    return 'full';
+  }
+  if (isExplicitComplexPlanningRequest(request)) return 'full';
+  if (/[\n`]/.test(request)) return 'full';
+  if (/[,:;]/.test(request)) return 'full';
+  if (request.includes('/') || request.includes('\\')) return 'full';
+  if (/(?:^|[\s(])(?:\.{1,2}\/|\/[A-Za-z0-9._-]|[A-Za-z0-9._-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|yaml|yml|py|rs|go|java|kt|c|cpp|h|hpp|sh))(?:$|[\s),.])/i.test(request)) {
+    return 'full';
+  }
+
+  const words = request.split(/\s+/).filter(Boolean);
+  if (words.length > 10 || request.length > 80) return 'full';
+
+  const complexity = scoreComplexity(request);
+  if (complexity.score >= 0.18) return 'full';
+  if (complexity.signals.questionDepth >= 0.45) return 'full';
+  if (complexity.signals.abstractionMarkers >= 0.5) return 'full';
+  if (complexity.signals.multiStepMarkers >= 0.4) return 'full';
+  if (complexity.signals.constraintComplexity >= 0.4) return 'full';
+
+  if (scoreAutomationOrchestration(request) >= 0.55) return 'full';
+
+  return 'compact';
+}
+
+function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
+  const normalized = request.trim().toLowerCase();
+  if (!normalized || normalized.length > 64) return false;
+  return /^(?:yes|yeah|yep|no|nope|ok|okay|sure|actually|instead|use\b|switch\b|continue\b|resume\b|retry\b|again\b|same\b|that\b|those\b|it\b|them\b|this\b)/.test(normalized)
+    || /\b(?:that|those|it|them|same\s+(?:one|workspace|session)|again)\b/.test(normalized);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1045,7 +1165,13 @@ function normalizeIntentGatewayDecision(
   const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
     ? parsed.resolvedContent.trim()
     : undefined;
-  const derivedWorkload = deriveWorkloadMetadata(route, operation, parsed);
+  const providerConfigRequest = isExplicitProviderConfigRequest(rawSourceContent);
+  const uiSurface = normalizeUiSurface(parsed.uiSurface)
+    ?? (route === 'general_assistant' && providerConfigRequest ? 'config' : undefined);
+  const derivedWorkload = deriveWorkloadMetadata(route, operation, {
+    ...parsed,
+    ...(uiSurface ? { uiSurface } : {}),
+  });
   const executionClass = normalizeExecutionClass(parsed.executionClass) ?? derivedWorkload.executionClass;
   const preferredTier = normalizePreferredTier(parsed.preferredTier) ?? derivedWorkload.preferredTier;
   const requiresRepoGrounding = typeof parsed.requiresRepoGrounding === 'boolean'
@@ -1059,7 +1185,6 @@ function normalizeIntentGatewayDecision(
   const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
     ?? derivedWorkload.preferredAnswerPath;
 
-  const uiSurface = normalizeUiSurface(parsed.uiSurface);
   const automationName = shouldKeepAutomationEntities(route, uiSurface)
     && typeof parsed.automationName === 'string' && parsed.automationName.trim()
     ? parsed.automationName.trim()
@@ -1102,8 +1227,10 @@ function normalizeIntentGatewayDecision(
         )
       ),
   );
-  const emailProvider = normalizeEmailProvider(parsed.emailProvider);
-  const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
+  const emailProvider = normalizeEmailProvider(parsed.emailProvider)
+    ?? inferEmailProviderFromSource(rawSourceContent, route, personalItemType);
+  const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode)
+    ?? inferMailboxReadModeFromSource(rawSourceContent, route, operation);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
   const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays)
@@ -1273,6 +1400,7 @@ function deriveWorkloadMetadata(
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
 } {
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
+  const uiSurface = normalizeUiSurface(parsed.uiSurface);
   const codingBackendRequested = parsed.codingBackendRequested === true;
   const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
 
@@ -1409,6 +1537,24 @@ function deriveWorkloadMetadata(
         preferredAnswerPath: ['inspect', 'read', 'navigate', 'search'].includes(operation) ? 'direct' : 'tool_loop',
       };
     case 'general_assistant':
+      if (uiSurface === 'config') {
+        return {
+          executionClass: 'provider_crud',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+        };
+      }
+      return {
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      };
     case 'unknown':
     default:
       return {
@@ -1642,6 +1788,18 @@ function normalizeMailboxReadMode(
   }
 }
 
+function normalizeIntentGatewayPromptProfile(
+  value: unknown,
+): IntentGatewayPromptProfile | undefined {
+  switch (value) {
+    case 'compact':
+    case 'full':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
 function normalizeCalendarTarget(
   value: unknown,
 ): IntentGatewayEntities['calendarTarget'] | undefined {
@@ -1723,13 +1881,16 @@ function repairIntentGatewayRoute(
   turnRelation: IntentGatewayTurnRelation,
   repairContext: IntentGatewayRepairContext | undefined,
 ): IntentGatewayRoute {
-  if (isExplicitComplexPlanningRequest(repairContext?.sourceContent)) {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'complex_planning_task';
+  }
+  if (isExplicitProviderConfigRequest(rawSourceContent)) {
+    return 'general_assistant';
   }
   if (route === 'personal_assistant_task') {
     return route;
   }
-  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   if (
     route === 'coding_session_control'
@@ -1769,6 +1930,9 @@ function repairIntentGatewayOperation(
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
   }
+  if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
+    return inferProviderConfigOperation(rawSourceContent, operation);
+  }
   if (
     route === 'coding_task'
     && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
@@ -1807,6 +1971,10 @@ function repairUnavailableIntentGatewayDecision(
         ? parsed.summary.trim()
         : 'Recovered explicit complex-planning request after an unstructured gateway response.',
     }, repairContext);
+  }
+  const inferredProviderConfigDecision = inferExplicitProviderConfigDecision(repairContext, parsed);
+  if (inferredProviderConfigDecision) {
+    return inferredProviderConfigDecision;
   }
   const parsedOperation = normalizeOperation(parsed?.operation);
   const inferredRemoteExecCommand = extractExplicitRemoteExecCommand(
@@ -1873,12 +2041,23 @@ const GENERIC_SESSION_TARGET_TOKENS = new Set([
   'active',
   'an',
   'attached',
+  'cloud',
   'current',
   'currently',
+  'for',
+  'from',
+  'in',
+  'isolated',
   'the',
   'my',
+  'of',
+  'on',
+  'remote',
+  'sandbox',
   'this',
   'that',
+  'using',
+  'via',
   'workspace',
   'workspaces',
   'session',
@@ -2431,6 +2610,98 @@ function isExplicitSecondBrainEntityRequest(
 
 function normalizeIntentGatewayRepairText(content: string | undefined): string {
   return collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
+}
+
+function inferEmailProviderFromSource(
+  content: string,
+  route: IntentGatewayRoute,
+  personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
+): IntentGatewayEntities['emailProvider'] | undefined {
+  if (!content) return undefined;
+  const canCarryEmailProvider = route === 'email_task'
+    || (route === 'personal_assistant_task' && personalItemType === 'brief');
+  if (!canCarryEmailProvider) return undefined;
+  const normalized = content.toLowerCase();
+  if (/\b(?:outlook|microsoft 365|office 365|m365)\b/.test(normalized)) {
+    return 'm365';
+  }
+  if (/\b(?:gmail|google workspace|google mail|gws)\b/.test(normalized)) {
+    return 'gws';
+  }
+  return undefined;
+}
+
+function inferMailboxReadModeFromSource(
+  content: string,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+): IntentGatewayEntities['mailboxReadMode'] | undefined {
+  if (!content || route !== 'email_task' || operation !== 'read') return undefined;
+  const normalized = content.toLowerCase();
+  if (/\b(?:unread|new)\b/.test(normalized)) {
+    return 'unread';
+  }
+  if (/\b(?:newest|latest|recent|last)\b/.test(normalized)) {
+    return 'latest';
+  }
+  return undefined;
+}
+
+function isExplicitProviderConfigRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  return /\bconfigured\s+(?:ai\s+|llm\s+)?providers?\b/.test(normalized)
+    || /\b(?:ai\s+|llm\s+)?provider\s+profiles?\b/.test(normalized)
+    || (/\b(?:providers?|profiles?|models?|catalog|routing policy)\b/.test(normalized)
+      && /\b(?:ai|llm|model|provider|ollama|anthropic|openai|xai|gemini|claude)\b/.test(normalized));
+}
+
+function inferProviderConfigOperation(
+  content: string,
+  fallback: IntentGatewayOperation,
+): IntentGatewayOperation {
+  if (['read', 'inspect', 'create', 'update', 'delete'].includes(fallback)) {
+    return fallback;
+  }
+  const normalized = content.toLowerCase();
+  if (/\b(?:update|edit|change|modify|set|switch)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\b(?:delete|remove)\b/.test(normalized)) {
+    return 'delete';
+  }
+  if (/\b(?:create|add)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (/\b(?:inspect|explain|details?|catalog|models?)\b/.test(normalized)) {
+    return 'inspect';
+  }
+  return 'read';
+}
+
+function inferExplicitProviderConfigDecision(
+  repairContext: IntentGatewayRepairContext | undefined,
+  parsed?: Record<string, unknown>,
+): IntentGatewayDecision | null {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (!isExplicitProviderConfigRequest(rawSourceContent)) return null;
+  const parsedOperation = normalizeOperation(parsed?.operation);
+  return normalizeIntentGatewayDecision({
+    ...(parsed ?? {}),
+    route: 'general_assistant',
+    operation: inferProviderConfigOperation(rawSourceContent, parsedOperation),
+    confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : 'Recovered an AI provider configuration request after an unstructured gateway response.',
+    uiSurface: 'config',
+    executionClass: 'provider_crud',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'tool_loop',
+  }, repairContext);
 }
 
 function collapseIntentGatewayWhitespace(content: string): string {
