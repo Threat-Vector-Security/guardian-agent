@@ -141,6 +141,8 @@ export function cleanInferredSessionTarget(value: string | undefined): string | 
   const cleaned = collapseIntentGatewayWhitespace(value)
     .replace(/^["'`]+|["'`]+$/g, '')
     .replace(/^[Tt]he\s+/, '')
+    .replace(/^(?:remote|isolated|cloud)\s+sandbox\s+(?:for|against|using)\s+/i, '')
+    .replace(/^[Tt]he\s+/, '')
     .replace(/[.,!?;:]+$/g, '')
     .trim();
   if (!cleaned) return undefined;

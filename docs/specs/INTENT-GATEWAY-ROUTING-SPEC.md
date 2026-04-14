@@ -106,7 +106,10 @@ Current internal ownership:
 - `src/runtime/intent-gateway.ts` remains the compatibility facade and owns the classifier call sequence, fallback ordering, and automation-name repair pass
 - `src/runtime/intent/route-classifier.ts` owns classifier prompt assets, request-message shaping, and single-pass classifier execution
 - `src/runtime/intent/normalization.ts` owns shared enum/value normalization for routed intent state
-- `src/runtime/intent/structured-recovery.ts` owns structured parsing, bounded repair, and route-scoped recovery after malformed or missing classifier output
+- `src/runtime/intent/structured-recovery.ts` owns structured parsing and final decision assembly from staged routing outputs
+- `src/runtime/intent/route-entity-resolution.ts` owns cross-route entity assembly on top of the scoped resolver helpers
+- `src/runtime/intent/clarification-resolver.ts` owns clarification, correction, and continuity-aware route/operation repair
+- `src/runtime/intent/unstructured-recovery.ts` owns bounded recovery when classifier output is missing or malformed
 - `src/runtime/intent/workload-derivation.ts` owns deterministic workload metadata derivation
 - `src/runtime/intent/capability-resolver.ts` owns direct capability-lane candidate mapping after routing
 - `src/runtime/intent/entity-resolvers/*.ts` own route-scoped entity inference and repair
@@ -255,6 +258,7 @@ Gateway behavior:
 - if the runtime creates a pending action, the next gateway call sees the blocker summary and original request
 - short answers like `Use Outlook`, `Codex`, `switch to Test Tactical Game App`, or `okay, now do that` are interpreted against that active pending action before ordinary bounded-history repair logic
 - an active pending action does not automatically make the next turn a follow-up; a clearly different request such as `Check my email.` must still classify as a fresh `new_request`
+- clarification and correction repair run through the shared clarification resolver stage instead of bespoke per-route follow-up handling
 
 Current implementation details:
 - pending action state is a single active slot per logical assistant context, canonical user id, channel, and surface
