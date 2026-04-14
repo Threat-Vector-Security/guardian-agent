@@ -69,6 +69,19 @@ export type IntentGatewaySimpleVsComplex =
   | 'simple'
   | 'complex';
 
+export type IntentGatewayProvenanceSource =
+  | 'classifier.primary'
+  | 'classifier.json_fallback'
+  | 'classifier.route_only_fallback'
+  | 'resolver.email'
+  | 'resolver.coding'
+  | 'resolver.personal_assistant'
+  | 'resolver.provider_config'
+  | 'resolver.clarification'
+  | 'repair.unstructured'
+  | 'repair.automation_name'
+  | 'derived.workload';
+
 export type IntentGatewayPreferredTier =
   | 'local'
   | 'external';
@@ -98,6 +111,20 @@ export interface IntentGatewayEntities {
   command?: string;
 }
 
+export interface IntentGatewayDecisionProvenance {
+  route?: IntentGatewayProvenanceSource;
+  operation?: IntentGatewayProvenanceSource;
+  resolvedContent?: IntentGatewayProvenanceSource;
+  executionClass?: IntentGatewayProvenanceSource;
+  preferredTier?: IntentGatewayProvenanceSource;
+  requiresRepoGrounding?: IntentGatewayProvenanceSource;
+  requiresToolSynthesis?: IntentGatewayProvenanceSource;
+  expectedContextPressure?: IntentGatewayProvenanceSource;
+  preferredAnswerPath?: IntentGatewayProvenanceSource;
+  simpleVsComplex?: IntentGatewayProvenanceSource;
+  entities?: Partial<Record<keyof IntentGatewayEntities, IntentGatewayProvenanceSource>>;
+}
+
 export interface IntentGatewayDecision {
   route: IntentGatewayRoute;
   confidence: IntentGatewayConfidence;
@@ -114,6 +141,7 @@ export interface IntentGatewayDecision {
   expectedContextPressure: IntentGatewayExpectedContextPressure;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
   simpleVsComplex?: IntentGatewaySimpleVsComplex;
+  provenance?: IntentGatewayDecisionProvenance;
   entities: IntentGatewayEntities;
 }
 

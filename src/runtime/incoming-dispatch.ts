@@ -327,7 +327,22 @@ export function createIncomingDispatchPreparer(args: {
             requiresRepoGrounding: gateway.decision.requiresRepoGrounding,
             requiresToolSynthesis: gateway.decision.requiresToolSynthesis,
             expectedContextPressure: gateway.decision.expectedContextPressure,
+            simpleVsComplex: gateway.decision.simpleVsComplex,
             preferredAnswerPath: gateway.decision.preferredAnswerPath,
+            routeSource: gateway.decision.provenance?.route,
+            operationSource: gateway.decision.provenance?.operation,
+            workloadSources: gateway.decision.provenance
+              ? {
+                  executionClass: gateway.decision.provenance.executionClass,
+                  preferredTier: gateway.decision.provenance.preferredTier,
+                  requiresRepoGrounding: gateway.decision.provenance.requiresRepoGrounding,
+                  requiresToolSynthesis: gateway.decision.provenance.requiresToolSynthesis,
+                  expectedContextPressure: gateway.decision.provenance.expectedContextPressure,
+                  preferredAnswerPath: gateway.decision.provenance.preferredAnswerPath,
+                  simpleVsComplex: gateway.decision.provenance.simpleVsComplex,
+                }
+              : undefined,
+            entitySources: gateway.decision.provenance?.entities,
             emailProvider: gateway.decision.entities.emailProvider,
             codingBackend: gateway.decision.entities.codingBackend,
             latencyMs: gateway.latencyMs,

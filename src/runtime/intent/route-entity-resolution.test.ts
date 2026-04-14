@@ -8,20 +8,28 @@ describe('resolveIntentGatewayEntities', () => {
       { sourceContent: 'Show me the configured AI providers and available models.' },
       'general_assistant',
       'inspect',
-    )).toMatchObject({
+      'classifier.primary',
+    ).entities).toMatchObject({
       uiSurface: 'config',
     });
   });
 
   it('infers mailbox provider and read mode from mailbox requests', () => {
-    expect(resolveIntentGatewayEntities(
+    const result = resolveIntentGatewayEntities(
       {},
       { sourceContent: 'Check my unread Outlook mail.' },
       'email_task',
       'read',
-    )).toMatchObject({
+      'classifier.primary',
+    );
+
+    expect(result.entities).toMatchObject({
       emailProvider: 'm365',
       mailboxReadMode: 'unread',
+    });
+    expect(result.provenance).toMatchObject({
+      emailProvider: 'resolver.email',
+      mailboxReadMode: 'resolver.email',
     });
   });
 
@@ -31,7 +39,8 @@ describe('resolveIntentGatewayEntities', () => {
       { sourceContent: 'Use Codex to inspect src/runtime/intent-gateway.ts in the Guardian workspace.' },
       'coding_task',
       'inspect',
-    )).toMatchObject({
+      'classifier.primary',
+    ).entities).toMatchObject({
       codingBackend: 'codex',
       codingBackendRequested: true,
       sessionTarget: 'Guardian',
@@ -44,7 +53,8 @@ describe('resolveIntentGatewayEntities', () => {
       { sourceContent: 'Run npm test in the remote sandbox for the Guardian workspace.' },
       'coding_task',
       'run',
-    )).toMatchObject({
+      'classifier.primary',
+    ).entities).toMatchObject({
       command: 'npm test',
       codingRemoteExecRequested: true,
       sessionTarget: 'Guardian',
@@ -57,7 +67,8 @@ describe('resolveIntentGatewayEntities', () => {
       { sourceContent: 'Show only my disabled routines.' },
       'personal_assistant_task',
       'read',
-    )).toMatchObject({
+      'classifier.primary',
+    ).entities).toMatchObject({
       personalItemType: 'routine',
       enabled: false,
     });
