@@ -32,6 +32,8 @@ export interface RemoteExecutionTargetDescriptor {
   networkMode: RemoteExecutionNetworkMode;
   allowedDomains: string[];
   allowedCidrs: string[];
+  snapshotConfigured?: boolean;
+  snapshotLabel?: string;
   healthState?: RemoteExecutionHealthState;
   healthReason?: string;
   healthCheckedAt?: number;
@@ -65,7 +67,7 @@ export function prioritizeReadyRemoteExecutionTargets(
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value) && value !== 'automatic');
   if (orderedPreferredIds.length === 0) {
-    return readyTargets;
+    return sortSnapshotBackedTargets(readyTargets);
   }
 
   const seen = new Set<string>();
@@ -82,7 +84,23 @@ export function prioritizeReadyRemoteExecutionTargets(
     prioritized.push(entry);
   }
 
-  return prioritized;
+  return [
+    ...prioritized.filter((entry) => orderedPreferredIds.includes(entry.id)),
+    ...sortSnapshotBackedTargets(prioritized.filter((entry) => !orderedPreferredIds.includes(entry.id))),
+  ];
+}
+
+function sortSnapshotBackedTargets(
+  targets: RemoteExecutionTargetDescriptor[],
+): RemoteExecutionTargetDescriptor[] {
+  return targets
+    .map((target, index) => ({ target, index }))
+    .sort((left, right) => {
+      const snapshotDelta = Number(Boolean(right.target.snapshotConfigured)) - Number(Boolean(left.target.snapshotConfigured));
+      if (snapshotDelta !== 0) return snapshotDelta;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.target);
 }
 
 function normalizeAllowedDomains(input: string[] | undefined): string[] {
@@ -138,6 +156,7 @@ export function listRemoteExecutionTargets(
             : 'Sandbox capability needs a Vercel sandbox projectId.';
     const id = `vercel:${profile.id}`;
     const health = options.healthByTargetId?.[id];
+    const baseSnapshotId = profile.sandbox?.baseSnapshotId?.trim() || undefined;
     return {
       id,
       profileId: profile.id,
@@ -153,6 +172,8 @@ export function listRemoteExecutionTargets(
       networkMode,
       allowedDomains,
       allowedCidrs: [],
+      snapshotConfigured: !!baseSnapshotId,
+      snapshotLabel: baseSnapshotId,
       healthState: health?.state,
       healthReason: health?.reason,
       healthCheckedAt: health?.checkedAt,
@@ -183,6 +204,7 @@ export function listRemoteExecutionTargets(
         : 'Sandbox capability needs a resolved Daytona API key or credential ref.';
     const id = `daytona:${profile.id}`;
     const health = options.healthByTargetId?.[id];
+    const snapshot = profile.snapshot?.trim() || undefined;
     return {
       id,
       profileId: profile.id,
@@ -198,6 +220,8 @@ export function listRemoteExecutionTargets(
       networkMode,
       allowedDomains: [],
       allowedCidrs,
+      snapshotConfigured: !!snapshot,
+      snapshotLabel: snapshot,
       healthState: health?.state,
       healthReason: health?.reason,
       healthCheckedAt: health?.checkedAt,

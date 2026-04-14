@@ -153,6 +153,7 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('run');
     expect(result.decision.entities.codingRemoteExecRequested).toBe(true);
     expect(result.decision.entities.command).toBe('pwd');
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
     expect(result.decision.preferredTier).toBe('external');
   });
 
@@ -1282,6 +1283,30 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('recovers AI provider inventory requests from unavailable gateway output', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'List my configured AI providers.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'This looks like a settings question.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.uiSurface).toBe('config');
+    expect(result.decision.executionClass).toBe('provider_crud');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
     const gateway = new IntentGateway();
     let inspectedSystemPrompt = '';
@@ -1311,8 +1336,83 @@ describe('IntentGateway', () => {
       },
     );
 
+    expect(inspectedSystemPrompt).toContain('Prompt profile: full');
     expect(inspectedSystemPrompt).toContain('Requests to inspect, explain, review, or plan changes against specific repo files');
     expect(inspectedSystemPrompt).toContain('Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests.');
+  });
+
+  it('uses the compact primary prompt for short flat turns', async () => {
+    const gateway = new IntentGateway();
+    let inspectedSystemPrompt = '';
+
+    await gateway.classify(
+      {
+        content: 'Show my notes.',
+        channel: 'web',
+      },
+      async (messages) => {
+        inspectedSystemPrompt = String(messages[0]?.content || '');
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-compact-1',
+            name: 'route_intent',
+            arguments: JSON.stringify({
+              route: 'personal_assistant_task',
+              confidence: 'high',
+              operation: 'read',
+              summary: 'Reads the user notes from Second Brain.',
+              personalItemType: 'note',
+            }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(inspectedSystemPrompt).toContain('Prompt profile: compact');
+    expect(inspectedSystemPrompt).toContain('This is the compact primary routing profile for short, flat turns.');
+    expect(inspectedSystemPrompt).toContain('Example: "Use Codex to say hello." -> route=coding_task, operation=run, codingBackend=codex, codingBackendRequested=true.');
+    expect(inspectedSystemPrompt).not.toContain('Create a contact in my Second Brain named Smoke Test Person with email smoke@example.com.');
+  });
+
+  it('keeps short self-contained turns on the compact prompt even with attached-session continuity', async () => {
+    const gateway = new IntentGateway();
+    let inspectedSystemPrompt = '';
+
+    await gateway.classify(
+      {
+        content: 'Show my notes.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Use Codex in the Guardian workspace to investigate the failing build.' },
+          { role: 'assistant', content: 'I need approval to run Codex for that coding task.' },
+        ],
+        continuity: {
+          continuityKey: 'shared-tier:owner',
+          linkedSurfaceCount: 3,
+          focusSummary: 'Attached Guardian coding session with an active investigation.',
+          activeExecutionRefs: ['code_session:Guardian'],
+        },
+      },
+      async (messages) => {
+        inspectedSystemPrompt = String(messages[0]?.content || '');
+        return {
+          content: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Reads the user notes from Second Brain.',
+            personalItemType: 'note',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(inspectedSystemPrompt).toContain('Prompt profile: compact');
   });
 
   it('includes explicit Google Workspace and Microsoft 365 split guidance in both gateway prompts', async () => {
@@ -1352,6 +1452,7 @@ describe('IntentGateway', () => {
     );
 
     expect(result.decision.route).toBe('personal_assistant_task');
+    expect(primaryPrompt).toContain('Prompt profile: full');
     expect(primaryPrompt).toContain('Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning');
     expect(primaryPrompt).toContain('Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks.');
     expect(primaryPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation');
@@ -2210,6 +2311,31 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.mailboxReadMode).toBe('latest');
   });
 
+  it('infers Outlook mailbox metadata when fallback output omits provider details', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check my unread Outlook mail.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Checks the inbox.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.emailProvider).toBe('m365');
+    expect(result.decision.entities.mailboxReadMode).toBe('unread');
+  });
+
   it('captures clarification answers for automation-selection follow-ups', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -2255,6 +2381,7 @@ describe('IntentGateway', () => {
         available: true,
         model: 'test-model',
         latencyMs: 12,
+        promptProfile: 'compact',
         decision: {
           route: 'coding_task',
           confidence: 'high',
@@ -2273,6 +2400,7 @@ describe('IntentGateway', () => {
     expect(readPreRoutedIntentGatewayMetadata(metadata)).toMatchObject({
       available: true,
       model: 'test-model',
+      promptProfile: 'compact',
       decision: {
         route: 'coding_task',
         entities: {

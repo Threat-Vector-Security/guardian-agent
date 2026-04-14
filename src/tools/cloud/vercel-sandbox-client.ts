@@ -67,15 +67,32 @@ function assertSupportedApiBaseUrl(apiBaseUrl: string | undefined): void {
 
 async function defaultSandboxFactory(input: VercelSandboxCreateInput): Promise<VercelSandboxSession> {
   assertSupportedApiBaseUrl(input.target.apiBaseUrl);
-  const sandbox = await Sandbox.create({
+  const timeout = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const resources = { vcpus: Math.max(1, input.vcpus ?? input.target.defaultVcpus ?? DEFAULT_VCPUS) };
+  const networkPolicy = buildNetworkPolicy(input.target);
+  const credentials = {
     token: input.target.token,
     teamId: input.target.teamId,
     projectId: input.target.projectId,
-    timeout: Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS),
-    resources: { vcpus: Math.max(1, input.vcpus ?? input.target.defaultVcpus ?? DEFAULT_VCPUS) },
-    runtime: input.runtime ?? DEFAULT_RUNTIME,
-    networkPolicy: buildNetworkPolicy(input.target),
-  });
+  };
+  const sandbox = input.target.baseSnapshotId
+    ? await Sandbox.create({
+        ...credentials,
+        source: {
+          type: 'snapshot',
+          snapshotId: input.target.baseSnapshotId,
+        },
+        timeout,
+        resources,
+        networkPolicy,
+      })
+    : await Sandbox.create({
+        ...credentials,
+        timeout,
+        resources,
+        runtime: input.runtime ?? DEFAULT_RUNTIME,
+        networkPolicy,
+      });
   return {
     sandboxId: sandbox.sandboxId,
     status: sandbox.status,

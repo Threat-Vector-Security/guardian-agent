@@ -124,6 +124,7 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
                 ? {
                     ...profile.sandbox,
                     projectId: trimOptionalString(profile.sandbox.projectId),
+                    baseSnapshotId: trimOptionalString(profile.sandbox.baseSnapshotId),
                     allowedDomains: trimStringArray(profile.sandbox.allowedDomains)?.map((domain) => domain.toLowerCase()),
                   }
                 : undefined,
@@ -133,6 +134,7 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
               apiUrl: normalizeOptionalHttpUrlInput(profile.apiUrl),
               target: trimOptionalString(profile.target),
               language: trimOptionalString(profile.language)?.toLowerCase(),
+              snapshot: trimOptionalString(profile.snapshot),
               allowedCidrs: trimStringArray(profile.allowedCidrs),
             })),
             cloudflareProfiles: (config.assistant.tools.cloud.cloudflareProfiles ?? []).map((profile) => ({

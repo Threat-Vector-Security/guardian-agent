@@ -1048,14 +1048,21 @@ function updateThinkingEl(el, run) {
 
 function summarizeTimelineRun(run) {
   const items = Array.isArray(run?.items) ? run.items : [];
-  const recentItems = items
-    .filter(isMeaningfulLiveItem)
-    .slice(-2)
-    .map((item) => ({
-    title: String(item?.title || '').trim(),
-    detail: String(item?.detail || '').trim(),
-    }))
-    .filter((item) => item.title);
+  const recentItems = [];
+  let lastKey = '';
+  for (let index = items.length - 1; index >= 0 && recentItems.length < 4; index -= 1) {
+    const item = items[index];
+    if (!isMeaningfulLiveItem(item)) continue;
+    const normalized = {
+      title: String(item?.title || '').trim(),
+      detail: String(item?.detail || '').trim(),
+    };
+    if (!normalized.title) continue;
+    const key = `${normalized.title}\n${normalized.detail}`;
+    if (key === lastKey) continue;
+    recentItems.unshift(normalized);
+    lastKey = key;
+  }
   const latestItem = recentItems[recentItems.length - 1];
   const status = String(run?.summary?.status || '').trim();
   if (latestItem) {

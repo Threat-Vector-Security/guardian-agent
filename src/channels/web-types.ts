@@ -335,6 +335,7 @@ export interface RedactedCloudVercelProfile {
     enabled: boolean;
     ready: boolean;
     projectId?: string;
+    baseSnapshotId?: string;
     defaultTimeoutMs?: number;
     defaultVcpus?: number;
     allowNetwork: boolean;
@@ -350,6 +351,7 @@ export interface RedactedCloudDaytonaProfile {
   apiKeyConfigured: boolean;
   target?: string;
   language?: string;
+  snapshot?: string;
   enabled: boolean;
   ready: boolean;
   defaultTimeoutMs?: number;
@@ -2128,6 +2130,7 @@ export interface ConfigUpdate {
           sandbox?: {
             enabled?: boolean;
             projectId?: string;
+            baseSnapshotId?: string;
             defaultTimeoutMs?: number;
             defaultVcpus?: number;
             allowNetwork?: boolean;
@@ -2142,6 +2145,7 @@ export interface ConfigUpdate {
           credentialRef?: string;
           target?: string;
           language?: string;
+          snapshot?: string;
           enabled?: boolean;
           defaultTimeoutMs?: number;
           defaultVcpus?: number;

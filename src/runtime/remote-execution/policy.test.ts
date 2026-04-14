@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_CONFIG, type AssistantCloudConfig } from '../../config/types.js';
-import { listRemoteExecutionTargets, recommendWorkflowIsolation } from './policy.js';
+import {
+  listRemoteExecutionTargets,
+  prioritizeReadyRemoteExecutionTargets,
+  recommendWorkflowIsolation,
+} from './policy.js';
 
 function createCloudConfig(input: Partial<AssistantCloudConfig>): AssistantCloudConfig {
   return {
@@ -22,6 +26,7 @@ describe('remote execution policy', () => {
         sandbox: {
           enabled: true,
           projectId: 'prj_123',
+          baseSnapshotId: 'snap_vercel_base',
           defaultTimeoutMs: 300_000,
           defaultVcpus: 2,
           allowNetwork: true,
@@ -38,6 +43,8 @@ describe('remote execution policy', () => {
       allowedDomains: ['registry.npmjs.org', 'api.anthropic.com'],
       defaultTimeoutMs: 300_000,
       defaultVcpus: 2,
+      snapshotConfigured: true,
+      snapshotLabel: 'snap_vercel_base',
     });
   });
 
@@ -68,6 +75,7 @@ describe('remote execution policy', () => {
         enabled: true,
         target: 'us',
         language: 'typescript',
+        snapshot: 'snapshot-main',
         allowNetwork: true,
         allowedCidrs: ['10.0.0.0/8', '192.168.0.0/16'],
       }],
@@ -82,7 +90,39 @@ describe('remote execution policy', () => {
       allowedCidrs: ['10.0.0.0/8', '192.168.0.0/16'],
       target: 'us',
       language: 'typescript',
+      snapshotConfigured: true,
+      snapshotLabel: 'snapshot-main',
     });
+  });
+
+  it('prefers snapshot-backed targets when Guardian auto-selects among ready sandboxes', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-cold',
+        name: 'Cold Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: {
+          enabled: true,
+          projectId: 'prj_123',
+          allowNetwork: false,
+        },
+      }],
+      daytonaProfiles: [{
+        id: 'daytona-warm',
+        name: 'Warm Daytona',
+        apiKey: 'daytona-secret',
+        enabled: true,
+        snapshot: 'snapshot-main',
+        allowNetwork: false,
+      }],
+    }));
+
+    const prioritized = prioritizeReadyRemoteExecutionTargets(targets);
+
+    expect(prioritized[0]?.id).toBe('daytona:daytona-warm');
+    expect(prioritized[0]?.snapshotConfigured).toBe(true);
   });
 
   it('recommends remote isolation for dependency reviews and caution workspaces', () => {

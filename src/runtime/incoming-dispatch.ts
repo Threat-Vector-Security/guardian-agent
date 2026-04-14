@@ -315,6 +315,7 @@ export function createIncomingDispatchPreparer(args: {
             source: 'routing',
             mode: gateway.mode,
             available: gateway.available,
+            promptProfile: gateway.promptProfile,
             route: gateway.decision.route,
             confidence: gateway.decision.confidence,
             operation: gateway.decision.operation,

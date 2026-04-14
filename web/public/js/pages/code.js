@@ -2044,10 +2044,16 @@ function describeRemoteExecutionBackend(target) {
 
 function getRemoteExecutionTargetTooltip(target) {
   if (target?.backendKind === 'vercel_sandbox') {
-    return 'Vercel Sandbox: fast startup and strong bounded execution for short installs, builds, and tests. Weakness: it is more time-bound and less suited to long-lived stateful sessions.';
+    const snapshotNote = target?.snapshotConfigured && target?.snapshotLabel
+      ? ` Snapshot-backed base image configured (${target.snapshotLabel}).`
+      : '';
+    return `Vercel Sandbox: fast startup and strong bounded execution for short installs, builds, and tests. Weakness: it is more time-bound and less suited to long-lived stateful sessions.${snapshotNote}`;
   }
   if (target?.backendKind === 'daytona_sandbox') {
-    return 'Daytona Sandbox: better for heavier and longer-running reusable workspaces. Weakness: startup and environment management can be a bit heavier than short-lived bounded sandboxes.';
+    const snapshotNote = target?.snapshotConfigured && target?.snapshotLabel
+      ? ` Snapshot-backed start configured (${target.snapshotLabel}).`
+      : '';
+    return `Daytona Sandbox: better for heavier and longer-running reusable workspaces. Weakness: startup and environment management can be a bit heavier than short-lived bounded sandboxes.${snapshotNote}`;
   }
   return 'Remote sandbox target.';
 }
@@ -6016,6 +6022,9 @@ function renderSandboxTargetOption(target, sandboxState) {
       : target.networkMode === 'deny_all'
         ? 'network blocked'
         : 'network allowed';
+  const snapshotSummary = target.snapshotConfigured
+    ? ` • snapshot ${target.snapshotLabel || 'configured'}`
+    : '';
   return `
     <label class="code-session" style="gap:0.45rem;cursor:default">
       <div class="code-session__top">
@@ -6030,7 +6039,7 @@ function renderSandboxTargetOption(target, sandboxState) {
         </span>
       </div>
       <div class="code-session__meta">${esc(backend)}${target.projectId ? ` • ${esc(target.projectId)}` : target.target ? ` • ${esc(target.target)}` : ''}</div>
-      <div class="code-session__hint">${esc(networkSummary)}${target.reason ? ` • ${target.reason}` : ''}${target.healthReason ? ` • ${target.healthReason}` : ''}</div>
+      <div class="code-session__hint">${esc(`${networkSummary}${snapshotSummary}`)}${target.reason ? ` • ${esc(target.reason)}` : ''}${target.healthReason ? ` • ${esc(target.healthReason)}` : ''}</div>
     </label>
   `;
 }

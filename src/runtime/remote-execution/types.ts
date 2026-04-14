@@ -27,6 +27,7 @@ export interface VercelRemoteExecutionResolvedTarget extends RemoteExecutionReso
   token: string;
   teamId: string;
   projectId: string;
+  baseSnapshotId?: string;
   apiBaseUrl?: string;
 }
 
@@ -36,6 +37,7 @@ export interface DaytonaRemoteExecutionResolvedTarget extends RemoteExecutionRes
   apiUrl?: string;
   target?: string;
   language?: string;
+  snapshot?: string;
 }
 
 export type RemoteExecutionResolvedTarget =

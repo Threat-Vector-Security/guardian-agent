@@ -311,6 +311,7 @@ describe('direct config update', () => {
               sandbox: {
                 enabled: true,
                 projectId: 'prj_123',
+                baseSnapshotId: 'snap_vercel_base',
                 defaultTimeoutMs: 300_000,
                 defaultVcpus: 2,
                 allowNetwork: true,
@@ -326,6 +327,7 @@ describe('direct config update', () => {
     expect(configRef.current.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox).toEqual({
       enabled: true,
       projectId: 'prj_123',
+      baseSnapshotId: 'snap_vercel_base',
       defaultTimeoutMs: 300_000,
       defaultVcpus: 2,
       allowNetwork: true,
@@ -340,10 +342,87 @@ describe('direct config update', () => {
     expect(rawVercel[0]?.sandbox).toEqual({
       enabled: true,
       projectId: 'prj_123',
+      baseSnapshotId: 'snap_vercel_base',
       defaultTimeoutMs: 300_000,
       defaultVcpus: 2,
       allowNetwork: true,
       allowedDomains: ['registry.npmjs.org', 'api.anthropic.com'],
+    });
+  });
+
+  it('persists Daytona snapshot updates on the existing Daytona cloud profile model', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      cpanelProfiles: [],
+      vercelProfiles: [],
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Main Daytona',
+        credentialRef: 'cloud.daytona.main',
+        enabled: true,
+      }],
+      cloudflareProfiles: [],
+      awsProfiles: [],
+      gcpProfiles: [],
+      azureProfiles: [],
+    };
+
+    const { configRef, rawState, handler } = createHandlerHarness(config);
+    const result = await handler({
+      assistant: {
+        tools: {
+          cloud: {
+            daytonaProfiles: [{
+              id: 'daytona-main',
+              name: 'Main Daytona',
+              credentialRef: 'cloud.daytona.main',
+              enabled: true,
+              target: 'us',
+              language: 'typescript',
+              snapshot: 'snapshot-main',
+              defaultTimeoutMs: 300_000,
+              defaultVcpus: 2,
+              allowNetwork: true,
+              allowedCidrs: ['10.0.0.0/8'],
+            }],
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.assistant.tools.cloud?.daytonaProfiles?.[0]).toEqual({
+      id: 'daytona-main',
+      name: 'Main Daytona',
+      credentialRef: 'cloud.daytona.main',
+      enabled: true,
+      target: 'us',
+      language: 'typescript',
+      snapshot: 'snapshot-main',
+      defaultTimeoutMs: 300_000,
+      defaultVcpus: 2,
+      allowNetwork: true,
+      allowedCidrs: ['10.0.0.0/8'],
+    });
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawTools = rawAssistant.tools as Record<string, unknown>;
+    const rawCloud = rawTools.cloud as Record<string, unknown>;
+    const rawDaytona = rawCloud.daytonaProfiles as Array<Record<string, unknown>>;
+    expect(rawDaytona[0]).toEqual({
+      id: 'daytona-main',
+      name: 'Main Daytona',
+      credentialRef: 'cloud.daytona.main',
+      enabled: true,
+      target: 'us',
+      language: 'typescript',
+      snapshot: 'snapshot-main',
+      defaultTimeoutMs: 300_000,
+      defaultVcpus: 2,
+      allowNetwork: true,
+      allowedCidrs: ['10.0.0.0/8'],
     });
   });
 });

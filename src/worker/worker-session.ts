@@ -429,8 +429,10 @@ export class BrokeredWorkerSession {
     decision?: IntentGatewayDecision | null,
     executionProfile?: SelectedExecutionProfile | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const planner = new (await import('../runtime/planner/task-planner.js')).TaskPlanner(
-      async (msgs, opts) => chatFn(msgs, opts)
+    const { TaskPlanner, BROKER_SAFE_PLANNER_ACTION_TYPES } = await import('../runtime/planner/task-planner.js');
+    const planner = new TaskPlanner(
+      async (msgs, opts) => chatFn(msgs, opts),
+      { allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES },
     );
     const plan = await planner.plan(message.content, decision || undefined);
     if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
@@ -520,6 +522,7 @@ export class BrokeredWorkerSession {
     pendingNodes: SuspendedPlannerNode[];
     trustState: PlannerTrustSnapshot;
   }> {
+    const { BROKER_SAFE_PLANNER_ACTION_TYPES } = await import('../runtime/planner/task-planner.js');
     const reflector = new (await import('../runtime/planner/reflection.js')).SemanticReflector(
       async (msgs, opts) => input.chatFn(msgs, opts)
     );
@@ -529,7 +532,8 @@ export class BrokeredWorkerSession {
     );
 
     const recoveryPlanner = new (await import('../runtime/planner/recovery.js')).RecoveryPlanner(
-      async (msgs, opts) => input.chatFn(msgs, opts)
+      async (msgs, opts) => input.chatFn(msgs, opts),
+      { allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES },
     );
 
     const learningQueue = new (await import('../runtime/planner/learning-queue.js')).ReflectiveLearningQueue(

@@ -744,6 +744,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (profile.sandbox.enabled && !profile.sandbox.projectId?.trim()) {
           errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.projectId is required when sandbox is enabled`);
         }
+        if (profile.sandbox.baseSnapshotId !== undefined && !profile.sandbox.baseSnapshotId.trim()) {
+          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.baseSnapshotId must be a non-empty string when provided`);
+        }
         if (profile.sandbox.defaultTimeoutMs !== undefined) {
           if (!Number.isFinite(profile.sandbox.defaultTimeoutMs) || profile.sandbox.defaultTimeoutMs <= 0) {
             errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.defaultTimeoutMs must be greater than 0`);
@@ -802,6 +805,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (!Number.isInteger(profile.defaultVcpus) || profile.defaultVcpus < 1) {
           errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.defaultVcpus must be an integer greater than 0`);
         }
+      }
+      if (profile.snapshot !== undefined && !profile.snapshot.trim()) {
+        errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.snapshot must be a non-empty string when provided`);
       }
       if (profile.allowedCidrs !== undefined) {
         if (!Array.isArray(profile.allowedCidrs)) {

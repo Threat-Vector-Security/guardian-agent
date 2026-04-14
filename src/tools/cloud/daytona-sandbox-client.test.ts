@@ -92,6 +92,7 @@ describe('DaytonaSandboxClient', () => {
       target: {
         ...TARGET,
         defaultVcpus: 4,
+        snapshot: 'snapshot-main',
       },
       timeoutMs: 30_000,
     });
@@ -100,6 +101,7 @@ describe('DaytonaSandboxClient', () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(createMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
       language: 'typescript',
+      snapshot: 'snapshot-main',
       resources: { cpu: 4 },
     }), { timeout: 30 });
     expect(createMock).toHaveBeenNthCalledWith(2, expect.not.objectContaining({

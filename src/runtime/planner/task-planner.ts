@@ -2,9 +2,14 @@ import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { ExecutionPlan, PlanNode } from './types.js';
 import { parseStructuredJsonObject } from '../../util/structured-json.js';
 
+export const BROKER_SAFE_PLANNER_ACTION_TYPES: PlanNode['actionType'][] = ['tool_call', 'execute_code'];
+
 export class TaskPlanner {
   constructor(
-    private readonly chatFn: (messages: any[], options?: any) => Promise<any>
+    private readonly chatFn: (messages: any[], options?: any) => Promise<any>,
+    private readonly options: {
+      allowedActionTypes?: PlanNode['actionType'][];
+    } = {},
   ) {}
 
   async plan(objective: string, intentDecision?: IntentGatewayDecision): Promise<ExecutionPlan | null> {
@@ -36,6 +41,8 @@ export class TaskPlanner {
   }
 
   private buildPlannerPrompt(objective: string, intentDecision?: IntentGatewayDecision): string {
+    const allowedActionTypes = this.options.allowedActionTypes ?? BROKER_SAFE_PLANNER_ACTION_TYPES;
+    const allowedActionTypeSet = new Set<PlanNode['actionType']>(allowedActionTypes);
     let prompt = `Objective: ${objective}\n`;
     if (intentDecision) {
       prompt += `Context/Intent: ${JSON.stringify(intentDecision)}\n`;
@@ -48,12 +55,13 @@ PlanNode structure:
   id: string,
   description: string,
   dependencies: string[] // Array of node IDs that must complete first
-  actionType: "tool_call" | "skill_delegation" | "routine_execution" | "execute_code" | "delegate_task",
-  target: string // The specific tool name, skill ID, language runtime (for execute_code), or worker profile (for delegate_task)
-  inputPrompt: string // The detailed instruction, code payload, or subagent prompt
+  actionType: ${allowedActionTypes.map((actionType) => `"${actionType}"`).join(' | ')},
+  target: string // For tool_call use the exact brokered tool name. For execute_code use "code_remote_exec".
+  inputPrompt: string // For tool_call this must be a JSON object string with tool arguments. For execute_code this must be one bounded remote command string.
 }
 
-Remember to delegate complex tasks (like coding) to specific skills via "skill_delegation", or spawn a subagent via "delegate_task" with specific bounds. For programmatic transformations or scripts that call managed tools, use "execute_code" instead of trying to chain dozens of tool calls.
+This brokered runtime only supports the action types listed above.
+${allowedActionTypeSet.has('tool_call') ? '- Prefer "tool_call" for file creation, directory creation, reading, writing, and other brokered tool orchestration. For example, use fs_mkdir and fs_write to create summary.md instead of embedding a script.\n' : ''}${allowedActionTypeSet.has('execute_code') ? '- Use "execute_code" only when you truly need one bounded remote shell command. Do not emit Python, Node, or shell script bodies as the inputPrompt; emit the exact command string that should run in the remote sandbox.\n' : ''}- Do not emit unsupported action types such as "skill_delegation", "routine_execution", or "delegate_task". They will be rejected by execution validation.
 Return ONLY valid JSON.
 `;
     return prompt;
