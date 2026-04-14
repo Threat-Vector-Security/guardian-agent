@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { posix as posixPath, win32 as win32Path } from 'node:path';
 
 import type { Logger } from 'pino';
 
@@ -144,12 +143,24 @@ import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.
 import type { PrincipalRole, ToolExecutionRequest } from './tools/types.js';
 import { buildToolResultPayloadFromJob } from './tools/job-results.js';
 import {
-  APPROVAL_COMMAND_PATTERN,
-  APPROVAL_CONFIRM_PATTERN,
-  APPROVAL_DENY_PATTERN,
   ChatAgentApprovalState,
   type ApprovalFollowUpCopy,
 } from './runtime/chat-agent/approval-state.js';
+import {
+  continueDirectRouteAfterApproval as continueDirectRouteAfterApprovalHelper,
+  handleApprovalMessage,
+  syncPendingApprovalsFromExecutor as syncPendingApprovalsFromExecutorHelper,
+} from './runtime/chat-agent/approval-orchestration.js';
+import {
+  DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION,
+  normalizeFilesystemResumePrincipalRole,
+  readFilesystemSaveOutputResumePayload,
+  readSecondBrainMutationResumePayload,
+  type SecondBrainMutationResumePayload,
+} from './runtime/chat-agent/direct-route-resume.js';
+import {
+  executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
+} from './runtime/chat-agent/filesystem-save-resume.js';
 import {
   ChatAgentOrchestrationState,
   PENDING_ACTION_SWITCH_CONFIRM_PATTERN,
@@ -228,8 +239,6 @@ import {
 import { normalizeSecondBrainMutationArgs } from './runtime/second-brain/chat-mutation-normalization.js';
 import { recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
-const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
-const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
@@ -298,31 +307,6 @@ interface SecondBrainFocusContinuationEntry {
 interface SecondBrainFocusContinuationPayload {
   activeItemType?: SecondBrainFocusItemType;
   byType: Partial<Record<SecondBrainFocusItemType, SecondBrainFocusContinuationEntry>>;
-}
-
-interface FilesystemSaveOutputResumePayload {
-  type: typeof DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT;
-  targetPath: string;
-  content: string;
-  originalUserContent: string;
-  allowPathRemediation: boolean;
-  principalId?: string;
-  principalRole?: string;
-  codeContext?: {
-    workspaceRoot: string;
-    sessionId?: string;
-  };
-}
-
-interface SecondBrainMutationResumePayload {
-  type: typeof DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION;
-  toolName: DirectSecondBrainMutationToolName;
-  args: Record<string, unknown>;
-  originalUserContent: string;
-  itemType: DirectSecondBrainMutationItemType;
-  action: DirectSecondBrainMutationAction;
-  fallbackId?: string;
-  fallbackLabel?: string;
 }
 
 interface DirectAutomationClarificationMetadata {
@@ -8731,225 +8715,54 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
-
-    const userKey = `${message.userId}:${message.channel}`;
-    const pendingAction = this.getPendingApprovalAction(message.userId, message.channel, message.surfaceId);
-    const pending = pendingAction
-      ? {
-          ids: pendingAction.blocker.approvalIds ?? [],
-          createdAt: pendingAction.createdAt,
-          expiresAt: pendingAction.expiresAt,
-        }
-      : null;
-    if (!pending?.ids.length) return null;
-
-    const input = stripLeadingContextPrefix(message.content).trim();
-    const isApprove = APPROVAL_CONFIRM_PATTERN.test(input);
-    const isDeny = APPROVAL_DENY_PATTERN.test(input);
-    if (!isApprove && !isDeny) return null;
-
-    const decision: 'approved' | 'denied' = isDeny ? 'denied' : 'approved';
-    let targetIds = pending.ids;
-    if (APPROVAL_COMMAND_PATTERN.test(input)) {
-      const selected = this.resolveApprovalTargets(input, pending.ids);
-      if (selected.errors.length > 0) {
-        const summaries = this.tools?.getApprovalSummaries(pending.ids);
-        return {
-          content: [
-            selected.errors.join('\n'),
-            '',
-            this.formatPendingApprovalPrompt(pending.ids, summaries),
-          ].join('\n'),
-        };
-      }
-      targetIds = selected.ids;
-    }
-
-    if (targetIds.length === 0) {
-      const summaries = this.tools?.getApprovalSummaries(pending.ids);
-      return { content: this.formatPendingApprovalPrompt(pending.ids, summaries) };
-    }
-
-    const remaining = pending.ids.filter((id) => !targetIds.includes(id));
-    this.setPendingApprovals(userKey, remaining, message.surfaceId);
-    const results: string[] = [];
-    const approvedIds = new Set<string>();
-    const failedIds = new Set<string>();
-    const approvalDecisionResults = new Map<string, ToolApprovalDecisionResult>();
-    for (const approvalId of targetIds) {
-      try {
-        const result = await this.tools.decideApproval(
-          approvalId,
-          decision,
-          message.principalId ?? message.userId,
-          message.principalRole ?? 'owner',
-        );
-        approvalDecisionResults.set(approvalId, result);
-        if (result.success) {
-          if (decision === 'approved') approvedIds.add(approvalId);
-          const followUp = this.takeApprovalFollowUp(approvalId, decision);
-          results.push(followUp ?? result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
-        } else {
-          failedIds.add(approvalId);
-          this.clearApprovalFollowUp(approvalId);
-          const failure = result.message ?? `${decision === 'approved' ? 'Approval' : 'Denial'} failed (${approvalId}).`;
-          results.push(
-            decision === 'approved'
-              ? `Approval received for ${approvalId}, but execution failed: ${failure}`
-              : `Denial for ${approvalId} failed: ${failure}`,
-          );
-        }
-      } catch (err) {
-        failedIds.add(approvalId);
-        this.clearApprovalFollowUp(approvalId);
-        results.push(`Error processing ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    const continuation = this.getAutomationApprovalContinuation(userKey);
-    if (continuation) {
-      const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
-      if (decision === 'approved' && affected.length > 0) {
-        const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
-        if (stillPending.length === 0) {
-          this.clearAutomationApprovalContinuation(userKey);
-          const retry = await this.tryDirectAutomationAuthoring(continuation.originalMessage, ctx, userKey, undefined, {
-            assumeAuthoring: true,
-          });
-          if (retry) {
-            results.push('');
-            results.push(retry.content);
-            return {
-              content: results.join('\n'),
-              metadata: this.withCurrentPendingActionMetadata(
-                retry.metadata,
-                message.userId,
-                message.channel,
-                message.surfaceId,
-              ),
-            };
-          }
-        } else {
-          this.setAutomationApprovalContinuation(userKey, continuation.originalMessage, continuation.ctx, stillPending, continuation.expiresAt);
-        }
-      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
-        this.clearAutomationApprovalContinuation(userKey);
-      }
-    }
-
-    const fallbackContinuation = this.getAutomationApprovalContinuation(userKey);
-    if (decision === 'approved' && fallbackContinuation && approvedIds.size > 0) {
-      const livePendingIds = new Set(this.tools.listPendingApprovalIdsForUser(
-        message.userId,
-        message.channel,
-        {
-          includeUnscoped: message.channel === 'web',
-          principalId: message.principalId ?? message.userId,
-        },
-      ));
-      const stillPending = fallbackContinuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
-      if (stillPending.length === 0) {
-        this.clearAutomationApprovalContinuation(userKey);
-        const retry = await this.tryDirectAutomationAuthoring(fallbackContinuation.originalMessage, ctx, userKey, undefined, {
-          assumeAuthoring: true,
-        });
-        if (retry) {
-          results.push('');
-          results.push(retry.content);
-          return {
-            content: results.join('\n'),
-            metadata: this.withCurrentPendingActionMetadata(
-              retry.metadata,
-              message.userId,
-              message.channel,
-              message.surfaceId,
-            ),
-          };
-        }
-      } else if (stillPending.length !== fallbackContinuation.pendingApprovalIds.length) {
-        this.setAutomationApprovalContinuation(
-          userKey,
-          fallbackContinuation.originalMessage,
-          fallbackContinuation.ctx,
-          stillPending,
-          fallbackContinuation.expiresAt,
-        );
-      }
-    }
-
-    if (remaining.length > 0) {
-      const summaries = this.tools?.getApprovalSummaries(remaining);
-      results.push('');
-      results.push(this.formatPendingApprovalPrompt(remaining, summaries));
-      const approvalSummaries = remaining.map((id) => {
-        const summary = summaries?.get(id);
-        return {
-          id,
-          toolName: summary?.toolName ?? 'unknown',
-          argsPreview: summary?.argsPreview ?? '',
-          actionLabel: summary?.actionLabel ?? '',
-        };
-      });
-      const nextActionResult = this.setPendingApprovalAction(
-        message.userId,
-        message.channel,
-        message.surfaceId,
-        {
-          prompt: pendingAction?.blocker.prompt ?? 'Approval required for the pending action.',
-          approvalIds: remaining,
-          approvalSummaries,
-          originalUserContent: pendingAction?.intent.originalUserContent ?? message.content,
-          route: pendingAction?.intent.route,
-          operation: pendingAction?.intent.operation,
-          summary: pendingAction?.intent.summary,
-          turnRelation: pendingAction?.intent.turnRelation,
-          resolution: pendingAction?.intent.resolution,
-          missingFields: pendingAction?.intent.missingFields,
-          entities: pendingAction?.intent.entities,
-          resume: pendingAction?.resume,
-          codeSessionId: pendingAction?.codeSessionId,
-        },
-      );
-      return {
-        content: [
-          results.join('\n'),
-          nextActionResult.collisionPrompt ?? '',
-        ].filter(Boolean).join('\n\n'),
-        metadata: nextActionResult.action ? { pendingAction: toPendingActionClientMetadata(nextActionResult.action) } : undefined,
-      };
-    }
-    if (decision === 'approved' && (pendingAction?.resume?.kind === 'direct_route' || pendingAction?.resume?.kind === 'tool_loop')) {
-      const approvalResult = targetIds.length === 1
-        ? approvalDecisionResults.get(targetIds[0])
-        : undefined;
-      const resumedResponse = pendingAction?.resume?.kind === 'tool_loop'
-        ? await this.resumeStoredToolLoopPendingAction(
-          pendingAction,
-          { approvalId: targetIds[0], approvalResult, ctx },
-        )
-        : await this.resumeStoredDirectRoutePendingAction(
-          pendingAction!,
-          { approvalResult },
-        );
-      if (resumedResponse) {
-        results.push('');
-        results.push(resumedResponse.content);
-        const normalizedResponse = this.normalizeDirectRouteContinuationResponse(
-          resumedResponse,
-          message.userId,
-          message.channel,
-          message.surfaceId,
-        );
-        return {
-          content: results.join('\n'),
-          metadata: normalizedResponse.metadata,
-        };
-      }
-    }
-    if (pendingAction) {
-      this.completePendingAction(pendingAction.id);
-    }
-    return { content: results.join('\n') };
+    return handleApprovalMessage({
+      message,
+      ctx,
+      tools: this.tools,
+      getPendingApprovalAction: (userId, channel, surfaceId, nowMs) => this.getPendingApprovalAction(userId, channel, surfaceId, nowMs),
+      setPendingApprovals: (userKey, ids, surfaceId, nowMs) => this.setPendingApprovals(userKey, ids, surfaceId, nowMs),
+      setPendingApprovalAction: (userId, channel, surfaceId, pendingActionInput) => this.setPendingApprovalAction(
+        userId,
+        channel,
+        surfaceId,
+        pendingActionInput,
+      ),
+      completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
+      takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
+      clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
+      getAutomationApprovalContinuation: (userKey, nowMs) => this.getAutomationApprovalContinuation(userKey, nowMs),
+      setAutomationApprovalContinuation: (userKey, originalMessage, automationCtx, pendingApprovalIds, expiresAt) => this.setAutomationApprovalContinuation(
+        userKey,
+        originalMessage,
+        automationCtx,
+        pendingApprovalIds,
+        expiresAt,
+      ),
+      clearAutomationApprovalContinuation: (userKey) => this.clearAutomationApprovalContinuation(userKey),
+      tryDirectAutomationAuthoring: (automationMessage, automationCtx, userKey, codeContext, options) => this.tryDirectAutomationAuthoring(
+        automationMessage,
+        automationCtx,
+        userKey,
+        codeContext,
+        options,
+      ),
+      resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
+      resumeStoredDirectRoutePendingAction: (pendingAction, options) => this.resumeStoredDirectRoutePendingAction(pendingAction, options),
+      normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
+        response,
+        userId,
+        channel,
+        surfaceId,
+      ),
+      withCurrentPendingActionMetadata: (metadata, userId, channel, surfaceId) => this.withCurrentPendingActionMetadata(
+        metadata,
+        userId,
+        channel,
+        surfaceId,
+      ),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      resolveApprovalTargets: (content, pendingIds) => this.resolveApprovalTargets(content, pendingIds),
+    });
   }
 
   private getContinuityThread(
@@ -9207,33 +9020,21 @@ type DirectIntentShadowCandidate =
     decision: 'approved' | 'denied',
     approvalResult?: ToolApprovalDecisionResult,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!pendingAction || decision !== 'approved') return null;
-    if (pendingAction.scope.agentId !== this.stateAgentId) return null;
-    const remainingApprovalIds = (pendingAction.blocker.approvalIds ?? []).filter((id) => id !== approvalId.trim());
-    if (remainingApprovalIds.length > 0) return null;
-    const response = pendingAction.resume?.kind === 'tool_loop'
-      ? await this.resumeStoredToolLoopPendingAction(
-        pendingAction,
-        {
-          approvalId,
-          pendingActionAlreadyCleared: true,
-          approvalResult,
-        },
-      )
-      : await this.resumeStoredDirectRoutePendingAction(
-        pendingAction,
-        {
-          pendingActionAlreadyCleared: true,
-          approvalResult,
-        },
-      );
-    if (!response) return null;
-    return this.normalizeDirectRouteContinuationResponse(
-      response,
-      pendingAction.scope.userId,
-      pendingAction.scope.channel,
-      pendingAction.scope.surfaceId,
-    );
+    return continueDirectRouteAfterApprovalHelper({
+      pendingAction,
+      approvalId,
+      decision,
+      approvalResult,
+      stateAgentId: this.stateAgentId,
+      resumeStoredToolLoopPendingAction: (action, options) => this.resumeStoredToolLoopPendingAction(action, options),
+      resumeStoredDirectRoutePendingAction: (action, options) => this.resumeStoredDirectRoutePendingAction(action, options),
+      normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
+        response,
+        userId,
+        channel,
+        surfaceId,
+      ),
+    });
   }
 
   async continueAutomationAfterApproval(
@@ -9266,23 +9067,18 @@ type DirectIntentShadowCandidate =
     surfaceId?: string,
     originalUserContent: string = '',
   ): void {
-    if (!this.tools?.isEnabled()) return;
-    const ids = this.tools.listPendingApprovalIdsForUser(sourceUserId, sourceChannel, {
-      includeUnscoped: sourceChannel === 'web',
+    syncPendingApprovalsFromExecutorHelper({
+      tools: this.tools,
+      sourceUserId,
+      sourceChannel,
+      targetUserId,
+      targetChannel,
+      surfaceId,
+      originalUserContent,
+      setPendingApprovals: (userKey, ids, nextSurfaceId, nowMs) => this.setPendingApprovals(userKey, ids, nextSurfaceId, nowMs),
+      getPendingApprovalAction: (userId, channel, nextSurfaceId, nowMs) => this.getPendingApprovalAction(userId, channel, nextSurfaceId, nowMs),
+      updatePendingAction: (actionId, patch, nowMs) => this.updatePendingAction(actionId, patch, nowMs),
     });
-    const userKey = `${targetUserId}:${targetChannel}`;
-    this.setPendingApprovals(userKey, ids, surfaceId);
-    if (ids.length > 0 && originalUserContent.trim()) {
-      const active = this.getPendingApprovalAction(targetUserId, targetChannel, surfaceId);
-      if (active && !active.intent.originalUserContent.trim()) {
-        this.updatePendingAction(active.id, {
-          intent: {
-            ...active.intent,
-            originalUserContent,
-          },
-        });
-      }
-    }
   }
 
   private resolveApprovalTargets(
@@ -11268,7 +11064,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       surfaceId: message.surfaceId,
       principalId: message.principalId ?? message.userId,
-      principalRole: this.normalizeFilesystemResumePrincipalRole(message.principalRole) ?? 'owner',
+      principalRole: normalizeFilesystemResumePrincipalRole(message.principalRole) ?? 'owner',
       requestId: message.id,
       agentCheckAction: ctx.checkAction,
       codeContext,
@@ -11391,7 +11187,7 @@ type DirectIntentShadowCandidate =
     if (!options?.pendingActionAlreadyCleared) {
       this.completePendingAction(pendingAction.id);
     }
-    const filesystemResume = this.readFilesystemSaveOutputResumePayload(pendingAction.resume?.payload);
+    const filesystemResume = readFilesystemSaveOutputResumePayload(pendingAction.resume?.payload);
     if (filesystemResume) {
       const result = await this.executeStoredFilesystemSave({
         targetPath: filesystemResume.targetPath,
@@ -11402,7 +11198,7 @@ type DirectIntentShadowCandidate =
         channel: pendingAction.scope.channel,
         surfaceId: pendingAction.scope.surfaceId,
         principalId: filesystemResume.principalId ?? pendingAction.scope.userId,
-        principalRole: this.normalizeFilesystemResumePrincipalRole(filesystemResume.principalRole) ?? 'owner',
+        principalRole: normalizeFilesystemResumePrincipalRole(filesystemResume.principalRole) ?? 'owner',
         requestId: randomUUID(),
         codeContext: filesystemResume.codeContext,
         allowPathRemediation: filesystemResume.allowPathRemediation,
@@ -11410,7 +11206,7 @@ type DirectIntentShadowCandidate =
       return typeof result === 'string' ? { content: result } : result;
     }
 
-    const secondBrainResume = this.readSecondBrainMutationResumePayload(pendingAction.resume?.payload);
+    const secondBrainResume = readSecondBrainMutationResumePayload(pendingAction.resume?.payload);
     if (secondBrainResume) {
       return this.executeStoredSecondBrainMutation(pendingAction, secondBrainResume, options?.approvalResult);
     }
@@ -11447,7 +11243,7 @@ type DirectIntentShadowCandidate =
   ) {
     return readToolLoopResumePayload(
       payload,
-      (value) => this.normalizeFilesystemResumePrincipalRole(value),
+      (value) => normalizeFilesystemResumePrincipalRole(value),
     );
   }
 
@@ -11876,363 +11672,23 @@ type DirectIntentShadowCandidate =
     codeContext?: { workspaceRoot: string; sessionId?: string };
     allowPathRemediation: boolean;
   }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
-    if (!this.tools?.isEnabled()) {
-      return `I couldn't save the previous assistant output to "${input.targetPath}" because filesystem tools are unavailable.`;
-    }
-
-    const request = this.buildDirectFilesystemToolRequest(input);
-    const writeResult = await this.tools.executeModelTool(
-      'fs_write',
-      {
-        path: input.targetPath,
-        content: input.content,
-        append: false,
-      },
-      request,
-    );
-
-    if (toBoolean(writeResult.success)) {
-      return `I saved the previous assistant output to \`${input.targetPath}\`.`;
-    }
-
-    const writeStatus = toString(writeResult.status);
-    if (writeStatus === 'pending_approval') {
-      return this.buildPendingFilesystemWriteApprovalResponse(input, toString(writeResult.approvalId));
-    }
-
-    const writeMessage = toString(writeResult.message) || toString(writeResult.error) || 'Save failed.';
-    if (!input.allowPathRemediation || !this.isFilesystemPathPolicyError(writeMessage)) {
-      return `I couldn't save the previous assistant output to "${input.targetPath}": ${writeMessage}`;
-    }
-
-    const policyPath = this.getFilesystemPolicyRoot(input.targetPath);
-    const policyResult = await this.tools.executeModelTool(
-      'update_tool_policy',
-      {
-        action: 'add_path',
-        value: policyPath,
-      },
-      request,
-    );
-
-    if (toBoolean(policyResult.success)) {
-      const resumedResult = await this.executeStoredFilesystemSave({
-        ...input,
-        allowPathRemediation: false,
-      });
-      return resumedResult;
-    }
-
-    const policyStatus = toString(policyResult.status);
-    if (policyStatus === 'pending_approval') {
-      return this.buildPendingFilesystemPathApprovalResponse(input, policyPath, toString(policyResult.approvalId));
-    }
-
-    const policyMessage = toString(policyResult.message) || toString(policyResult.error) || 'Path approval failed.';
-    return `I couldn't prepare access to "${input.targetPath}" for saving the previous assistant output: ${policyMessage}`;
-  }
-
-  private buildDirectFilesystemToolRequest(input: {
-    targetPath?: string;
-    userId: string;
-    channel: string;
-    surfaceId?: string;
-    principalId?: string;
-    principalRole?: PrincipalRole;
-    requestId: string;
-    agentCheckAction?: AgentContext['checkAction'];
-    codeContext?: { workspaceRoot: string; sessionId?: string };
-  }): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
-    const scopedCodeContext = this.resolveDirectFilesystemSaveCodeContext(input.codeContext, input.targetPath);
-    return {
-      origin: 'assistant',
+    return executeStoredFilesystemSaveHelper({
+      request: input,
       agentId: this.id,
-      userId: input.userId,
-      channel: input.channel,
-      surfaceId: input.surfaceId,
-      principalId: input.principalId,
-      principalRole: input.principalRole,
-      requestId: input.requestId,
-      ...(input.agentCheckAction ? { agentContext: { checkAction: input.agentCheckAction } } : {}),
-      ...(scopedCodeContext ? { codeContext: scopedCodeContext } : {}),
-    };
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      getPendingApprovals: (userKey, surfaceId, nowMs) => this.getPendingApprovals(userKey, surfaceId, nowMs),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(result, fallbackContent),
+    });
   }
 
-  private resolveDirectFilesystemSaveCodeContext(
-    codeContext?: { workspaceRoot: string; sessionId?: string },
-    targetPath?: string,
-  ): { workspaceRoot: string; sessionId?: string } | undefined {
-    const workspaceRoot = toString(codeContext?.workspaceRoot).trim();
-    if (!workspaceRoot) return undefined;
-    const requestedTarget = toString(targetPath).trim();
-    if (!requestedTarget) return codeContext;
-    return this.isFilesystemPathInsideWorkspace(requestedTarget, workspaceRoot)
-      ? codeContext
-      : undefined;
-  }
-
-  private isFilesystemPathInsideWorkspace(targetPath: string, workspaceRoot: string): boolean {
-    try {
-      const normalizedTarget = this.normalizeFilesystemPathForComparison(targetPath);
-      const normalizedWorkspaceRoot = this.normalizeFilesystemPathForComparison(workspaceRoot);
-      if (!normalizedTarget || !normalizedWorkspaceRoot) return true;
-      const usesWindowsPaths = /^[a-z]:\\/i.test(normalizedTarget) || /^[a-z]:\\/i.test(normalizedWorkspaceRoot);
-      const pathLib = usesWindowsPaths ? win32Path : posixPath;
-      const resolvedTarget = pathLib.resolve(normalizedTarget);
-      const resolvedRoot = pathLib.resolve(normalizedWorkspaceRoot);
-      const comparableTarget = usesWindowsPaths ? resolvedTarget.toLowerCase() : resolvedTarget;
-      const comparableRoot = usesWindowsPaths ? resolvedRoot.toLowerCase() : resolvedRoot;
-      if (comparableTarget === comparableRoot) return true;
-      const separator = usesWindowsPaths ? '\\' : '/';
-      return comparableTarget.startsWith(
-        comparableRoot.endsWith(separator) ? comparableRoot : `${comparableRoot}${separator}`,
-      );
-    } catch {
-      return true;
-    }
-  }
-
-  private normalizeFilesystemPathForComparison(inputPath: string): string {
-    const trimmed = inputPath.trim();
-    if (!trimmed) return trimmed;
-    if (process.platform === 'win32') {
-      const mntMatch = trimmed.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
-      if (mntMatch) {
-        const drive = mntMatch[1].toUpperCase();
-        const rest = mntMatch[2].replace(/\//g, '\\');
-        return `${drive}:\\${rest}`;
-      }
-      return trimmed.replace(/\//g, '\\');
-    }
-    const driveMatch = trimmed.match(/^([a-zA-Z]):[\\/](.*)$/);
-    if (driveMatch) {
-      const drive = driveMatch[1].toLowerCase();
-      const rest = driveMatch[2].replace(/\\/g, '/');
-      return `/mnt/${drive}/${rest}`;
-    }
-    return trimmed.replace(/\\/g, '/');
-  }
-
-  private buildPendingFilesystemWriteApprovalResponse(input: {
-    targetPath: string;
-    content: string;
-    originalUserContent: string;
-    userKey: string;
-    userId: string;
-    channel: string;
-    surfaceId?: string;
-    codeContext?: { workspaceRoot: string; sessionId?: string };
-  }, approvalId: string): string | { content: string; metadata?: Record<string, unknown> } {
-    const existingIds = this.getPendingApprovals(input.userKey, input.surfaceId)?.ids ?? [];
-    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-    if (approvalId) {
-      this.setApprovalFollowUp(approvalId, {
-        approved: `I saved the previous assistant output to \`${input.targetPath}\`.`,
-        denied: `I did not save the previous assistant output to \`${input.targetPath}\`.`,
-      });
-    }
-    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-    const pendingActionResult = this.setPendingApprovalActionForRequest(
-      input.userKey,
-      input.surfaceId,
-      {
-        prompt,
-        approvalIds: pendingIds,
-        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-        originalUserContent: input.originalUserContent,
-        route: 'filesystem_task',
-        operation: 'save',
-        summary: 'Writes the previous assistant output to a file.',
-        turnRelation: 'new_request',
-        resolution: 'ready',
-        ...(input.codeContext?.sessionId ? { codeSessionId: input.codeContext.sessionId } : {}),
-      },
-    );
-    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-      `I prepared a file save for "${input.targetPath}" but it needs approval first.`,
-      prompt,
-    ].filter(Boolean).join('\n\n'));
-  }
-
-  private buildPendingFilesystemPathApprovalResponse(input: {
-    targetPath: string;
-    content: string;
-    originalUserContent: string;
-    userKey: string;
-    userId: string;
-    channel: string;
-    surfaceId?: string;
-    principalId?: string;
-    principalRole?: PrincipalRole;
-    requestId: string;
-    codeContext?: { workspaceRoot: string; sessionId?: string };
-  }, policyPath: string, approvalId: string): string | { content: string; metadata?: Record<string, unknown> } {
-    const existingIds = this.getPendingApprovals(input.userKey, input.surfaceId)?.ids ?? [];
-    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-    if (approvalId) {
-      this.setApprovalFollowUp(approvalId, {
-        approved: `I added \`${policyPath}\` to the allowed paths.`,
-        denied: `I did not add \`${policyPath}\` to the allowed paths.`,
-      });
-    }
-    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-    const pendingActionResult = this.setPendingApprovalActionForRequest(
-      input.userKey,
-      input.surfaceId,
-      {
-        prompt,
-        approvalIds: pendingIds,
-        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-        originalUserContent: input.originalUserContent,
-        route: 'filesystem_task',
-        operation: 'save',
-        summary: 'Adds an allowed path so Guardian can save the previous assistant output, then resumes the save.',
-        turnRelation: 'new_request',
-        resolution: 'ready',
-        resume: {
-          kind: 'direct_route',
-          payload: {
-            type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
-            targetPath: input.targetPath,
-            content: input.content,
-            originalUserContent: input.originalUserContent,
-            allowPathRemediation: false,
-            ...(input.principalId ? { principalId: input.principalId } : {}),
-            ...(input.principalRole ? { principalRole: input.principalRole } : {}),
-            ...(input.codeContext ? { codeContext: { ...input.codeContext } } : {}),
-          },
-        },
-        ...(input.codeContext?.sessionId ? { codeSessionId: input.codeContext.sessionId } : {}),
-      },
-    );
-    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-      `I need approval to add "${policyPath}" to the allowed paths before I can save the previous assistant output to "${input.targetPath}".`,
-      prompt,
-    ].filter(Boolean).join('\n\n'));
-  }
-
-  private readFilesystemSaveOutputResumePayload(
-    payload: Record<string, unknown> | undefined,
-  ): FilesystemSaveOutputResumePayload | null {
-    if (!isRecord(payload)) return null;
-    if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
-    const targetPath = toString(payload.targetPath).trim();
-    const content = toString(payload.content);
-    const originalUserContent = toString(payload.originalUserContent).trim();
-    if (!targetPath || !originalUserContent) return null;
-    const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
-      ? {
-          workspaceRoot: toString(payload.codeContext.workspaceRoot).trim(),
-          ...(toString(payload.codeContext.sessionId).trim()
-            ? { sessionId: toString(payload.codeContext.sessionId).trim() }
-            : {}),
-        }
-      : undefined;
-    return {
-      type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
-      targetPath,
-      content,
-      originalUserContent,
-      allowPathRemediation: payload.allowPathRemediation === true,
-      ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
-      ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
-      ...(codeContext ? { codeContext } : {}),
-    };
-  }
-
-  private readSecondBrainMutationResumePayload(
-    payload: Record<string, unknown> | undefined,
-  ): SecondBrainMutationResumePayload | null {
-    if (!isRecord(payload)) return null;
-    if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION) return null;
-    const toolName = toString(payload.toolName).trim();
-    const originalUserContent = toString(payload.originalUserContent).trim();
-    const itemType = toString(payload.itemType).trim();
-    const action = toString(payload.action).trim();
-    if (!originalUserContent || !isRecord(payload.args)) return null;
-    if (
-      toolName !== 'second_brain_note_upsert'
-      && toolName !== 'second_brain_note_delete'
-      && toolName !== 'second_brain_task_upsert'
-      && toolName !== 'second_brain_task_delete'
-      && toolName !== 'second_brain_calendar_upsert'
-      && toolName !== 'second_brain_calendar_delete'
-      && toolName !== 'second_brain_person_upsert'
-      && toolName !== 'second_brain_person_delete'
-      && toolName !== 'second_brain_library_upsert'
-      && toolName !== 'second_brain_library_delete'
-      && toolName !== 'second_brain_brief_upsert'
-      && toolName !== 'second_brain_brief_delete'
-      && toolName !== 'second_brain_routine_create'
-      && toolName !== 'second_brain_routine_update'
-      && toolName !== 'second_brain_routine_delete'
-    ) {
-      return null;
-    }
-    if (
-      itemType !== 'note'
-      && itemType !== 'task'
-      && itemType !== 'calendar'
-      && itemType !== 'person'
-      && itemType !== 'library'
-      && itemType !== 'brief'
-      && itemType !== 'routine'
-    ) {
-      return null;
-    }
-    if (action !== 'create' && action !== 'update' && action !== 'delete' && action !== 'complete') {
-      return null;
-    }
-    return {
-      type: DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION,
-      toolName,
-      args: { ...payload.args },
-      originalUserContent,
-      itemType,
-      action,
-      ...(toString(payload.fallbackId).trim() ? { fallbackId: toString(payload.fallbackId).trim() } : {}),
-      ...(toString(payload.fallbackLabel).trim() ? { fallbackLabel: toString(payload.fallbackLabel).trim() } : {}),
-    };
-  }
-
-  private isFilesystemPathPolicyError(message: string): boolean {
-    const lower = message.trim().toLowerCase();
-    if (!lower) return false;
-    return lower.includes('outside allowed paths')
-      || lower.includes('outside the authorized workspace root')
-      || lower.includes('outside the authorized workspace');
-  }
-
-  private getFilesystemPolicyRoot(targetPath: string): string {
-    const trimmed = targetPath.trim();
-    if (!trimmed) return trimmed;
-    const pathApi = this.getFilesystemPathApi(trimmed);
-    if (trimmed.endsWith('/') || trimmed.endsWith('\\')) {
-      return trimmed.replace(/[\\/]+$/, '');
-    }
-    const parent = pathApi.dirname(trimmed);
-    return parent && parent !== '.' ? parent : trimmed;
-  }
-
-  private getFilesystemPathApi(targetPath: string): typeof win32Path | typeof posixPath {
-    return /^[a-zA-Z]:[\\/]/.test(targetPath) || targetPath.includes('\\')
-      ? win32Path
-      : posixPath;
-  }
-
-  private normalizeFilesystemResumePrincipalRole(value: string | undefined): PrincipalRole | undefined {
-    switch (value) {
-      case 'owner':
-      case 'operator':
-      case 'approver':
-      case 'viewer':
-        return value;
-      default:
-        return undefined;
-    }
-  }
 }
 
 }
