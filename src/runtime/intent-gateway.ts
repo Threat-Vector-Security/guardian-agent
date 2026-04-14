@@ -353,6 +353,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- coding_task: code execution, code generation, debugging, repo inspection, code review, implementation planning, or programming work within a coding workspace. NOT session management.',
   '- coding_session_control: managing coding workspace sessions — listing, inspecting current session, switching/attaching, detaching, or creating sessions.',
   '- security_task: security triage, containment, or security-control operations.',
+  '- complex_planning_task: explicitly use Guardian\'s brokered DAG / complex-planning path for a multi-step task. Use this when the user directly asks for the planner path, DAG path, or complex-planning route itself. Do NOT use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
   '- general_assistant: everything else.',
   'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
   'An active pending action does not automatically make the next turn a follow_up, clarification_answer, or correction.',
@@ -471,6 +472,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Use Codex in the Test Tactical Game App workspace to create a smoke test file." -> route=coding_task, operation=create, codingBackend=codex, codingBackendRequested=true, sessionTarget="Test Tactical Game App workspace".',
   'Example: "Run pwd in the remote sandbox for this workspace." -> route=coding_task, operation=run, codingRemoteExecRequested=true, command="pwd".',
   'Example: "Run npm test in the cloud sandbox." -> route=coding_task, operation=run, codingRemoteExecRequested=true, command="npm test".',
+  'Example: "Use your complex-planning path for this request. Create three files and then synthesize them into a summary." -> route=complex_planning_task, operation=run, executionClass=tool_orchestration, preferredTier=external, requiresToolSynthesis=true, expectedContextPressure=high, preferredAnswerPath=chat_synthesis.',
   'Example: prior assistant said a Codex request named a different coding workspace and asked the user to switch first; then the user says "Okay, switch to Test Tactical Game App." -> route=coding_session_control, turnRelation=clarification_answer, operation=update, sessionTarget="Test Tactical Game App".',
   'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
@@ -494,12 +496,13 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
 const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
   'Classify the user request and return exactly one JSON object. Do not explain anything and do not call tools.',
-  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
+  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, complex_planning_task, general_assistant, unknown.',
   'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
   'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
   'Use only these exact resolution values: ready, needs_clarification.',
   'coding_session_control means current session, list sessions, switch or attach to another session, detach, or create a coding session.',
   'coding_task means code work inside a workspace, including explicit backend delegation such as Codex, Claude Code, Gemini CLI, or Aider, plus file-grounded repo inspection, code review, and implementation planning.',
+  'complex_planning_task means the user explicitly wants Guardian\'s complex-planning / DAG planner path. Do not use it for ordinary filesystem or coding work unless the user directly asks for the planner path itself.',
   'memory_task means explicit remember, save, recall, or search memory requests.',
   'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, contact context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
@@ -570,6 +573,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
   'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
   'Examples: "Inspect src/runtime/intent-gateway.ts and review the uplift for regressions." -> route="coding_task", operation="inspect", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
+  'Examples: "Use your complex-planning path for this request. Create three files and synthesize them into a summary." -> route="complex_planning_task", operation="run", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", mailboxReadMode="unread".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", executionClass="direct_assistant", preferredTier="local", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", preferredAnswerPath="direct".',
   'Return valid JSON with double-quoted keys and string values only.',
@@ -579,13 +583,14 @@ const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
   'Classify the user request using a minimal JSON object only. Do not explain anything and do not call tools.',
   'Return exactly one JSON object with only these keys: route, operation, confidence, summary, turnRelation, resolution.',
-  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
+  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, complex_planning_task, general_assistant, unknown.',
   'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
   'Use only these exact confidence values: high, medium, low.',
   'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
   'Use only these exact resolution values: ready, needs_clarification.',
   'Prefer coding_session_control for switching, attaching, detaching, listing, or inspecting coding workspaces or sessions.',
   'Prefer coding_task for code work inside a workspace, repo inspection, implementation, review, or explicit coding-backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',
+  'Prefer complex_planning_task only when the user explicitly asks for Guardian\'s complex-planning path, planner path, or DAG planner route itself.',
   'Prefer personal_assistant_task for Second Brain notes, tasks, calendar planning, briefs, contacts, routines, and personal retrieval.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, or Outlook Calendar CRUD.',
   'Prefer general_assistant for direct advice, explanation, or provider/model configuration work.',
@@ -1718,6 +1723,9 @@ function repairIntentGatewayRoute(
   turnRelation: IntentGatewayTurnRelation,
   repairContext: IntentGatewayRepairContext | undefined,
 ): IntentGatewayRoute {
+  if (isExplicitComplexPlanningRequest(repairContext?.sourceContent)) {
+    return 'complex_planning_task';
+  }
   if (route === 'personal_assistant_task') {
     return route;
   }
@@ -1758,6 +1766,9 @@ function repairIntentGatewayOperation(
 ): IntentGatewayOperation {
   const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const normalizedSourceContent = rawSourceContent.toLowerCase();
+  if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
+    return 'run';
+  }
   if (
     route === 'coding_task'
     && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
@@ -1786,6 +1797,17 @@ function repairUnavailableIntentGatewayDecision(
   const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const sourceContent = rawSourceContent.toLowerCase();
   if (!sourceContent) return null;
+  if (isExplicitComplexPlanningRequest(rawSourceContent)) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'complex_planning_task',
+      operation: 'run',
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'medium',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered explicit complex-planning request after an unstructured gateway response.',
+    }, repairContext);
+  }
   const parsedOperation = normalizeOperation(parsed?.operation);
   const inferredRemoteExecCommand = extractExplicitRemoteExecCommand(
     rawSourceContent,
@@ -2179,6 +2201,14 @@ function inferRoutinePersonalItemType(
     return 'routine';
   }
   return undefined;
+}
+
+function isExplicitComplexPlanningRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  return /\buse (?:your|the) complex[- ]planning path\b/.test(normalized)
+    || /\b(?:route|send) (?:this|it|the request)?\s*(?:through|to) (?:your |the )?complex[- ]planning path\b/.test(normalized)
+    || /\b(?:use|run|route|handle|take)\b[^.!?\n]{0,80}\b(?:dag planner|dag path|planner path)\b/.test(normalized);
 }
 
 function inferSecondBrainQuery(
