@@ -276,6 +276,143 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('navigate');
   });
 
+  it('keeps explicit complex-planning requests on the JSON fallback path', async () => {
+    const gateway = new IntentGateway();
+    const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: request,
+        channel: 'web',
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        expect(messages[0]?.content).toContain('complex_planning_task');
+        expect(messages[0]?.content).toContain('planner path');
+        return {
+          content: JSON.stringify({
+            route: 'complex_planning_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Uses the brokered DAG planner path to create the requested files and summary.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).toBe('complex_planning_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.executionClass).toBe('tool_orchestration');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
+  it('uses the route-only fallback for explicit complex-planning requests when the JSON fallback throws', async () => {
+    const gateway = new IntentGateway();
+    const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: request,
+        channel: 'web',
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        if (callCount === 2) {
+          expect(options?.responseFormat).toEqual({ type: 'json_object' });
+          expect(messages[0]?.content).toContain('complex_planning_task');
+          throw new Error('ollama api error: failed to produce JSON fallback output');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        expect(messages[0]?.content).toContain('complex_planning_task');
+        expect(messages[0]?.content).toContain('planner path');
+        return {
+          content: JSON.stringify({
+            route: 'complex_planning_task',
+            confidence: 'medium',
+            operation: 'run',
+            summary: 'Uses the planner path for this brokered DAG request.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.mode).toBe('route_only_fallback');
+    expect(result.decision.route).toBe('complex_planning_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.executionClass).toBe('tool_orchestration');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
+  it('repairs explicit complex-planning requests when fallback output drifts to filesystem_task', async () => {
+    const gateway = new IntentGateway();
+    const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: request,
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: JSON.stringify({
+            route: 'filesystem_task',
+            confidence: 'medium',
+            operation: 'create',
+            summary: 'Creates the requested files in tmp/manual-dag-smoke.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).toBe('complex_planning_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.executionClass).toBe('tool_orchestration');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresRepoGrounding).toBe(false);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
   it('infers coding backend metadata from a minimal structured fallback decision', async () => {
     const gateway = new IntentGateway();
 

@@ -993,6 +993,174 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(resumed.content).toContain('"search-repo"');
   });
 
+  it('executes explicit complex-planning smoke requests through planner file writes including summary.md', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              mkdir: {
+                id: 'mkdir',
+                description: 'Create the manual DAG smoke directory.',
+                dependencies: [],
+                actionType: 'tool_call',
+                target: 'fs_mkdir',
+                inputPrompt: JSON.stringify({ path: 'tmp/manual-dag-smoke' }),
+              },
+              risks: {
+                id: 'risks',
+                description: 'Write risks.txt.',
+                dependencies: ['mkdir'],
+                actionType: 'tool_call',
+                target: 'fs_write',
+                inputPrompt: JSON.stringify({
+                  path: 'tmp/manual-dag-smoke/risks.txt',
+                  content: '- Planner drift can bypass intended approval checkpoints.\n- Remote output can taint downstream file writes.\n- Long multi-step runs can hide partial failure behind a success summary.\n',
+                }),
+              },
+              controls: {
+                id: 'controls',
+                description: 'Write controls.txt.',
+                dependencies: ['risks'],
+                actionType: 'tool_call',
+                target: 'fs_write',
+                inputPrompt: JSON.stringify({
+                  path: 'tmp/manual-dag-smoke/controls.txt',
+                  content: '- Supervisor-owned tool admission keeps writes brokered.\n- Trust-state propagation marks tainted downstream actions.\n- Approval mediation can pause and resume the DAG safely.\n',
+                }),
+              },
+              gaps: {
+                id: 'gaps',
+                description: 'Write gaps.txt.',
+                dependencies: ['controls'],
+                actionType: 'tool_call',
+                target: 'fs_write',
+                inputPrompt: JSON.stringify({
+                  path: 'tmp/manual-dag-smoke/gaps.txt',
+                  content: '- Live UI progress is still too coarse during long planner runs.\n- Planner-path regression coverage must stay aligned with routing fallbacks.\n- End-to-end smoke coverage should include managed-cloud provider lanes.\n',
+                }),
+              },
+              summary: {
+                id: 'summary',
+                description: 'Write summary.md.',
+                dependencies: ['gaps'],
+                actionType: 'tool_call',
+                target: 'fs_write',
+                inputPrompt: JSON.stringify({
+                  path: 'tmp/manual-dag-smoke/summary.md',
+                  content: '| Category | Notes |\n| --- | --- |\n| Risks | Planner drift, taint propagation, misleading completion copy. |\n| Controls | Brokered tool admission, trust-state tracking, approval mediation. |\n| Gaps | UI progress detail, regression coverage, managed-cloud validation. |\n\nBrokered agent isolation is directionally sound, but production readiness still depends on keeping planner routing explicit and improving run visibility during longer brokered executions.\n',
+                }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The requested file operation completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 120)}`);
+    });
+
+    const callRequests: Array<Record<string, unknown>> = [];
+    const callTool = vi.fn(async (request: Record<string, unknown>) => {
+      callRequests.push(request);
+      if (request.toolName === 'fs_mkdir') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-mkdir-1',
+          message: 'Created directory.',
+          output: { path: 'tmp/manual-dag-smoke' },
+        };
+      }
+      if (request.toolName === 'fs_write') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: `job-write-${callRequests.length}`,
+          message: 'Wrote file.',
+          output: { path: request.args && typeof request.args === 'object' ? (request.args as { path?: string }).path : undefined },
+        };
+      }
+      throw new Error(`Unexpected tool ${(request.toolName as string) || 'unknown'}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_mkdir',
+          description: 'Create a directory.',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          risk: 'mutating',
+        },
+        {
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+          risk: 'mutating',
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-manual-dag-smoke',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    const writtenPaths = callRequests
+      .map((request) => request.args)
+      .filter((args): args is { path?: string } => !!args && typeof args === 'object')
+      .map((args) => args.path)
+      .filter((path): path is string => typeof path === 'string');
+
+    expect(result.content).toContain('I have generated and executed a DAG plan');
+    expect(result.content).toContain('"summary"');
+    expect(callRequests).toHaveLength(5);
+    expect(callRequests[0]).toMatchObject({
+      toolName: 'fs_mkdir',
+      requestId: 'msg-plan-manual-dag-smoke',
+      contentTrustLevel: 'trusted',
+      derivedFromTaintedContent: false,
+    });
+    expect(writtenPaths).toEqual([
+      'tmp/manual-dag-smoke',
+      'tmp/manual-dag-smoke/risks.txt',
+      'tmp/manual-dag-smoke/controls.txt',
+      'tmp/manual-dag-smoke/gaps.txt',
+      'tmp/manual-dag-smoke/summary.md',
+    ]);
+  });
+
   it('propagates taint from earlier planner nodes into later node tool requests', async () => {
     const llmChat = vi.fn(async (messages) => {
       const lastMessage = messages[messages.length - 1];

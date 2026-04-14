@@ -250,6 +250,32 @@ async function runHarness() {
 
   const provider = await resolveHarnessProvider(options);
   const providerConfig = getHarnessProviderConfig(provider);
+  const managedCloudHarnessConfig = provider.providerType === 'ollama_cloud'
+    ? `
+  ollama:
+    provider: ollama
+    baseUrl: http://127.0.0.1:11434
+    model: llama3.2
+    enabled: false`
+    : '';
+  const managedCloudAssistantConfig = provider.providerType === 'ollama_cloud'
+    ? `
+    preferredProviders:
+      managedCloud: ${providerConfig.profileName}
+    modelSelection:
+      managedCloudRouting:
+        enabled: true
+        roleBindings:
+          general: ${providerConfig.profileName}
+          direct: ${providerConfig.profileName}
+          toolLoop: ${providerConfig.profileName}
+          coding: ${providerConfig.profileName}`
+    : '';
+  const managedCloudRoutingConfig = provider.providerType === 'ollama_cloud'
+    ? `
+routing:
+  tierMode: managed-cloud-only`
+    : '';
   const config = `
 llm:
   ${providerConfig.profileName}:
@@ -257,7 +283,8 @@ llm:
     baseUrl: ${provider.baseUrl}
     model: ${provider.model}
 ${providerConfig.credentialRef ? `    credentialRef: ${providerConfig.credentialRef}
-` : ''}defaultProvider: ${providerConfig.profileName}
+` : ''}${managedCloudHarnessConfig}
+defaultProvider: ${providerConfig.profileName}
 channels:
   cli:
     enabled: false
@@ -280,9 +307,11 @@ ${providerConfig.credentialRef ? `  credentials:
   tools:
     enabled: true
     policyMode: autonomous
+${managedCloudAssistantConfig}
 runtime:
   agentIsolation:
     enabled: false
+${managedCloudRoutingConfig}
 guardian:
   enabled: true
 `;
