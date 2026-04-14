@@ -4,6 +4,7 @@ import {
   repairIntentGatewayOperation,
   repairIntentGatewayRoute,
 } from './clarification-resolver.js';
+import { classifierProvenanceSourceForMode } from './provenance.js';
 import { resolveIntentGatewayEntities } from './route-entity-resolution.js';
 import {
   normalizeConfidence,
@@ -19,7 +20,9 @@ import {
 } from './normalization.js';
 import type {
   IntentGatewayDecision,
+  IntentGatewayProvenanceSource,
   IntentGatewayRepairContext,
+  IntentGatewayRecord,
 } from './types.js';
 import { repairUnavailableIntentGatewayDecision } from './unstructured-recovery.js';
 import { deriveWorkloadMetadata } from './workload-derivation.js';
@@ -27,7 +30,9 @@ import { deriveWorkloadMetadata } from './workload-derivation.js';
 export function parseIntentGatewayDecision(
   response: ChatResponse,
   repairContext?: IntentGatewayRepairContext,
+  options?: { mode?: IntentGatewayRecord['mode'] },
 ): { decision: IntentGatewayDecision; available: boolean } {
+  const classifierSource = classifierProvenanceSourceForMode(options?.mode ?? 'primary');
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
   if (!parsed) {
@@ -58,12 +63,16 @@ export function parseIntentGatewayDecision(
         expectedContextPressure: 'low',
         preferredAnswerPath: 'direct',
         simpleVsComplex: 'simple',
+        provenance: {
+          route: classifierSource,
+          operation: classifierSource,
+        },
         entities: {},
       },
       available: false,
     };
   }
-  const decision = normalizeIntentGatewayDecision(parsed, repairContext);
+  const decision = normalizeIntentGatewayDecision(parsed, repairContext, { classifierSource });
   if (decision.route === 'unknown') {
     const repaired = repairUnavailableIntentGatewayDecision(
       repairContext,
@@ -96,7 +105,11 @@ export function parseStructuredContent(content: string): Record<string, unknown>
 export function normalizeIntentGatewayDecision(
   parsed: Record<string, unknown>,
   repairContext?: IntentGatewayRepairContext,
+  options?: {
+    classifierSource?: IntentGatewayProvenanceSource;
+  },
 ): IntentGatewayDecision {
+  const classifierSource = options?.classifierSource ?? 'classifier.primary';
   const parsedOperation = normalizeOperation(parsed.operation);
   const confidence = normalizeConfidence(parsed.confidence);
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
@@ -117,21 +130,32 @@ export function normalizeIntentGatewayDecision(
       .map((value) => value.trim())
       .filter(Boolean)
     : [];
+  const normalizedParsedRoute = normalizeRoute(parsed.route);
   const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
     ? parsed.resolvedContent.trim()
     : undefined;
-  const entities = resolveIntentGatewayEntities(parsed, repairContext, route, operation);
+  const entityResolution = resolveIntentGatewayEntities(
+    parsed,
+    repairContext,
+    route,
+    operation,
+    classifierSource,
+  );
   const derivedWorkload = deriveWorkloadMetadata(route, operation, {
     ...parsed,
-    ...entities,
+    ...entityResolution.entities,
   });
-  const executionClass = normalizeExecutionClass(parsed.executionClass) ?? derivedWorkload.executionClass;
-  const preferredTier = normalizePreferredTier(parsed.preferredTier) ?? derivedWorkload.preferredTier;
-  const requiresRepoGrounding = typeof parsed.requiresRepoGrounding === 'boolean'
-    ? parsed.requiresRepoGrounding
+  const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);
+  const executionClass = normalizedExecutionClass ?? derivedWorkload.executionClass;
+  const normalizedPreferredTier = normalizePreferredTier(parsed.preferredTier);
+  const preferredTier = normalizedPreferredTier ?? derivedWorkload.preferredTier;
+  const hasParsedRequiresRepoGrounding = typeof parsed.requiresRepoGrounding === 'boolean';
+  const requiresRepoGrounding = hasParsedRequiresRepoGrounding
+    ? parsed.requiresRepoGrounding as boolean
     : derivedWorkload.requiresRepoGrounding;
-  const requiresToolSynthesis = typeof parsed.requiresToolSynthesis === 'boolean'
-    ? parsed.requiresToolSynthesis
+  const hasParsedRequiresToolSynthesis = typeof parsed.requiresToolSynthesis === 'boolean';
+  const requiresToolSynthesis = hasParsedRequiresToolSynthesis
+    ? parsed.requiresToolSynthesis as boolean
     : derivedWorkload.requiresToolSynthesis;
   const expectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure)
     ?? derivedWorkload.expectedContextPressure;
@@ -139,6 +163,25 @@ export function normalizeIntentGatewayDecision(
     ?? derivedWorkload.preferredAnswerPath;
   const simpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex)
     ?? derivedWorkload.simpleVsComplex;
+  const provenance = {
+    route: route === normalizedParsedRoute ? classifierSource : 'resolver.clarification',
+    operation: operation === parsedOperation ? classifierSource : 'resolver.clarification',
+    ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
+    executionClass: normalizedExecutionClass ? classifierSource : 'derived.workload',
+    preferredTier: normalizedPreferredTier ? classifierSource : 'derived.workload',
+    requiresRepoGrounding: hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
+    requiresToolSynthesis: hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
+    expectedContextPressure: normalizeExpectedContextPressure(parsed.expectedContextPressure)
+      ? classifierSource
+      : 'derived.workload',
+    preferredAnswerPath: normalizePreferredAnswerPath(parsed.preferredAnswerPath)
+      ? classifierSource
+      : 'derived.workload',
+    simpleVsComplex: normalizeSimpleVsComplex(parsed.simpleVsComplex)
+      ? classifierSource
+      : 'derived.workload',
+    ...(entityResolution.provenance ? { entities: entityResolution.provenance } : {}),
+  } satisfies NonNullable<IntentGatewayDecision['provenance']>;
 
   return {
     route,
@@ -155,8 +198,9 @@ export function normalizeIntentGatewayDecision(
     expectedContextPressure,
     preferredAnswerPath,
     simpleVsComplex,
+    provenance,
     ...(resolvedContent ? { resolvedContent } : {}),
-    entities,
+    entities: entityResolution.entities,
   };
 }
 

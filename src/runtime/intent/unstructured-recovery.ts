@@ -22,6 +22,9 @@ import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.
 type NormalizeIntentGatewayDecisionFn = (
   parsed: Record<string, unknown>,
   repairContext?: IntentGatewayRepairContext,
+  options?: {
+    classifierSource?: import('./types.js').IntentGatewayProvenanceSource;
+  },
 ) => IntentGatewayDecision;
 
 export function repairUnavailableIntentGatewayDecision(
@@ -41,7 +44,7 @@ export function repairUnavailableIntentGatewayDecision(
       summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
         ? parsed.summary.trim()
         : 'Recovered explicit complex-planning request after an unstructured gateway response.',
-    }, repairContext);
+    }, repairContext, { classifierSource: 'repair.unstructured' });
   }
   const inferredProviderConfigDecision = inferExplicitProviderConfigDecision(
     repairContext,
@@ -71,7 +74,7 @@ export function repairUnavailableIntentGatewayDecision(
       ...(extractCodingWorkspaceTarget(rawSourceContent)
         ? { sessionTarget: extractCodingWorkspaceTarget(rawSourceContent) }
         : {}),
-    }, repairContext);
+    }, repairContext, { classifierSource: 'repair.unstructured' });
   }
   const inferredCodingBackendRequest = inferExplicitCodingBackendRequest(
     rawSourceContent,
@@ -92,7 +95,7 @@ export function repairUnavailableIntentGatewayDecision(
       ...(inferredCodingBackendRequest.sessionTarget
         ? { sessionTarget: inferredCodingBackendRequest.sessionTarget }
         : {}),
-    }, repairContext);
+    }, repairContext, { classifierSource: 'repair.unstructured' });
   }
   const inferredSecondBrainDecision = inferExplicitSecondBrainDecision(
     repairContext,
@@ -112,7 +115,7 @@ export function repairUnavailableIntentGatewayDecision(
     summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
       ? parsed.summary.trim()
       : 'Recovered coding-task intent from explicit repo file references after an unstructured gateway response.',
-  }, repairContext);
+  }, repairContext, { classifierSource: 'repair.unstructured' });
 }
 
 function inferExplicitSecondBrainDecision(
@@ -151,7 +154,7 @@ function inferExplicitSecondBrainDecision(
     summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
       ? parsed.summary.trim()
       : 'Recovered Second Brain intent from an unstructured gateway response.',
-  }, repairContext);
+  }, repairContext, { classifierSource: 'repair.unstructured' });
 }
 
 function inferExplicitProviderConfigDecision(
@@ -178,5 +181,5 @@ function inferExplicitProviderConfigDecision(
     expectedContextPressure: 'medium',
     preferredAnswerPath: 'tool_loop',
     simpleVsComplex: 'complex',
-  }, repairContext);
+  }, repairContext, { classifierSource: 'repair.unstructured' });
 }

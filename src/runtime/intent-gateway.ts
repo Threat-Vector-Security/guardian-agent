@@ -1,6 +1,10 @@
 import type { ChatMessage, ChatResponse, ToolDefinition } from '../llm/types.js';
 import { selectIntentGatewayPromptProfile } from './intent/prompt-profiles.js';
 import { normalizeIntentGatewayPromptProfile } from './intent/normalization.js';
+import {
+  classifierProvenanceSourceForMode,
+  normalizeIntentGatewayDecisionProvenance,
+} from './intent/provenance.js';
 import { classifyIntentGatewayPass } from './intent/route-classifier.js';
 import {
   normalizeIntentGatewayDecision,
@@ -22,6 +26,7 @@ export type {
   IntentGatewayChatFn,
   IntentGatewayConfidence,
   IntentGatewayDecision,
+  IntentGatewayDecisionProvenance,
   IntentGatewayEntities,
   IntentGatewayExecutionClass,
   IntentGatewayExpectedContextPressure,
@@ -30,6 +35,7 @@ export type {
   IntentGatewayPreferredAnswerPath,
   IntentGatewayPreferredTier,
   IntentGatewayPromptProfile,
+  IntentGatewayProvenanceSource,
   IntentGatewayRepairContext,
   IntentGatewayRecord,
   IntentGatewayResolution,
@@ -109,6 +115,13 @@ export class IntentGateway {
       if (repairedName) {
         decision = {
           ...decision,
+          provenance: {
+            ...(decision.provenance ?? {}),
+            entities: {
+              ...(decision.provenance?.entities ?? {}),
+              automationName: 'repair.automation_name',
+            },
+          },
           entities: {
             ...decision.entities,
             automationName: repairedName,
@@ -147,6 +160,7 @@ export function toIntentGatewayClientMetadata(
     expectedContextPressure: record.decision.expectedContextPressure,
     ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
     preferredAnswerPath: record.decision.preferredAnswerPath,
+    ...(record.decision.provenance ? { provenance: record.decision.provenance } : {}),
     ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
     entities: record.decision.entities,
   };
@@ -177,6 +191,7 @@ export function serializeIntentGatewayRecord(
       expectedContextPressure: record.decision.expectedContextPressure,
       ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
       preferredAnswerPath: record.decision.preferredAnswerPath,
+      ...(record.decision.provenance ? { provenance: record.decision.provenance } : {}),
       ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
       ...record.decision.entities,
     },
@@ -188,10 +203,19 @@ export function deserializeIntentGatewayRecord(
 ): IntentGatewayRecord | null {
   if (!isRecord(value)) return null;
   if (!isRecord(value.decision)) return null;
+  const mode = value.mode === 'json_fallback' || value.mode === 'route_only_fallback'
+    ? value.mode
+    : 'primary';
+  const normalizedDecision = normalizeIntentGatewayDecision(
+    value.decision,
+    undefined,
+    { classifierSource: classifierProvenanceSourceForMode(mode) },
+  );
+  const normalizedProvenance = normalizeIntentGatewayDecisionProvenance(
+    (value.decision as Record<string, unknown>).provenance,
+  );
   return {
-    mode: value.mode === 'json_fallback' || value.mode === 'route_only_fallback'
-      ? value.mode
-      : 'primary',
+    mode,
     available: value.available !== false,
     model: typeof value.model === 'string' && value.model.trim()
       ? value.model
@@ -205,7 +229,12 @@ export function deserializeIntentGatewayRecord(
     ...(typeof value.rawResponsePreview === 'string' && value.rawResponsePreview.trim()
       ? { rawResponsePreview: value.rawResponsePreview }
       : {}),
-    decision: normalizeIntentGatewayDecision(value.decision),
+    decision: {
+      ...normalizedDecision,
+      ...(normalizedProvenance
+        ? { provenance: normalizedProvenance }
+        : {}),
+    },
   };
 }
 

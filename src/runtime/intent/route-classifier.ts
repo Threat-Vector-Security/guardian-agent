@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatOptions, ToolDefinition } from '../../llm/types.js';
+import { classifierProvenanceSourceForMode } from './provenance.js';
 import { buildRawResponsePreview, parseIntentGatewayDecision } from './structured-recovery.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import type {
@@ -509,6 +510,8 @@ export async function classifyIntentGatewayPass(
       sourceContent: input.content,
       pendingAction: input.pendingAction,
       continuity: input.continuity,
+    }, {
+      mode: options.mode,
     });
     return {
       mode: options.mode,
@@ -520,6 +523,7 @@ export async function classifyIntentGatewayPass(
       rawResponsePreview: buildRawResponsePreview(response),
     };
   } catch (error) {
+    const classifierSource = classifierProvenanceSourceForMode(options.mode);
     return {
       mode: options.mode,
       available: false,
@@ -541,6 +545,10 @@ export async function classifyIntentGatewayPass(
         expectedContextPressure: 'low',
         simpleVsComplex: 'simple',
         preferredAnswerPath: 'direct',
+        provenance: {
+          route: classifierSource,
+          operation: classifierSource,
+        },
         entities: {},
       },
     };

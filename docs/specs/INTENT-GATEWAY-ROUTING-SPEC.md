@@ -100,6 +100,7 @@ The `decision` is structured and includes:
 - `expectedContextPressure`
 - `simpleVsComplex`
 - `preferredAnswerPath`
+- `provenance`
 - `entities`
 
 Current internal ownership:
@@ -143,6 +144,7 @@ Workload metadata meanings:
 - `expectedContextPressure`: low, medium, or high expected bounded context cost
 - `simpleVsComplex`: coarse classifier signal for whether the turn is a short direct ask or a higher-complexity routed task
 - `preferredAnswerPath`: whether the best path is direct answer, tool loop, or chat synthesis
+- `provenance`: structured source attribution for repaired or derived route, operation, workload metadata, and route entities
 
 ### Routes
 
@@ -490,6 +492,8 @@ Relevant diagnostics:
 The durable routing trace is distinct from the existing run timeline:
 - the run timeline is the operator UI story for queueing, approvals, tool progress, verification, and completion
 - the routing trace is the low-level decision log for gateway classification, clarification prompts, tier selection, direct-intent candidates, direct tool execution, and final response locality
+- `gateway_classified` entries now carry structured provenance such as route source, operation source, workload-source attribution, and per-entity sources when those were repaired or derived after the initial classifier output
+- `direct_candidates_evaluated` entries are the current capability-resolution trace point for direct lanes and record the routed candidates alongside the gateway provenance that shaped them
 
 Current routing trace stages include:
 - `incoming_dispatch`

@@ -586,6 +586,10 @@ describe('IntentGateway', () => {
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
+        provenance: {
+          route: 'classifier.primary',
+          operation: 'classifier.primary',
+        },
         entities: {
           uiSurface: 'automations',
         },
@@ -597,6 +601,9 @@ describe('IntentGateway', () => {
       model: 'test-model',
       route: 'ui_control',
       operation: 'navigate',
+      provenance: {
+        route: 'classifier.primary',
+      },
     });
   });
 
@@ -655,6 +662,14 @@ describe('IntentGateway', () => {
     expect(result.decision.requiresToolSynthesis).toBe(false);
     expect(result.decision.expectedContextPressure).toBe('medium');
     expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.provenance).toMatchObject({
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresRepoGrounding: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+    });
   });
 
   it('parses personal assistant routes and item types', async () => {
@@ -1044,6 +1059,13 @@ describe('IntentGateway', () => {
     expect(result.decision.turnRelation).toBe('clarification_answer');
     expect(result.decision.operation).toBe('create');
     expect(result.decision.entities.personalItemType).toBe('routine');
+    expect(result.decision.provenance).toMatchObject({
+      route: 'resolver.clarification',
+      operation: 'resolver.clarification',
+      entities: {
+        personalItemType: 'resolver.personal_assistant',
+      },
+    });
   });
 
   it('repairs personal-assistant clarification answers back onto the pending Second Brain person route', async () => {
@@ -2360,6 +2382,10 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('read');
     expect(result.decision.entities.emailProvider).toBe('m365');
     expect(result.decision.entities.mailboxReadMode).toBe('unread');
+    expect(result.decision.provenance?.entities).toMatchObject({
+      emailProvider: 'resolver.email',
+      mailboxReadMode: 'resolver.email',
+    });
   });
 
   it('captures clarification answers for automation-selection follow-ups', async () => {
@@ -2416,6 +2442,13 @@ describe('IntentGateway', () => {
           turnRelation: 'new_request',
           resolution: 'ready',
           missingFields: [],
+          provenance: {
+            route: 'classifier.primary',
+            operation: 'classifier.primary',
+            entities: {
+              codingBackend: 'classifier.primary',
+            },
+          },
           entities: {
             codingBackend: 'codex',
           },
@@ -2429,6 +2462,12 @@ describe('IntentGateway', () => {
       promptProfile: 'compact',
       decision: {
         route: 'coding_task',
+        provenance: {
+          route: 'classifier.primary',
+          entities: {
+            codingBackend: 'classifier.primary',
+          },
+        },
         entities: {
           codingBackend: 'codex',
         },
