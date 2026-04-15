@@ -64,14 +64,12 @@ export async function continueDirectRouteAfterApproval(input: {
       input.pendingAction,
       {
         approvalId: input.approvalId,
-        pendingActionAlreadyCleared: true,
         approvalResult: input.approvalResult,
       },
     )
     : await input.resumeStoredDirectRoutePendingAction(
       input.pendingAction,
       {
-        pendingActionAlreadyCleared: true,
         approvalResult: input.approvalResult,
       },
     );
