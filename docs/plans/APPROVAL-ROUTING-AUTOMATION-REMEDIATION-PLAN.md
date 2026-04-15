@@ -38,6 +38,7 @@ The pasted failures are not one bug. They cluster into four separate buckets:
 1. **Shared approval/orchestration defects**
    - The original web-approval button regression was real.
    - Canonical brokered approval rendering now looks mostly correct again, but the generic non-brokered multi-step continuation path is still not fully healthy.
+   - Active code-session metadata was unintentionally following users across web surfaces (e.g., config/second-brain), causing requests for external paths to be mistakenly treated as repo-grounded coding tasks, triggering extra approvals. This has been fixed.
 
 2. **Delegated execution and routing deficiencies**
    - Search and coding requests are reaching generic managed-cloud tool loops too often, so the model improvises with repeated approval hops instead of executing a bounded plan.
@@ -77,6 +78,9 @@ Representative observed requests:
 
 | Area | Current Classification | Why |
 | --- | --- | --- |
+| Code-session metadata leaking across web surfaces | **Real bug, fixed** | The `resolvedCodeSession` was active in external-path requests outside the code panel, triggering extra workspace-related approvals. |
+| Explicit file paths routed as Second Brain notes | **Real bug, fixed** | `note-a.txt` was extracted as a "note" entity rather than a filesystem request, causing bad capability routing. |
+| External paths fall back to ad-hoc scripts | **Real bug, fixed** | After an external path is allowlisted, if a code session was active, the filesystem tools still enforced a workspace-root-only policy. The model gave up on `fs_write`/`fs_mkdir` and tried to write its own Node shell script (which failed due to ESM/CJS conflicts). We fixed the sandbox logic so `fs_*` tools correctly merge and respect both the active code session root and global allowed paths. |
 | Web approval buttons not surfacing | **Real bug, largely fixed for canonical brokered flows** | The web UI depends on `response.metadata.pendingAction`. Earlier blocked responses were not consistently carrying canonical metadata. Current Gmail-send traces now show the expected metadata path again. |
 | Generic non-brokered multi-step web continuation | **Real bug** | The generic web approval harness still falls back into "You already have blocked work waiting for input or approval" after approval continuation. That is shared continuation-state drift, not a Gmail-only issue. |
 | OpenAI pricing request taking many approval cycles | **Capability/routing deficiency** | Routing is correct, but the delegated tool loop keeps making serial fetch attempts and asking for new approvals instead of executing a bounded retrieval plan. |
@@ -109,10 +113,10 @@ Exit criteria:
 - Approval buttons render on the first blocked response for direct-route and delegated paths alike.
 - Post-approval continuation clears or updates the active pending slot exactly once.
 
-### 2. Delegated Search And Coding Execution Discipline
+### 2. Delegated Search, Coding, and Filesystem Execution Discipline
 
-**Owner layer:** intent-to-capability mapping, direct-candidate handling, delegated tool-loop policy  
-**Primary files:** `src/runtime/intent-gateway.ts`, `src/runtime/intent/capability-resolver.ts`, `src/chat-agent.ts`
+**Owner layer:** intent-to-capability mapping, direct-candidate handling, delegated tool-loop policy, sandbox policy sync  
+**Primary files:** `src/runtime/intent-gateway.ts`, `src/runtime/intent/capability-resolver.ts`, `src/chat-agent.ts`, `src/tools/builtin/filesystem-tools.ts`
 
 Fixes:
 
@@ -120,12 +124,14 @@ Fixes:
 - For `coding_task` with an attached code session, prefer a deterministic coding execution path over a generic managed-cloud tool loop when the user is clearly asking to run repo commands.
 - When a repo command likely needs setup (`npm ci`/`npm install`), build a single explicit plan and present one bounded approval request where possible instead of letting the model keep escalating commands ad hoc.
 - Separate "I need approval to execute this plan" from "I am guessing at the next command."
+- For external path filesystem operations, fix the sandbox and tool policy sync. When a path is added to allowed paths via policy update, ensure the underlying `fs_write`/`fs_mkdir` tools respect that allowlist rather than incorrectly continuing to enforce a workspace-root-only check. This prevents the model from abandoning the brokered tools and attempting dangerous/fragile ad-hoc script executions.
 
 Exit criteria:
 
 - `run the test suite for this repo` produces a single bounded execution plan or cleanly routes to the coding backend.
 - Search flows do not require a new approval for each fallback URL unless the requested scope genuinely widens.
 - Failed fetches or missing binaries produce concrete diagnoses, not model churn.
+- File and directory creation in an allowlisted external path succeeds natively using `fs_mkdir`/`fs_write` without falling back to shell scripts.
 
 ### 3. Scheduled Assistant Automation Semantics
 
@@ -196,6 +202,7 @@ Exit criteria:
 2. Scheduled assistant automation prompt/name corruption
 3. Scheduled assistant runtime approval semantics
 4. Coding-task execution/routing discipline for repo command requests
+5. Filesystem tool sandbox policy sync for external paths (fixes ad-hoc script execution loop)
 
 ### High priority but can land in parallel
 
@@ -272,6 +279,10 @@ Guardian is ready for an initial packaged release when:
 
 - approvals surface immediately and consistently on every channel
 - approval continuation resumes the original work exactly once
+- coding requests run through bounded, intelligible execution plans
+- scheduled assistant automations execute the saved task rather than re-authoring themselves
+- no fix requires bypassing the broker, the approval system, or supervisor-owned security controls
+y once
 - coding requests run through bounded, intelligible execution plans
 - scheduled assistant automations execute the saved task rather than re-authoring themselves
 - no fix requires bypassing the broker, the approval system, or supervisor-owned security controls

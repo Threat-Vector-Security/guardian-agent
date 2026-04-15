@@ -1920,19 +1920,24 @@ export class ToolExecutor {
 
   private getEffectiveAllowedPaths(request?: Partial<ToolExecutionRequest>): string[] {
     const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
-    if (codeWorkspaceRoot) {
-      return [codeWorkspaceRoot];
+    const paths = [...this.policy.sandbox.allowedPaths];
+    if (codeWorkspaceRoot && !paths.includes(codeWorkspaceRoot)) {
+      paths.push(codeWorkspaceRoot);
     }
-    return this.policy.sandbox.allowedPaths.length > 0
-      ? this.policy.sandbox.allowedPaths
-      : [this.options.workspaceRoot];
+    return paths.length > 0 ? paths : [this.options.workspaceRoot];
   }
 
   private getEffectiveAllowedCommands(request?: Partial<ToolExecutionRequest>): string[] {
-    if (this.getCodeWorkspaceRoot(request)) {
-      return [...CODE_ASSISTANT_ALLOWED_COMMANDS];
+    const codeWorkspaceRoot = this.getCodeWorkspaceRoot(request);
+    const commands = [...this.policy.sandbox.allowedCommands];
+    if (codeWorkspaceRoot) {
+      for (const cmd of CODE_ASSISTANT_ALLOWED_COMMANDS) {
+        if (!commands.includes(cmd)) {
+          commands.push(cmd);
+        }
+      }
     }
-    return this.policy.sandbox.allowedCommands;
+    return commands;
   }
 
   private getDependencyLedger(workspaceRoot: string): WorkspaceDependencyLedger {

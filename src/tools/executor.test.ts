@@ -3975,7 +3975,7 @@ describe('ToolExecutor', () => {
     });
 
     expect(context).toContain(`Workspace root (default for file operations): ${codeRoot}`);
-    expect(context).toContain(`Allowed paths (1): ${codeRoot}`);
+    expect(context).toContain(`Allowed paths (2): ${globalRoot}, ${codeRoot}`);
     expect(context).toContain('Active coding session workspace:');
     expect(context).toContain('already trusted');
   });
