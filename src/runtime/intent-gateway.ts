@@ -129,10 +129,157 @@ export class IntentGateway {
         };
       }
     }
+    decision = repairEmailProviderDecisionIfNeeded(input, decision);
+    decision = resolveSatisfiedClarificationIfNeeded(input, decision);
     return {
       ...record,
       decision,
     };
+  }
+}
+
+function repairEmailProviderDecisionIfNeeded(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (decision.route !== 'email_task' || decision.entities.emailProvider) {
+    return decision;
+  }
+
+  const enabledProviders = new Set(
+    (input.enabledManagedProviders ?? [])
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const hasGoogleWorkspace = enabledProviders.has('gws');
+  const hasMicrosoft365 = enabledProviders.has('m365');
+
+  if (!hasGoogleWorkspace && !hasMicrosoft365) {
+    return decision;
+  }
+
+  if (hasGoogleWorkspace && hasMicrosoft365) {
+    const missingFields = new Set(decision.missingFields);
+    missingFields.add('email_provider');
+    return {
+      ...decision,
+      resolution: 'needs_clarification',
+      missingFields: [...missingFields],
+    };
+  }
+
+  const emailProvider = hasMicrosoft365 ? 'm365' : 'gws';
+  return {
+    ...decision,
+    provenance: {
+      ...(decision.provenance ?? {}),
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        emailProvider: decision.provenance?.entities?.emailProvider ?? 'resolver.email',
+      },
+    },
+    entities: {
+      ...decision.entities,
+      emailProvider,
+    },
+  };
+}
+
+function resolveSatisfiedClarificationIfNeeded(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  const pendingAction = input.pendingAction;
+  if (!pendingAction || pendingAction.blockerKind !== 'clarification') {
+    return decision;
+  }
+  const satisfiedField = readSatisfiedClarificationField(decision, pendingAction.field);
+  if (!satisfiedField) {
+    return decision;
+  }
+  const missingFields = decision.missingFields.filter((field) => field !== satisfiedField);
+  const resolvedContent = decision.resolvedContent
+    ?? buildSatisfiedClarificationResolvedContent(decision, pendingAction.originalRequest, satisfiedField);
+  return {
+    ...decision,
+    turnRelation: decision.turnRelation === 'correction' ? 'correction' : 'clarification_answer',
+    resolution: 'ready',
+    missingFields,
+    ...(resolvedContent ? { resolvedContent } : {}),
+    provenance: {
+      ...(decision.provenance ?? {}),
+      ...(resolvedContent
+        ? {
+            resolvedContent: decision.provenance?.resolvedContent ?? 'resolver.clarification',
+          }
+        : {}),
+    },
+  };
+}
+
+function readSatisfiedClarificationField(
+  decision: IntentGatewayDecision,
+  field: string | undefined,
+): string | null {
+  switch (field?.trim()) {
+    case 'email_provider':
+      return decision.entities.emailProvider ? 'email_provider' : null;
+    case 'coding_backend':
+      return decision.entities.codingBackend ? 'coding_backend' : null;
+    case 'automation_name':
+      return decision.entities.automationName?.trim() ? 'automation_name' : null;
+    case 'session_target':
+      return decision.entities.sessionTarget?.trim() ? 'session_target' : null;
+    case 'path':
+      return decision.entities.path?.trim() ? 'path' : null;
+    default:
+      return null;
+  }
+}
+
+function buildSatisfiedClarificationResolvedContent(
+  decision: IntentGatewayDecision,
+  originalRequest: string,
+  field: string,
+): string | undefined {
+  const original = originalRequest.trim();
+  if (!original) return undefined;
+  switch (field) {
+    case 'email_provider': {
+      const providerLabel = decision.entities.emailProvider === 'm365'
+        ? 'Outlook / Microsoft 365'
+        : decision.entities.emailProvider === 'gws'
+          ? 'Gmail / Google Workspace'
+          : '';
+      return providerLabel ? `Use ${providerLabel} for this request: ${original}` : undefined;
+    }
+    case 'coding_backend': {
+      const backendLabel = formatCodingBackendLabel(decision.entities.codingBackend);
+      return backendLabel ? `Use ${backendLabel} for this request: ${original}` : undefined;
+    }
+    case 'automation_name':
+      return original;
+    case 'session_target':
+      return `Use ${decision.entities.sessionTarget} for this request: ${original}`;
+    case 'path':
+      return original;
+    default:
+      return undefined;
+  }
+}
+
+function formatCodingBackendLabel(value: string | undefined): string {
+  switch (value?.trim()) {
+    case 'codex':
+      return 'Codex';
+    case 'claude-code':
+      return 'Claude Code';
+    case 'gemini-cli':
+      return 'Gemini CLI';
+    case 'aider':
+      return 'Aider';
+    default:
+      return value?.trim() ?? '';
   }
 }
 

@@ -1,8 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { decideChatApproval } from '../../web/public/js/chat-approval.js';
+import { buildApprovalContinuationSummaryPart, decideChatApproval } from '../../web/public/js/chat-approval.js';
 
 describe('decideChatApproval', () => {
+  it('normalizes continuation summaries to stable tool outcomes', () => {
+    expect(buildApprovalContinuationSummaryPart(
+      { success: true, message: "Policy updated: add_path '/tmp'." },
+      { toolName: 'update_tool_policy' },
+      'approved',
+    )).toBe('update_tool_policy: Approved and executed');
+
+    expect(buildApprovalContinuationSummaryPart(
+      { success: false, message: 'Approval timed out.' },
+      { toolName: 'fs_write' },
+      'approved',
+    )).toBe('Failed: fs_write: Approval timed out.');
+  });
+
   it('uses the code-session approval endpoint when the approval belongs to the focused session', async () => {
     const apiClient = {
       codeSessionDecideApproval: vi.fn().mockResolvedValue({ success: true, message: 'Approved in code session.' }),

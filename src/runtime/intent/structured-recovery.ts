@@ -6,6 +6,7 @@ import {
 } from './clarification-resolver.js';
 import { classifierProvenanceSourceForMode } from './provenance.js';
 import { resolveIntentGatewayEntities } from './route-entity-resolution.js';
+import { INTENT_GATEWAY_MISSING_SUMMARY } from './summary.js';
 import {
   normalizeConfidence,
   normalizeExecutionClass,
@@ -114,7 +115,7 @@ export function normalizeIntentGatewayDecision(
   const confidence = normalizeConfidence(parsed.confidence);
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
     ? parsed.summary.trim()
-    : 'No classification summary provided.';
+    : INTENT_GATEWAY_MISSING_SUMMARY;
   const turnRelation = normalizeTurnRelation(parsed.turnRelation);
   const route = repairIntentGatewayRoute(
     normalizeRoute(parsed.route),

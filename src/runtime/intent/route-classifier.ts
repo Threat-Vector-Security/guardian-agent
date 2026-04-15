@@ -1,6 +1,10 @@
 import type { ChatMessage, ChatOptions, ToolDefinition } from '../../llm/types.js';
 import { classifierProvenanceSourceForMode } from './provenance.js';
 import { buildRawResponsePreview, parseIntentGatewayDecision } from './structured-recovery.js';
+import {
+  looksLikeContextDependentPromptSelectionTurn,
+  looksLikeStandaloneGreetingTurn,
+} from './request-patterns.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import type {
   IntentGatewayChatFn,
@@ -589,7 +593,10 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
   const channelLabel = input.channel?.trim() || 'unknown';
   const rawRequest = input.content.trim();
   const normalizedRequest = collapseIntentGatewayWhitespace(rawRequest);
-  const historySection = input.recentHistory && input.recentHistory.length > 0
+  const suppressThreadContext = !input.pendingAction
+    && looksLikeStandaloneGreetingTurn(rawRequest)
+    && !looksLikeContextDependentPromptSelectionTurn(normalizedRequest);
+  const historySection = !suppressThreadContext && input.recentHistory && input.recentHistory.length > 0
     ? [
         'Recent conversation:',
         ...input.recentHistory.slice(-6).map((entry) => `${entry.role}: ${entry.content}`),
@@ -618,7 +625,7 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
         '',
       ].join('\n')
     : '';
-  const continuitySection = input.continuity
+  const continuitySection = !suppressThreadContext && input.continuity
     ? [
         'Continuity thread context:',
         `continuity key: ${input.continuity.continuityKey}`,

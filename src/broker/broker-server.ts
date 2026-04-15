@@ -148,7 +148,7 @@ export class BrokerServer {
                 : request.params.principalRole === 'operator'
                   ? 'operator'
                   : 'owner',
-            channel: 'broker',
+            channel: token.authorizedChannel,
             requestId,
             contentTrustLevel: request.params.contentTrustLevel === 'quarantined'
               ? 'quarantined'
@@ -180,6 +180,7 @@ export class BrokerServer {
             severity: 'info',
             agentId: token.agentId,
             userId: token.authorizedBy,
+            channel: token.authorizedChannel,
             details: {
               method: 'tool.call',
               toolName,

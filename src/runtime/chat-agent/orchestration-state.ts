@@ -10,6 +10,7 @@ import type { IntentGatewayRecord } from '../intent-gateway.js';
 import {
   defaultPendingActionTransferPolicy,
   isPendingActionActive,
+  sanitizePendingActionPrompt,
   type PendingActionApprovalSummary,
   type PendingActionBlocker,
   type PendingActionRecord,
@@ -18,6 +19,8 @@ import {
   reconcilePendingApprovalAction,
   toPendingActionClientMetadata,
 } from '../pending-actions.js';
+import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
+import { formatPendingApprovalMessage } from '../pending-approval-copy.js';
 
 export const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 
@@ -176,6 +179,7 @@ export class ChatAgentOrchestrationState {
     const nextLastActionableRequest = decision.turnRelation === 'new_request'
       ? (routingContent || undefined)
       : (resolvedContent || undefined);
+    const summary = normalizeUserFacingIntentGatewaySummary(decision.summary);
     return this.continuityThreadStore.upsert(
       this.buildContinuityThreadScope(normalizedUserId),
       {
@@ -183,9 +187,9 @@ export class ChatAgentOrchestrationState {
           channel: normalizedChannel,
           surfaceId: input.surfaceId?.trim() || normalizedUserId || 'default-surface',
         },
-        ...(decision.summary.trim() ? { focusSummary: decision.summary.trim() } : {}),
+        ...(summary ? { focusSummary: summary } : {}),
         ...(nextLastActionableRequest ? { lastActionableRequest: nextLastActionableRequest } : {}),
-        ...(decision.summary.trim() ? { safeSummary: decision.summary.trim() } : {}),
+        ...(summary ? { safeSummary: summary } : {}),
         ...(input.codeSessionId?.trim()
           ? {
               activeExecutionRefs: [{
@@ -228,7 +232,7 @@ export class ChatAgentOrchestrationState {
   ): PendingActionRecord | null {
     const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
     const pendingAction = this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
-    if (!pendingAction || pendingAction.blocker.kind !== 'approval' || !this.pendingActionStore) {
+    if (!this.pendingActionStore) {
       return pendingAction;
     }
     const liveApprovalIds = this.tools?.listPendingApprovalIdsForUser?.(userId, channel, {
@@ -238,6 +242,7 @@ export class ChatAgentOrchestrationState {
     return reconcilePendingApprovalAction(this.pendingActionStore, pendingAction, {
       liveApprovalIds,
       liveApprovalSummaries: approvalSummaries,
+      scope: primaryScope,
       nowMs,
     });
   }
@@ -299,7 +304,7 @@ export class ChatAgentOrchestrationState {
     const route = input.intent.route?.trim() || 'task';
     const operation = input.intent.operation?.trim() || 'continue';
     const original = input.intent.originalUserContent.trim();
-    const blockerPrompt = input.blocker.prompt.trim();
+    const blockerPrompt = sanitizePendingActionPrompt(input.blocker.prompt, input.blocker.kind);
     const fragments = [
       `${route} · ${operation}`,
       original || blockerPrompt,
@@ -340,12 +345,9 @@ export class ChatAgentOrchestrationState {
     value: Record<string, unknown>,
   ): PendingActionReplacementInput | null {
     if (!isRecord(value.blocker) || !isRecord(value.intent)) return null;
-    const blockerPrompt = typeof value.blocker.prompt === 'string' ? value.blocker.prompt.trim() : '';
     const originalUserContent = typeof value.intent.originalUserContent === 'string'
       ? value.intent.originalUserContent.trim()
       : '';
-    if (!blockerPrompt || !originalUserContent) return null;
-
     const blockerKind = value.blocker.kind === 'approval'
       || value.blocker.kind === 'clarification'
       || value.blocker.kind === 'workspace_switch'
@@ -354,6 +356,11 @@ export class ChatAgentOrchestrationState {
       || value.blocker.kind === 'missing_context'
       ? value.blocker.kind
       : 'clarification';
+    const blockerPrompt = sanitizePendingActionPrompt(
+      typeof value.blocker.prompt === 'string' ? value.blocker.prompt : '',
+      blockerKind,
+    );
+    if (!originalUserContent) return null;
     const resume = isRecord(value.resume)
       && typeof value.resume.kind === 'string'
       && isRecord(value.resume.payload)
@@ -564,7 +571,9 @@ export class ChatAgentOrchestrationState {
       channel,
       surfaceId,
       {
-        prompt: active?.blocker.prompt ?? 'Approval required for the pending action.',
+        prompt: (active?.blocker.prompt && !active.blocker.prompt.startsWith('Approval required'))
+          ? active.blocker.prompt
+          : formatPendingApprovalMessage(approvalSummaries),
         approvalIds,
         approvalSummaries,
         originalUserContent: active?.intent.originalUserContent ?? '',
@@ -727,12 +736,14 @@ export class ChatAgentOrchestrationState {
     },
     nowMs: number = Date.now(),
   ): PendingActionSetResult {
+    const prompt = sanitizePendingActionPrompt(input.prompt, input.blockerKind);
+    const summary = normalizeUserFacingIntentGatewaySummary(input.summary);
     return this.replacePendingActionWithGuard(userId, channel, surfaceId, {
       status: 'pending',
       transferPolicy: defaultPendingActionTransferPolicy(input.blockerKind),
       blocker: {
         kind: input.blockerKind,
-        prompt: input.prompt,
+        prompt,
         ...(input.field ? { field: input.field } : {}),
         ...(input.options?.length ? { options: input.options.map((option) => ({ ...option })) } : {}),
         ...(input.currentSessionId ? { currentSessionId: input.currentSessionId } : {}),
@@ -744,7 +755,7 @@ export class ChatAgentOrchestrationState {
       intent: {
         ...(input.route ? { route: input.route } : {}),
         ...(input.operation ? { operation: input.operation } : {}),
-        ...(input.summary ? { summary: input.summary } : {}),
+        ...(summary ? { summary } : {}),
         ...(input.turnRelation ? { turnRelation: input.turnRelation } : {}),
         ...(input.resolution ? { resolution: input.resolution } : {}),
         ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),

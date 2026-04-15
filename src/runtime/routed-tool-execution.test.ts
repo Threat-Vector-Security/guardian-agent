@@ -28,6 +28,28 @@ function repoDecision(
   };
 }
 
+function complexPlanningDecision(
+  overrides: Partial<IntentGatewayDecision> = {},
+): IntentGatewayDecision {
+  return {
+    route: 'complex_planning_task',
+    confidence: 'high',
+    operation: 'run',
+    summary: 'Plan and execute a multi-step task.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'tool_orchestration',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'high',
+    preferredAnswerPath: 'chat_synthesis',
+    entities: {},
+    ...overrides,
+  };
+}
+
 describe('routed tool execution', () => {
   it('adds repo-grounded tool guidance for coding inspection turns', () => {
     const section = buildRoutedIntentAdditionalSection(repoDecision());
@@ -50,6 +72,14 @@ describe('routed tool execution', () => {
     expect(section?.content).toContain('external coding backend "codex"');
     expect(section?.content).toContain('Use coding_backend_run for the main execution step');
     expect(section?.content).toContain('verify the result with code_git_diff, code_test, code_build, or code_lint');
+  });
+
+  it('adds brokered filesystem guidance for explicit complex-planning turns', () => {
+    const section = buildRoutedIntentAdditionalSection(complexPlanningDecision());
+
+    expect(section?.content).toContain('brokered complex-planning path');
+    expect(section?.content).toContain('fs_read, fs_search, fs_mkdir, and fs_write');
+    expect(section?.content).toContain('Do not use code_remote_exec for simple directory creation or text-file writes');
   });
 
   it('denies grep-style shell inspection during repo-grounded coding review turns', () => {
@@ -309,5 +339,59 @@ describe('routed tool execution', () => {
       status: 'denied',
     });
     expect(prepared.immediateResult?.message).toContain('Do not use package_install here');
+  });
+
+  it('denies mkdir-style code_remote_exec during complex-planning turns without explicit remote sandbox intent', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'mkdir -p tmp/manual-dag-smoke-3',
+      },
+      requestText: 'Use your complex-planning path for this request. In tmp/manual-dag-smoke-3, create notes1.txt and summary1.md.',
+      referenceTime: Date.now(),
+      intentDecision: complexPlanningDecision(),
+    });
+
+    expect(prepared.immediateResult).toMatchObject({
+      success: false,
+      status: 'denied',
+    });
+    expect(prepared.immediateResult?.message).toContain('Prefer fs_mkdir');
+  });
+
+  it('denies shell-style text writes through code_remote_exec during complex-planning turns without explicit remote sandbox intent', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'printf "1. Summary\\n2. Risks\\n3. Next steps\\n" > tmp/planner-summary.md',
+      },
+      requestText: 'Use your complex-planning path for this request. Read src/chat-agent.ts and write a 3-line summary to tmp/planner-summary.md.',
+      referenceTime: Date.now(),
+      intentDecision: complexPlanningDecision(),
+    });
+
+    expect(prepared.immediateResult).toMatchObject({
+      success: false,
+      status: 'denied',
+    });
+    expect(prepared.immediateResult?.message).toContain('fs_write');
+  });
+
+  it('allows code_remote_exec for trivial filesystem commands when the user explicitly requested remote sandbox execution', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'mkdir -p tmp/manual-dag-smoke-3',
+      },
+      requestText: 'Use your complex-planning path for this request and run the steps in the remote sandbox.',
+      referenceTime: Date.now(),
+      intentDecision: complexPlanningDecision({
+        entities: {
+          codingRemoteExecRequested: true,
+        },
+      }),
+    });
+
+    expect(prepared.immediateResult).toBeUndefined();
   });
 });

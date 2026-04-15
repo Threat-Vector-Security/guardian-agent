@@ -3025,14 +3025,16 @@ tr:hover td {
   grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
-.sb-layout--today > .sb-card:nth-child(1) { grid-column: span 7; }
-.sb-layout--today > .sb-card:nth-child(2) { grid-column: span 5; }
-.sb-layout--today > .sb-card:nth-child(3) { grid-column: span 4; }
-.sb-layout--today > .sb-card:nth-child(4) { grid-column: span 4; }
-.sb-layout--today > .sb-card:nth-child(5) { grid-column: span 4; }
-.sb-layout--today > .sb-card:nth-child(6) { grid-column: span 4; }
-.sb-layout--today > .sb-card:nth-child(7) { grid-column: span 4; }
-.sb-layout--today > .sb-card:nth-child(8) { grid-column: span 4; }
+.sb-layout--today .sb-card--today-feature { grid-column: span 7; }
+.sb-layout--today.has-setup .sb-card--today-setup { grid-column: span 5; }
+.sb-layout--today.is-setup-hidden .sb-card--today-feature { grid-column: span 12; }
+.sb-layout--today .sb-card--today-agenda,
+.sb-layout--today .sb-card--today-capture,
+.sb-layout--today .sb-card--today-tasks,
+.sb-layout--today .sb-card--today-briefs,
+.sb-layout--today .sb-card--today-contacts,
+.sb-layout--today .sb-card--today-notes,
+.sb-layout--today .sb-card--today-routines { grid-column: span 4; }
 
 .sb-split {
   grid-template-columns: minmax(340px, 0.92fr) minmax(0, 1.2fr);
@@ -3793,15 +3795,7 @@ tr:hover td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sb-layout--today > .sb-card,
-  .sb-layout--today > .sb-card:nth-child(1),
-  .sb-layout--today > .sb-card:nth-child(2),
-  .sb-layout--today > .sb-card:nth-child(3),
-  .sb-layout--today > .sb-card:nth-child(4),
-  .sb-layout--today > .sb-card:nth-child(5),
-  .sb-layout--today > .sb-card:nth-child(6),
-  .sb-layout--today > .sb-card:nth-child(7),
-  .sb-layout--today > .sb-card:nth-child(8) {
+  .sb-layout--today > .sb-card {
     grid-column: span 1;
   }
 

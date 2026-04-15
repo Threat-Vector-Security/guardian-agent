@@ -9,6 +9,7 @@ export class TaskPlanner {
     private readonly chatFn: (messages: any[], options?: any) => Promise<any>,
     private readonly options: {
       allowedActionTypes?: PlanNode['actionType'][];
+      allowedToolNames?: string[];
     } = {},
   ) {}
 
@@ -19,7 +20,7 @@ export class TaskPlanner {
       { role: 'user', content: prompt }
     ], {
       // Expect JSON output or tools, etc. We'll simplify to JSON for the POC.
-      response_format: { type: 'json_object' }
+      responseFormat: { type: 'json_object' }
     });
 
     const content = response?.content;
@@ -43,6 +44,11 @@ export class TaskPlanner {
   private buildPlannerPrompt(objective: string, intentDecision?: IntentGatewayDecision): string {
     const allowedActionTypes = this.options.allowedActionTypes ?? BROKER_SAFE_PLANNER_ACTION_TYPES;
     const allowedActionTypeSet = new Set<PlanNode['actionType']>(allowedActionTypes);
+    const allowedToolNames = Array.isArray(this.options.allowedToolNames)
+      ? [...new Set(this.options.allowedToolNames
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim()))].sort((left, right) => left.localeCompare(right))
+      : [];
     let prompt = `Objective: ${objective}\n`;
     if (intentDecision) {
       prompt += `Context/Intent: ${JSON.stringify(intentDecision)}\n`;
@@ -56,12 +62,13 @@ PlanNode structure:
   description: string,
   dependencies: string[] // Array of node IDs that must complete first
   actionType: ${allowedActionTypes.map((actionType) => `"${actionType}"`).join(' | ')},
-  target: string // For tool_call use the exact brokered tool name. For execute_code use "code_remote_exec".
+  target: string // For tool_call use the exact brokered tool name from the allowed list below. For execute_code use "code_remote_exec".
   inputPrompt: string // For tool_call this must be a JSON object string with tool arguments. For execute_code this must be one bounded remote command string.
 }
 
 This brokered runtime only supports the action types listed above.
-${allowedActionTypeSet.has('tool_call') ? '- Prefer "tool_call" for file creation, directory creation, reading, writing, and other brokered tool orchestration. For example, use fs_mkdir and fs_write to create summary.md instead of embedding a script.\n' : ''}${allowedActionTypeSet.has('execute_code') ? '- Use "execute_code" only when you truly need one bounded remote shell command. Do not emit Python, Node, or shell script bodies as the inputPrompt; emit the exact command string that should run in the remote sandbox.\n' : ''}- Do not emit unsupported action types such as "skill_delegation", "routine_execution", or "delegate_task". They will be rejected by execution validation.
+${allowedToolNames.length > 0 ? `Allowed brokered tool names in this runtime: ${allowedToolNames.join(', ')}.\n` : ''}${allowedActionTypeSet.has('tool_call') ? '- Prefer "tool_call" for file creation, directory creation, reading, writing, and other brokered tool orchestration. For example, use fs_read to read files, fs_mkdir to create directories, and fs_write to write files instead of embedding a script.\n' : ''}${allowedActionTypeSet.has('execute_code') ? '- Use "execute_code" only when you truly need one bounded remote shell command. Do not emit Python, Node, or shell script bodies as the inputPrompt, and do not wrap the command in a JSON object. Emit the exact command string that should run in the remote sandbox.\n' : ''}- Do not invent tool aliases such as "fs_readFile", "read_file", or "fs_writeFile". Use the exact brokered tool names above.
+- Do not emit unsupported action types outside the allowed set above. They will be rejected by execution validation.
 Return ONLY valid JSON.
 `;
     return prompt;

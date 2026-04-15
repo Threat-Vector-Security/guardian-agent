@@ -14,6 +14,7 @@ type ToolsDashboardCallbacks = Pick<
   | 'onToolsState'
   | 'onToolsPendingApprovals'
   | 'onPendingActionCurrent'
+  | 'onPendingActionReset'
   | 'onSkillsState'
   | 'onSkillsUpdate'
   | 'onToolsRun'
@@ -44,6 +45,21 @@ interface ToolsDashboardCallbackOptions {
   identity: IdentityService;
   pendingActionStore: PendingActionStore;
   codeSessionStore: CodeSessionStore;
+  chatAgents?: Iterable<{
+    resetPendingState: (args: {
+      userId: string;
+      channel: string;
+      surfaceId?: string;
+      approvalIds?: string[];
+    }) => void;
+  }>;
+  workerManager?: {
+    resetPendingState?: (args: {
+      userId: string;
+      channel: string;
+      approvalIds?: string[];
+    }) => void;
+  };
   resolveSharedStateAgentId: (agentId?: string) => string | undefined;
   getCodeSessionSurfaceId: (args: { surfaceId?: string; userId?: string; principalId?: string }) => string;
   readMessageSurfaceId: (value: unknown) => string | undefined;
@@ -60,6 +76,24 @@ interface ToolsDashboardCallbackOptions {
 export function createToolsDashboardCallbacks(
   options: ToolsDashboardCallbackOptions,
 ): ToolsDashboardCallbacks {
+  const resolvePendingActionScope = (args: { userId: string; channel: string; surfaceId: string }) => {
+    const preferredAgentId = options.configRef.current.channels.web?.defaultAgent
+      || options.configRef.current.agents[0]?.id
+      || 'default';
+    const stateAgentId = options.resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId;
+    const canonicalUserId = options.identity.resolveCanonicalUserId(args.channel, args.userId);
+    return {
+      stateAgentId,
+      canonicalUserId,
+      scope: {
+        agentId: stateAgentId,
+        userId: canonicalUserId,
+        channel: args.channel,
+        surfaceId: args.surfaceId,
+      },
+    };
+  };
+
   return {
     onToolsState: ({ limit } = {}) => ({
       enabled: options.toolExecutor.isEnabled(),
@@ -101,16 +135,9 @@ export function createToolsDashboardCallbacks(
     },
 
     onPendingActionCurrent: ({ userId, channel, surfaceId }) => {
-      const preferredAgentId = options.configRef.current.channels.web?.defaultAgent
-        || options.configRef.current.agents[0]?.id
-        || 'default';
-      const stateAgentId = options.resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId;
-      const canonicalUserId = options.identity.resolveCanonicalUserId(channel, userId);
+      const { canonicalUserId, scope } = resolvePendingActionScope({ userId, channel, surfaceId });
       const pendingAction = options.pendingActionStore.resolveActiveForSurface({
-        agentId: stateAgentId,
-        userId: canonicalUserId,
-        channel,
-        surfaceId,
+        ...scope,
       });
       const liveApprovalIds = options.toolExecutor.listPendingApprovalIdsForUser(canonicalUserId, channel, {
         includeUnscoped: channel === 'web',
@@ -121,10 +148,112 @@ export function createToolsDashboardCallbacks(
         {
           liveApprovalIds,
           liveApprovalSummaries: options.toolExecutor.getApprovalSummaries(liveApprovalIds),
+          scope,
         },
       );
       return {
         pendingAction: toPendingActionClientMetadata(reconciledPendingAction) ?? null,
+      };
+    },
+
+    onPendingActionReset: async ({ userId, principalId, principalRole, channel, surfaceId }) => {
+      const { canonicalUserId, scope } = resolvePendingActionScope({ userId, channel, surfaceId });
+      const normalizedChannelUserId = userId.trim() || canonicalUserId;
+      const userIdsForCleanup = [...new Set([canonicalUserId, normalizedChannelUserId].filter(Boolean))];
+      const pendingAction = options.pendingActionStore.resolveActiveForSurface(scope);
+      const liveApprovalIds = [...new Set(userIdsForCleanup.flatMap((nextUserId) => (
+        options.toolExecutor.listPendingApprovalIdsForUser(nextUserId, channel, {
+          includeUnscoped: channel === 'web',
+          ...(principalId?.trim() ? { principalId } : {}),
+        })
+      )))];
+      const approvalIdsToClear = [...new Set([
+        ...liveApprovalIds,
+        ...(
+          pendingAction?.blocker.kind === 'approval'
+            ? (pendingAction.blocker.approvalIds ?? [])
+            : []
+        ),
+      ])];
+      const clearedApprovalIds: string[] = [];
+      const ignoredApprovalIds: string[] = [];
+      const failedApprovalIds: string[] = [];
+      const actor = principalId?.trim() || canonicalUserId;
+      const actorRoleResolved = principalRole ?? 'owner';
+
+      for (const approvalId of approvalIdsToClear) {
+        const result = await options.toolExecutor.decideApproval(
+          approvalId,
+          'denied',
+          actor,
+          actorRoleResolved,
+          'Cleared from chat pending-state reset.',
+        );
+        if (result.success) {
+          clearedApprovalIds.push(approvalId);
+          continue;
+        }
+        if (result.message.includes('not found')) {
+          ignoredApprovalIds.push(approvalId);
+          continue;
+        }
+        failedApprovalIds.push(approvalId);
+      }
+
+      const cancelledPendingAction = pendingAction
+        ? options.pendingActionStore.cancel(pendingAction.id)
+        : null;
+
+      if (options.chatAgents) {
+        for (const agent of options.chatAgents) {
+          for (const nextUserId of userIdsForCleanup) {
+            agent.resetPendingState({
+              userId: nextUserId,
+              channel,
+              surfaceId,
+              approvalIds: approvalIdsToClear,
+            });
+          }
+        }
+      }
+      for (const nextUserId of userIdsForCleanup) {
+        options.workerManager?.resetPendingState?.({
+          userId: nextUserId,
+          channel,
+          approvalIds: approvalIdsToClear,
+        });
+      }
+
+      const summaryParts: string[] = [];
+      if (cancelledPendingAction) summaryParts.push('cleared 1 pending action');
+      if (clearedApprovalIds.length > 0) {
+        summaryParts.push(`cleared ${clearedApprovalIds.length} pending approval${clearedApprovalIds.length === 1 ? '' : 's'}`);
+      }
+      if (ignoredApprovalIds.length > 0) {
+        summaryParts.push(`dropped ${ignoredApprovalIds.length} stale approval reference${ignoredApprovalIds.length === 1 ? '' : 's'}`);
+      }
+      const message = summaryParts.length > 0
+        ? `Cleared pending state for this chat: ${summaryParts.join(', ')}.${failedApprovalIds.length > 0 ? ` ${failedApprovalIds.length} approval${failedApprovalIds.length === 1 ? '' : 's'} could not be cleared.` : ''}`
+        : 'No pending actions or approvals were active for this chat.';
+
+      options.trackSystemAnalytics('chat_pending_state_reset', {
+        channel,
+        surfaceId,
+        pendingActionCleared: Boolean(cancelledPendingAction),
+        clearedApprovalCount: clearedApprovalIds.length,
+        staleApprovalReferenceCount: ignoredApprovalIds.length,
+        failedApprovalCount: failedApprovalIds.length,
+      });
+
+      return {
+        success: true,
+        message,
+        details: {
+          ...(cancelledPendingAction ? { clearedPendingActionId: cancelledPendingAction.id } : {}),
+          clearedApprovalIds,
+          ignoredApprovalIds,
+          failedApprovalIds,
+        },
       };
     },
 

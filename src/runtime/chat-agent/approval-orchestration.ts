@@ -18,6 +18,13 @@ export interface ApprovalOrchestrationResponse {
   metadata?: Record<string, unknown>;
 }
 
+function isGenericSuccessfulToolCompletionMessage(message: string): boolean {
+  const normalized = stripLeadingContextPrefix(message).trim();
+  if (!normalized) return false;
+  return /^Tool '[^']+' completed\.$/.test(normalized)
+    || /^Approved and executed(?: \([^)]+\))?\.$/.test(normalized);
+}
+
 export async function continueDirectRouteAfterApproval(input: {
   pendingAction: PendingActionRecord | null;
   approvalId: string;
@@ -428,16 +435,18 @@ export async function handleApprovalMessage(input: {
         { approvalResult },
       );
     if (resumedResponse) {
-      results.push('');
-      results.push(resumedResponse.content);
       const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
         resumedResponse,
         input.message.userId,
         input.message.channel,
         input.message.surfaceId,
       );
+      const leadingResults = results.filter((line) => !isGenericSuccessfulToolCompletionMessage(line));
       return {
-        content: results.join('\n'),
+        content: [
+          leadingResults.join('\n'),
+          normalizedResponse.content,
+        ].filter(Boolean).join('\n\n'),
         metadata: normalizedResponse.metadata,
       };
     }

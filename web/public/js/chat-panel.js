@@ -14,7 +14,7 @@ import {
   markApprovalUiProcessing,
   markApprovalUiResolved,
 } from './approval-ui-state.js';
-import { decideChatApproval } from './chat-approval.js';
+import { buildApprovalContinuationSummaryPart, decideChatApproval } from './chat-approval.js';
 import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
 import { resolveChatHistoryKey } from './chat-history.js';
 import {
@@ -43,6 +43,7 @@ const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
+const INTENT_GATEWAY_MISSING_SUMMARY = 'No classification summary provided.';
 let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
@@ -287,6 +288,11 @@ export async function initChatPanel(container) {
   resetBtn.textContent = 'Reset Chat';
   resetBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
 
+  const clearPendingBtn = document.createElement('button');
+  clearPendingBtn.className = 'btn btn-secondary';
+  clearPendingBtn.textContent = 'Clear Pending';
+  clearPendingBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
+
   const stopBtn = document.createElement('button');
   stopBtn.className = 'btn btn-secondary';
   stopBtn.textContent = 'Stop';
@@ -294,6 +300,7 @@ export async function initChatPanel(container) {
   stopBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
 
   primaryControls.appendChild(stopBtn);
+  primaryControls.appendChild(clearPendingBtn);
   primaryControls.appendChild(resetBtn);
 
   const refreshCodeSessions = async () => {
@@ -513,6 +520,21 @@ export async function initChatPanel(container) {
     }
   });
 
+  clearPendingBtn.addEventListener('click', async () => {
+    clearPendingBtn.disabled = true;
+    try {
+      await api.resetPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
+      clearPendingUiState();
+      renderHistory(history, getHistoryKey(), approvalHandler);
+      refreshVisiblePendingAction?.();
+    } catch (err) {
+      history.appendChild(createMessageEl('error', err?.message || 'Failed to clear pending state.'));
+      history.scrollTop = history.scrollHeight;
+    } finally {
+      clearPendingBtn.disabled = false;
+    }
+  });
+
   const beginApprovalProgress = (tracking) => {
     const sessionId = typeof tracking?.codeSessionId === 'string' && tracking.codeSessionId.trim()
       ? tracking.codeSessionId.trim()
@@ -574,12 +596,15 @@ export async function initChatPanel(container) {
     markApprovalUiProcessing(approvalIds, decision);
     const historyKey = getHistoryKey();
     const chatHistory = getHistory(historyKey);
+    const knownApprovals = chatHistory
+      .filter((entry) => entry?.pendingAction)
+      .flatMap((entry) => extractPendingActionApprovals(entry.pendingAction));
+    const approvalLookup = new Map(knownApprovals.map((approval) => [approval.id, approval]));
     const focusedSessionId = currentCodeSessionId;
     const continuationRequestId = decision === 'approved' ? createClientRequestId() : '';
     const progress = decision === 'approved'
       ? beginApprovalProgress(resolveApprovalProgressTracking(
-        chatHistory.filter((entry) => entry?.pendingAction).flatMap((entry) => extractPendingActionApprovals(entry.pendingAction))
-          .filter((approval) => approvalIds.includes(approval.id)),
+        knownApprovals.filter((approval) => approvalIds.includes(approval.id)),
         focusedSessionId,
         continuationRequestId,
       ))
@@ -589,6 +614,7 @@ export async function initChatPanel(container) {
       const results = [];
       const approvalResponses = [];
       for (const id of approvalIds) {
+        const approval = approvalLookup.get(id);
         try {
           const result = await decideChatApproval({
             apiClient: api,
@@ -599,10 +625,15 @@ export async function initChatPanel(container) {
             surfaceId: GUARDIAN_CHAT_SURFACE_ID,
           });
           approvalResponses.push(result);
-          results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
+          results.push(buildApprovalContinuationSummaryPart(result, approval, decision));
         } catch (err) {
-          approvalResponses.push({ success: false, message: err.message || 'unknown error', continueConversation: false });
-          results.push(`Error: ${err.message || 'unknown'}`);
+          approvalResponses.push({
+            success: false,
+            message: err.message || 'unknown error',
+            continueConversation: false,
+            transportError: true,
+          });
+          results.push(`Error: ${(approval?.toolName || 'tool')}: ${err.message || 'unknown'}`);
         }
       }
 
@@ -613,13 +644,14 @@ export async function initChatPanel(container) {
         .map((result) => result.continuedResponse)
         .filter((value) => value && typeof value.content === 'string');
       const allSucceeded = approvalResponses.every((result) => result?.success !== false);
+      const hasTransportFailures = approvalResponses.some((result) => result?.transportError === true);
 
       if (continuedResponses.length > 0) {
         let activitySummary = captureActiveChatActivitySummary();
-        if (allSucceeded) {
-          markApprovalUiResolved(approvalIds, decision);
-        } else {
+        if (hasTransportFailures) {
           markApprovalUiError(approvalIds, results.join('; '));
+        } else {
+          markApprovalUiResolved(approvalIds, decision);
         }
         if (immediateMessages.length > 0) {
           addAgentMessage(immediateMessages.join('\n'));
@@ -630,6 +662,7 @@ export async function initChatPanel(container) {
             response.metadata?.pendingAction,
             response.metadata?.responseSource,
             activitySummary,
+            response.metadata,
           );
           activitySummary = null;
         }
@@ -638,7 +671,15 @@ export async function initChatPanel(container) {
       }
 
       // Only continue when the backend confirms there is suspended chat context to resume.
-      if (decision === 'approved' && approvalResponses.some((result) => result.continueConversation !== false)) {
+      const hasExplicitContinuationDirective = approvalResponses.some(
+        (result) => result.continuedResponse || result.continueConversation !== undefined,
+      );
+      const needsSyntheticContinuation = decision === 'approved'
+        && (
+          approvalResponses.some((result) => result.continueConversation === true)
+          || (!hasExplicitContinuationDirective && allSucceeded)
+        );
+      if (needsSyntheticContinuation) {
         progress?.setLabel('Finalizing response…');
 
         try {
@@ -654,19 +695,24 @@ export async function initChatPanel(container) {
             GUARDIAN_CHAT_SURFACE_ID,
             continuationRequestId,
           );
-          if (allSucceeded) {
-            markApprovalUiResolved(approvalIds, decision);
-          } else {
+          if (hasTransportFailures) {
             markApprovalUiError(approvalIds, summary);
+          } else {
+            markApprovalUiResolved(approvalIds, decision);
           }
           addAgentMessage(
             response.content,
             response.metadata?.pendingAction,
             response.metadata?.responseSource,
             captureActiveChatActivitySummary(),
+            response.metadata,
           );
         } catch (err) {
-          markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
+          if (hasTransportFailures) {
+            markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
+          } else {
+            markApprovalUiResolved(approvalIds, decision);
+          }
           history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
         }
         history.scrollTop = history.scrollHeight;
@@ -674,10 +720,10 @@ export async function initChatPanel(container) {
       }
 
       if (immediateMessages.length > 0) {
-        if (allSucceeded) {
-          markApprovalUiResolved(approvalIds, decision);
-        } else {
+        if (hasTransportFailures) {
           markApprovalUiError(approvalIds, results.join('; '));
+        } else {
+          markApprovalUiResolved(approvalIds, decision);
         }
         addAgentMessage(immediateMessages.join('\n'));
         history.scrollTop = history.scrollHeight;
@@ -685,10 +731,10 @@ export async function initChatPanel(container) {
       }
 
       if (results.length > 0) {
-        if (allSucceeded) {
-          markApprovalUiResolved(approvalIds, decision);
-        } else {
+        if (hasTransportFailures) {
           markApprovalUiError(approvalIds, results.join('; '));
+        } else {
+          markApprovalUiResolved(approvalIds, decision);
         }
         addAgentMessage(results.join('\n'));
         history.scrollTop = history.scrollHeight;
@@ -707,13 +753,19 @@ export async function initChatPanel(container) {
    * Append an agent message to the chat, with approval buttons when the
    * response includes structured pending approval data.
    */
-  const addAgentMessage = (content, pendingAction, responseSource, activitySummary = null) => {
+  const addAgentMessage = (content, pendingAction, responseSource, activitySummary = null, metadata = null) => {
+    const normalizedActivitySummary = mergeResponseActivitySummary(activitySummary, metadata);
     const chatHistory = getHistory(getHistoryKey());
-    chatHistory.push({ role: 'agent', content, responseSource, pendingAction, activitySummary });
+    const removedSynthetic = removeSyntheticPendingActionEntries(chatHistory);
+    chatHistory.push({ role: 'agent', content, responseSource, pendingAction, activitySummary: normalizedActivitySummary });
+    if (removedSynthetic) {
+      renderHistory(history, getHistoryKey(), approvalHandler);
+      return;
+    }
     history.appendChild(createMessageEl('agent', content, {
       pendingAction,
       responseSource,
-      activitySummary,
+      activitySummary: normalizedActivitySummary,
       onApproval: handleApproval,
     }));
   };
@@ -734,21 +786,11 @@ export async function initChatPanel(container) {
   const ensureVisiblePendingAction = async () => {
     const historyKey = getHistoryKey();
     if (!historyKey || !history || activeChatIndicator) return;
-    const pendingAction = await resolvePendingActionForDisplay();
-    if (!pendingAction || typeof pendingAction !== 'object') return;
-    const pendingId = typeof pendingAction.id === 'string' ? pendingAction.id.trim() : '';
     const chatHistory = getHistory(historyKey);
-    const alreadyPresent = chatHistory.some((entry) => (
-      entry?.pendingAction
-      && typeof entry.pendingAction === 'object'
-      && entry.pendingAction.id === pendingId
-    ));
-    if (alreadyPresent) return;
-    const prompt = typeof pendingAction?.blocker?.prompt === 'string'
-      ? pendingAction.blocker.prompt
-      : 'This request is waiting on approval.';
-    chatHistory.push({ role: 'agent', content: prompt, pendingAction });
-    renderHistory(history, historyKey, approvalHandler);
+    const pendingAction = await resolvePendingActionForDisplay();
+    if (syncSyntheticPendingActionEntry(chatHistory, pendingAction)) {
+      renderHistory(history, historyKey, approvalHandler);
+    }
   };
   refreshVisiblePendingAction = () => {
     void ensureVisiblePendingAction();
@@ -848,12 +890,12 @@ export async function initChatPanel(container) {
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
           .then((pendingAction) => {
-            addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource, activitySummary);
+            addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource, activitySummary, data.metadata);
             notifyTouchedCodeSessions(data?.metadata);
             history.scrollTop = history.scrollHeight;
           })
           .catch(() => {
-            addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource, activitySummary);
+            addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource, activitySummary, data.metadata);
           });
       };
 
@@ -938,7 +980,7 @@ export async function initChatPanel(container) {
         clearActiveRequestIfCurrent();
         const activitySummary = captureActiveChatActivitySummary();
         clearActiveChatIndicator();
-        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource, activitySummary);
+        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource, activitySummary, response.metadata);
         notifyTouchedCodeSessions(response?.metadata);
       }
     } catch (err) {
@@ -1005,6 +1047,104 @@ function getHistory(agentId) {
     chatHistoryByAgent.set(agentId, []);
   }
   return chatHistoryByAgent.get(agentId);
+}
+
+function normalizePendingActionId(pendingAction) {
+  return typeof pendingAction?.id === 'string' ? pendingAction.id.trim() : '';
+}
+
+function isSyntheticPendingActionEntry(entry) {
+  return entry?.syntheticPendingAction === true;
+}
+
+function removeSyntheticPendingActionEntries(chatHistory, keepPendingId = '') {
+  let changed = false;
+  for (let index = chatHistory.length - 1; index >= 0; index -= 1) {
+    const entry = chatHistory[index];
+    if (!isSyntheticPendingActionEntry(entry)) continue;
+    const entryPendingId = normalizePendingActionId(entry.pendingAction);
+    if (keepPendingId && entryPendingId === keepPendingId) {
+      continue;
+    }
+    chatHistory.splice(index, 1);
+    changed = true;
+  }
+  return changed;
+}
+
+function normalizePendingActionPromptForDisplay(pendingAction) {
+  const rawPrompt = typeof pendingAction?.blocker?.prompt === 'string'
+    ? pendingAction.blocker.prompt.trim()
+    : '';
+  if (rawPrompt && rawPrompt !== INTENT_GATEWAY_MISSING_SUMMARY) {
+    return rawPrompt;
+  }
+  return summarizePendingActionBlocker(String(pendingAction?.blocker?.kind || '').trim());
+}
+
+function syncSyntheticPendingActionEntry(chatHistory, pendingAction) {
+  const pendingId = normalizePendingActionId(pendingAction);
+  let changed = removeSyntheticPendingActionEntries(chatHistory, pendingId);
+  if (!pendingId || !pendingAction || typeof pendingAction !== 'object') {
+    return changed;
+  }
+
+  const realEntryPresent = chatHistory.some((entry) => (
+    !isSyntheticPendingActionEntry(entry)
+    && normalizePendingActionId(entry?.pendingAction) === pendingId
+  ));
+  if (realEntryPresent) {
+    const removedSameId = removeSyntheticPendingActionEntries(chatHistory);
+    return changed || removedSameId;
+  }
+
+  const prompt = normalizePendingActionPromptForDisplay(pendingAction);
+  const syntheticIndex = chatHistory.findIndex((entry) => (
+    isSyntheticPendingActionEntry(entry)
+    && normalizePendingActionId(entry.pendingAction) === pendingId
+  ));
+  if (syntheticIndex >= 0) {
+    const existing = chatHistory[syntheticIndex];
+    const promptChanged = existing.content !== prompt;
+    const statusChanged = JSON.stringify(existing.pendingAction) !== JSON.stringify(pendingAction);
+    if (promptChanged || statusChanged) {
+      chatHistory[syntheticIndex] = {
+        ...existing,
+        role: 'agent',
+        content: prompt,
+        pendingAction,
+        syntheticPendingAction: true,
+      };
+      changed = true;
+    }
+    return changed;
+  }
+
+  chatHistory.push({
+    role: 'agent',
+    content: prompt,
+    pendingAction,
+    syntheticPendingAction: true,
+  });
+  return true;
+}
+
+function clearPendingActionUiEntries(chatHistory) {
+  let changed = removeSyntheticPendingActionEntries(chatHistory);
+  for (const entry of chatHistory) {
+    if (!entry?.pendingAction) {
+      continue;
+    }
+    entry.pendingAction = undefined;
+    changed = true;
+  }
+  return changed;
+}
+
+function clearPendingUiState() {
+  for (const chatHistory of chatHistoryByAgent.values()) {
+    clearPendingActionUiEntries(chatHistory);
+  }
 }
 
 function renderHistory(historyEl, agentId, onApproval) {
@@ -1113,6 +1253,82 @@ function captureActiveChatActivitySummary() {
   };
 }
 
+function mergeResponseActivitySummary(activitySummary, metadata) {
+  const semanticItem = buildSemanticResponseActivityItem(metadata);
+  if (!semanticItem) return activitySummary;
+  const items = Array.isArray(activitySummary?.items)
+    ? activitySummary.items
+      .filter((item) => String(item?.title || '').trim())
+      .map((item) => ({
+        title: String(item.title || '').trim(),
+        detail: String(item.detail || '').trim(),
+      }))
+    : [];
+  while (items.length > 0 && isTerminalSummaryLabel(items[items.length - 1]?.title)) {
+    items.pop();
+  }
+  items.push(semanticItem);
+  return {
+    label: semanticItem.title,
+    items,
+  };
+}
+
+function buildSemanticResponseActivityItem(metadata) {
+  const planner = metadata?.plannerExecution;
+  if (planner && typeof planner === 'object') {
+    const status = String(planner.status || '').trim();
+    if (status === 'failed') {
+      const failedNodes = Array.isArray(planner.failedNodes) ? planner.failedNodes : [];
+      const firstDetail = typeof failedNodes[0]?.detail === 'string'
+        ? failedNodes[0].detail.trim()
+        : '';
+      return {
+        title: 'Failed',
+        detail: firstDetail || 'Planner execution failed.',
+      };
+    }
+    if (status === 'unsupported_actions') {
+      return {
+        title: 'Blocked',
+        detail: 'Planner execution was blocked because the plan used unsupported actions.',
+      };
+    }
+  }
+
+  const pendingAction = metadata?.pendingAction;
+  const pendingStatus = String(pendingAction?.status || '').trim();
+  if (pendingAction && (pendingStatus === 'pending' || pendingStatus === 'resolving' || pendingStatus === 'running')) {
+    const blockerKind = String(pendingAction?.blocker?.kind || '').trim();
+    const prompt = String(pendingAction?.blocker?.prompt || '').trim();
+    return {
+      title: 'Blocked',
+      detail: prompt || summarizePendingActionBlocker(blockerKind),
+    };
+  }
+
+  return null;
+}
+
+function summarizePendingActionBlocker(blockerKind) {
+  switch (blockerKind) {
+    case 'approval':
+      return 'Waiting for approval.';
+    case 'clarification':
+      return 'Waiting for clarification.';
+    case 'workspace_switch':
+      return 'Waiting for workspace switch.';
+    case 'auth':
+      return 'Waiting for authentication.';
+    case 'policy':
+      return 'Waiting for policy approval.';
+    case 'missing_context':
+      return 'Waiting for required context.';
+    default:
+      return 'Waiting for input.';
+  }
+}
+
 function setThinkingLabel(el, label) {
   const labelEl = el?.querySelector?.('.chat-thinking__label');
   if (labelEl) {
@@ -1148,8 +1364,27 @@ function summarizeTimelineRun(run) {
     recentItems.unshift(normalized);
     lastKey = key;
   }
-  const latestItem = recentItems[recentItems.length - 1];
   const status = String(run?.summary?.status || '').trim();
+  if (isTerminalTimelineStatus(status)) {
+    while (recentItems.length > 0 && isGenericWorkingTimelineItem(recentItems[recentItems.length - 1])) {
+      recentItems.pop();
+    }
+    if (recentItems.length === 0) {
+      recentItems.push({
+        title: humanizeTimelineStatus(status),
+        detail: '',
+      });
+    } else if (status === 'completed') {
+      const completedLabel = humanizeTimelineStatus(status);
+      if (recentItems[recentItems.length - 1]?.title !== completedLabel) {
+        recentItems.push({
+          title: completedLabel,
+          detail: '',
+        });
+      }
+    }
+  }
+  const latestItem = recentItems[recentItems.length - 1];
   if (latestItem) {
     return {
       label: latestItem.title,
@@ -1175,12 +1410,30 @@ function humanizeTimelineStatus(status) {
     case 'blocked':
       return 'Blocked';
     case 'completed':
-      return 'Done';
+      return 'Completed';
     case 'failed':
       return 'Failed';
     default:
       return 'Working…';
   }
+}
+
+function isTerminalTimelineStatus(status) {
+  return status === 'completed'
+    || status === 'failed'
+    || status === 'blocked'
+    || status === 'awaiting_approval'
+    || status === 'verification_pending';
+}
+
+function isGenericWorkingTimelineItem(item) {
+  const title = String(item?.title || '').trim().toLowerCase();
+  return title === 'agent is working' || title === 'working…' || title === 'working...';
+}
+
+function isTerminalSummaryLabel(title) {
+  const normalized = String(title || '').trim().toLowerCase();
+  return normalized === 'completed' || normalized === 'failed' || normalized === 'blocked';
 }
 
 function isMeaningfulLiveItem(item) {

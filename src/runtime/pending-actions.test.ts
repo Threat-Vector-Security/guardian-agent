@@ -231,6 +231,50 @@ describe('PendingActionStore', () => {
     ]);
   });
 
+  it('promotes a stale clarification blocker to a live approval blocker on the same surface', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      blocker: {
+        kind: 'clarification',
+        prompt: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?',
+        field: 'email_provider',
+        options: [
+          { value: 'gws', label: 'Gmail' },
+          { value: 'm365', label: 'Outlook' },
+        ],
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+    }));
+
+    const reconciled = reconcilePendingApprovalAction(store, created, {
+      liveApprovalIds: ['approval-gmail-1'],
+      liveApprovalSummaries: new Map([
+        ['approval-gmail-1', {
+          toolName: 'gws - gmail users messages list',
+          argsPreview: '{"userId":"me","maxResults":10}',
+          actionLabel: 'run Gmail inbox read',
+        }],
+      ]),
+      scope,
+      nowMs: created.updatedAt + 1,
+    });
+
+    expect(reconciled?.blocker.kind).toBe('approval');
+    expect(reconciled?.blocker.prompt).toBe('Waiting for approval to run Gmail inbox read.');
+    expect(reconciled?.blocker.approvalIds).toEqual(['approval-gmail-1']);
+    expect(reconciled?.intent).toMatchObject({
+      route: 'email_task',
+      operation: 'read',
+      originalUserContent: 'Check my email.',
+    });
+    expect(store.getActive(scope)?.blocker.kind).toBe('approval');
+  });
+
   it('completes stale approval blockers when none of their approval ids are still live', () => {
     const store = createStore();
     const scope = createScope();
@@ -338,6 +382,37 @@ describe('PendingActionStore', () => {
         },
       },
     });
+  });
+
+  it('sanitizes placeholder clarification prompts before exposing pending-action metadata', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      blocker: {
+        kind: 'clarification',
+        prompt: 'No classification summary provided.',
+      },
+      intent: {
+        route: 'general_assistant',
+        operation: 'read',
+        summary: 'No classification summary provided.',
+        originalUserContent: 'Do the thing.',
+      },
+    }));
+
+    const gatewaySummary = summarizePendingActionForGateway(created);
+    const clientMetadata = toPendingActionClientMetadata(created);
+
+    expect(gatewaySummary).toMatchObject({
+      prompt: 'I need a bit more detail before I can continue with that request.',
+    });
+    expect(gatewaySummary).not.toHaveProperty('summary');
+    expect(clientMetadata).toMatchObject({
+      blocker: {
+        prompt: 'I need a bit more detail before I can continue with that request.',
+      },
+    });
+    expect(clientMetadata?.intent).not.toHaveProperty('summary');
   });
 
   it('preserves structured intent context in gateway summaries', () => {

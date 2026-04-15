@@ -14,8 +14,20 @@ import {
   inferProviderConfigOperation,
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
+import {
+  extractExplicitAutomationOutputName,
+  extractExplicitAutomationName,
+  inferAutomationControlOperation,
+  inferAutomationEnabledState,
+  inferAutomationOutputOperation,
+  isExplicitAutomationControlRequest,
+  isExplicitAutomationOutputRequest,
+} from './entity-resolvers/automation.js';
 import { normalizeConfidence, normalizeOperation } from './normalization.js';
-import { isExplicitComplexPlanningRequest } from './request-patterns.js';
+import {
+  isExplicitComplexPlanningRequest,
+  looksLikeStandaloneGreetingTurn,
+} from './request-patterns.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.js';
 
@@ -46,6 +58,24 @@ export function repairUnavailableIntentGatewayDecision(
         : 'Recovered explicit complex-planning request after an unstructured gateway response.',
     }, repairContext, { classifierSource: 'repair.unstructured' });
   }
+  if (looksLikeStandaloneGreetingTurn(rawSourceContent)) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'general_assistant',
+      operation: 'inspect',
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered a standalone greeting after an unstructured gateway response.',
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, repairContext, { classifierSource: 'repair.unstructured' });
+  }
   const inferredProviderConfigDecision = inferExplicitProviderConfigDecision(
     repairContext,
     parsed,
@@ -53,6 +83,22 @@ export function repairUnavailableIntentGatewayDecision(
   );
   if (inferredProviderConfigDecision) {
     return inferredProviderConfigDecision;
+  }
+  const inferredAutomationOutputDecision = inferExplicitAutomationOutputDecision(
+    repairContext,
+    parsed,
+    normalizeIntentGatewayDecision,
+  );
+  if (inferredAutomationOutputDecision) {
+    return inferredAutomationOutputDecision;
+  }
+  const inferredAutomationControlDecision = inferExplicitAutomationControlDecision(
+    repairContext,
+    parsed,
+    normalizeIntentGatewayDecision,
+  );
+  if (inferredAutomationControlDecision) {
+    return inferredAutomationControlDecision;
   }
   const parsedOperation = normalizeOperation(parsed?.operation);
   const inferredRemoteExecCommand = extractExplicitRemoteExecCommand(
@@ -181,5 +227,60 @@ function inferExplicitProviderConfigDecision(
     expectedContextPressure: 'medium',
     preferredAnswerPath: 'tool_loop',
     simpleVsComplex: 'complex',
+  }, repairContext, { classifierSource: 'repair.unstructured' });
+}
+
+function inferExplicitAutomationControlDecision(
+  repairContext: IntentGatewayRepairContext | undefined,
+  parsed: Record<string, unknown> | undefined,
+  normalizeIntentGatewayDecision: NormalizeIntentGatewayDecisionFn,
+): IntentGatewayDecision | null {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (!isExplicitAutomationControlRequest(rawSourceContent)) return null;
+  const operation = inferAutomationControlOperation(
+    rawSourceContent,
+    normalizeOperation(parsed?.operation),
+  );
+  if (!operation || operation === 'unknown') return null;
+  return normalizeIntentGatewayDecision({
+    ...(parsed ?? {}),
+    route: 'automation_control',
+    operation,
+    ...(extractExplicitAutomationName(rawSourceContent)
+      ? { automationName: extractExplicitAutomationName(rawSourceContent) }
+      : {}),
+    ...(typeof inferAutomationEnabledState(rawSourceContent) === 'boolean'
+      ? { enabled: inferAutomationEnabledState(rawSourceContent) }
+      : {}),
+    confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : 'Recovered an automation-control request after an unstructured gateway response.',
+  }, repairContext, { classifierSource: 'repair.unstructured' });
+}
+
+function inferExplicitAutomationOutputDecision(
+  repairContext: IntentGatewayRepairContext | undefined,
+  parsed: Record<string, unknown> | undefined,
+  normalizeIntentGatewayDecision: NormalizeIntentGatewayDecisionFn,
+): IntentGatewayDecision | null {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (!isExplicitAutomationOutputRequest(rawSourceContent)) return null;
+  const operation = inferAutomationOutputOperation(
+    rawSourceContent,
+    normalizeOperation(parsed?.operation),
+  );
+  if (!operation || operation === 'unknown') return null;
+  return normalizeIntentGatewayDecision({
+    ...(parsed ?? {}),
+    route: 'automation_output_task',
+    operation,
+    ...(extractExplicitAutomationOutputName(rawSourceContent)
+      ? { automationName: extractExplicitAutomationOutputName(rawSourceContent) }
+      : {}),
+    confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : 'Recovered an automation-output analysis request after an unstructured gateway response.',
   }, repairContext, { classifierSource: 'repair.unstructured' });
 }

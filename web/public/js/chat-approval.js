@@ -7,6 +7,19 @@ function isCodeSessionApprovalNotFoundError(error) {
   );
 }
 
+export function buildApprovalContinuationSummaryPart(result, approval, decision) {
+  const toolName = typeof approval?.toolName === 'string' && approval.toolName.trim()
+    ? approval.toolName.trim()
+    : 'tool';
+  if (result?.success === false) {
+    const message = typeof result?.message === 'string' && result.message.trim()
+      ? result.message.trim()
+      : 'unknown error';
+    return `Failed: ${toolName}: ${message}`;
+  }
+  return `${toolName}: ${decision === 'approved' ? 'Approved and executed' : 'Denied'}`;
+}
+
 export async function decideChatApproval(input) {
   const {
     apiClient,

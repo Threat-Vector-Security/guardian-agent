@@ -1565,6 +1565,13 @@ export interface DashboardCallbacks {
   }) => {
     pendingAction?: Record<string, unknown> | null;
   };
+  onPendingActionReset?: (args: {
+    userId: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
+    channel: string;
+    surfaceId: string;
+  }) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSkillsState?: () => DashboardSkillsState;
   onSkillsUpdate?: (input: { skillId: string; enabled: boolean }) => { success: boolean; message: string };
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;

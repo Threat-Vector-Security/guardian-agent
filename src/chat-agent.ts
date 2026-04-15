@@ -1764,6 +1764,17 @@ export interface ChatAgentPublicApi extends BaseAgent {
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null;
   hasSuspendedApproval(approvalId: string, scope?: ApprovalContinuationScope): boolean;
   hasAutomationApprovalContinuation(approvalId: string): boolean;
+  syncPendingApprovalsFromExecutorForScope(args: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+  }): void;
+  resetPendingState(args: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    approvalIds?: string[];
+  }): void;
   continueDirectRouteAfterApproval(
     pendingAction: PendingActionRecord | null,
     approvalId: string,
@@ -2693,19 +2704,18 @@ type DirectIntentShadowCandidate =
       }
       return workspaceSwitchContinuation;
     }
-    const resolvedPendingActionContinuation = resolvePendingActionContinuationContentHelper(
+    const resolvedPendingActionContinuation = this.resolvePendingActionContinuationContent(
       groundedScopedMessage.content,
       pendingAction,
       effectiveCodeContext?.sessionId,
     );
     const resolvedRetryAfterFailureContinuation = resolvedPendingActionContinuation
       ? null
-      : resolveRetryAfterFailureContinuationContentHelper({
-          content: groundedScopedMessage.content,
+      : this.resolveRetryAfterFailureContinuationContent(
+          groundedScopedMessage.content,
           continuityThread,
           conversationKey,
-          readLatestAssistantOutput: (nextConversationKey) => this.readLatestAssistantOutput(nextConversationKey),
-        });
+        );
     let routedScopedMessage = resolvedPendingActionContinuation
       ? {
           ...groundedScopedMessage,
@@ -5425,7 +5435,25 @@ type DirectIntentShadowCandidate =
   ): boolean {
     if (!metadata) return false;
     if (isRecord(metadata.pendingAction)) return true;
-    return Array.isArray(metadata.pendingApprovals);
+    if (Array.isArray(metadata.pendingApprovals)) return true;
+    if (isRecord(metadata.delegatedHandoff)) {
+      const reportingMode = typeof metadata.delegatedHandoff.reportingMode === 'string'
+        ? metadata.delegatedHandoff.reportingMode.trim()
+        : '';
+      const unresolvedBlockerKind = typeof metadata.delegatedHandoff.unresolvedBlockerKind === 'string'
+        ? metadata.delegatedHandoff.unresolvedBlockerKind.trim()
+        : '';
+      const approvalCount = typeof metadata.delegatedHandoff.approvalCount === 'number'
+        ? metadata.delegatedHandoff.approvalCount
+        : 0;
+      if (reportingMode === 'held_for_approval'
+        || (reportingMode === 'status_only' && unresolvedBlockerKind.length > 0)
+        || unresolvedBlockerKind.length > 0
+        || approvalCount > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async buildDirectIntentResponse(input: DirectIntentResponseInput): Promise<AgentResponse> {
@@ -6389,6 +6417,47 @@ type DirectIntentShadowCandidate =
 
   hasAutomationApprovalContinuation(approvalId: string): boolean {
     return this.approvalState.hasAutomationApprovalContinuation(approvalId);
+  }
+
+  syncPendingApprovalsFromExecutorForScope(args: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+  }): void {
+    this.syncPendingApprovalsFromExecutor(
+      args.userId,
+      args.channel,
+      args.userId,
+      args.channel,
+      args.surfaceId,
+    );
+  }
+
+  resetPendingState(args: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    approvalIds?: string[];
+  }): void {
+    const approvalIds = new Set((args.approvalIds ?? []).map((id) => id.trim()).filter(Boolean));
+    const normalizedScope = normalizeApprovalContinuationScope({
+      userId: args.userId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+    });
+    for (const [key, session] of this.suspendedSessions.entries()) {
+      const matchesScope = session.scope.userId === normalizedScope.userId
+        && session.scope.channel === normalizedScope.channel
+        && session.scope.surfaceId === normalizedScope.surfaceId;
+      const matchesApproval = session.pendingTools.some((tool) => approvalIds.has(tool.approvalId));
+      if (matchesScope || matchesApproval) {
+        this.suspendedSessions.delete(key);
+      }
+    }
+    for (const approvalId of approvalIds) {
+      this.clearApprovalFollowUp(approvalId);
+    }
+    this.clearAutomationApprovalContinuation(`${args.userId}:${args.channel}`);
   }
 
   async continueDirectRouteAfterApproval(
@@ -8113,6 +8182,31 @@ type DirectIntentShadowCandidate =
         result,
         fallbackContent,
       ),
+    });
+  }
+
+  private resolvePendingActionContinuationContent(
+    content: string,
+    pendingAction: PendingActionRecord | null,
+    currentCodeSessionId?: string,
+  ): string | null {
+    return resolvePendingActionContinuationContentHelper(
+      content,
+      pendingAction,
+      currentCodeSessionId,
+    );
+  }
+
+  private resolveRetryAfterFailureContinuationContent(
+    content: string,
+    continuityThread: ContinuityThreadRecord | null | undefined,
+    conversationKey: ConversationKey,
+  ): string | null {
+    return resolveRetryAfterFailureContinuationContentHelper({
+      content,
+      continuityThread,
+      conversationKey,
+      readLatestAssistantOutput: (nextConversationKey) => this.readLatestAssistantOutput(nextConversationKey),
     });
   }
 

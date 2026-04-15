@@ -13,7 +13,11 @@ import {
   isWorkspaceSwitchPendingActionSatisfied,
 } from '../pending-action-resume.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
-import type { PendingActionBlocker, PendingActionRecord } from '../pending-actions.js';
+import {
+  sanitizePendingActionPrompt,
+  type PendingActionBlocker,
+  type PendingActionRecord,
+} from '../pending-actions.js';
 import {
   PENDING_ACTION_SWITCH_CONFIRM_PATTERN,
   PENDING_ACTION_SWITCH_DENY_PATTERN,
@@ -170,8 +174,8 @@ export function buildGatewayClarificationResponse(
     return buildClarificationResponseMetadata(input, responseContent, deps);
   }
 
-  if (decision.resolution === 'needs_clarification' && decision.summary.trim()) {
-    const prompt = decision.summary.trim();
+  if (decision.resolution === 'needs_clarification') {
+    const prompt = sanitizePendingActionPrompt(decision.summary, 'clarification');
     const pendingActionResult = deps.setClarificationPendingAction(
       input.surfaceUserId,
       input.surfaceChannel,
@@ -409,7 +413,10 @@ export async function tryHandlePendingActionSwitchDecision(input: {
     );
     return {
       content: replacement
-        ? `Switched the active blocked request.\n\n${replacement.blocker.prompt}`
+        ? `Switched the active blocked request.\n\n${sanitizePendingActionPrompt(
+            replacement.blocker.prompt,
+            replacement.blocker.kind,
+          )}`
         : 'I could not switch the active blocked request.',
       metadata: {
         ...(input.buildImmediateResponseMetadata(
@@ -432,7 +439,10 @@ export async function tryHandlePendingActionSwitchDecision(input: {
     });
     return {
       content: restored
-        ? `Kept the current blocked request active.\n\n${restored.blocker.prompt}`
+        ? `Kept the current blocked request active.\n\n${sanitizePendingActionPrompt(
+            restored.blocker.prompt,
+            restored.blocker.kind,
+          )}`
         : 'Kept the current blocked request active.',
       metadata: {
         ...(input.buildImmediateResponseMetadata(

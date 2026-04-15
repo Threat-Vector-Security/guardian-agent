@@ -15,6 +15,9 @@ const GIT_HISTORY_SHELL_PATTERN = /\b(?:git\s+diff|git\s+show|git\s+log|git\s+bl
 const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated)\s+sandbox\b/i;
 const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
 const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
+const SIMPLE_MKDIR_REMOTE_EXEC_PATTERN = /^\s*mkdir(?:\s+-p)?\s+.+$/i;
+const SIMPLE_TOUCH_REMOTE_EXEC_PATTERN = /^\s*touch\s+.+$/i;
+const SIMPLE_FILE_WRITE_REMOTE_EXEC_PATTERN = /^\s*(?:printf|echo|cat)\b[\s\S]*(?:^|[;&|]\s*|\s)(?:>{1,2}|tee\b)/i;
 const REMOTE_VERIFICATION_TOOL_NAMES = new Set(['code_test', 'code_build', 'code_lint']);
 const SECOND_BRAIN_MUTATION_TOOLS = new Set([
   'second_brain_generate_brief',
@@ -207,6 +210,14 @@ function buildIntentRoutedToolDenial(input: {
     };
   }
 
+  if (shouldDenyTrivialFilesystemRemoteExec(input, decision)) {
+    return {
+      success: false,
+      status: 'denied',
+      message: 'Use brokered filesystem tools for simple file or directory changes in this turn. Prefer fs_mkdir for directory creation and fs_write for writing text files. Reserve code_remote_exec for bounded remote commands that truly need sandbox execution.',
+    };
+  }
+
   return undefined;
 }
 
@@ -287,6 +298,17 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
       'Use provider email tools instead of mutating local Second Brain records.',
     ];
   }
+  if (decision.route === 'complex_planning_task') {
+    const lines = [
+      'This turn explicitly targets Guardian\'s brokered complex-planning path.',
+      'Prefer brokered filesystem and repo tools first: fs_read, fs_search, fs_mkdir, and fs_write for file and directory work inside the workspace.',
+      'Do not use code_remote_exec for simple directory creation or text-file writes unless the user explicitly asked for remote sandbox execution.',
+    ];
+    if (decision.entities.codingRemoteExecRequested === true) {
+      lines.push('Because the user explicitly asked for remote sandbox execution, code_remote_exec or remote-required verification tools are allowed for the execution steps that truly need sandboxed commands.');
+    }
+    return lines;
+  }
   return [];
 }
 
@@ -352,6 +374,25 @@ function shouldDenyRepoInspectionShell(
   return GIT_HISTORY_SHELL_PATTERN.test(command)
     && namesExplicitFilesInRequest(requestText)
     && !/\b(?:diff|patch|commit|commits|pull request|pr|git)\b/i.test(requestText);
+}
+
+function shouldDenyTrivialFilesystemRemoteExec(
+  input: {
+    toolName: string;
+    args: Record<string, unknown>;
+    requestText?: string;
+  },
+  decision: IntentGatewayDecision,
+): boolean {
+  if (input.toolName !== 'code_remote_exec') return false;
+  if (isExplicitRemoteSandboxIntent(decision, input.requestText)) return false;
+
+  const command = typeof input.args.command === 'string' ? input.args.command.trim() : '';
+  if (!command) return false;
+
+  return SIMPLE_MKDIR_REMOTE_EXEC_PATTERN.test(command)
+    || SIMPLE_TOUCH_REMOTE_EXEC_PATTERN.test(command)
+    || SIMPLE_FILE_WRITE_REMOTE_EXEC_PATTERN.test(command);
 }
 
 function namesExplicitFilesInRequest(requestText: string): boolean {

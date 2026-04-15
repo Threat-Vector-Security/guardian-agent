@@ -1463,6 +1463,45 @@ describe('IntentGateway', () => {
     expect(inspectedSystemPrompt).toContain('Prompt profile: compact');
   });
 
+  it('omits recent-history and continuity thread context for standalone greetings', async () => {
+    const gateway = new IntentGateway();
+    let capturedUser = '';
+
+    await gateway.classify(
+      {
+        content: 'Hello',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Use Codex in the Guardian workspace to investigate the failing build.' },
+          { role: 'assistant', content: 'I need approval to run Codex for that coding task.' },
+        ],
+        continuity: {
+          continuityKey: 'shared-tier:owner',
+          linkedSurfaceCount: 3,
+          focusSummary: 'Attached Guardian coding session with an active investigation.',
+          lastActionableRequest: 'Use Codex in the Guardian workspace to investigate the failing build.',
+          activeExecutionRefs: ['code_session:Guardian'],
+        },
+      },
+      async (messages) => {
+        capturedUser = messages[1]?.content ?? '';
+        return {
+          content: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Greets the user.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(capturedUser).not.toContain('Recent conversation:');
+    expect(capturedUser).not.toContain('Continuity thread context:');
+  });
+
   it('includes explicit Google Workspace and Microsoft 365 split guidance in both gateway prompts', async () => {
     const gateway = new IntentGateway();
     let primaryPrompt = '';
@@ -1994,6 +2033,73 @@ describe('IntentGateway', () => {
     expect(callCount).toBe(2);
   });
 
+  it('recovers explicit automation-control requests from unstructured fallback output', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Disable the automation called Daily Inbox Triage.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'I am not sure.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('toggle');
+    expect(result.decision.entities.automationName).toBe('Daily Inbox Triage');
+    expect(result.decision.entities.enabled).toBe(false);
+  });
+
+  it('recovers automation-output analysis requests from unstructured fallback output', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Analyze the output from the last HN Snapshot Smoke automation run.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'Need to inspect the stored run output.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).toBe('automation_output_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.automationName).toBe('HN Snapshot Smoke');
+  });
+
   it('repairs missing automation names for follow-up rename requests using recent history', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
@@ -2267,6 +2373,34 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('recovers standalone greetings from unavailable gateway output', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Hello',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          operation: 'unknown',
+          confidence: 'low',
+          summary: 'No classification summary provided.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.simpleVsComplex).toBe('simple');
+  });
+
   it('captures correction metadata and resolved content for coding backend repairs', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -2340,6 +2474,47 @@ describe('IntentGateway', () => {
     expect(result.decision.resolvedContent).toContain('Outlook / Microsoft 365');
   });
 
+  it('repairs satisfied email-provider clarifications even when the classifier leaves them as new requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Gmail.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-email-provider',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'email_provider',
+          route: 'email_task',
+          operation: 'read',
+          prompt: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?',
+          originalRequest: 'Check my email.',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Check my email in Gmail.',
+          turnRelation: 'new_request',
+          resolution: 'needs_clarification',
+          missingFields: ['email_provider'],
+          emailProvider: 'gws',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('email_provider');
+    expect(result.decision.entities.emailProvider).toBe('gws');
+    expect(result.decision.resolvedContent).toContain('Gmail / Google Workspace');
+  });
+
   it('captures mailbox read mode for latest inbox requests', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -2365,6 +2540,66 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('read');
     expect(result.decision.entities.emailProvider).toBe('gws');
     expect(result.decision.entities.mailboxReadMode).toBe('latest');
+  });
+
+  it('requires provider clarification for ambiguous mailbox reads when both mail providers are enabled', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check my email.',
+        channel: 'web',
+        enabledManagedProviders: ['gws', 'm365'],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Checks the mailbox.',
+          resolution: 'ready',
+          missingFields: [],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.entities.emailProvider).toBeUndefined();
+    expect(result.decision.missingFields).toContain('email_provider');
+  });
+
+  it('selects the only enabled mail provider when mailbox classification omits it', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check my email.',
+        channel: 'web',
+        enabledManagedProviders: ['m365'],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Checks the mailbox.',
+          resolution: 'ready',
+          missingFields: [],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.entities.emailProvider).toBe('m365');
+    expect(result.decision.provenance?.entities).toMatchObject({
+      emailProvider: 'resolver.email',
+    });
   });
 
   it('infers Outlook mailbox metadata when fallback output omits provider details', async () => {

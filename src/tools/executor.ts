@@ -1525,6 +1525,8 @@ export class ToolExecutor {
       'code_test',
       'code_build',
       'code_lint',
+      'fs_write',
+      'fs_mkdir',
     ];
     const defs: ToolDefinition[] = [];
     for (const name of eagerToolNames) {

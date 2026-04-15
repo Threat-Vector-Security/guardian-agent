@@ -165,6 +165,11 @@ export class OllamaProvider implements LLMProvider {
       model: options?.model ?? this.model,
       messages: toOllamaMessages(messages),
       stream,
+      ...(options?.responseFormat?.type === 'json_object'
+        ? { format: 'json' }
+        : options?.responseFormat?.type === 'json_schema'
+          ? { format: options.responseFormat.schema }
+          : {}),
       ...(options?.tools?.length
         ? {
             tools: options.tools.map(toOllamaTool),

@@ -60,6 +60,13 @@ const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go 
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const PLANNER_TOOL_ALIASES = new Map<string, string>([
+  ['fs_readfile', 'fs_read'],
+  ['fs_writefile', 'fs_write'],
+  ['read_file', 'fs_read'],
+  ['write_file', 'fs_write'],
+  ['mkdir', 'fs_mkdir'],
+]);
 
 interface PendingApprovalState {
   ids: string[];
@@ -168,11 +175,184 @@ function buildApprovalPendingActionMetadata(
   };
 }
 
+function buildExecutionProfileResponseSource(
+  executionProfile: SelectedExecutionProfile | null | undefined,
+): ResponseSourceMetadata | undefined {
+  if (!executionProfile) return undefined;
+  return {
+    locality: executionProfile.providerLocality,
+    providerName: executionProfile.providerType,
+    ...(executionProfile.providerName !== executionProfile.providerType
+      ? { providerProfileName: executionProfile.providerName }
+      : {}),
+    providerTier: executionProfile.providerTier,
+    ...(executionProfile.providerModel?.trim()
+      ? { model: executionProfile.providerModel.trim() }
+      : {}),
+    usedFallback: false,
+  };
+}
+
 function createPlannerPauseControl(result: unknown): PlanExecutionPauseControl {
   return {
     kind: 'pause_execution',
     reason: 'pending_approval',
     result,
+  };
+}
+
+function extractPlannerMkdirPath(command: string): string | undefined {
+  const match = command.match(/^mkdir(?:\s+-p)?\s+(?:"([^"]+)"|'([^']+)'|([^\s"'`;&|<>]+))$/);
+  const candidate = match?.[1] ?? match?.[2] ?? match?.[3];
+  const normalized = candidate?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizePlannerNodeStatus(status: PlanNode['status'] | undefined): PlanNode['status'] {
+  if (status === 'running' || status === 'success' || status === 'failed') {
+    return status;
+  }
+  return 'pending';
+}
+
+function truncatePlannerInlineText(value: string | undefined, maxChars: number): string | undefined {
+  const normalized = value?.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function summarizePlannerNodeIds(nodeIds: string[], maxItems = 5): string | undefined {
+  if (nodeIds.length === 0) return undefined;
+  const visible = nodeIds.slice(0, maxItems).join(', ');
+  if (nodeIds.length <= maxItems) return visible;
+  return `${visible}, +${nodeIds.length - maxItems} more`;
+}
+
+function readPlannerNodeResultDetail(result: unknown): string | undefined {
+  if (result instanceof Error) {
+    return truncatePlannerInlineText(result.message, 120);
+  }
+  if (typeof result === 'string') {
+    return truncatePlannerInlineText(result, 120);
+  }
+  if (!isRecord(result)) return undefined;
+
+  const candidates = [
+    typeof result.reflectionReason === 'string' ? result.reflectionReason : undefined,
+    typeof result.error === 'string' ? result.error : undefined,
+    typeof result.message === 'string' ? result.message : undefined,
+    typeof result.status === 'string' && result.status !== 'succeeded'
+      ? `status ${result.status}`
+      : undefined,
+  ];
+  for (const candidate of candidates) {
+    const normalized = truncatePlannerInlineText(candidate, 120);
+    if (normalized) return normalized;
+  }
+  if (result.originalResult !== undefined) {
+    return readPlannerNodeResultDetail(result.originalResult);
+  }
+  return undefined;
+}
+
+function summarizePlannerFailedNodes(nodes: PlanNode[], maxItems = 4): string | undefined {
+  if (nodes.length === 0) return undefined;
+  const visible = nodes.slice(0, maxItems).map((node) => {
+    const detail = readPlannerNodeResultDetail(node.result);
+    return detail ? `${node.id} (${detail})` : node.id;
+  });
+  if (nodes.length > maxItems) {
+    visible.push(`+${nodes.length - maxItems} more`);
+  }
+  return visible.join('; ');
+}
+
+function buildPlannerExecutionMetadata(
+  plan: ExecutionPlan,
+  status: 'completed' | 'failed' | 'unsupported_actions',
+  options?: { unsupportedActions?: string[] },
+): Record<string, unknown> {
+  const nodes = Object.values(plan.nodes ?? {});
+  const completed = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'success');
+  const failed = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'failed');
+  const running = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'running');
+  const pending = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'pending');
+
+  return {
+    plannerExecution: {
+      status,
+      totalNodes: nodes.length,
+      completedNodeCount: completed.length,
+      failedNodeCount: failed.length,
+      runningNodeCount: running.length,
+      pendingNodeCount: pending.length,
+      completedNodeIds: completed.map((node) => node.id),
+      failedNodes: failed.map((node) => ({
+        id: node.id,
+        ...(node.target ? { target: node.target } : {}),
+        ...(readPlannerNodeResultDetail(node.result) ? { detail: readPlannerNodeResultDetail(node.result) } : {}),
+      })),
+      pendingNodeIds: pending.map((node) => node.id),
+      ...(options?.unsupportedActions?.length
+        ? { unsupportedActions: [...new Set(options.unsupportedActions)] }
+        : {}),
+    },
+  };
+}
+
+function buildPlannerExecutionResponse(
+  plan: ExecutionPlan,
+  status: 'completed' | 'failed' | 'unsupported_actions',
+  options?: { unsupportedActions?: string[] },
+  responseSource?: ResponseSourceMetadata,
+): { content: string; metadata?: Record<string, unknown> } {
+  const nodes = Object.values(plan.nodes ?? {});
+  const completed = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'success');
+  const failed = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'failed');
+  const running = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'running');
+  const pending = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'pending');
+  const summaryParts = [`${nodes.length} node${nodes.length === 1 ? '' : 's'}`];
+  if (completed.length > 0) summaryParts.push(`${completed.length} completed`);
+  if (failed.length > 0) summaryParts.push(`${failed.length} failed`);
+  if (running.length > 0) summaryParts.push(`${running.length} running`);
+  if (pending.length > 0) summaryParts.push(`${pending.length} pending`);
+
+  const lines = [
+    status === 'unsupported_actions'
+      ? 'I generated a DAG plan, but I could not execute it safely because it included unsupported planner actions.'
+      : status === 'failed'
+        ? 'I generated a DAG plan for your request, but execution failed.'
+        : 'I generated and executed a DAG plan for your request.',
+    '',
+    `Plan summary: ${summaryParts.join(', ')}.`,
+  ];
+
+  if (options?.unsupportedActions?.length) {
+    lines.push(`Unsupported actions: ${[...new Set(options.unsupportedActions)].join(', ')}.`);
+  }
+
+  const completedSummary = summarizePlannerNodeIds(completed.map((node) => node.id));
+  if (completedSummary) {
+    lines.push(`Completed nodes: ${completedSummary}.`);
+  }
+
+  const failedSummary = summarizePlannerFailedNodes(failed);
+  if (failedSummary) {
+    lines.push(`Failed nodes: ${failedSummary}.`);
+  }
+
+  const pendingSummary = summarizePlannerNodeIds(pending.map((node) => node.id));
+  if (pendingSummary && status !== 'unsupported_actions') {
+    lines.push(`Pending nodes: ${pendingSummary}.`);
+  }
+
+  return {
+    content: lines.join('\n'),
+    metadata: {
+      ...buildPlannerExecutionMetadata(plan, status, options),
+      ...(responseSource ? { responseSource } : {}),
+    },
   };
 }
 
@@ -430,12 +610,22 @@ export class BrokeredWorkerSession {
     executionProfile?: SelectedExecutionProfile | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const { TaskPlanner, BROKER_SAFE_PLANNER_ACTION_TYPES } = await import('../runtime/planner/task-planner.js');
+    const allowedToolNames = this.listPlannerAllowedToolNames(toolExecutor);
+    const responseSource = buildExecutionProfileResponseSource(executionProfile);
     const planner = new TaskPlanner(
       async (msgs, opts) => chatFn(msgs, opts),
-      { allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES },
+      {
+        allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES,
+        allowedToolNames,
+      },
     );
     const plan = await planner.plan(message.content, decision || undefined);
-    if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
+    if (!plan) {
+      return {
+        content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.',
+        ...(responseSource ? { metadata: { responseSource } } : {}),
+      };
+    }
 
     const unsupportedActions = [...new Set(
       Object.values(plan.nodes)
@@ -444,17 +634,7 @@ export class BrokeredWorkerSession {
     )];
     if (unsupportedActions.length > 0) {
       plan.status = 'failed';
-      return {
-        content: [
-          'I generated a DAG plan, but I cannot safely execute it because it includes unsupported planner actions.',
-          `Unsupported actions: ${unsupportedActions.join(', ')}`,
-          '',
-          'Plan:',
-          '```json',
-          JSON.stringify(plan, null, 2),
-          '```',
-        ].join('\n'),
-      };
+      return buildPlannerExecutionResponse(plan, 'unsupported_actions', { unsupportedActions }, responseSource);
     }
 
     const execution = await this.executePlannerPlan({
@@ -489,25 +669,19 @@ export class BrokeredWorkerSession {
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0
-          ? buildApprovalPendingActionMetadata(pendingApprovalMeta)
-          : undefined,
+          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
+          : (responseSource ? { responseSource } : undefined),
       };
     }
 
     this.pendingApprovals = null;
     this.suspendedSession = null;
-    return {
-      content: [
-        execution.outcome.status === 'failed'
-          ? 'I generated a DAG plan for your request, but execution failed.'
-          : 'I have generated and executed a DAG plan for your request.',
-        '',
-        'Plan:',
-        '```json',
-        JSON.stringify(plan, null, 2),
-        '```',
-      ].join('\n'),
-    };
+    return buildPlannerExecutionResponse(
+      plan,
+      execution.outcome.status === 'failed' ? 'failed' : 'completed',
+      undefined,
+      responseSource,
+    );
   }
 
   private async executePlannerPlan(input: {
@@ -523,6 +697,7 @@ export class BrokeredWorkerSession {
     trustState: PlannerTrustSnapshot;
   }> {
     const { BROKER_SAFE_PLANNER_ACTION_TYPES } = await import('../runtime/planner/task-planner.js');
+    const allowedToolNames = this.listPlannerAllowedToolNames(input.toolExecutor);
     const reflector = new (await import('../runtime/planner/reflection.js')).SemanticReflector(
       async (msgs, opts) => input.chatFn(msgs, opts)
     );
@@ -533,7 +708,10 @@ export class BrokeredWorkerSession {
 
     const recoveryPlanner = new (await import('../runtime/planner/recovery.js')).RecoveryPlanner(
       async (msgs, opts) => input.chatFn(msgs, opts),
-      { allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES },
+      {
+        allowedActionTypes: BROKER_SAFE_PLANNER_ACTION_TYPES,
+        allowedToolNames,
+      },
     );
 
     const learningQueue = new (await import('../runtime/planner/learning-queue.js')).ReflectiveLearningQueue(
@@ -574,9 +752,10 @@ export class BrokeredWorkerSession {
     pendingNodes: SuspendedPlannerNode[],
   ): Promise<Record<string, unknown> | PlanExecutionPauseControl> {
     if (node.actionType === 'tool_call') {
+      const toolName = this.normalizePlannerToolName(node.target);
       const args = this.parsePlannerToolArgs(node);
       const result = await toolExecutor.executeModelTool(
-        node.target,
+        toolName,
         args,
         this.buildPlannerToolRequest(message, trustState),
       );
@@ -585,7 +764,7 @@ export class BrokeredWorkerSession {
           nodeId: node.id,
           approvalId: result.approvalId,
           jobId: result.jobId,
-          toolName: node.target,
+          toolName,
         });
         return createPlannerPauseControl(result);
       }
@@ -594,9 +773,30 @@ export class BrokeredWorkerSession {
     }
 
     if (node.actionType === 'execute_code') {
+      const normalizedToolCall = this.normalizePlannerExecuteCodeToToolCall(node.inputPrompt, toolExecutor);
+      if (normalizedToolCall) {
+        const result = await toolExecutor.executeModelTool(
+          normalizedToolCall.toolName,
+          normalizedToolCall.args,
+          this.buildPlannerToolRequest(message, trustState),
+        );
+        if (result.status === 'pending_approval' && typeof result.approvalId === 'string' && typeof result.jobId === 'string') {
+          pendingNodes.push({
+            nodeId: node.id,
+            approvalId: result.approvalId,
+            jobId: result.jobId,
+            toolName: normalizedToolCall.toolName,
+          });
+          return createPlannerPauseControl(result);
+        }
+        this.updatePlannerTrustState(trustState, result);
+        return result;
+      }
+
+      const command = this.normalizePlannerExecuteCodeCommand(node.inputPrompt);
       const result = await toolExecutor.executeModelTool(
         'code_remote_exec',
-        { command: String(node.inputPrompt ?? '') },
+        { command },
         this.buildPlannerToolRequest(message, trustState),
       );
       if (result.status === 'pending_approval' && typeof result.approvalId === 'string' && typeof result.jobId === 'string') {
@@ -616,6 +816,58 @@ export class BrokeredWorkerSession {
       new Error(`Planner action '${node.actionType}' is not implemented in brokered execution.`),
       { nonRecoverable: true },
     );
+  }
+
+  private listPlannerAllowedToolNames(toolExecutor: BrokeredToolExecutor): string[] {
+    return [...new Set(
+      toolExecutor.listAlwaysLoadedDefinitions()
+        .map((definition) => definition.name)
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim()),
+    )].sort((left, right) => left.localeCompare(right));
+  }
+
+  private normalizePlannerToolName(toolName: string): string {
+    const trimmed = toolName.trim();
+    if (!trimmed) return trimmed;
+    return PLANNER_TOOL_ALIASES.get(trimmed.toLowerCase()) ?? trimmed;
+  }
+
+  private normalizePlannerExecuteCodeCommand(inputPrompt: unknown): string {
+    if (typeof inputPrompt !== 'string') {
+      return String(inputPrompt ?? '');
+    }
+    const trimmed = inputPrompt.trim();
+    if (!trimmed) return '';
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (isRecord(parsed) && typeof parsed.command === 'string' && parsed.command.trim()) {
+        return parsed.command.trim();
+      }
+    } catch {
+      // Fall back to the raw bounded command string.
+    }
+    return trimmed;
+  }
+
+  private normalizePlannerExecuteCodeToToolCall(
+    inputPrompt: unknown,
+    toolExecutor: BrokeredToolExecutor,
+  ): { toolName: string; args: Record<string, unknown> } | null {
+    const command = this.normalizePlannerExecuteCodeCommand(inputPrompt);
+    if (!command) return null;
+
+    if (toolExecutor.getToolDefinition('fs_mkdir')) {
+      const path = extractPlannerMkdirPath(command);
+      if (path) {
+        return {
+          toolName: 'fs_mkdir',
+          args: { path },
+        };
+      }
+    }
+
+    return null;
   }
 
   private parsePlannerToolArgs(node: PlanNode): Record<string, unknown> {
@@ -793,6 +1045,7 @@ export class BrokeredWorkerSession {
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
     toolExecutor: BrokeredToolExecutor,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const responseSource = buildExecutionProfileResponseSource(suspended.executionProfile);
     const resumedTrustState = {
       contentTrustLevel: suspended.trustState.contentTrustLevel,
       taintReasons: new Set(suspended.trustState.taintReasons),
@@ -862,23 +1115,17 @@ export class BrokeredWorkerSession {
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0
-          ? buildApprovalPendingActionMetadata(pendingApprovalMeta)
-          : undefined,
+          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
+          : (responseSource ? { responseSource } : undefined),
       };
     }
 
-    return {
-      content: [
-        execution.outcome.status === 'failed'
-          ? 'I generated a DAG plan for your request, but execution failed.'
-          : 'I have generated and executed a DAG plan for your request.',
-        '',
-        'Plan:',
-        '```json',
-        JSON.stringify(suspended.plan, null, 2),
-        '```',
-      ].join('\n'),
-    };
+    return buildPlannerExecutionResponse(
+      suspended.plan,
+      execution.outcome.status === 'failed' ? 'failed' : 'completed',
+      undefined,
+      responseSource,
+    );
   }
 
   private async tryDirectAutomationAuthoring(

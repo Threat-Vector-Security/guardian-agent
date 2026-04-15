@@ -6,6 +6,7 @@ import {
   markApprovalUiProcessing,
   markApprovalUiResolved,
 } from '../approval-ui-state.js';
+import { buildApprovalContinuationSummaryPart } from '../chat-approval.js';
 import { resolveWorkbenchActiveSessionId } from '../code-session-workbench.js';
 import {
   normalizeReferencedSessionIds,
@@ -1407,7 +1408,7 @@ function setModelValueFromDisk(filePath, model, content) {
 /**
  * Mount or update the Monaco editor in the given container for the active tab.
  */
-function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
+function mountMonacoEditor(container, filePath, content, isDiff, diffContent, options = {}) {
   const monaco = window.monaco;
   if (!monaco || !container) return;
   ensureMonacoStructureSupport();
@@ -1567,7 +1568,9 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
   }
   triggerMonacoStructureRefresh();
   applyMonacoStructureSelection(session);
-  monacoEditorInstance.focus();
+  if (options.shouldFocus === true) {
+    monacoEditorInstance.focus();
+  }
 }
 
 function isActiveCodeView(container, lifecycleId) {
@@ -1726,7 +1729,7 @@ function bindRunTimelineListeners() {
     saveState(codeState);
     const activeSession = getActiveSession();
     if (window.location.hash.startsWith('#/code') && activeSession?.id === codeSessionId) {
-      rerenderFromState();
+      refreshVisibleAssistantPanel(activeSession);
       if (isTimelineRunTerminal(run)) {
         scheduleTimelineDrivenSessionRefresh(codeSessionId);
       }
@@ -3766,7 +3769,9 @@ function captureFocusState(container) {
     }, active);
   }
 
-  return null;
+  return {
+    type: 'code-view',
+  };
 }
 
 function captureSelectionState(state, element) {
@@ -3779,7 +3784,7 @@ function captureSelectionState(state, element) {
 }
 
 function restoreFocusState(container, state) {
-  if (!state || state.type === 'terminal') return;
+  if (!state || state.type === 'terminal' || state.type === 'code-view') return;
   let selector = '';
   if (state.type === 'create-session-form' && state.name) {
     selector = `[data-code-session-form] [name="${state.name}"]`;
@@ -4119,7 +4124,14 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
         if (!isActiveCodeView(container, codeViewLifecycleId)) return;
         const src = activeTab.content ?? fileView.source ?? '';
         const isDiff = activeSession.showDiff;
-        mountMonacoEditor(monacoContainer, activeTab.filePath, src, isDiff, fileView.source || '');
+        mountMonacoEditor(
+          monacoContainer,
+          activeTab.filePath,
+          src,
+          isDiff,
+          fileView.source || '',
+          { shouldFocus: focusState?.type === 'code-view' },
+        );
         syncEditorSearchState(activeSession, { reveal: false, preserveIndex: true });
       }).catch((err) => {
         monacoContainer.innerHTML = `<div class="code-error" style="padding:1rem">Failed to load editor: ${esc(err.message)}</div>`;
@@ -5542,6 +5554,19 @@ function renderAssistantPanel(session) {
   `;
 }
 
+function refreshVisibleAssistantPanel(session = getActiveSession()) {
+  if (!currentContainer || codeState.activePanel !== 'activity' || !session) return false;
+  const host = currentContainer.querySelector('[data-code-assistant-panel-host]');
+  if (!(host instanceof HTMLElement)) return false;
+  const previousScrollTop = host.querySelector('.code-assistant-panel__scroll')?.scrollTop || 0;
+  host.innerHTML = renderAssistantPanel(session);
+  const nextScroll = host.querySelector('.code-assistant-panel__scroll');
+  if (nextScroll) {
+    nextScroll.scrollTop = previousScrollTop;
+  }
+  return true;
+}
+
 function renderDetachedInspectorWindow(session) {
   if (!session?.inspectorDetached || !session.inspectorOpen) return false;
   const popup = inspectorPopupWindow && !inspectorPopupWindow.closed
@@ -6634,18 +6659,27 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
   let refreshSessionId = sessionId;
 
   const approvalResponses = [];
+  const approvalSummaryParts = [];
   let continuationPendingApprovals = null;
+  const approvalLookup = new Map(
+    (Array.isArray(session.pendingApprovals) ? session.pendingApprovals : [])
+      .map((approval) => [approval.id, approval]),
+  );
   for (const id of approvalIds) {
     const liveSession = resolveLiveSession(sessionId, session);
+    const approval = approvalLookup.get(id);
     try {
       const result = await decideCodeApprovalWithRetry(liveSession, id, decision);
       approvalResponses.push(result);
+      approvalSummaryParts.push(buildApprovalContinuationSummaryPart(result, approval, decision));
     } catch (err) {
       approvalResponses.push({
         success: false,
         message: err instanceof Error ? err.message : String(err),
         continueConversation: false,
+        transportError: true,
       });
+      approvalSummaryParts.push(`Error: ${(approval?.toolName || 'tool')}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -6656,6 +6690,7 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
     .map((result) => result.continuedResponse)
     .filter((value) => value && typeof value.content === 'string');
   const allSucceeded = approvalResponses.every((result) => result?.success !== false);
+  const hasTransportFailures = approvalResponses.some((result) => result?.transportError === true);
 
   const currentSession = resolveLiveSession(sessionId, session);
   immediateMessages.forEach((message) => appendChatMessage(currentSession, 'agent', message));
@@ -6663,10 +6698,17 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
     responseSource: response.metadata?.responseSource,
   }));
 
-  if (decision === 'approved' && continuedResponses.length === 0 && approvalResponses.some((result) => result.continueConversation !== false)) {
-    const summary = approvalResponses
-      .map((result) => result.success ? (result.message || 'approved') : `Failed: ${result.message || 'unknown error'}`)
-      .join('; ');
+  const hasExplicitContinuationDirective = approvalResponses.some(
+    (result) => result.continuedResponse || result.continueConversation !== undefined,
+  );
+  const needsSyntheticContinuation = decision === 'approved'
+    && continuedResponses.length === 0
+    && (
+      approvalResponses.some((result) => result.continueConversation === true)
+      || (!hasExplicitContinuationDirective && allSucceeded)
+    );
+  if (needsSyntheticContinuation) {
+    const summary = approvalSummaryParts.join('; ');
     const continuationMessage = [
       '[Code Approval Continuation]',
       `[User approved the pending tool action(s). Result: ${summary}]`,
@@ -6702,29 +6744,33 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
         continuationPendingApprovals = responsePendingApprovals;
         liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
       }
-      if (allSucceeded) {
-        markApprovalUiResolved(approvalIds, decision);
-      } else {
+      if (hasTransportFailures) {
         const summary = approvalResponses
           .map((result) => result.success ? (result.message || decision) : `Failed: ${result.message || 'unknown error'}`)
           .join('; ');
         markApprovalUiError(approvalIds, summary);
+      } else {
+        markApprovalUiResolved(approvalIds, decision);
       }
       appendChatMessage(liveSession, 'agent', response.content || 'Approval processed.', {
         responseSource: response.metadata?.responseSource,
       });
     } catch (err) {
-      markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
+      if (hasTransportFailures) {
+        markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
+      } else {
+        markApprovalUiResolved(approvalIds, decision);
+      }
       appendChatMessage(resolveLiveSession(sessionId, currentSession || session), 'error', err instanceof Error ? err.message : String(err));
     }
   } else {
-    if (allSucceeded) {
-      markApprovalUiResolved(approvalIds, decision);
-    } else {
+    if (hasTransportFailures) {
       const summary = approvalResponses
         .map((result) => result.success ? (result.message || decision) : `Failed: ${result.message || 'unknown error'}`)
         .join('; ');
       markApprovalUiError(approvalIds, summary);
+    } else {
+      markApprovalUiResolved(approvalIds, decision);
     }
   }
 

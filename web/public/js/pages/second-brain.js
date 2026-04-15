@@ -200,6 +200,7 @@ function getSecondBrainFocusWindow(now = Date.now()) {
 
 function getSecondBrainSettingsView(config) {
   const secondBrain = config?.assistant?.secondBrain || {};
+  const responseStyle = config?.assistant?.responseStyle || {};
   const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
     ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
     : [];
@@ -209,25 +210,17 @@ function getSecondBrainSettingsView(config) {
       completed: secondBrain.onboarding?.completed === true,
       dismissed: secondBrain.onboarding?.dismissed === true,
     },
-    profile: {
-      timezone: secondBrain.profile?.timezone || '',
-      workdayStart: secondBrain.profile?.workdayStart || '08:30',
-      workdayEnd: secondBrain.profile?.workdayEnd || '17:30',
-      proactivityLevel: secondBrain.profile?.proactivityLevel || 'balanced',
-    },
     delivery: {
       defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
     },
-    knowledge: {
-      prioritizeConnectedSources: secondBrain.knowledge?.prioritizeConnectedSources !== false,
-      defaultRetrievalMode: secondBrain.knowledge?.defaultRetrievalMode || 'hybrid',
-      rerankerEnabled: secondBrain.knowledge?.rerankerEnabled !== false,
+    responseStyle: {
+      enabled: responseStyle.enabled !== false,
+      level: responseStyle.level || 'balanced',
     },
   };
 }
 
 function buildRecommendedSecondBrainPatch(config) {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const telegramEnabled = config?.channels?.telegram?.enabled === true;
   return {
     assistant: {
@@ -241,19 +234,8 @@ function buildRecommendedSecondBrainPatch(config) {
           completed: true,
           dismissed: false,
         },
-        profile: {
-          timezone,
-          workdayStart: '08:30',
-          workdayEnd: '17:30',
-          proactivityLevel: 'balanced',
-        },
         delivery: {
           defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
-        },
-        knowledge: {
-          prioritizeConnectedSources: true,
-          defaultRetrievalMode: 'hybrid',
-          rerankerEnabled: true,
         },
       },
     },
@@ -261,15 +243,11 @@ function buildRecommendedSecondBrainPatch(config) {
 }
 
 function formatSecondBrainPreferencesSummary(secondBrain) {
-  const timezone = secondBrain.profile.timezone || 'browser-local time';
-  const workday = `${secondBrain.profile.workdayStart || '08:30'}-${secondBrain.profile.workdayEnd || '17:30'}`;
   const delivery = formatSecondBrainChannelList(secondBrain.delivery.defaultChannels);
-  const retrievalMode = secondBrain.knowledge.defaultRetrievalMode.replace(/_/g, ' ');
   return {
-    timezone,
-    workday,
+    setupCard: formatSecondBrainSetupCardState(secondBrain),
+    responseStyle: formatSecondBrainResponseStyle(secondBrain),
     delivery,
-    retrievalMode,
   };
 }
 
@@ -280,6 +258,24 @@ function formatSecondBrainChannelList(channels) {
   return channels
     .map((channel) => SECOND_BRAIN_CHANNEL_LABELS[channel] || channel)
     .join(', ');
+}
+
+function formatSecondBrainResponseStyle(secondBrain) {
+  if (!secondBrain.responseStyle.enabled) {
+    return 'Off';
+  }
+  const level = secondBrain.responseStyle.level || 'balanced';
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}
+
+function formatSecondBrainSetupCardState(secondBrain) {
+  if (secondBrain.onboarding.dismissed) {
+    return 'Hidden for now';
+  }
+  if (secondBrain.onboarding.completed) {
+    return 'Completed';
+  }
+  return 'Show until finished';
 }
 
 function resolveSecondBrainOnboardingMode(secondBrain) {
@@ -294,7 +290,7 @@ function renderSecondBrainSetupCard(data) {
 
   if (!secondBrain.enabled) {
     return `
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-setup">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Second Brain Preferences</div>
@@ -316,17 +312,16 @@ function renderSecondBrainSetupCard(data) {
   const summary = formatSecondBrainPreferencesSummary(secondBrain);
   if (onboardingMode === 'pending') {
     return `
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-setup">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Second Brain Setup</div>
             <h3>Tune how Guardian should help you</h3>
           </div>
         </div>
-        <p>Set a workday window, preferred delivery channels, and retrieval defaults once, then change them later in <strong>Configuration &gt; Second Brain</strong>. This stays as preferences only. It does not create a second memory authority beside Guardian memory.</p>
+        <p>Set your reply style and default delivery channels once, then change them later in <strong>Configuration &gt; Second Brain</strong>. This stays as preferences only. It does not create a second memory authority beside Guardian memory.</p>
         <div class="sb-readout-grid">
-          ${renderReadoutCard('Recommended timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')}
-          ${renderReadoutCard('Recommended workday', '08:30-17:30')}
+          ${renderReadoutCard('Recommended reply style', 'Balanced')}
           ${renderReadoutCard('Recommended delivery', formatSecondBrainChannelList(buildRecommendedSecondBrainPatch(data?.config).assistant.secondBrain.delivery.defaultChannels))}
         </div>
         <div class="sb-brief-actions">
@@ -339,19 +334,18 @@ function renderSecondBrainSetupCard(data) {
   }
 
   return `
-    <article class="sb-card">
+    <article class="sb-card sb-card--today-setup">
       <div class="sb-card__header">
         <div>
           <div class="sb-card__eyebrow">Second Brain Preferences</div>
           <h3>Your current defaults</h3>
         </div>
       </div>
-      <p>These preferences stay editable. Use Configuration when you want to change the workday window, delivery defaults, or retrieval posture later.</p>
+      <p>These preferences stay editable. Use Configuration when you want to change reply style, delivery defaults, or the home setup card later.</p>
       <div class="sb-readout-grid">
-        ${renderReadoutCard('Timezone', summary.timezone)}
-        ${renderReadoutCard('Workday', summary.workday)}
+        ${renderReadoutCard('Setup card', summary.setupCard)}
+        ${renderReadoutCard('Reply style', summary.responseStyle)}
         ${renderReadoutCard('Delivery', summary.delivery)}
-        ${renderReadoutCard('Retrieval', summary.retrievalMode)}
       </div>
       <div class="sb-brief-actions">
         <button class="btn btn-secondary btn-sm" type="button" data-second-brain-open-config="true">Edit preferences</button>
@@ -561,6 +555,8 @@ function preserveRoutineTemplateSelection(currentId, data) {
 
 function renderToday(panel, data) {
   const nowDate = new Date(data.now);
+  const setupCard = renderSecondBrainSetupCard(data);
+  const hasSetupCard = setupCard.trim().length > 0;
   const todayEvents = getEventsForDay(data.focusEvents, nowDate);
   const focusTasks = data.tasks
     .filter((task) => task.status !== 'done')
@@ -575,8 +571,8 @@ function renderToday(panel, data) {
   const stalePeople = data.people.filter((person) => isPersonStale(person, data.now)).slice(0, 4);
 
   panel.innerHTML = `
-    <section class="sb-layout sb-layout--today">
-      <article class="sb-card sb-card--feature">
+    <section class="sb-layout sb-layout--today${hasSetupCard ? ' has-setup' : ' is-setup-hidden'}">
+      <article class="sb-card sb-card--feature sb-card--today-feature">
         <div class="sb-card__eyebrow">Today</div>
         <h3>${esc(getDayGreeting(nowDate))}</h3>
         <p>${esc(data.overview.nextEvent
@@ -589,9 +585,9 @@ function renderToday(panel, data) {
         </div>
       </article>
 
-      ${renderSecondBrainSetupCard(data)}
+      ${setupCard}
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-agenda">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Agenda</div>
@@ -601,7 +597,7 @@ function renderToday(panel, data) {
         ${renderAgenda(todayEvents, 'No events on the books for today.')}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-capture">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Capture</div>
@@ -616,7 +612,7 @@ function renderToday(panel, data) {
         ${renderTodayCaptureForm(nowDate)}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-tasks">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Tasks</div>
@@ -626,7 +622,7 @@ function renderToday(panel, data) {
         ${renderTaskCompactList(focusTasks, 'No open tasks right now.')}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-briefs">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Briefs</div>
@@ -647,7 +643,7 @@ function renderToday(panel, data) {
           : '<div class="sb-empty">No morning brief generated yet for this window.</div>'}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-contacts">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Contacts</div>
@@ -657,7 +653,7 @@ function renderToday(panel, data) {
         ${renderPeopleCompactList(stalePeople, 'No stale relationships surfaced right now.')}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-notes">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Notes</div>
@@ -667,7 +663,7 @@ function renderToday(panel, data) {
         ${renderNoteCompactList(recentNotes, 'No fresh notes captured yet.')}
       </article>
 
-      <article class="sb-card">
+      <article class="sb-card sb-card--today-routines">
         <div class="sb-card__header">
           <div>
             <div class="sb-card__eyebrow">Routines</div>

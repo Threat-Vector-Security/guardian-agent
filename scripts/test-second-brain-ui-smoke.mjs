@@ -204,6 +204,32 @@ async function openSecondBrainTab(page, label, readySelector) {
   }
 }
 
+async function assertTodayRoutinesCardLayout(page) {
+  await page.waitForSelector('.sb-layout--today .sb-card--today-routines');
+  const layoutMetrics = await page.evaluate(() => {
+    const routinesCard = document.querySelector('.sb-card--today-routines');
+    const notesCard = document.querySelector('.sb-card--today-notes');
+    const layout = document.querySelector('.sb-layout--today');
+    if (!(routinesCard instanceof HTMLElement) || !(notesCard instanceof HTMLElement) || !(layout instanceof HTMLElement)) {
+      return null;
+    }
+    return {
+      routinesWidth: routinesCard.getBoundingClientRect().width,
+      notesWidth: notesCard.getBoundingClientRect().width,
+      layoutWidth: layout.getBoundingClientRect().width,
+    };
+  });
+  assert.ok(layoutMetrics, 'Expected the Today summary cards to render before checking routines layout.');
+  assert.ok(
+    layoutMetrics.routinesWidth >= layoutMetrics.notesWidth * 0.85,
+    `Expected the Today routines card to stay close to the notes card width. Got routines=${layoutMetrics.routinesWidth}, notes=${layoutMetrics.notesWidth}.`,
+  );
+  assert.ok(
+    layoutMetrics.routinesWidth >= layoutMetrics.layoutWidth * 0.25,
+    `Expected the Today routines card to keep a real summary-card width. Got routines=${layoutMetrics.routinesWidth}, layout=${layoutMetrics.layoutWidth}.`,
+  );
+}
+
 async function acceptNextDialog(page) {
   page.once('dialog', (dialog) => dialog.accept());
 }
@@ -344,6 +370,7 @@ guardian:
     });
     const page = await browser.newPage();
     await loginToWeb(page, baseUrl, authToken);
+    await assertTodayRoutinesCardLayout(page);
 
     const noteTitle = `Harness Note ${Date.now()}`;
     const noteUpdatedTitle = `${noteTitle} Updated`;

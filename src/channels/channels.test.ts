@@ -5301,6 +5301,54 @@ describe('WebChannel', () => {
       expect(res.status).toBe(404);
     });
 
+    it('POST /api/chat/pending-action/reset forwards principal and surface identity', async () => {
+      const calls: Array<{
+        userId: string;
+        principalId?: string;
+        principalRole?: string;
+        channel: string;
+        surfaceId: string;
+      }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onPendingActionReset: async (input) => {
+          calls.push({
+            userId: input.userId,
+            principalId: input.principalId,
+            principalRole: input.principalRole,
+            channel: input.channel,
+            surfaceId: input.surfaceId,
+          });
+          return { success: true, message: 'Cleared pending state.' };
+        },
+      };
+
+      web = new WebChannel({ port: 18982, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18982/api/chat/pending-action/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; message: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Cleared pending state.');
+      expect(calls).toEqual([{
+        userId: 'web-user',
+        principalId: 'web-bearer',
+        principalRole: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
     it('GET /api/chat/pending-action requires auth', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,

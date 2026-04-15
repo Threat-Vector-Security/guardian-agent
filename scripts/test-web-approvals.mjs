@@ -4,6 +4,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
+
+const HARNESS_USER_ID = 'harness';
+const HARNESS_CHANNEL = 'web';
+const HARNESS_SURFACE_ID = 'web-guardian-chat';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -55,26 +60,105 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
   };
 }
 
+function buildRouteIntentDecision(latestUser) {
+  if (latestUser.includes('[User approved the pending tool action(s).')) {
+    return {
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'continue',
+      summary: 'Continue the approved file-creation request.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+    };
+  }
+  if (latestUser.includes('create an empty file called web-empty.txt')) {
+    return {
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'execute',
+      summary: 'Create the requested empty file.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+    };
+  }
+  return {
+    route: 'general_assistant',
+    confidence: 'low',
+    operation: 'unknown',
+    summary: 'Unhandled harness request.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+  };
+}
+
 async function startFakeProvider(testDir, scenarioLog) {
   const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
+    const isOpenAiCompatChat = req.method === 'POST' && url.pathname === '/v1/chat/completions';
+
     if (req.method === 'GET' && req.url === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ models: [{ name: 'web-harness-model', size: 1 }] }));
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    if (isOllamaNativeChat || isOpenAiCompatChat) {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const tools = Array.isArray(parsed.tools)
-        ? parsed.tools.map((tool) => String(tool?.function?.name ?? '')).filter(Boolean)
+        ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
       scenarioLog.push({ latestUser, tools });
+      const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(
+          isOllamaNativeChat
+            ? createOllamaHarnessChatResponse({
+                model,
+                content,
+                doneReason: finishReason,
+                toolCalls,
+              })
+            : createChatCompletionResponse({
+                model,
+                content,
+                finishReason,
+                toolCalls,
+              }),
+        ));
+      };
+      const decision = buildRouteIntentDecision(latestUser);
+
+      if (tools.includes('route_intent')) {
+        sendResponse({
+          model: 'web-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'web-route-intent-1',
+              name: 'route_intent',
+              arguments: JSON.stringify(decision),
+            },
+          ],
+        });
+        return;
+      }
+
+      if (latestUser.includes('Classify this request.')) {
+        sendResponse({
+          model: 'web-harness-model',
+          content: JSON.stringify(decision),
+        });
+        return;
+      }
 
       if (latestUser.includes('create an empty file called web-empty.txt')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'web-harness-model',
           finishReason: 'tool_calls',
           toolCalls: [
@@ -87,13 +171,12 @@ async function startFakeProvider(testDir, scenarioLog) {
               }),
             },
           ],
-        })));
+        });
         return;
       }
 
-      if (latestUser.includes('Result: ✓ update_tool_policy: Approved and executed')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+      if (latestUser.includes('update_tool_policy') && /approved and executed/i.test(latestUser)) {
+        sendResponse({
           model: 'web-harness-model',
           finishReason: 'tool_calls',
           toolCalls: [
@@ -107,24 +190,22 @@ async function startFakeProvider(testDir, scenarioLog) {
               }),
             },
           ],
-        })));
+        });
         return;
       }
 
-      if (latestUser.includes('Result: ✓ fs_write: Approved and executed')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+      if (latestUser.includes('fs_write') && /approved and executed/i.test(latestUser)) {
+        sendResponse({
           model: 'web-harness-model',
           content: `Done - created ${path.join(testDir, 'web-empty.txt')} as an empty file.`,
-        })));
+        });
         return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(createChatCompletionResponse({
+      sendResponse({
         model: 'web-harness-model',
         content: 'Unexpected harness prompt.',
-      })));
+      });
       return;
     }
 
@@ -173,6 +254,21 @@ function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+function getPendingApprovalSummaries(response) {
+  const pendingActionApprovals = response?.metadata?.pendingAction?.blocker?.approvalSummaries;
+  if (Array.isArray(pendingActionApprovals)) {
+    return pendingActionApprovals;
+  }
+  return Array.isArray(response?.metadata?.pendingApprovals)
+    ? response.metadata.pendingApprovals
+    : [];
+}
+
+async function readCurrentPendingAction(baseUrl, token, userId = 'harness', channel = 'web', surfaceId = 'web-guardian-chat') {
+  const qs = new URLSearchParams({ userId, channel, surfaceId });
+  return requestJson(baseUrl, token, 'GET', `/api/chat/pending-action?${qs.toString()}`);
+}
+
 async function getFreePort() {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -187,7 +283,8 @@ async function getFreePort() {
 }
 
 async function waitForHealth(baseUrl) {
-  for (let i = 0; i < 60; i += 1) {
+  // Fresh temp HOME cold starts can exceed 30s on mounted workspaces even when healthy.
+  for (let i = 0; i < 180; i += 1) {
     try {
       const result = await requestJson(baseUrl, 'unused', 'GET', '/health');
       if (result?.status === 'ok') {
@@ -198,10 +295,52 @@ async function waitForHealth(baseUrl) {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('GuardianAgent did not become healthy within 30 seconds.');
+  throw new Error('GuardianAgent did not become healthy within 90 seconds.');
+}
+
+function normalizeApprovalSummary(result, approval, decision = 'approved') {
+  const toolName = approval?.toolName || 'tool';
+  if (result?.success === false) {
+    const rawMessage = typeof result?.message === 'string' ? result.message.trim() : '';
+    return `Failed: ${toolName}: ${rawMessage || 'unknown error'}`;
+  }
+  return `${toolName}: ${decision === 'approved' ? 'Approved and executed' : 'Denied'}`;
+}
+
+async function continueAfterApproval({
+  baseUrl,
+  token,
+  approval,
+  decisionResult,
+  userId = HARNESS_USER_ID,
+  channel = HARNESS_CHANNEL,
+  surfaceId = HARNESS_SURFACE_ID,
+}) {
+  if (decisionResult?.continuedResponse && typeof decisionResult.continuedResponse.content === 'string') {
+    return decisionResult.continuedResponse;
+  }
+
+  const hasExplicitContinuationDirective = decisionResult?.continuedResponse || decisionResult?.continueConversation !== undefined;
+  const needsSyntheticContinuation = decisionResult?.success !== false
+    && (
+      decisionResult?.continueConversation === true
+      || !hasExplicitContinuationDirective
+    );
+  if (!needsSyntheticContinuation) {
+    return null;
+  }
+
+  const summary = normalizeApprovalSummary(decisionResult, approval, 'approved');
+  return requestJson(baseUrl, token, 'POST', '/api/message', {
+    content: `[Context: User is currently viewing the second-brain panel] [User approved the pending tool action(s). Result: ${summary}] Please continue with the current request only. Do not resume older unrelated pending tasks.`,
+    userId,
+    channel,
+    surfaceId,
+  });
 }
 
 async function runWebApprovalHarness() {
+  const preserveArtifacts = process.env.HARNESS_KEEP_TMP === '1';
   const harnessPort = await getFreePort();
   const harnessToken = `web-approval-harness-${Date.now()}`;
   const baseUrl = `http://127.0.0.1:${harnessPort}`;
@@ -249,15 +388,30 @@ runtime:
     enabled: false
 guardian:
   enabled: true
+  guardianAgent:
+    llmProvider: local
 `;
 
   fs.writeFileSync(configPath, config);
 
   let appProcess;
+  let exitInfo = null;
+  let completed = false;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+    appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+        USERPROFILE: tmpDir,
+        XDG_CONFIG_HOME: tmpDir,
+        XDG_DATA_HOME: tmpDir,
+        XDG_CACHE_HOME: tmpDir,
+      },
+    });
+    appProcess.once('exit', (code, signal) => {
+      exitInfo = { code, signal };
     });
     const stdout = fs.createWriteStream(logPath);
     const stderr = fs.createWriteStream(`${logPath}.err`);
@@ -268,44 +422,65 @@ guardian:
 
     const first = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'Please create an empty file called web-empty.txt in the requested external directory.',
-      userId: 'harness',
-      channel: 'web',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
-    assert.ok(first?.metadata?.pendingApprovals?.length > 0, `Expected pending approval from initial message: ${JSON.stringify(first)}`);
-    assert.equal(first.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
+    const firstPending = getPendingApprovalSummaries(first);
+    assert.ok(firstPending.length > 0, `Expected pending approval from initial message: ${JSON.stringify(first)}`);
+    assert.equal(first.metadata?.pendingAction?.blocker?.kind, 'approval', `Expected canonical pendingAction metadata on blocked response: ${JSON.stringify(first)}`);
+    assert.equal(firstPending[0].toolName, 'update_tool_policy');
     assert.match(first.content, /Waiting for approval to add .*allowed paths\./i);
+    const firstCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(firstCurrent?.pendingAction?.blocker?.kind, 'approval', `Expected current pending action after first blocked response: ${JSON.stringify(firstCurrent)}`);
+    assert.equal(firstCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, firstPending[0].id);
 
     const firstDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: first.metadata.pendingApprovals[0].id,
+      approvalId: firstPending[0].id,
       decision: 'approved',
       actor: 'web-user',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(firstDecision.success, true);
 
-    const second = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ update_tool_policy: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
-      userId: 'harness',
-      channel: 'web',
+    const second = await continueAfterApproval({
+      baseUrl,
+      token: harnessToken,
+      approval: firstPending[0],
+      decisionResult: firstDecision,
     });
-    assert.ok(second?.metadata?.pendingApprovals?.length > 0, `Expected pending fs_write approval after path update: ${JSON.stringify(second)}`);
-    assert.equal(second.metadata.pendingApprovals[0].toolName, 'fs_write');
+    const secondPending = getPendingApprovalSummaries(second);
+    assert.ok(secondPending.length > 0, `Expected pending fs_write approval after path update: ${JSON.stringify(second)}`);
+    assert.equal(second.metadata?.pendingAction?.blocker?.kind, 'approval', `Expected canonical pendingAction metadata on second blocked response: ${JSON.stringify(second)}`);
+    assert.equal(secondPending[0].toolName, 'fs_write');
     assert.match(second.content, /Waiting for approval to write .*web-empty\.txt\./i);
+    const secondCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(secondCurrent?.pendingAction?.blocker?.kind, 'approval', `Expected current pending action after second blocked response: ${JSON.stringify(secondCurrent)}`);
+    assert.equal(secondCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, secondPending[0].id);
 
     const secondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: second.metadata.pendingApprovals[0].id,
+      approvalId: secondPending[0].id,
       decision: 'approved',
       actor: 'web-user',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(secondDecision.success, true);
 
-    const third = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
-      userId: 'harness',
-      channel: 'web',
+    const third = await continueAfterApproval({
+      baseUrl,
+      token: harnessToken,
+      approval: secondPending[0],
+      decisionResult: secondDecision,
     });
     assert.ok(typeof third.content === 'string' && third.content.length > 0, `Expected final response text: ${JSON.stringify(third)}`);
-    assert.ok(!third.metadata?.pendingApprovals?.length, 'Did not expect more pending approvals after fs_write approval');
+    assert.equal(getPendingApprovalSummaries(third).length, 0, 'Did not expect more pending approvals after fs_write approval');
     assert.match(third.content, /created .*web-empty\.txt as an empty file/i);
+    const clearedCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(clearedCurrent?.pendingAction ?? null, null, `Did not expect a current pending action after completion: ${JSON.stringify(clearedCurrent)}`);
 
     const emptyFilePath = path.join(testDir, 'web-empty.txt');
     assert.equal(fs.existsSync(emptyFilePath), true, `Expected ${emptyFilePath} to exist`);
@@ -313,18 +488,20 @@ guardian:
 
     const followUp = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'What exact tool did you use?',
-      userId: 'harness',
-      channel: 'web',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.match(followUp.content, /1\. update_tool_policy/);
     assert.match(followUp.content, /"action": "add_path"/);
     assert.match(followUp.content, /2\. fs_write/);
     assert.match(followUp.content, /"content": ""/);
-    assert.ok(!followUp.metadata?.pendingApprovals?.length, 'Did not expect stale pending approvals on follow-up');
+    assert.equal(getPendingApprovalSummaries(followUp).length, 0, 'Did not expect stale pending approvals on follow-up');
 
     const toolCallsSeen = scenarioLog.map((entry) => entry.tools);
     assert.ok(toolCallsSeen.some((tools) => tools.includes('update_tool_policy')), 'Expected update_tool_policy in tool list');
 
+    completed = true;
     console.log('PASS web approval flow');
   } finally {
     if (appProcess && !appProcess.killed) {
@@ -335,7 +512,18 @@ guardian:
       }
     }
     await provider.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (!completed) {
+      if (exitInfo) {
+        console.error(`[web-approvals] GuardianAgent exited before completion: code=${exitInfo.code ?? 'null'} signal=${exitInfo.signal ?? 'null'}`);
+      }
+      console.error(`[web-approvals] Scenario log: ${JSON.stringify(scenarioLog, null, 2)}`);
+      if (preserveArtifacts) {
+        console.error(`[web-approvals] Preserved artifacts at ${tmpDir}`);
+      }
+    }
+    if (completed || !preserveArtifacts) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 }
 

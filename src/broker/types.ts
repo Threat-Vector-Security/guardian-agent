@@ -30,6 +30,7 @@ export interface CapabilityToken {
   sessionId: string;                    // Bound to user session
   agentId: string;                      // Bound to specific agent
   authorizedBy: string;                 // Human authority (userId) who started session
+  authorizedChannel: string;            // Channel that authorized the session (e.g. 'web', 'cli')
   grantedCapabilities: readonly string[]; // Subset of agent's registered capabilities
   allowedToolCategories?: string[];     // Optional narrower tool category filter
   issuedAt: number;                     // Unix ms

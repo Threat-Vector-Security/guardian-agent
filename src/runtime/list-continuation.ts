@@ -85,7 +85,7 @@ export function hasPagedListFollowUpRequest(
   content: string,
   _turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
 ): boolean {
-  return /\b(additional|more|remaining|rest|next)\b/i.test(content);
+  return /\b(additional|more|remaining|rest|next|other)\b/i.test(content);
 }
 
 function wantsRemainingItems(content: string): boolean {
@@ -95,7 +95,9 @@ function wantsRemainingItems(content: string): boolean {
 function readRequestedAdditionalCount(content: string): number | undefined {
   const match = content.match(/\b(?:additional|next|more)\s+(\d{1,3})\b/i)
     ?? content.match(/\b(\d{1,3})\s+(?:more|additional)\b/i)
-    ?? content.match(/\blist\s+the\s+additional\s+(\d{1,3})\b/i);
+    ?? content.match(/\blist\s+the\s+additional\s+(\d{1,3})\b/i)
+    ?? content.match(/\b(?:show|list)\s+the\s+other\s+(\d{1,3})\b/i)
+    ?? content.match(/\bother\s+(\d{1,3})\b/i);
   if (!match) return undefined;
   const value = Number.parseInt(match[1] ?? '', 10);
   if (!Number.isFinite(value) || value <= 0) return undefined;

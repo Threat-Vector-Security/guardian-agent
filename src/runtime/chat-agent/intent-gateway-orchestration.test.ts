@@ -188,6 +188,42 @@ describe('intent-gateway-orchestration', () => {
     ]);
   });
 
+  it('falls back to generic clarification copy when the classifier omits a real summary', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const gateway = makeGatewayRecord({
+      route: 'general_assistant',
+      resolution: 'needs_clarification',
+      summary: 'No classification summary provided.',
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Do the thing'),
+        activeSkills: [],
+      },
+      {
+        enabledManagedProviders: new Set(['gws', 'm365']),
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toBe('I need a bit more detail before I can continue with that request.');
+    expect(pendingActionInputs[0]).toMatchObject({
+      prompt: 'I need a bit more detail before I can continue with that request.',
+    });
+    expect(pendingActionInputs[0]?.summary).toBe('No classification summary provided.');
+  });
+
   it('rewrites correction turns against the last actionable request', () => {
     const gateway = makeGatewayRecord({
       turnRelation: 'correction',
@@ -322,6 +358,50 @@ describe('intent-gateway-orchestration', () => {
       pendingAction: { id: 'pending-1' },
       intentGateway: expect.any(Object),
     });
+  });
+
+  it('sanitizes placeholder switch prompts before echoing them back to the user', async () => {
+    const pendingAction = makePendingAction();
+    const replacement = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        prompt: 'No classification summary provided.',
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+    });
+
+    const response = await tryHandlePendingActionSwitchDecision({
+      message: makeMessage('yes'),
+      pendingAction,
+      gateway: makeGatewayRecord({
+        route: 'email_task',
+      }),
+      activeSkills: [],
+      surfaceUserId: 'user-1',
+      surfaceChannel: 'web',
+      surfaceId: 'web-guardian-chat',
+      readPendingActionSwitchCandidatePayload: () => ({
+        type: 'pending_action_switch_candidate',
+        replacement: {
+          status: replacement.status,
+          transferPolicy: replacement.transferPolicy,
+          blocker: replacement.blocker,
+          intent: replacement.intent,
+          expiresAt: replacement.expiresAt,
+        },
+      }),
+      replacePendingAction: () => replacement,
+      updatePendingAction: () => pendingAction,
+      buildImmediateResponseMetadata: () => undefined,
+    });
+
+    expect(response?.content).toBe(
+      'Switched the active blocked request.\n\nI need a bit more detail before I can continue with that request.',
+    );
   });
 
   it('normalizes pending action entities and only clears satisfied clarifications', () => {
