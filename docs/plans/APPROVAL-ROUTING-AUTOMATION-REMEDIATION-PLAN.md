@@ -88,9 +88,11 @@ Representative observed requests:
 | `vitest: not found` leading to escalating command guesses (`npm install`, `npx vitest`, etc.) | **Capability deficiency** | This is model-side execution planning drift. The system lacks a deterministic repo-command strategy for prerequisite handling and approval bundling. |
 | `Invalid capability token` shown near these failures | **Separate platform reliability item; not yet proven root cause of the pasted UX failures** | The audit stream shows `Invalid capability token` appearing as security-triage noise, but not as direct evidence that the pricing/test-suite user requests failed on token validation. |
 | Scheduled assistant task asks for approval again at runtime | **Architecture gap** | The automation spec says save-time approval should cover bounded later runs while scope/TTL remain valid. `assistant_task` runs are not honoring that model yet. |
-| Scheduled assistant task stores authoring prompt instead of runtime goal | **Real bug** | The saved task prompt is `Set up a scheduled automation...` instead of `check email and send/write a summary`. This is an authoring-compiler defect. |
-| Automation name drift like `Daily You Are Executing Fulfill` | **Real bug** | This is title/name extraction drift in the automation compiler, not an approval bug. |
+| Scheduled assistant task stores authoring prompt instead of runtime goal | **Real bug, fixed** | The saved task prompt was the full authoring string ("Set up a scheduled automation...") because `buildValidatedAutomationIR` used the raw input. We added an `extractRuntimeGoal` filter to strip authoring preambles so only the actual goal is saved. |
+| Automation name drift like `Daily You Are Executing Fulfill` | **Real bug, fixed** | `inferAutomationName` was incorrectly processing the injected "Operator request:" system prompt text when evaluating edits, picking up words like "You are executing". We updated `normalizeAutomationAuthoringText` to strip the injected instructions out and only analyze the goal text. |
 | Scheduled run recorded as succeeded even when it only emitted a blocked approval flow | **Real bug + architecture mismatch** | The run history/output path currently treats some assistant-task deliveries as success even when the assistant actually produced another blocked authoring turn. |
+| Telegram notifications fail to deliver | **Real bug, fixed** | Routine and automation notifications try to parse the primary user ID ("owner") as a number, failing and falling back to an ephemeral in-memory set that clears on restart. We updated `resolveTelegramDeliveryChatIds` to correctly map the configured primary user ID directly to the allowed chat IDs without dropping it. |
+| Automation compiler ignores custom skills | **Architecture gap** | The compiler uses a hardcoded list of built-in tools (`EXPLICIT_WORKFLOW_TOOL_NAMES`) instead of querying the dynamic tool/skill registry, preventing custom skills from being correctly compiled into deterministic workflows. |
 | Gmail web approval harness failing after approval because Google auth was required | **Harness deficiency** | That particular harness failure hit real provider auth after approval. It does not prove the approval-button path is broken. |
 
 ## Root-Cause Workstreams
@@ -194,21 +196,53 @@ Exit criteria:
 - Live-provider auth is never mistaken for approval-rendering regressions.
 - Release gates include at least one generic approval flow per capability class, not just Gmail.
 
+### 6. Telegram Notifications & Delivery
+
+**Owner layer:** telegram channel, notification service, delivery routing  
+**Primary files:** `src/runtime/telegram-delivery.ts`, `src/runtime/second-brain/routine-notifier.ts`
+
+Fixes:
+
+- Correctly map the abstract `primaryUserId` (e.g. "owner") to the configured Telegram chat IDs, rather than attempting to `Number()` parse the string and silently dropping the delivery target.
+- Prevent the system from silently relying solely on the ephemeral `knownChatIds` cache (which is wiped on restart) when a routine or automation tries to send an alert to the owner.
+
+Exit criteria:
+
+- String-based user IDs like "owner" map cleanly to the allowed chat IDs array.
+- A background routine triggers and successfully resolves the delivery target even immediately after a service restart.
+
+### 7. Automation Compiler Custom Capability Gap
+
+**Owner layer:** automation compiler, tool registry  
+**Primary files:** `src/runtime/automation-authoring.ts`
+
+Fixes:
+
+- Remove the hardcoded `EXPLICIT_WORKFLOW_TOOL_NAMES` array.
+- Dynamically query the registered tools and custom skills to determine if a requested workflow step maps to a deterministic tool.
+- Compile custom capability requests into strict workflow steps rather than falling back to open-ended assistant tasks.
+
+Exit criteria:
+
+- Compiling a request for a custom skill (e.g. "lead research") produces a deterministic `workflow` rather than a `manual_agent` or `scheduled_agent`.
+
 ## Prioritized Release Sequence
 
 ### Release blockers
 
 1. Shared pending-action continuity for generic web approval flows (Fixed: restored `completePendingAction` clearing)
-2. Scheduled assistant automation prompt/name corruption
-3. Scheduled assistant runtime approval semantics
-4. Coding-task execution/routing discipline for repo command requests
-5. Filesystem tool sandbox policy sync for external paths (fixes ad-hoc script execution loop) (Fixed)
+2. Scheduled assistant automation prompt/name corruption (Fixed: stripped authoring commands from saved goal and ignored system prompts during edits)
+3. Telegram notification delivery failure (Fixed: mapped owner ID to allowed chat IDs to survive restarts)
+4. Scheduled assistant runtime approval semantics
+5. Coding-task execution/routing discipline for repo command requests
+6. Filesystem tool sandbox policy sync for external paths (fixes ad-hoc script execution loop) (Fixed)
 
 ### High priority but can land in parallel
 
-1. Search-task approval batching and fetch-planning cleanup
-2. Capability-token reliability triage
-3. Harness hardening and clearer failure taxonomy
+1. Automation Compiler Skill Integration (dynamic tool resolution instead of hardcoded lists)
+2. Search-task approval batching and fetch-planning cleanup
+3. Capability-token reliability triage
+4. Harness hardening and clearer failure taxonomy
 
 ## Concrete Test Matrix
 

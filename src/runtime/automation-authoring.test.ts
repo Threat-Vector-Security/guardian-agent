@@ -117,7 +117,7 @@ describe('compileAutomationAuthoringRequest', () => {
     expect(compilation?.description).not.toContain('[Context:');
     expect(compilation?.taskCreate?.description).not.toContain('[Context:');
     expect(compilation?.taskCreate?.prompt).not.toContain('[Context:');
-    expect(compilation?.taskCreate?.prompt).toContain('Operator request:\nBuild a weekday lead research workflow');
+    expect(compilation?.taskCreate?.prompt).toContain('Operator request:\nreads ./companies.csv, researches each company website');
   });
 
   it('compiles explicit deterministic tool requests into workflows', () => {

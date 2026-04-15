@@ -22,12 +22,14 @@ async function sendToConfiguredTelegramChats(
   args: {
     configuredChatIds: readonly number[];
     preferredUserIds?: readonly string[];
+    primaryUserId?: string;
   },
   text: string,
 ): Promise<void> {
   const chatIds = resolveTelegramDeliveryChatIds({
     configuredChatIds: args.configuredChatIds,
     preferredUserIds: args.preferredUserIds,
+    primaryUserId: args.primaryUserId,
     telegramChannel,
   });
   if (!telegramChannel || chatIds.length === 0) {
@@ -43,12 +45,14 @@ async function sendTelegramNotificationIfConfigured(
   args: {
     configuredChatIds: readonly number[];
     preferredUserIds?: readonly string[];
+    primaryUserId?: string;
   },
   text: string,
 ): Promise<void> {
   const chatIds = resolveTelegramDeliveryChatIds({
     configuredChatIds: args.configuredChatIds,
     preferredUserIds: args.preferredUserIds,
+    primaryUserId: args.primaryUserId,
     telegramChannel,
   });
   if (!telegramChannel || chatIds.length === 0) {
@@ -127,7 +131,8 @@ export function wireScheduledAgentExecutor(args: {
               args.getTelegramChannel(),
               {
                 configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
-                preferredUserIds: [userId],
+                preferredUserIds: input.userId ? [input.userId] : undefined,
+                primaryUserId: args.configRef.current.assistant.identity.primaryUserId,
               },
               deliveryText,
             );
@@ -190,6 +195,7 @@ export function createRuntimeNotificationService(args: {
           {
             configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
             preferredUserIds: [args.configRef.current.assistant.identity.primaryUserId],
+            primaryUserId: args.configRef.current.assistant.identity.primaryUserId,
           },
           text,
         );
