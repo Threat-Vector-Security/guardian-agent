@@ -60,6 +60,7 @@ function resolveDeliveryChannels(
   const hasTelegramTarget = resolveTelegramDeliveryChatIds({
     configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
     preferredUserIds: args.preferredUserIds,
+    primaryUserId: args.configRef.current.assistant.identity.primaryUserId,
     telegramChannel: args.getTelegramChannel(),
   }).length > 0;
   const hasWeb = Boolean(args.getWebChannel());
@@ -107,6 +108,7 @@ export function createSecondBrainRoutineNotifier(args: {
     const telegramChatIds = resolveTelegramDeliveryChatIds({
       configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
       preferredUserIds,
+      primaryUserId: args.configRef.current.assistant.identity.primaryUserId,
       telegramChannel: args.getTelegramChannel(),
     });
     const channels = resolveDeliveryChannels(outcome.channels, {

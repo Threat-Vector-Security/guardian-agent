@@ -31,17 +31,26 @@ function normalizePreferredTelegramUserIds(userIds: readonly string[] | undefine
 export function resolveTelegramDeliveryChatIds(args: {
   configuredChatIds: readonly number[];
   preferredUserIds?: readonly string[];
+  primaryUserId?: string;
   telegramChannel: Pick<TelegramChannel, 'getKnownChatIds'> | null;
 }): number[] {
   const configuredChatIds = normalizeChatIds(args.configuredChatIds);
   const preferredChatIds = normalizePreferredTelegramUserIds(args.preferredUserIds);
 
+  const includesPrimaryUser = args.primaryUserId && args.preferredUserIds?.includes(args.primaryUserId);
+
   if (configuredChatIds.length > 0) {
     if (preferredChatIds.length > 0) {
       const matchingConfiguredChatIds = configuredChatIds.filter((chatId) => preferredChatIds.includes(chatId));
       if (matchingConfiguredChatIds.length > 0) {
+        if (includesPrimaryUser) {
+          return [...new Set([...matchingConfiguredChatIds, ...configuredChatIds])];
+        }
         return matchingConfiguredChatIds;
       }
+    }
+    if (includesPrimaryUser || preferredChatIds.length === 0) {
+      return configuredChatIds;
     }
     return configuredChatIds;
   }

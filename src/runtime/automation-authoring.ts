@@ -397,10 +397,18 @@ function buildValidatedAutomationIR(
     schedule: parsed.desiredShape === 'scheduled_agent' ? parsed.schedule ?? undefined : undefined,
     agent: {
       target: 'default',
-      operatorRequest: parsed.text,
+      operatorRequest: extractRuntimeGoal(parsed.text),
     } satisfies AutomationIRAgentBody,
   });
   return validateAutomationIR(repaired).ok ? repaired : null;
+}
+
+export function extractRuntimeGoal(text: string): string {
+  const stripped = stripExplicitAutomationNameSegment(text);
+  const goal = stripped
+    .replace(/^\s*(?:create|build|set up|setup|make|configure|schedule|automate|turn into|create this as)\b[\s\S]{0,120}?\b(?:automation|workflow|playbook|pipeline|scheduled task|task|assistant task|agent task)(?:\s+(?:that|which|to))?\s*/i, '')
+    .trim();
+  return goal || text;
 }
 
 function buildAutomationAuthoringDraft(
@@ -1063,10 +1071,13 @@ function extractExplicitAutomationName(text: string): string | null {
 }
 
 function normalizeAutomationAuthoringText(text: string): string {
+  let normalized = text.trim().replace(/^(?:\s*\[Context:[^\]]+\]\s*)+/i, '');
+  const operatorRequestMatch = normalized.match(/Operator request:\s*([\s\S]+)$/i);
+  if (operatorRequestMatch) {
+    normalized = operatorRequestMatch[1].trim();
+  }
   return normalizePathLikeSegments(
-    text
-    .trim()
-    .replace(/^(?:\s*\[Context:[^\]]+\]\s*)+/i, '')
+    normalized
     .replace(/(\.{1,2}[\\/])\s+/g, '$1')
     .replace(/([A-Za-z]:[\\/])\s+/g, '$1')
     .trim(),
