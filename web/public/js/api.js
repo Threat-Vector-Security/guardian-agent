@@ -513,6 +513,10 @@ export const api = {
     const qs = new URLSearchParams({ userId, channel, surfaceId });
     return request(`/api/chat/pending-action?${qs.toString()}`);
   },
+  resetPendingAction: (userId = 'web-user', channel = 'web', surfaceId = 'web-guardian-chat') => request('/api/chat/pending-action/reset', {
+    method: 'POST',
+    body: JSON.stringify({ userId, channel, surfaceId }),
+  }),
   routingTrace: (params = {}) => request(`/api/routing/trace${buildQueryString(params)}`),
   routingMode: () => request('/api/routing/mode'),
   setRoutingMode: (mode) => request('/api/routing/mode', {

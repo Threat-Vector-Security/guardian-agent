@@ -85,4 +85,32 @@ describe('list-continuation', () => {
       total: 5,
     });
   });
+
+  it('treats "show the other N" as a paged-list follow-up', () => {
+    const window = resolvePagedListWindow({
+      continuityThread: {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: buildPagedListContinuationState('automation_catalog_list', {
+          offset: 0,
+          limit: 20,
+          total: 47,
+        }),
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      continuationKind: 'automation_catalog_list',
+      content: 'Show the other 27 automations.',
+      total: 47,
+      turnRelation: 'new_request',
+    });
+
+    expect(window).toEqual({
+      offset: 20,
+      limit: 27,
+      total: 47,
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
+import { isExplicitAutomationOutputRequest } from './intent/entity-resolvers/automation.js';
 import type { AutomationSaveInput } from './automation-save.js';
 import {
   parseAutomationSchedule,
@@ -97,7 +98,7 @@ export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
   options?: { intentDecision?: IntentGatewayDecision | null },
 ): Promise<AutomationControlPreRouteResult | null> {
-  if (looksLikeAutomationOutputAnalysisRequest(params.message.content)) {
+  if (isExplicitAutomationOutputRequest(params.message.content)) {
     return null;
   }
   const intent = resolveAutomationControlIntent(
@@ -403,19 +404,6 @@ function withAutomationCatalogContinuation(
       continuationState,
     },
   };
-}
-
-function looksLikeAutomationOutputAnalysisRequest(content: string): boolean {
-  const trimmed = content.trim();
-  if (!trimmed) return false;
-  if (!/\b(automation|workflow|assistant automation|scheduled task|task|run)\b/i.test(trimmed)) {
-    return false;
-  }
-  const analysisIntent = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i.test(trimmed);
-  if (!analysisIntent) return false;
-  const outputContext = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i.test(trimmed);
-  if (!outputContext) return false;
-  return true;
 }
 
 function parseAutomationListResult(result: Record<string, unknown>): AutomationCatalogLookupResult {

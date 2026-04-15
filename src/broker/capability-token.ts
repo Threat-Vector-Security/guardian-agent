@@ -6,6 +6,7 @@ export interface TokenMintOptions {
   sessionId: string;
   agentId: string;
   authorizedBy: string;
+  authorizedChannel: string;
   grantedCapabilities: readonly string[];
   allowedToolCategories?: string[];
   ttlMs?: number;
@@ -31,6 +32,7 @@ export class CapabilityTokenManager {
       sessionId: options.sessionId,
       agentId: options.agentId,
       authorizedBy: options.authorizedBy,
+      authorizedChannel: options.authorizedChannel,
       grantedCapabilities: [...options.grantedCapabilities],
       allowedToolCategories: options.allowedToolCategories ? [...options.allowedToolCategories] : undefined,
       issuedAt: now,

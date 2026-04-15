@@ -215,6 +215,7 @@ import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
 import { normalizeCodeSessionAgentId, resolveConfiguredAgentId } from './runtime/agent-target-resolution.js';
 import {
+  clearApprovalIdFromPendingAction,
   PendingActionStore,
   reconcilePendingApprovalAction,
   summarizePendingActionForGateway,
@@ -1618,6 +1619,13 @@ function buildDashboardCallbacks(
       input.reason,
     );
     if (pendingActionForApproval?.blocker.kind === 'approval') {
+      const pendingActionAfterDecision = result.success
+        ? (
+            clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId)
+            ?? pendingActionStore.resolveActiveForSurface(pendingActionForApproval.scope)
+            ?? pendingActionForApproval
+          )
+        : pendingActionForApproval;
       const liveApprovalIds = toolExecutor.listPendingApprovalIdsForUser(
         pendingActionForApproval.scope.userId,
         pendingActionForApproval.scope.channel,
@@ -1625,10 +1633,23 @@ function buildDashboardCallbacks(
           includeUnscoped: pendingActionForApproval.scope.channel === 'web',
         },
       );
-      reconcilePendingApprovalAction(pendingActionStore, pendingActionForApproval, {
+      reconcilePendingApprovalAction(pendingActionStore, pendingActionAfterDecision, {
         liveApprovalIds,
         liveApprovalSummaries: toolExecutor.getApprovalSummaries(liveApprovalIds),
       });
+      const scopedUserIds = [...new Set([
+        pendingActionForApproval.scope.userId,
+        input.userId?.trim() || '',
+      ].filter(Boolean))];
+      for (const nextUserId of scopedUserIds) {
+        for (const agent of chatAgents.values()) {
+          agent.syncPendingApprovalsFromExecutorForScope({
+            userId: nextUserId,
+            channel: pendingActionForApproval.scope.channel,
+            surfaceId: input.surfaceId ?? pendingActionForApproval.scope.surfaceId,
+          });
+        }
+      }
     }
     if (!result.success) {
       log.warn({
@@ -1942,6 +1963,8 @@ function buildDashboardCallbacks(
       identity,
       pendingActionStore,
       codeSessionStore,
+      chatAgents: chatAgents.values(),
+      workerManager: runtime.workerManager,
       resolveSharedStateAgentId,
       getCodeSessionSurfaceId,
       readMessageSurfaceId,

@@ -923,6 +923,23 @@ describe('BrokeredWorkerSession automation control', () => {
 
     const initial = await session.handleMessage({
       ...baseParams,
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud',
+        providerType: 'ollama_cloud',
+        providerModel: 'gpt-oss:120b',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 80_000,
+        toolContextMode: 'standard',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud'],
+        reason: 'test profile',
+      },
       message: {
         id: 'msg-plan-start',
         userId: 'owner',
@@ -988,9 +1005,24 @@ describe('BrokeredWorkerSession automation control', () => {
     });
 
     expect(getApprovalResult).toHaveBeenCalledWith('approval-plan-search-1');
-    expect(resumed.content).toContain('I have generated and executed a DAG plan');
-    expect(resumed.content).toContain('"status": "completed"');
-    expect(resumed.content).toContain('"search-repo"');
+    expect(resumed.content).toContain('I generated and executed a DAG plan');
+    expect(resumed.content).toContain('Plan summary: 1 node, 1 completed.');
+    expect(resumed.content).toContain('Completed nodes: search-repo.');
+    expect(resumed.content).not.toContain('```json');
+    expect(resumed.metadata).toMatchObject({
+      plannerExecution: {
+        status: 'completed',
+        totalNodes: 1,
+        completedNodeIds: ['search-repo'],
+      },
+      responseSource: {
+        locality: 'external',
+        providerName: 'ollama_cloud',
+        providerProfileName: 'ollama-cloud',
+        providerTier: 'managed_cloud',
+        model: 'gpt-oss:120b',
+      },
+    });
   });
 
   it('executes explicit complex-planning smoke requests through planner file writes including summary.md', async () => {
@@ -1143,8 +1175,17 @@ describe('BrokeredWorkerSession automation control', () => {
       .map((args) => args.path)
       .filter((path): path is string => typeof path === 'string');
 
-    expect(result.content).toContain('I have generated and executed a DAG plan');
-    expect(result.content).toContain('"summary"');
+    expect(result.content).toContain('I generated and executed a DAG plan');
+    expect(result.content).toContain('Plan summary: 5 nodes, 5 completed.');
+    expect(result.content).toContain('Completed nodes: mkdir, risks, controls, gaps, summary.');
+    expect(result.content).not.toContain('```json');
+    expect(result.metadata).toMatchObject({
+      plannerExecution: {
+        status: 'completed',
+        totalNodes: 5,
+        completedNodeIds: ['mkdir', 'risks', 'controls', 'gaps', 'summary'],
+      },
+    });
     expect(callRequests).toHaveLength(5);
     expect(callRequests[0]).toMatchObject({
       toolName: 'fs_mkdir',
@@ -1235,7 +1276,260 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(plannerPrompt).toContain('"tool_call" | "execute_code"');
     expect(plannerPrompt).not.toContain('"skill_delegation"');
     expect(plannerPrompt).not.toContain('"delegate_task"');
+    expect(plannerPrompt).toContain('Allowed brokered tool names in this runtime: fs_mkdir.');
+    expect(plannerPrompt).toContain('Do not invent tool aliases such as "fs_readFile", "read_file", or "fs_writeFile".');
     expect(plannerPrompt).toContain('Do not emit unsupported action types');
+  });
+
+  it('normalizes common planner tool aliases before broker execution', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              read: {
+                id: 'read',
+                description: 'Read the source file.',
+                dependencies: [],
+                actionType: 'tool_call',
+                target: 'fs_readFile',
+                inputPrompt: JSON.stringify({ path: 'src/chat-agent.ts' }),
+              },
+              write: {
+                id: 'write',
+                description: 'Write the summary.',
+                dependencies: ['read'],
+                actionType: 'tool_call',
+                target: 'write_file',
+                inputPrompt: JSON.stringify({ path: 'summary.md', content: 'done' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The node completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 120)}`);
+    });
+
+    const callRequests: Array<Record<string, unknown>> = [];
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_read',
+          description: 'Read a file.',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          risk: 'read_only',
+        },
+        {
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+          risk: 'mutating',
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async (request: Record<string, unknown>) => {
+        callRequests.push(request);
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: `job-${String(request.toolName)}`,
+          message: 'Completed.',
+          output: {},
+        };
+      }),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-alias-normalization',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use your complex-planning path for this request. Read a file and write a summary.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    expect(callRequests).toHaveLength(2);
+    expect(callRequests[0]).toMatchObject({
+      toolName: 'fs_read',
+      args: { path: 'src/chat-agent.ts' },
+    });
+    expect(callRequests[1]).toMatchObject({
+      toolName: 'fs_write',
+      args: { path: 'summary.md', content: 'done' },
+    });
+  });
+
+  it('extracts bounded execute_code commands from JSON command payloads', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              run: {
+                id: 'run',
+                description: 'Run a bounded command.',
+                dependencies: [],
+                actionType: 'execute_code',
+                target: 'node',
+                inputPrompt: JSON.stringify({ command: 'pwd' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The node completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 120)}`);
+    });
+
+    const callTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-code-1',
+      message: 'Ran command.',
+      output: { stdout: '/repo' },
+    }));
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-command-normalization',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use your complex-planning path for this request. Run pwd.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'code_remote_exec',
+      args: { command: 'pwd' },
+    }));
+  });
+
+  it('normalizes simple mkdir execute_code commands into fs_mkdir tool calls', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              mkdir: {
+                id: 'mkdir',
+                description: 'Create the tmp directory.',
+                dependencies: [],
+                actionType: 'execute_code',
+                target: 'node',
+                inputPrompt: JSON.stringify({ command: 'mkdir -p tmp' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The node completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 120)}`);
+    });
+
+    const callTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-mkdir-1',
+      message: 'Created directory.',
+      output: { path: 'tmp' },
+    }));
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_mkdir',
+        description: 'Create a directory.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        risk: 'mutating',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-mkdir-normalization',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Use your complex-planning path for this request. Create a tmp directory.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'fs_mkdir',
+      args: { path: 'tmp' },
+    }));
+    expect(callTool).not.toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'code_remote_exec',
+    }));
   });
 
   it('propagates taint from earlier planner nodes into later node tool requests', async () => {
@@ -1428,7 +1722,16 @@ describe('BrokeredWorkerSession automation control', () => {
     });
 
     expect(callTool).not.toHaveBeenCalled();
-    expect(result.content).toContain('cannot safely execute');
+    expect(result.content).toContain('could not execute it safely');
     expect(result.content).toContain('delegate_task');
+    expect(result.content).toContain('Plan summary: 1 node, 1 pending.');
+    expect(result.content).not.toContain('```json');
+    expect(result.metadata).toMatchObject({
+      plannerExecution: {
+        status: 'unsupported_actions',
+        totalNodes: 1,
+        unsupportedActions: ['delegate_task'],
+      },
+    });
   });
 });

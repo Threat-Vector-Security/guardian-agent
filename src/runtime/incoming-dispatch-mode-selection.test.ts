@@ -117,6 +117,21 @@ function createBaseArgs(config: GuardianAgentConfig) {
 }
 
 describe('createIncomingDispatchPreparer classifier provider selection', () => {
+  it('prefers the external classifier provider before the local provider in auto mode', async () => {
+    const config = createConfig();
+    const { args, runtimeGetProvider } = createBaseArgs(config);
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(args);
+
+    await prepareIncomingDispatch(undefined, {
+      content: 'Give me a concise plan for organizing my week',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(runtimeGetProvider).toHaveBeenCalledWith('ollama-cloud');
+    expect(runtimeGetProvider).not.toHaveBeenCalledWith('ollama');
+  });
+
   it('does not touch the local provider when managed-cloud-only mode is active', async () => {
     const config = createConfig();
     config.routing = {

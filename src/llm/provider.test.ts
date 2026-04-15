@@ -134,6 +134,42 @@ describe('OllamaProvider', () => {
     vi.unstubAllGlobals();
   });
 
+  it('passes JSON response format hints through to Ollama-compatible providers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        model: 'llama3.2',
+        created_at: new Date().toISOString(),
+        message: { role: 'assistant', content: '{"ok":true}' },
+        done: true,
+        done_reason: 'stop',
+        total_duration: 1,
+        load_duration: 1,
+        prompt_eval_count: 10,
+        prompt_eval_duration: 1,
+        eval_count: 5,
+        eval_duration: 1,
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const provider = createProvider(config);
+
+    await provider.chat([{ role: 'user', content: 'Return JSON.' }], {
+      responseFormat: { type: 'json_object' },
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+    expect(request.format).toBe('json');
+
+    vi.unstubAllGlobals();
+  });
+
   it('should surface a helpful connectivity error when Ollama is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
 

@@ -146,11 +146,10 @@ export function createIncomingDispatchPreparer(args: {
           ].filter((value): value is string => Boolean(value)));
     }
     return [
+      args.findProviderByLocality(config, 'external'),
       args.findProviderByLocality(config, 'local')
         ?? config.defaultProvider
-        ?? args.findProviderByLocality(config, 'external')
         ?? null,
-      args.findProviderByLocality(config, 'external'),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
   };
 

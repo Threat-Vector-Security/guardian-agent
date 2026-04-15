@@ -369,8 +369,8 @@ function renderSecondBrainTab(panel) {
     kicker: 'Second Brain',
     compact: true,
     whatItIs: 'This tab configures Second Brain as an editable product surface rather than a one-shot setup flow.',
-    whatSeeing: 'You are seeing guided-setup state, personal workday defaults, routine delivery preferences, and knowledge-plane defaults for future retrieval-backed work.',
-    whatCanDo: 'Set or change your Second Brain preferences at any time without creating a separate memory system or a stale wizard.',
+    whatSeeing: 'You are seeing the live Second Brain preferences that currently affect the shipped product: guided-setup visibility, assistant reply style, and default delivery for new routines.',
+    whatCanDo: 'Set or change your Second Brain preferences at any time without creating a separate memory system or carrying placeholder settings that do not do anything yet.',
     howLinks: 'These settings shape the personal-assistant experience. Memory, search infrastructure, and provider admin still stay on their own owner surfaces.',
   }));
 
@@ -3764,19 +3764,8 @@ function getSecondBrainSettingsView(config = sharedConfig) {
       completed: secondBrain.onboarding?.completed === true,
       dismissed: secondBrain.onboarding?.dismissed === true,
     },
-    profile: {
-      timezone: secondBrain.profile?.timezone || '',
-      workdayStart: secondBrain.profile?.workdayStart || '08:30',
-      workdayEnd: secondBrain.profile?.workdayEnd || '17:30',
-      proactivityLevel: secondBrain.profile?.proactivityLevel || 'balanced',
-    },
     delivery: {
       defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
-    },
-    knowledge: {
-      prioritizeConnectedSources: secondBrain.knowledge?.prioritizeConnectedSources !== false,
-      defaultRetrievalMode: secondBrain.knowledge?.defaultRetrievalMode || 'hybrid',
-      rerankerEnabled: secondBrain.knowledge?.rerankerEnabled !== false,
     },
     responseStyle: {
       enabled: responseStyle.enabled !== false,
@@ -3792,7 +3781,6 @@ function resolveSecondBrainOnboardingMode(secondBrainView) {
 }
 
 function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const telegramEnabled = config?.channels?.telegram?.enabled === true;
   const markCompleted = options.markCompleted !== false;
   return {
@@ -3807,23 +3795,25 @@ function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
           completed: markCompleted,
           dismissed: false,
         },
-        profile: {
-          timezone,
-          workdayStart: '08:30',
-          workdayEnd: '17:30',
-          proactivityLevel: 'balanced',
-        },
         delivery: {
           defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
-        },
-        knowledge: {
-          prioritizeConnectedSources: true,
-          defaultRetrievalMode: 'hybrid',
-          rerankerEnabled: true,
         },
       },
     },
   };
+}
+
+const SECOND_BRAIN_CONFIG_TOOLTIPS = {
+  '#cfg-response-style-enabled': 'Turns stable response-style steering on or off for Guardian replies. This changes presentation only and does not change provider routing, model choice, or tool access.',
+  '#cfg-response-style-level': 'Chooses how compact Guardian should sound when response-style steering is enabled. Strong keeps replies tighter; light keeps more supporting detail.',
+  '#cfg-second-brain-onboarding': 'Controls whether the guided setup card appears on Second Brain > Today. Use completed when you are done with setup, or hide it temporarily if you do not want to see it right now.',
+  '#cfg-second-brain-delivery-web': 'Includes the web UI as a default delivery destination for newly created Second Brain routines.',
+  '#cfg-second-brain-delivery-telegram': 'Includes Telegram as a default delivery destination for newly created Second Brain routines. This only has effect when Telegram is configured and enabled.',
+  '#cfg-second-brain-delivery-cli': 'Includes the CLI as a default delivery destination for newly created Second Brain routines.',
+};
+
+function renderConfigLabelWithTooltip(label, inputId) {
+  return `<label for="${escAttr(inputId)}">${esc(label)} <span class="code-tooltip-icon" title="" aria-hidden="true">&#9432;</span></label>`;
 }
 
 function createSecondBrainPanel(config, panel) {
@@ -3839,10 +3829,16 @@ function createSecondBrainPanel(config, panel) {
     </div>
     <div class="cfg-center-body">
       <div style="margin-bottom:0.65rem;font-size:0.72rem;color:var(--text-muted);">
-        These settings drive the <strong>Second Brain</strong> home experience and future knowledge-plane defaults.
-        They also own the assistant reply-style preference so it stays stable even when Guardian routes between different AI providers.
-        They do <strong>not</strong> create a second memory authority beside Guardian memory, and they do <strong>not</strong> replace the normal Routines editor for existing routines.
+        These settings drive the current <strong>Second Brain</strong> home experience and new routine defaults.
+        This panel only shows settings that have a live effect in the shipped product today, so placeholder or duplicated preferences are intentionally omitted.
+        The assistant reply-style preference lives here as well so it stays stable even when Guardian routes between different AI providers.
+        These preferences do <strong>not</strong> create a second memory authority beside Guardian memory, and they do <strong>not</strong> replace the normal Routines editor for existing routines.
       </div>
+      ${!secondBrain.enabled ? `
+        <div style="margin-bottom:0.65rem;font-size:0.72rem;color:var(--warning);">
+          A legacy config has the old Second Brain preferences toggle turned off. Saving here or using recommended defaults will restore the live preferences panel.
+        </div>
+      ` : ''}
       <div class="cfg-divider"></div>
       <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
         <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Assistant Reply Style</h3>
@@ -3850,14 +3846,14 @@ function createSecondBrainPanel(config, panel) {
       </div>
       <div class="cfg-form-grid">
         <div class="cfg-field">
-          <label>Response Style</label>
+          ${renderConfigLabelWithTooltip('Response Style', 'cfg-response-style-enabled')}
           <select id="cfg-response-style-enabled">
             <option value="true" ${secondBrain.responseStyle.enabled ? 'selected' : ''}>Enabled</option>
             <option value="false" ${!secondBrain.responseStyle.enabled ? 'selected' : ''}>Disabled</option>
           </select>
         </div>
         <div class="cfg-field">
-          <label>Style Level</label>
+          ${renderConfigLabelWithTooltip('Style Level', 'cfg-response-style-level')}
           <select id="cfg-response-style-level">
             <option value="light" ${secondBrain.responseStyle.level === 'light' ? 'selected' : ''}>Light</option>
             <option value="balanced" ${secondBrain.responseStyle.level === 'balanced' ? 'selected' : ''}>Balanced</option>
@@ -3870,40 +3866,17 @@ function createSecondBrainPanel(config, panel) {
       </div>
 
       <div class="cfg-divider"></div>
+      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
+        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Second Brain Home</h3>
+        <span class="cfg-header-note">Controls the guided setup card on Today</span>
+      </div>
       <div class="cfg-form-grid">
         <div class="cfg-field">
-          <label>Second Brain Preferences</label>
-          <select id="cfg-second-brain-enabled">
-            <option value="true" ${secondBrain.enabled ? 'selected' : ''}>Enabled</option>
-            <option value="false" ${!secondBrain.enabled ? 'selected' : ''}>Disabled</option>
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label>Guided Home Card</label>
+          ${renderConfigLabelWithTooltip('Home Setup Card', 'cfg-second-brain-onboarding')}
           <select id="cfg-second-brain-onboarding">
             <option value="pending" ${onboardingMode === 'pending' ? 'selected' : ''}>Show until I finish setup</option>
             <option value="done" ${onboardingMode === 'done' ? 'selected' : ''}>Mark setup complete</option>
             <option value="hidden" ${onboardingMode === 'hidden' ? 'selected' : ''}>Hide for now</option>
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label>Timezone</label>
-          <input id="cfg-second-brain-timezone" type="text" value="${escAttr(secondBrain.profile.timezone)}" placeholder="Australia/Brisbane">
-        </div>
-        <div class="cfg-field">
-          <label>Workday Start</label>
-          <input id="cfg-second-brain-workday-start" type="time" value="${escAttr(secondBrain.profile.workdayStart)}">
-        </div>
-        <div class="cfg-field">
-          <label>Workday End</label>
-          <input id="cfg-second-brain-workday-end" type="time" value="${escAttr(secondBrain.profile.workdayEnd)}">
-        </div>
-        <div class="cfg-field">
-          <label>Proactivity</label>
-          <select id="cfg-second-brain-proactivity">
-            <option value="minimal" ${secondBrain.profile.proactivityLevel === 'minimal' ? 'selected' : ''}>Minimal</option>
-            <option value="balanced" ${secondBrain.profile.proactivityLevel === 'balanced' ? 'selected' : ''}>Balanced</option>
-            <option value="proactive" ${secondBrain.profile.proactivityLevel === 'proactive' ? 'selected' : ''}>Proactive</option>
           </select>
         </div>
       </div>
@@ -3914,44 +3887,25 @@ function createSecondBrainPanel(config, panel) {
         <span class="cfg-header-note">Used for new routine drafts and guided setup suggestions</span>
       </div>
       <div style="display:grid;gap:0.6rem;padding:0.25rem 0 0.25rem;">
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+        <label for="cfg-second-brain-delivery-web" style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
           <input type="checkbox" id="cfg-second-brain-delivery-web" ${secondBrain.delivery.defaultChannels.includes('web') ? 'checked' : ''}>
           <span>Web</span>
+          <span class="code-tooltip-icon" title="" aria-hidden="true">&#9432;</span>
         </label>
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+        <label for="cfg-second-brain-delivery-telegram" style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
           <input type="checkbox" id="cfg-second-brain-delivery-telegram" ${secondBrain.delivery.defaultChannels.includes('telegram') ? 'checked' : ''}>
           <span>Telegram</span>
+          <span class="code-tooltip-icon" title="" aria-hidden="true">&#9432;</span>
         </label>
-        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+        <label for="cfg-second-brain-delivery-cli" style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
           <input type="checkbox" id="cfg-second-brain-delivery-cli" ${secondBrain.delivery.defaultChannels.includes('cli') ? 'checked' : ''}>
           <span>CLI</span>
+          <span class="code-tooltip-icon" title="" aria-hidden="true">&#9432;</span>
         </label>
-      </div>
-
-      <div class="cfg-divider"></div>
-      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
-        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Knowledge Plane Defaults</h3>
-        <span class="cfg-header-note">Retrieval preferences, not a second memory store</span>
-      </div>
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Default Retrieval Mode</label>
-          <select id="cfg-second-brain-retrieval-mode">
-            <option value="hybrid" ${secondBrain.knowledge.defaultRetrievalMode === 'hybrid' ? 'selected' : ''}>Hybrid</option>
-            <option value="library_first" ${secondBrain.knowledge.defaultRetrievalMode === 'library_first' ? 'selected' : ''}>Library first</option>
-            <option value="search_first" ${secondBrain.knowledge.defaultRetrievalMode === 'search_first' ? 'selected' : ''}>Search first</option>
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label><input id="cfg-second-brain-prioritize-connected" type="checkbox" ${secondBrain.knowledge.prioritizeConnectedSources ? 'checked' : ''}> Prioritize connected and synced sources</label>
-        </div>
-        <div class="cfg-field">
-          <label><input id="cfg-second-brain-reranker" type="checkbox" ${secondBrain.knowledge.rerankerEnabled ? 'checked' : ''}> Enable reranker-ready defaults</label>
-        </div>
       </div>
 
       <div style="margin-top:0.65rem;font-size:0.72rem;color:var(--text-muted);">
-        Existing routines stay editable from <strong>Second Brain &gt; Routines</strong>. Changing these defaults affects the guided setup, future routine drafts, and the summary shown on the Second Brain home surface.
+        Existing routines stay editable from <strong>Second Brain &gt; Routines</strong>. Changing these defaults affects the guided setup card, future routine drafts, and the summary shown on the Second Brain home surface.
       </div>
 
       <div class="cfg-actions">
@@ -4021,24 +3975,13 @@ function createSecondBrainPanel(config, panel) {
             level: section.querySelector('#cfg-response-style-level').value,
           },
           secondBrain: {
-            enabled: section.querySelector('#cfg-second-brain-enabled').value === 'true',
+            enabled: true,
             onboarding: {
               completed: onboardingSelection === 'done',
               dismissed: onboardingSelection === 'hidden',
             },
-            profile: {
-              timezone: section.querySelector('#cfg-second-brain-timezone').value.trim(),
-              workdayStart: section.querySelector('#cfg-second-brain-workday-start').value.trim(),
-              workdayEnd: section.querySelector('#cfg-second-brain-workday-end').value.trim(),
-              proactivityLevel: section.querySelector('#cfg-second-brain-proactivity').value,
-            },
             delivery: {
               defaultChannels,
-            },
-            knowledge: {
-              prioritizeConnectedSources: section.querySelector('#cfg-second-brain-prioritize-connected').checked,
-              defaultRetrievalMode: section.querySelector('#cfg-second-brain-retrieval-mode').value,
-              rerankerEnabled: section.querySelector('#cfg-second-brain-reranker').checked,
             },
           },
         },
@@ -4055,7 +3998,7 @@ function createSecondBrainPanel(config, panel) {
     }
   });
 
-  applyInputTooltips(section);
+  applyInputTooltips(section, SECOND_BRAIN_CONFIG_TOOLTIPS);
   return section;
 }
 

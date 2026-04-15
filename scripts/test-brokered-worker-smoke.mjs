@@ -60,7 +60,19 @@ async function main() {
       stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
       if (line) {
         try {
-          notifications.push(JSON.parse(line));
+          const parsed = JSON.parse(line);
+          notifications.push(parsed);
+          
+          if (parsed.method === 'llm.chat' && parsed.id) {
+            send({
+              jsonrpc: '2.0',
+              id: parsed.id,
+              result: {
+                content: 'Simulated LLM response from supervisor',
+                role: 'assistant'
+              }
+            });
+          }
         } catch {
           notifications.push({ parseError: line });
         }

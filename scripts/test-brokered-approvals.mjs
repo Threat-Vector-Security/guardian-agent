@@ -176,6 +176,11 @@ function getPendingApprovalSummaries(response) {
   return Array.isArray(pendingActionApprovals) ? pendingActionApprovals : [];
 }
 
+async function readCurrentPendingAction(baseUrl, token, userId = 'harness', channel = 'web', surfaceId = 'web-guardian-chat') {
+  const qs = new URLSearchParams({ userId, channel, surfaceId });
+  return requestJson(baseUrl, token, 'GET', `/api/chat/pending-action?${qs.toString()}`);
+}
+
 async function getFreePort() {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -299,7 +304,15 @@ guardian:
       firstPending.length > 0,
       `Expected pending approval from initial message: ${JSON.stringify(first)}`,
     );
+    assert.equal(
+      first.metadata?.pendingAction?.blocker?.kind,
+      'approval',
+      `Expected canonical pendingAction metadata on first blocked response: ${JSON.stringify(first)}`,
+    );
     assert.equal(firstPending[0].toolName, 'update_tool_policy');
+    const firstCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(firstCurrent?.pendingAction?.blocker?.kind, 'approval');
+    assert.equal(firstCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, firstPending[0].id);
 
     // Approve first tool
     const firstDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
@@ -320,7 +333,15 @@ guardian:
       secondPending.length > 0,
       `Expected pending fs_write approval: ${JSON.stringify(second)}`,
     );
+    assert.equal(
+      second.metadata?.pendingAction?.blocker?.kind,
+      'approval',
+      `Expected canonical pendingAction metadata on second blocked response: ${JSON.stringify(second)}`,
+    );
     assert.equal(secondPending[0].toolName, 'fs_write');
+    const secondCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(secondCurrent?.pendingAction?.blocker?.kind, 'approval');
+    assert.equal(secondCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, secondPending[0].id);
 
     // Approve second tool
     const secondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
@@ -342,6 +363,8 @@ guardian:
     );
     assert.equal(getPendingApprovalSummaries(third).length, 0, 'No more pending approvals expected');
     assert.match(third.content, /created .*brokered-test\.txt/i);
+    const clearedCurrent = await readCurrentPendingAction(baseUrl, harnessToken);
+    assert.equal(clearedCurrent?.pendingAction ?? null, null, `Expected pending action to clear after completion: ${JSON.stringify(clearedCurrent)}`);
 
     // Verify file was actually created
     const filePath = path.join(testDir, 'brokered-test.txt');

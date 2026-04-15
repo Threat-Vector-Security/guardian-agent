@@ -85,6 +85,7 @@ export interface WorkerProcess {
   workerSessionKey: string;
   agentId: string;
   authorizedBy: string;
+  authorizedChannel: string;
   grantedCapabilities: string[];
   process: ChildProcess;
   brokerServer: BrokerServer;
@@ -198,7 +199,13 @@ export class WorkerManager {
     });
 
     try {
-      const worker = await this.getOrSpawnWorker(input.sessionId, input.agentId, input.userId, input.grantedCapabilities);
+      const worker = await this.getOrSpawnWorker(
+        input.sessionId,
+        input.agentId,
+        input.userId,
+        input.message.channel,
+        input.grantedCapabilities,
+      );
       this.delegatedJobTracker.update(delegatedJob.id, {
         metadata: {
           delegation: buildDelegationJobMetadata(input, {
@@ -644,6 +651,34 @@ export class WorkerManager {
     return !!this.getWorkerSuspendedApprovalState(approvalId);
   }
 
+  resetPendingState(args: {
+    userId: string;
+    channel: string;
+    approvalIds?: string[];
+  }): void {
+    const approvalIds = new Set((args.approvalIds ?? []).map((id) => id.trim()).filter(Boolean));
+    for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
+      const matchesScope = continuation.request.userId === args.userId
+        && continuation.request.message.channel === args.channel;
+      const matchesApproval = continuation.pendingApprovalIds.some((id) => approvalIds.has(id));
+      if (matchesScope || matchesApproval) {
+        this.directAutomationContinuations.delete(sessionId);
+      }
+    }
+    for (const [sessionId, pending] of this.directPendingApprovals.entries()) {
+      if (pending.ids.some((id) => approvalIds.has(id))) {
+        this.directPendingApprovals.delete(sessionId);
+      }
+    }
+    for (const [workerSessionKey, state] of this.workerSuspendedApprovalsBySession.entries()) {
+      const matchesScope = state.userId === args.userId && state.channel === args.channel;
+      const matchesApproval = state.approvalIds.some((id) => approvalIds.has(id));
+      if (matchesScope || matchesApproval) {
+        this.clearWorkerSuspendedApprovals(workerSessionKey);
+      }
+    }
+  }
+
   async continueAfterApproval(
     approvalId: string,
     decision: 'approved' | 'denied',
@@ -701,6 +736,7 @@ export class WorkerManager {
     sessionId: string,
     agentId: string,
     userId: string,
+    channel: string,
     grantedCapabilities: string[],
   ): Promise<WorkerProcess> {
     const workerSessionKey = buildWorkerSessionKey(sessionId, agentId);
@@ -708,8 +744,9 @@ export class WorkerManager {
     if (existingId) {
       const existing = this.workers.get(existingId);
       if (existing && existing.status === 'ready') {
-        this.refreshWorkerCapabilityToken(existing, agentId, userId, grantedCapabilities);
+        this.refreshWorkerCapabilityToken(existing, agentId, userId, channel, grantedCapabilities);
         existing.authorizedBy = userId;
+        existing.authorizedChannel = channel;
         existing.grantedCapabilities = [...grantedCapabilities];
         existing.lastActivityMs = Date.now();
         return existing;
@@ -725,6 +762,7 @@ export class WorkerManager {
       sessionId,
       agentId,
       authorizedBy: userId,
+      authorizedChannel: channel,
       grantedCapabilities,
       maxToolCalls: this.config.capabilityTokenMaxToolCalls,
     });
@@ -816,6 +854,7 @@ export class WorkerManager {
       workerSessionKey,
       agentId,
       authorizedBy: userId,
+      authorizedChannel: channel,
       grantedCapabilities: [...grantedCapabilities],
       process: child,
       brokerServer,
@@ -872,6 +911,7 @@ export class WorkerManager {
     worker: WorkerProcess,
     agentId: string,
     userId: string,
+    channel: string,
     grantedCapabilities: string[],
   ): void {
     this.tokenManager.revokeForWorker(worker.id);
@@ -880,6 +920,7 @@ export class WorkerManager {
       sessionId: worker.sessionId,
       agentId,
       authorizedBy: userId,
+      authorizedChannel: channel,
       grantedCapabilities,
       maxToolCalls: this.config.capabilityTokenMaxToolCalls,
     });

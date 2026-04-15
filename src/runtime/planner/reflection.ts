@@ -40,7 +40,7 @@ Provide your answer as a JSON object with two fields:
         { role: 'system', content: 'You are a strict, semantic validation system.' },
         { role: 'user', content: prompt }
       ], {
-        response_format: { type: 'json_object' }
+        responseFormat: { type: 'json_object' }
       });
 
       const content = response?.content;

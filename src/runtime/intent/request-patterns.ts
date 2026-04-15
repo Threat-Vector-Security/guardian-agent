@@ -7,10 +7,17 @@ export function looksLikeContextDependentPromptSelectionTurn(request: string): b
     || /\b(?:that|those|it|them|same\s+(?:one|workspace|session)|again)\b/.test(normalized);
 }
 
+export function looksLikeStandaloneGreetingTurn(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized || normalized.length > 48) return false;
+  return /^(?:hi|hello|hey|hiya|howdy|greetings|good\s+(?:morning|afternoon|evening))(?:[.!?]+)?$/.test(normalized);
+}
+
 export function isExplicitComplexPlanningRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
   return /\buse (?:your|the) complex[- ]planning path\b/.test(normalized)
+    || /\b(?:your|the)\s+complex[- ]planning path\b[^.!?\n]{0,40}\bfor this request\b/.test(normalized)
     || /\b(?:route|send) (?:this|it|the request)?\s*(?:through|to) (?:your |the )?complex[- ]planning path\b/.test(normalized)
     || /\b(?:use|run|route|handle|take)\b[^.!?\n]{0,80}\b(?:dag planner|dag path|planner path)\b/.test(normalized);
 }

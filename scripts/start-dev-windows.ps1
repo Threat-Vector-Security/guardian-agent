@@ -586,49 +586,57 @@ if (Test-Path $playwrightMcpPath) {
     }
 }
 
-# --- Step 3: Build (always clean) ---
-Write-Host "[3/6] Building TypeScript..." -ForegroundColor DarkCyan
-Write-WaitLine "Cleaning old build artifacts and forging TypeScript into JavaScript..."
-Remove-DevArtifacts -ProjectRoot $Root
-npm run build
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ERROR: Build failed" -ForegroundColor Red
-    exit 1
-}
-
+# --- Step 3/4: Build + tests ---
 $indexJs = Join-Path $Root "dist\index.js"
-$firstLine = Get-Content $indexJs -First 1
-if ($firstLine -eq "#!/usr/bin/env node") {
-    Write-Host "  Build: OK (shebang present)" -ForegroundColor Green
-} else {
-    Write-Host "  Build: OK (WARNING: missing shebang)" -ForegroundColor DarkCyan
-}
-
-# --- Step 4: Tests ---
-if (-not $SkipTests) {
-    Write-Host "[4/6] Running tests..." -ForegroundColor DarkCyan
-    Write-WaitLine "Interrogating the test matrix..."
-    $testStart = Get-Date
-    $testResult = Invoke-ProcessQuietlyWithAnimation `
-        -FilePath "npm.cmd" `
-        -ArgumentList @("test", "--", "--reporter=dot") `
-        -WorkingDirectory $Root `
-        -Messages (Get-TestWaitMessages) `
-        -IntervalSeconds 4 `
-        -FailureLabel "Test runner"
-    $testDuration = (Get-Date) - $testStart
-
-    if ($testResult.ExitCode -ne 0) {
-        Write-Host "  Test runner exit code: $($testResult.ExitCode)" -ForegroundColor DarkCyan
-        Write-Host "  ERROR: Tests failed" -ForegroundColor Red
+if ($StartOnly) {
+    Write-Host "[3/6] Build: SKIPPED (-StartOnly)" -ForegroundColor DarkCyan
+    Write-Host "[4/6] Tests: SKIPPED (-StartOnly)" -ForegroundColor DarkCyan
+    if (-not (Test-Path $indexJs)) {
+        Write-Host "  ERROR: dist\index.js not found. Run without -StartOnly first." -ForegroundColor Red
         exit 1
     }
-    Write-Host ("  Tests: PASSED ({0:N1}s)" -f $testDuration.TotalSeconds) -ForegroundColor Green
-    if ($testDuration.TotalSeconds -gt 90) {
-        Write-Host "  Tip: use -SkipTests for faster local startup when iterating." -ForegroundColor DarkCyan
-    }
 } else {
-    Write-Host "[4/6] Tests: SKIPPED" -ForegroundColor DarkCyan
+    Write-Host "[3/6] Building TypeScript..." -ForegroundColor DarkCyan
+    Write-WaitLine "Cleaning old build artifacts and forging TypeScript into JavaScript..."
+    Remove-DevArtifacts -ProjectRoot $Root
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: Build failed" -ForegroundColor Red
+        exit 1
+    }
+
+    $firstLine = Get-Content $indexJs -First 1
+    if ($firstLine -eq "#!/usr/bin/env node") {
+        Write-Host "  Build: OK (shebang present)" -ForegroundColor Green
+    } else {
+        Write-Host "  Build: OK (WARNING: missing shebang)" -ForegroundColor DarkCyan
+    }
+
+    if (-not $SkipTests) {
+        Write-Host "[4/6] Running tests..." -ForegroundColor DarkCyan
+        Write-WaitLine "Interrogating the test matrix..."
+        $testStart = Get-Date
+        $testResult = Invoke-ProcessQuietlyWithAnimation `
+            -FilePath "npm.cmd" `
+            -ArgumentList @("test", "--", "--reporter=dot") `
+            -WorkingDirectory $Root `
+            -Messages (Get-TestWaitMessages) `
+            -IntervalSeconds 4 `
+            -FailureLabel "Test runner"
+        $testDuration = (Get-Date) - $testStart
+
+        if ($testResult.ExitCode -ne 0) {
+            Write-Host "  Test runner exit code: $($testResult.ExitCode)" -ForegroundColor DarkCyan
+            Write-Host "  ERROR: Tests failed" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host ("  Tests: PASSED ({0:N1}s)" -f $testDuration.TotalSeconds) -ForegroundColor Green
+        if ($testDuration.TotalSeconds -gt 90) {
+            Write-Host "  Tip: use -SkipTests for faster local startup when iterating." -ForegroundColor DarkCyan
+        }
+    } else {
+        Write-Host "[4/6] Tests: SKIPPED" -ForegroundColor DarkCyan
+    }
 }
 
 if ($BuildOnly) {

@@ -13,6 +13,7 @@ export class RecoveryPlanner {
     private readonly chatFn: (messages: any[], options?: any) => Promise<any>,
     private readonly options: {
       allowedActionTypes?: PlanNode['actionType'][];
+      allowedToolNames?: string[];
     } = {},
   ) {}
 
@@ -22,10 +23,15 @@ export class RecoveryPlanner {
     errorOrReflectionReason: unknown
   ): Promise<RecoveryPlan> {
     const allowedActionTypes = this.options.allowedActionTypes ?? BROKER_SAFE_PLANNER_ACTION_TYPES;
+    const allowedToolNames = Array.isArray(this.options.allowedToolNames)
+      ? [...new Set(this.options.allowedToolNames
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim()))].sort((left, right) => left.localeCompare(right))
+      : [];
     const prompt = `
 You are the Guardian Agent Recovery Planner.
 A sub-task within a complex Execution Plan has failed either technically or semantically.
-Your job is to generate a fallback sub-task to replace the failed one, or dynamically draft a sandbox script to unblock the execution.
+Your job is to generate a fallback sub-task to replace the failed one while staying inside the broker-safe execution contract.
 
 Overall Objective: ${objective}
 
@@ -34,8 +40,6 @@ ${JSON.stringify(failedNode, null, 2)}
 
 Failure Reason / Result:
 ${JSON.stringify(errorOrReflectionReason, null, 2)}
-
-If the failure requires parsing a proprietary format or calling an undocumented API, pivot to "Dynamic Skill Creation" by providing a new node with actionType "execute_code" that contains the script needed to solve the problem.
 
 Provide your answer as a JSON object with:
 - "success": boolean (true if you have a recovery plan, false if it's unrecoverable)
@@ -53,9 +57,10 @@ PlanNode structure:
 }
 
 This brokered runtime only supports the action types listed above.
-- Prefer "tool_call" for brokered file and tool operations.
-- Use "execute_code" only for one bounded remote command string.
-- Do not emit unsupported actions like "skill_delegation", "routine_execution", or "delegate_task".
+${allowedToolNames.length > 0 ? `Allowed brokered tool names in this runtime: ${allowedToolNames.join(', ')}.\n` : ''}- Prefer "tool_call" for brokered file and tool operations.
+- Use "execute_code" only for one bounded remote command string, and do not wrap that command in JSON.
+- Do not invent tool aliases such as "fs_readFile", "read_file", or "fs_writeFile". Use the exact brokered tool names above.
+- Do not emit unsupported actions outside the allowed set above.
 `;
 
     try {
@@ -63,7 +68,7 @@ This brokered runtime only supports the action types listed above.
         { role: 'system', content: 'You are the Guardian Agent Recovery Planner. You recover failed DAG nodes with logical pivots or dynamic sandbox skills.' },
         { role: 'user', content: prompt }
       ], {
-        response_format: { type: 'json_object' }
+        responseFormat: { type: 'json_object' }
       });
 
       const content = response?.content;

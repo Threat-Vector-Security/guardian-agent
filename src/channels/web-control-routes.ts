@@ -345,6 +345,34 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/chat/pending-action/reset') {
+    if (!dashboard.onPendingActionReset) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readOptionalJsonBody<{
+        userId?: string;
+        channel?: string;
+        surfaceId?: string;
+      }>(req, context.maxBodyBytes, {});
+      const principal = context.resolveRequestPrincipal(req);
+      const result = await dashboard.onPendingActionReset({
+        userId: trimOptionalString(parsed.userId) ?? 'web-user',
+        principalId: principal.principalId,
+        principalRole: principal.principalRole,
+        channel: trimOptionalString(parsed.channel) ?? 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? 'web-guardian-chat',
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['dashboard', 'tools'], 'chat.pending-action.reset', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/tools/approvals/decision') {
     if (!dashboard.onToolsApprovalDecision) {
       sendJSON(res, 404, { error: 'Not available' });

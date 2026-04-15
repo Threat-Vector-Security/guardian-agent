@@ -516,7 +516,7 @@ else
     echo -e "${CYAN}[4/6] Running tests...${RESET}"
     write_wait_line "Interrogating the test matrix..."
     TEST_START=$(date +%s)
-    invoke_process_quietly_with_animation "Test runner" 4 -- npx vitest run --reporter=dot
+    invoke_process_quietly_with_animation "Test runner" 4 -- npm test -- --reporter=dot
     TEST_END=$(date +%s)
     TEST_DURATION=$((TEST_END - TEST_START))
     echo -e "  ${GREEN}Tests: PASSED (${TEST_DURATION}s)${RESET}"

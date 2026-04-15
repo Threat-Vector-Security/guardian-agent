@@ -189,6 +189,7 @@ Web requirements:
 - approving or denying from native web buttons must clear the same shared pending approval ids that plain-language `yes` / `no` or `/approve` / `/deny` would clear
 - the transcript should only inline blocker UI when the current response carries `response.metadata.pendingAction`
 - `/api/chat/pending-action` is the canonical recovery/status fallback when streamed response metadata is missing, delayed, or the page reconnects
+- if the web chat exposes a manual `Clear Pending` action, it must clear the shared pending-action record for the visible chat surface and deny any still-pending approvals being surfaced for that same web user/channel; it must not merely hide the local UI while leaving resumable blocked work behind
 - the fallback lookup must use the canonical user id and the current chat surface id
 - live activity and tooling progress must be request-scoped; a new request in the same coding session must not reuse timeline/status events from an older run
 - page, panel, or route changes must not silently drop the visible in-flight / pending-action state for the current Guardian chat surface

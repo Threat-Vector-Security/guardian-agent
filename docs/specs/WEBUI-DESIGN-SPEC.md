@@ -107,7 +107,7 @@ Notes:
 
 - the persistent chat panel remains part of the shell, not a left-nav page
 - the chat panel now exposes a request-scoped provider-profile selector sourced from enabled AI provider profiles; choosing a provider affects only that chat turn and does not persist to config
-- the chat toolbar keeps `Provider`, `Stop`, and `Reset Chat` on a single row; `Stop` cancels the active in-flight chat request (triggering a true backend abort and queue clearance) and `Reset Chat` clears conversation state after issuing a stop when needed
+- the chat toolbar keeps `Provider`, `Stop`, `Clear Pending`, and `Reset Chat` on a single row; `Stop` cancels the active in-flight chat request (triggering a true backend abort and queue clearance), `Clear Pending` clears the current chat surface's blocked-work state and denies any still-pending approvals tied to that web user/channel, and `Reset Chat` clears conversation state after issuing a stop when needed
 - if the chat panel reloads mid-turn, the panel should recover the prior in-flight request ID and issue a cancel so stale work does not continue invisibly behind the refreshed UI
 - persistent tier-routing mode changes such as `auto` / `local-only` / `managed-cloud-only` / `frontier-only` remain a shared routing control, but they are not owned by the web chat toolbar
 - `System` is the dedicated cross-product status and activity monitoring surface
@@ -759,15 +759,15 @@ Owns:
 
 - editable Second Brain setup preferences
 - assistant response-style preferences that should stay stable across provider routing
-- workday defaults
+- guided setup-card visibility/state for the Second Brain home surface
 - default delivery preferences for new Second Brain routines
-- bounded retrieval defaults for the Second Brain experience
 
 Must not own:
 
 - a second memory authority or duplicate memory store
 - direct provider administration
 - per-provider model or credential tuning
+- placeholder or duplicate preferences that do not affect shipped Second Brain behavior
 - routine editing for already configured routines
 
 This tab should make clear that the settings remain editable later and that existing routines still belong to `Second Brain > Routines`.

@@ -136,7 +136,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('automation_output_read');
   });
 
-  it('limits eager code-session tools to the lightweight planning and verification subset', () => {
+  it('keeps code-session eager tools focused on planning, verification, and brokered file writes', () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -153,6 +153,8 @@ describe('ToolExecutor', () => {
     expect(eagerNames).toContain('code_symbol_search');
     expect(eagerNames).toContain('code_git_diff');
     expect(eagerNames).toContain('code_test');
+    expect(eagerNames).toContain('fs_write');
+    expect(eagerNames).toContain('fs_mkdir');
     expect(eagerNames).not.toContain('code_edit');
     expect(eagerNames).not.toContain('code_patch');
     expect(eagerNames).not.toContain('automation_save');

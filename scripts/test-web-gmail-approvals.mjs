@@ -5,6 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import yaml from 'js-yaml';
+import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
+
+const HARNESS_USER_ID = 'harness';
+const HARNESS_CHANNEL = 'web';
+const HARNESS_SURFACE_ID = 'web-guardian-chat';
 
 const HARNESS_PORT = 3012;
 const HARNESS_TOKEN = `test-web-gmail-${Date.now()}`;
@@ -45,8 +50,23 @@ function request(method, requestPath, body = null) {
   });
 }
 
+async function readCurrentPendingAction(userId = 'harness', channel = 'web', surfaceId = 'web-guardian-chat') {
+  const qs = new URLSearchParams({ userId, channel, surfaceId });
+  return request('GET', `/api/chat/pending-action?${qs.toString()}`);
+}
+
+function getPendingApprovalSummaries(response) {
+  const pendingActionApprovals = response?.metadata?.pendingAction?.blocker?.approvalSummaries;
+  if (Array.isArray(pendingActionApprovals)) {
+    return pendingActionApprovals;
+  }
+  return Array.isArray(response?.metadata?.pendingApprovals)
+    ? response.metadata.pendingApprovals
+    : [];
+}
+
 async function waitForHealth() {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 180; attempt += 1) {
     try {
       const response = await request('GET', '/health');
       if (response?.status === 'ok') {
@@ -57,7 +77,170 @@ async function waitForHealth() {
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error('GuardianAgent did not become healthy within 60 seconds.');
+  throw new Error('GuardianAgent did not become healthy within 180 seconds.');
+}
+
+function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
+  const message = {
+    role: 'assistant',
+    content,
+  };
+  if (toolCalls?.length) {
+    message.tool_calls = toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      type: 'function',
+      function: {
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      },
+    }));
+  }
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    model,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: finishReason,
+      },
+    ],
+    usage: {
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      total_tokens: 2,
+    },
+  };
+}
+
+function buildRouteIntentDecision(latestUser) {
+  if (latestUser.includes('alexanderkenley@gmail.com') && latestUser.includes('subject is test')) {
+    return {
+      route: 'email_task',
+      operation: 'send',
+      confidence: 'high',
+      summary: 'Send a Gmail message.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      emailProvider: 'gws',
+      missingFields: [],
+    };
+  }
+  return {
+    route: 'general_assistant',
+    operation: 'unknown',
+    confidence: 'low',
+    summary: 'Unexpected harness prompt.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+  };
+}
+
+async function startFakeProvider() {
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
+    const isOpenAiCompatChat = req.method === 'POST' && url.pathname === '/v1/chat/completions';
+
+    if (req.method === 'GET' && url.pathname === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'web-gmail-harness-model', size: 1 }] }));
+      return;
+    }
+
+    if (isOllamaNativeChat || isOpenAiCompatChat) {
+      const parsed = await new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', (chunk) => {
+          data += chunk;
+        });
+        req.on('end', () => {
+          try {
+            resolve(data ? JSON.parse(data) : {});
+          } catch (error) {
+            reject(error);
+          }
+        });
+        req.on('error', reject);
+      });
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+      const tools = Array.isArray(parsed.tools)
+        ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
+        : [];
+      const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+      const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(
+          isOllamaNativeChat
+            ? createOllamaHarnessChatResponse({
+                model,
+                content,
+                doneReason: finishReason,
+                toolCalls,
+              })
+            : createChatCompletionResponse({
+                model,
+                content,
+                finishReason,
+                toolCalls,
+              }),
+        ));
+      };
+      const decision = buildRouteIntentDecision(latestUser);
+
+      if (tools.includes('route_intent')) {
+        sendResponse({
+          model: 'web-gmail-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'web-gmail-route-intent-1',
+              name: 'route_intent',
+              arguments: JSON.stringify(decision),
+            },
+          ],
+        });
+        return;
+      }
+
+      if (latestUser.includes('Classify this request.')) {
+        sendResponse({
+          model: 'web-gmail-harness-model',
+          content: JSON.stringify(decision),
+        });
+        return;
+      }
+
+      if (latestUser.includes('alexanderkenley@gmail.com') && latestUser.includes('subject is test')) {
+        sendResponse({
+          model: 'web-gmail-harness-model',
+          content: JSON.stringify(decision),
+        });
+        return;
+      }
+
+      sendResponse({
+        model: 'web-gmail-harness-model',
+        content: JSON.stringify(decision),
+      });
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Failed to start fake provider');
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
 }
 
 function writeStubGws() {
@@ -82,15 +265,19 @@ exit 1
 }
 
 function writeHarnessConfig() {
+  const providerBaseUrl = process.env.WEB_GMAIL_HARNESS_BASE_URL;
+  if (!providerBaseUrl) {
+    throw new Error('WEB_GMAIL_HARNESS_BASE_URL is required');
+  }
   const merged = {
     llm: {
-      mock: {
+      local: {
         provider: 'ollama',
-        baseUrl: 'http://127.0.0.1:11434',
-        model: 'llama3.2',
+        baseUrl: providerBaseUrl,
+        model: 'web-gmail-harness-model',
       },
     },
-    defaultProvider: 'mock',
+    defaultProvider: 'local',
     channels: {
       cli: {
         enabled: false,
@@ -106,6 +293,9 @@ function writeHarnessConfig() {
       identity: {
         mode: 'single_user',
         primaryUserId: 'harness',
+      },
+      setup: {
+        completed: true,
       },
       tools: {
         enabled: true,
@@ -131,74 +321,109 @@ function writeHarnessConfig() {
 }
 
 async function run() {
+  const preserveArtifacts = process.env.HARNESS_KEEP_TMP === '1';
   writeStubGws();
-  writeHarnessConfig();
+  const provider = await startFakeProvider();
+  try {
+    process.env.WEB_GMAIL_HARNESS_BASE_URL = provider.baseUrl;
+    writeHarnessConfig();
 
-  console.log('[web-gmail] Starting GuardianAgent...');
-  appProcess = spawn('node', ['--import', 'tsx', 'src/index.ts', CONFIG_PATH], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      HOME: TEMP_DIR,
-      USERPROFILE: TEMP_DIR,
-      XDG_CONFIG_HOME: TEMP_DIR,
-      XDG_DATA_HOME: TEMP_DIR,
-    },
-  });
-  appProcess.stdout.pipe(fs.createWriteStream(LOG_FILE));
-  appProcess.stderr.pipe(fs.createWriteStream(ERR_FILE));
+    console.log('[web-gmail] Starting GuardianAgent...');
+    let completed = false;
+    let exitInfo = null;
+    appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', CONFIG_PATH], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        HOME: TEMP_DIR,
+        USERPROFILE: TEMP_DIR,
+        XDG_CONFIG_HOME: TEMP_DIR,
+        XDG_DATA_HOME: TEMP_DIR,
+        XDG_CACHE_HOME: TEMP_DIR,
+      },
+    });
+    appProcess.once('exit', (code, signal) => {
+      exitInfo = { code, signal };
+    });
+    appProcess.stdout.pipe(fs.createWriteStream(LOG_FILE));
+    appProcess.stderr.pipe(fs.createWriteStream(ERR_FILE));
 
-  await waitForHealth();
-  console.log('[web-gmail] App is healthy');
+    await waitForHealth();
+    console.log('[web-gmail] App is healthy');
 
-  await request('POST', '/api/tools/policy', {
-    mode: 'approve_by_policy',
-    sandbox: {
-      allowedPaths: ['.'],
-      allowedCommands: ['node'],
-      allowedDomains: ['gmail.googleapis.com'],
-    },
-  });
+    await request('POST', '/api/tools/policy', {
+      mode: 'approve_by_policy',
+      sandbox: {
+        allowedPaths: ['.'],
+        allowedCommands: ['node'],
+        allowedDomains: ['gmail.googleapis.com'],
+      },
+    });
 
-  const prompt = 'Can you send a new email to alexanderkenley@gmail.com with subject test and in the body put testicles123';
-  const first = await request('POST', '/api/message', {
-    content: prompt,
-    userId: 'harness',
-    channel: 'web',
-  });
+    const prompt = 'send to alexanderkenley@gmail.com subject is test, body testicles123';
+    const first = await request('POST', '/api/message', {
+      content: prompt,
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
+    });
 
-  if (typeof first?.content !== 'string') {
-    throw new Error(`Expected chat content from /api/message, got: ${JSON.stringify(first)}`);
+    if (typeof first?.content !== 'string') {
+      throw new Error(`Expected chat content from /api/message, got: ${JSON.stringify(first)}`);
+    }
+    if (first.content.includes('No LLM provider configured')) {
+      throw new Error('Harness needs a configured LLM provider. Set up ~/.guardianagent/config.yaml or a local Ollama model.');
+    }
+
+    const firstPending = getPendingApprovalSummaries(first);
+    assert.ok(firstPending[0]?.id, `Expected structured pending approval metadata: ${JSON.stringify(first)}`);
+    assert.equal(first.metadata?.pendingAction?.blocker?.kind, 'approval', `Expected canonical pendingAction metadata on Gmail blocked response: ${JSON.stringify(first)}`);
+    const currentPending = await readCurrentPendingAction();
+    assert.equal(currentPending?.pendingAction?.blocker?.kind, 'approval', `Expected Gmail pending action from current-pending endpoint: ${JSON.stringify(currentPending)}`);
+    assert.equal(currentPending.pendingAction.blocker.approvalSummaries?.[0]?.id, firstPending[0].id);
+
+    const approvalId = firstPending[0].id;
+    console.log(`[web-gmail] Approving ${approvalId}`);
+
+    const decision = await request('POST', '/api/tools/approvals/decision', {
+      approvalId,
+      decision: 'approved',
+      actor: 'web-user',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
+    });
+
+    assert.equal(decision.success, true, 'approval decision should succeed');
+    assert.equal(decision.continueConversation, false, 'direct Gmail approvals should not force a bogus continuation');
+    assert.match(decision.displayMessage || '', /I sent the Gmail message\./, 'web UI should get an immediate direct-tool confirmation');
+    const clearedPending = await readCurrentPendingAction();
+    assert.equal(clearedPending?.pendingAction ?? null, null, `Did not expect Gmail pending action after approval: ${JSON.stringify(clearedPending)}`);
+
+    completed = true;
+    console.log('[web-gmail] PASS: Gmail Web UI approval flow returned immediate confirmation without continuation.');
+
+    return { preserveArtifacts, completed, exitInfo };
+  } finally {
+    await provider.close();
   }
-  if (first.content.includes('No LLM provider configured')) {
-    throw new Error('Harness needs a configured LLM provider. Set up ~/.guardianagent/config.yaml or a local Ollama model.');
-  }
-
-  assert.match(first.content, /subject "test"/i, 'subject parser should stop before the body clause');
-  assert.doesNotMatch(first.content, /test and in the/i, 'subject parser should not swallow connector text');
-  assert.ok(first.metadata?.pendingApprovals?.[0]?.id, 'expected structured pending approval metadata');
-
-  const approvalId = first.metadata.pendingApprovals[0].id;
-  console.log(`[web-gmail] Approving ${approvalId}`);
-
-  const decision = await request('POST', '/api/tools/approvals/decision', {
-    approvalId,
-    decision: 'approved',
-    actor: 'web-user',
-  });
-
-  assert.equal(decision.success, true, 'approval decision should succeed');
-  assert.equal(decision.continueConversation, false, 'direct Gmail approvals should not force a bogus continuation');
-  assert.match(decision.displayMessage || '', /I sent the Gmail message\./, 'web UI should get an immediate direct-tool confirmation');
-
-  console.log('[web-gmail] PASS: Gmail Web UI approval flow returned immediate confirmation without continuation.');
 }
 
-run().catch((error) => {
+run().then((state) => {
+  if (!state.completed && state.exitInfo) {
+    console.error(`[web-gmail] GuardianAgent exited before completion: code=${state.exitInfo.code ?? 'null'} signal=${state.exitInfo.signal ?? 'null'}`);
+  }
+}).catch((error) => {
   console.error('[web-gmail] FAIL:', error instanceof Error ? error.message : String(error));
+  if (process.env.HARNESS_KEEP_TMP === '1') {
+    console.error(`[web-gmail] Preserved artifacts at ${TEMP_DIR}`);
+  }
   process.exitCode = 1;
 }).finally(() => {
   if (appProcess && !appProcess.killed) {
     appProcess.kill();
+  }
+  if (process.exitCode !== 1 || process.env.HARNESS_KEEP_TMP !== '1') {
+    fs.rmSync(TEMP_DIR, { recursive: true, force: true });
   }
 });

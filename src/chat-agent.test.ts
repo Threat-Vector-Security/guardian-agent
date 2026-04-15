@@ -161,6 +161,174 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
+  it('reattaches the live approval pending action for delegated held-for-approval responses', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      {
+        listPendingApprovalIdsForUser: vi.fn(() => ['approval-gmail-1']),
+        getApprovalSummaries: vi.fn(() => new Map([
+          ['approval-gmail-1', {
+            toolName: 'gws - gmail users messages list',
+            argsPreview: '{"userId":"me","maxResults":10}',
+            actionLabel: 'run Gmail inbox read',
+          }],
+        ])),
+      } as never,
+    );
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-pending-action-metadata.test.sqlite',
+      now: () => nowMs,
+    });
+    (agent as any).pendingActionStore = store;
+    store.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Waiting for approval to run gws - gmail users messages list.',
+        approvalIds: ['approval-gmail-1'],
+        approvalSummaries: [{
+          id: 'approval-gmail-1',
+          toolName: 'gws - gmail users messages list',
+          argsPreview: '{"userId":"me","maxResults":10}',
+          actionLabel: 'run Gmail inbox read',
+        }],
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+      expiresAt: nowMs + 60_000,
+    });
+
+    const metadata = (agent as any).withCurrentPendingActionMetadata(
+      {
+        delegatedHandoff: {
+          reportingMode: 'held_for_approval',
+          unresolvedBlockerKind: 'approval',
+          approvalCount: 1,
+        },
+      },
+      'owner',
+      'web',
+      'web-guardian-chat',
+    );
+
+    expect(metadata?.pendingAction).toMatchObject({
+      blocker: {
+        kind: 'approval',
+        approvalIds: ['approval-gmail-1'],
+        approvalSummaries: [{
+          id: 'approval-gmail-1',
+          toolName: 'gws - gmail users messages list',
+        }],
+      },
+    });
+  });
+
+  it('replaces a stale clarification blocker with the live approval blocker for delegated held-for-approval responses', async () => {
+    const nowMs = Date.now();
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      {
+        listPendingApprovalIdsForUser: vi.fn(() => ['approval-gmail-1']),
+        getApprovalSummaries: vi.fn(() => new Map([
+          ['approval-gmail-1', {
+            toolName: 'gws - gmail users messages list',
+            argsPreview: '{"userId":"me","maxResults":10}',
+            actionLabel: 'run Gmail inbox read',
+          }],
+        ])),
+      } as never,
+    );
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-pending-action-metadata-clarification.test.sqlite',
+      now: () => nowMs,
+    });
+    (agent as any).pendingActionStore = store;
+    store.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'clarification',
+        prompt: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?',
+        field: 'email_provider',
+        options: [
+          { value: 'gws', label: 'Gmail' },
+          { value: 'm365', label: 'Outlook' },
+        ],
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+      expiresAt: nowMs + 60_000,
+    });
+
+    const metadata = (agent as any).withCurrentPendingActionMetadata(
+      {
+        delegatedHandoff: {
+          reportingMode: 'held_for_approval',
+          unresolvedBlockerKind: 'approval',
+          approvalCount: 1,
+        },
+      },
+      'owner',
+      'web',
+      'web-guardian-chat',
+    );
+
+    expect(metadata?.pendingAction).toMatchObject({
+      blocker: {
+        kind: 'approval',
+        prompt: 'Waiting for approval to run Gmail inbox read.',
+        approvalIds: ['approval-gmail-1'],
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+    });
+  });
+
   it('auto-switches to an explicitly named coding workspace before delegated coding work runs', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

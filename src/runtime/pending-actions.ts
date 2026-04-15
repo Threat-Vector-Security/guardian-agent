@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { formatPendingApprovalMessage } from './pending-approval-copy.js';
 import { normalizeIntentGatewayDecisionProvenance } from './intent/provenance.js';
+import { normalizeUserFacingIntentGatewaySummary } from './intent/summary.js';
 import type { IntentGatewayDecisionProvenance } from './intent/types.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 import {
@@ -240,6 +242,35 @@ export function defaultPendingActionTransferPolicy(
   }
 }
 
+export function fallbackPendingActionPrompt(
+  blockerKind: PendingActionBlockerKind,
+): string {
+  switch (blockerKind) {
+    case 'approval':
+      return 'Approval required for the pending action.';
+    case 'clarification':
+      return 'I need a bit more detail before I can continue with that request.';
+    case 'workspace_switch':
+      return 'Switch workspaces first, then continue the request.';
+    case 'auth':
+      return 'Authentication is required before I can continue.';
+    case 'policy':
+      return 'This request is blocked by policy and needs approval.';
+    case 'missing_context':
+      return 'I need the required context before I can continue.';
+    default:
+      return 'This request is waiting for input.';
+  }
+}
+
+export function sanitizePendingActionPrompt(
+  prompt: string | null | undefined,
+  blockerKind: PendingActionBlockerKind,
+): string {
+  return normalizeUserFacingIntentGatewaySummary(prompt)
+    ?? fallbackPendingActionPrompt(blockerKind);
+}
+
 function normalizeTransferPolicy(
   value: unknown,
   blockerKind: PendingActionBlockerKind,
@@ -397,16 +428,18 @@ export function summarizePendingActionForGateway(
   field?: string;
 } | null {
   if (!record || !isPendingActionActive(record.status)) return null;
+  const prompt = sanitizePendingActionPrompt(record.blocker.prompt, record.blocker.kind);
+  const summary = normalizeUserFacingIntentGatewaySummary(record.intent.summary);
   return {
     id: record.id,
     status: record.status,
     blockerKind: record.blocker.kind,
     transferPolicy: record.transferPolicy,
-    prompt: record.blocker.prompt,
+    prompt,
     originalRequest: record.intent.originalUserContent,
     ...(record.intent.route ? { route: record.intent.route } : {}),
     ...(record.intent.operation ? { operation: record.intent.operation } : {}),
-    ...(record.intent.summary ? { summary: record.intent.summary } : {}),
+    ...(summary ? { summary } : {}),
     ...(record.intent.resolution ? { resolution: record.intent.resolution } : {}),
     ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
     ...(record.intent.provenance ? { provenance: cloneIntent(record.intent).provenance } : {}),
@@ -419,6 +452,8 @@ export function toPendingActionClientMetadata(
   record: PendingActionRecord | null | undefined,
 ): Record<string, unknown> | undefined {
   if (!record || !isPendingActionActive(record.status)) return undefined;
+  const prompt = sanitizePendingActionPrompt(record.blocker.prompt, record.blocker.kind);
+  const summary = normalizeUserFacingIntentGatewaySummary(record.intent.summary);
   return {
     id: record.id,
     status: record.status,
@@ -431,7 +466,7 @@ export function toPendingActionClientMetadata(
     ...(record.codeSessionId ? { codeSessionId: record.codeSessionId } : {}),
     blocker: {
       kind: record.blocker.kind,
-      prompt: record.blocker.prompt,
+      prompt,
       ...(record.blocker.field ? { field: record.blocker.field } : {}),
       ...(record.blocker.provider ? { provider: record.blocker.provider } : {}),
       ...(record.blocker.service ? { service: record.blocker.service } : {}),
@@ -447,7 +482,7 @@ export function toPendingActionClientMetadata(
     intent: {
       ...(record.intent.route ? { route: record.intent.route } : {}),
       ...(record.intent.operation ? { operation: record.intent.operation } : {}),
-      ...(record.intent.summary ? { summary: record.intent.summary } : {}),
+      ...(summary ? { summary } : {}),
       ...(record.intent.turnRelation ? { turnRelation: record.intent.turnRelation } : {}),
       ...(record.intent.resolution ? { resolution: record.intent.resolution } : {}),
       ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
@@ -900,6 +935,28 @@ function approvalSummariesEqual(
   });
 }
 
+function buildReconciledApprovalSummaries(
+  approvalIds: readonly string[],
+  liveApprovalSummaries: ReadonlyMap<string, PendingActionApprovalSummary | {
+    toolName: string;
+    argsPreview: string;
+    actionLabel?: string;
+  }> | undefined,
+  currentApprovalSummaries: readonly PendingActionApprovalSummary[] | undefined,
+): PendingActionApprovalSummary[] {
+  const currentSummaries = buildApprovalSummaryMap(currentApprovalSummaries);
+  return approvalIds.map((approvalId) => {
+    const liveSummary = liveApprovalSummaries?.get(approvalId);
+    const currentSummary = currentSummaries.get(approvalId);
+    return {
+      id: approvalId,
+      toolName: liveSummary?.toolName ?? currentSummary?.toolName ?? 'unknown',
+      argsPreview: liveSummary?.argsPreview ?? currentSummary?.argsPreview ?? '',
+      actionLabel: liveSummary?.actionLabel ?? currentSummary?.actionLabel ?? '',
+    };
+  });
+}
+
 export function reconcilePendingApprovalAction(
   store: PendingActionStore,
   pendingAction: PendingActionRecord | null | undefined,
@@ -910,48 +967,97 @@ export function reconcilePendingApprovalAction(
       argsPreview: string;
       actionLabel?: string;
     }>;
+    scope?: PendingActionScope;
     nowMs?: number;
   },
 ): PendingActionRecord | null {
+  const nowMs = input.nowMs ?? Date.now();
+  const liveApprovalIds = normalizeApprovalIds(input.liveApprovalIds);
+
   if (!pendingAction || !isPendingActionActive(pendingAction.status) || pendingAction.blocker.kind !== 'approval') {
-    return pendingAction ?? null;
+    if (liveApprovalIds.length === 0) {
+      return pendingAction ?? null;
+    }
+    const scope = input.scope ?? pendingAction?.scope;
+    if (!scope) {
+      return pendingAction ?? null;
+    }
+    const approvalSummaries = buildReconciledApprovalSummaries(
+      liveApprovalIds,
+      input.liveApprovalSummaries,
+      pendingAction?.blocker.approvalSummaries,
+    );
+    const prompt = approvalSummaries.length > 0
+      ? formatPendingApprovalMessage(approvalSummaries)
+      : 'Approval required for the pending action.';
+    return store.replaceActive(scope, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt,
+        approvalIds: [...liveApprovalIds],
+        ...(approvalSummaries.length > 0 ? { approvalSummaries } : {}),
+      },
+      intent: {
+        ...(pendingAction?.intent.route ? { route: pendingAction.intent.route } : {}),
+        ...(pendingAction?.intent.operation ? { operation: pendingAction.intent.operation } : {}),
+        ...(pendingAction?.intent.summary ? { summary: pendingAction.intent.summary } : {}),
+        ...(pendingAction?.intent.turnRelation ? { turnRelation: pendingAction.intent.turnRelation } : {}),
+        ...(pendingAction?.intent.resolution ? { resolution: pendingAction.intent.resolution } : {}),
+        ...(pendingAction?.intent.missingFields?.length ? { missingFields: [...pendingAction.intent.missingFields] } : {}),
+        originalUserContent: pendingAction?.intent.originalUserContent ?? '',
+        ...(pendingAction?.intent.resolvedContent ? { resolvedContent: pendingAction.intent.resolvedContent } : {}),
+        ...(pendingAction?.intent.provenance ? {
+          provenance: normalizeIntentGatewayDecisionProvenance(pendingAction.intent.provenance),
+        } : {}),
+        ...(pendingAction?.intent.entities ? { entities: { ...pendingAction.intent.entities } } : {}),
+      },
+      ...(pendingAction?.resume
+        ? {
+            resume: {
+              kind: pendingAction.resume.kind,
+              payload: { ...pendingAction.resume.payload },
+            },
+          }
+        : {}),
+      ...(pendingAction?.codeSessionId ? { codeSessionId: pendingAction.codeSessionId } : {}),
+      expiresAt: nowMs + 30 * 60_000,
+    }, nowMs);
   }
 
-  const nowMs = input.nowMs ?? Date.now();
   const currentApprovalIds = normalizeApprovalIds(pendingAction.blocker.approvalIds);
   if (currentApprovalIds.length === 0) {
     return store.complete(pendingAction.id, nowMs);
   }
 
-  const liveApprovalIds = normalizeApprovalIds(input.liveApprovalIds);
   const liveApprovalSet = new Set(liveApprovalIds);
   const remainingApprovalIds = currentApprovalIds.filter((approvalId) => liveApprovalSet.has(approvalId));
   if (remainingApprovalIds.length === 0) {
     return store.complete(pendingAction.id, nowMs);
   }
 
-  const currentSummaries = buildApprovalSummaryMap(pendingAction.blocker.approvalSummaries);
-  const nextSummaries = remainingApprovalIds.map((approvalId) => {
-    const liveSummary = input.liveApprovalSummaries?.get(approvalId);
-    const currentSummary = currentSummaries.get(approvalId);
-    return {
-      id: approvalId,
-      toolName: liveSummary?.toolName ?? currentSummary?.toolName ?? 'unknown',
-      argsPreview: liveSummary?.argsPreview ?? currentSummary?.argsPreview ?? '',
-      actionLabel: liveSummary?.actionLabel ?? currentSummary?.actionLabel ?? '',
-    };
-  });
+  const nextSummaries = buildReconciledApprovalSummaries(
+    remainingApprovalIds,
+    input.liveApprovalSummaries,
+    pendingAction.blocker.approvalSummaries,
+  );
   const approvalIdsChanged = remainingApprovalIds.length !== currentApprovalIds.length
     || remainingApprovalIds.some((approvalId, index) => approvalId !== currentApprovalIds[index]);
   const summariesChanged = approvalIdsChanged
     || !approvalSummariesEqual(pendingAction.blocker.approvalSummaries, nextSummaries);
-  if (!approvalIdsChanged && !summariesChanged) {
+  const nextPrompt = nextSummaries.length > 0
+    ? formatPendingApprovalMessage(nextSummaries)
+    : pendingAction.blocker.prompt;
+  const promptChanged = nextPrompt !== pendingAction.blocker.prompt;
+  if (!approvalIdsChanged && !summariesChanged && !promptChanged) {
     return pendingAction;
   }
 
   return store.update(pendingAction.id, {
     blocker: {
       ...pendingAction.blocker,
+      prompt: nextPrompt,
       approvalIds: remainingApprovalIds,
       approvalSummaries: nextSummaries,
     },
