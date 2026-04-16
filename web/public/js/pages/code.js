@@ -1972,6 +1972,7 @@ function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
         localWorkspaceRoot: typeof entry.localWorkspaceRoot === 'string' ? entry.localWorkspaceRoot : '',
         remoteWorkspaceRoot: typeof entry.remoteWorkspaceRoot === 'string' ? entry.remoteWorkspaceRoot : '',
         status: typeof entry.status === 'string' ? entry.status : 'active',
+        state: typeof entry.state === 'string' ? entry.state : '',
         acquiredAt: Number(entry.acquiredAt) || 0,
         lastUsedAt: Number(entry.lastUsedAt) || 0,
         expiresAt: Number(entry.expiresAt) || 0,
@@ -6037,9 +6038,11 @@ function renderSandboxTargetOption(target, sandboxState) {
   const statusBadge = isReady
     ? '<span class="badge badge-info">READY</span>'
     : `<span class="badge badge-warn">${esc(String(target.capabilityState || 'unavailable').toUpperCase())}</span>`;
-  const healthBadge = target.healthState === 'unreachable'
-    ? '<span class="badge badge-warn">UNREACHABLE</span>'
-    : '';
+  const healthBadge = target.healthState === 'healthy'
+    ? '<span class="badge badge-success">READY</span>'
+    : target.healthState === 'unreachable'
+      ? '<span class="badge badge-warn">UNREACHABLE</span>'
+      : '';
   const networkSummary = target.networkMode === 'domain_allowlist'
     ? `${target.allowedDomains?.length || 0} allowed domain${(target.allowedDomains?.length || 0) === 1 ? '' : 's'}`
     : target.networkMode === 'cidr_allowlist'
@@ -6069,11 +6072,76 @@ function renderSandboxTargetOption(target, sandboxState) {
   `;
 }
 
+function getManagedSandboxLifecycleState(sandbox) {
+  const state = typeof sandbox?.state === 'string' ? sandbox.state.trim().toLowerCase() : '';
+  if (state) return state;
+  const status = typeof sandbox?.status === 'string' ? sandbox.status.trim().toLowerCase() : '';
+  if (status === 'active') return 'running';
+  return status;
+}
+
+function formatManagedSandboxLifecycleLabel(state) {
+  return String(state || 'unknown').trim().replace(/[-_]+/g, ' ').toUpperCase();
+}
+
+function renderManagedSandboxStatusBadge(sandbox) {
+  const lifecycleState = getManagedSandboxLifecycleState(sandbox);
+  if (!lifecycleState || lifecycleState === 'unknown') {
+    return sandbox.status === 'unreachable'
+      ? '<span class="badge badge-warn">UNREACHABLE</span>'
+      : sandbox.status === 'stopped'
+        ? '<span class="badge badge-dead">STOPPED</span>'
+        : '<span class="badge badge-success">RUNNING</span>';
+  }
+  if (/\b(running|ready|started|active)\b/.test(lifecycleState)) {
+    return '<span class="badge badge-success">RUNNING</span>';
+  }
+  if (/\b(starting|pending|creating|provisioning)\b/.test(lifecycleState)) {
+    return `<span class="badge badge-info">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
+  }
+  if (/\b(stopped|stopping)\b/.test(lifecycleState)) {
+    return `<span class="badge badge-dead">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
+  }
+  if (/\b(expired|failed|error|dead|terminated|deleted)\b/.test(lifecycleState)) {
+    return `<span class="badge badge-errored">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
+  }
+  if (lifecycleState === 'unreachable') {
+    return '<span class="badge badge-warn">UNREACHABLE</span>';
+  }
+  return `<span class="badge ${sandbox.status === 'unreachable' ? 'badge-warn' : 'badge-info'}">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
+}
+
+function canStartManagedSandbox(sandbox) {
+  return sandbox?.backendKind === 'daytona_sandbox' && getManagedSandboxLifecycleState(sandbox) === 'stopped';
+}
+
+function canStopManagedSandbox(sandbox) {
+  return /\b(running|ready|started|active|pending|starting|creating|provisioning)\b/.test(
+    getManagedSandboxLifecycleState(sandbox),
+  );
+}
+
+function showUnavailableManagedSandboxStart(sandbox) {
+  return sandbox?.backendKind === 'vercel_sandbox'
+    && /\b(stopped|stopping|expired|failed|error|dead|terminated|deleted)\b/.test(
+      getManagedSandboxLifecycleState(sandbox),
+    );
+}
+
+function getManagedSandboxLifecycleHint(sandbox) {
+  if (sandbox?.backendKind === 'vercel_sandbox' && showUnavailableManagedSandboxStart(sandbox)) {
+    return 'Vercel sandboxes cannot be restarted after stop. Release this sandbox and create a new one when you need another session.';
+  }
+  return '';
+}
+
 function renderManagedSandboxCard(sandbox) {
   const backend = describeRemoteExecutionBackend(sandbox);
-  const statusBadge = sandbox.status === 'unreachable'
-    ? '<span class="badge badge-warn">UNREACHABLE</span>'
-    : '<span class="badge badge-info">MANAGED</span>';
+  const statusBadge = renderManagedSandboxStatusBadge(sandbox);
+  const canStart = canStartManagedSandbox(sandbox);
+  const canStop = canStopManagedSandbox(sandbox);
+  const showDisabledStart = showUnavailableManagedSandboxStart(sandbox);
+  const lifecycleHint = getManagedSandboxLifecycleHint(sandbox);
   const lastUsed = formatRelativeTime(sandbox.lastUsedAt || sandbox.acquiredAt);
   const runtimeBits = [
     sandbox.runtime ? `runtime ${sandbox.runtime}` : '',
@@ -6086,13 +6154,24 @@ function renderManagedSandboxCard(sandbox) {
           <strong>${esc(sandbox.profileName || backend)}</strong>
           ${statusBadge}
         </span>
-        <button class="btn btn-secondary btn-sm" type="button" data-code-sandbox-delete="${escAttr(sandbox.leaseId)}">Release</button>
+        <div class="panel__actions" style="margin-left:auto">
+          ${canStart ? `
+            <button class="btn btn-primary btn-sm" type="button" data-code-sandbox-start="${escAttr(sandbox.leaseId)}">Start</button>
+          ` : showDisabledStart ? `
+            <button class="btn btn-secondary btn-sm" type="button" disabled title="Vercel sandboxes cannot be restarted after stop. Release and create a new one instead.">Start</button>
+          ` : ''}
+          ${canStop ? `
+            <button class="btn btn-secondary btn-sm" type="button" data-code-sandbox-stop="${escAttr(sandbox.leaseId)}">Stop</button>
+          ` : ''}
+          <button class="btn btn-secondary btn-sm" type="button" data-code-sandbox-delete="${escAttr(sandbox.leaseId)}" title="Release and destroy sandbox">Release</button>
+        </div>
       </div>
       <div class="code-session__meta">${esc(backend)} • ${esc(sandbox.sandboxId)}</div>
       <div class="code-session__hint">
         ${lastUsed ? `Last used ${esc(lastUsed)}.` : 'Managed sandbox attached to this code session.'}
         ${runtimeBits ? ` ${esc(runtimeBits)}.` : ''}
         ${sandbox.healthReason ? ` ${esc(sandbox.healthReason)}` : ''}
+        ${lifecycleHint ? ` ${esc(lifecycleHint)}` : ''}
       </div>
       <div class="code-session__meta">${esc(sandbox.remoteWorkspaceRoot || sandbox.localWorkspaceRoot || '')}</div>
     </div>
@@ -6935,6 +7014,48 @@ function bindEvents(container) {
         const result = await api.codeSessionSandboxDelete(session.id, leaseId, currentCodeSessionPayload());
         applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
         await refreshSessionSnapshot(session.id).catch(() => null);
+      } catch (err) {
+        applySessionSandboxesResponse(session.id, {}, {
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      saveState(codeState);
+      rerenderFromState();
+    });
+  });
+
+  container.querySelectorAll('[data-code-sandbox-stop]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const session = getActiveSession();
+      const leaseId = button.dataset.codeSandboxStop;
+      if (!session || !leaseId) return;
+      applySessionSandboxesResponse(session.id, {}, { loading: true, error: '' });
+      rerenderFromState();
+      try {
+        const result = await api.codeSessionSandboxStop(session.id, leaseId, currentCodeSessionPayload());
+        applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
+      } catch (err) {
+        applySessionSandboxesResponse(session.id, {}, {
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      saveState(codeState);
+      rerenderFromState();
+    });
+  });
+
+  container.querySelectorAll('[data-code-sandbox-start]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const session = getActiveSession();
+      const leaseId = button.dataset.codeSandboxStart;
+      if (!session || !leaseId) return;
+      applySessionSandboxesResponse(session.id, {}, { loading: true, error: '' });
+      rerenderFromState();
+      try {
+        const result = await api.codeSessionSandboxStart(session.id, leaseId, currentCodeSessionPayload());
+        applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
       } catch (err) {
         applySessionSandboxesResponse(session.id, {}, {
           loading: false,

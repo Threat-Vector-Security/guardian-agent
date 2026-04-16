@@ -1396,6 +1396,22 @@ export interface DashboardCallbacks {
     channel: string;
     surfaceId: string;
   }) => Promise<DashboardCodeSessionSandboxesResponse> | DashboardCodeSessionSandboxesResponse;
+  onCodeSessionSandboxStop?: (args: {
+    sessionId: string;
+    leaseId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => Promise<DashboardCodeSessionSandboxesResponse> | DashboardCodeSessionSandboxesResponse;
+  onCodeSessionSandboxStart?: (args: {
+    sessionId: string;
+    leaseId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => Promise<DashboardCodeSessionSandboxesResponse> | DashboardCodeSessionSandboxesResponse;
   onCodeSessionDelete?: (args: {
     sessionId: string;
     userId: string;
@@ -1611,7 +1627,7 @@ export interface DashboardCallbacks {
     channel?: string;
     metadata?: Record<string, unknown>;
   }) => Promise<ToolRunResponse> | ToolRunResponse;
-  onToolsPreflight?: (input: { tools?: string[]; requests?: Array<{ name: string; args?: Record<string, unknown> }> }) => {
+  onToolsPreflight?: (input: { tools?: string[]; requests?: Array<{ name: string; args?: Record<string, unknown> }> }) => Promise<{
     results: Array<{
       name: string;
       found: boolean;
@@ -1621,7 +1637,7 @@ export interface DashboardCallbacks {
       fixes: Array<{ type: 'tool_policy' | 'domain' | 'command' | 'path'; value: string; description: string }>;
     }>;
     policy: { mode: string; allowedPaths?: string[]; allowedCommands?: string[]; allowedDomains?: string[] };
-  };
+  }>;
   onToolsPolicyUpdate?: (input: {
     mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
     toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;

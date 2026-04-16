@@ -138,7 +138,10 @@ Guardian should follow these rules when selecting an execution boundary:
 
 1. If the task does not require a subprocess or detached execution context, keep it in the normal Guardian runtime path.
 2. The built-in chat/planner loop stays brokered even when stronger job backends exist.
-3. For managed subprocess work, start with the least-complex backend that satisfies policy, trust posture, and host capabilities.
+3. **Capability-Aware Routing:** For managed subprocess work, the system performs a multi-tier workspace fingerprinting (`workspace-analysis.ts`) to determine the required capability tier:
+   - **`runtime_only`**: No native dependencies or build markers. Safe for Vercel burst tasks.
+   - **`build_essential`**: Presence of `Makefile`, `go.mod`, `Cargo.toml`, or native dependencies (e.g., `node-pty`, `pandas`). Prioritizes **Daytona** to ensure a full build environment.
+   - **`full_os_persistence`**: Required for complex iterative builds or large datasets. Prioritizes **Daytona**.
 4. If a workload or policy requires a stronger boundary and the required backend is unavailable, fail closed or require an explicit degraded fallback. Do not silently downgrade.
 5. Windows process-sandbox and Windows Hyper-V tiers must be treated as distinct backends in diagnostics, setup, and audit.
 6. Remote sandbox backends are job-oriented execution substrates. They do not replace Guardian's memory model, approval flow, or intent gateway.
@@ -233,6 +236,17 @@ Every isolation path should surface:
 - whether approval or policy forced a stricter posture
 
 Operators should not have to infer from symptoms whether a task ran in a helper sandbox, a VM boundary, or a remote provider sandbox.
+
+## Lifecycle Controls and Visibility
+
+Guardian provides manual and automatic controls for persistent managed sandboxes to optimize cloud costs and monitor active resource usage.
+
+- **Provider-Aware Lifecycle Controls:** Persistent sandboxes in the Code Workspace feature lifecycle controls that match the selected provider.
+  - **Stop:** Hibernates the remote session when the provider supports stop (for example `session.stop()` in Daytona or Vercel), pausing compute costs.
+  - **Start:** Resumes the same dormant sandbox only for restartable providers such as Daytona. Non-restartable providers such as Vercel keep the managed card visible after stop, but require release and recreation instead of restart.
+- **Real-time Status Badges:** The UI displays the provider-reported lifecycle state of each managed sandbox, including states such as **`RUNNING`**, **`STOPPED`**, **`STARTING`**, **`EXPIRED`**, **`FAILED`**, or **`UNREACHABLE`**.
+- **Auto-Hibernation:** Managed sandboxes automatically stop after a period of inactivity (default 1 minute) to save costs. Restartable providers can be resumed later; non-restartable providers remain visible until they are released or recreated.
+- **Graceful Shutdown:** All active managed sandboxes are signaled to stop when the GuardianAgent process exits.
 
 ## Non-Goals
 

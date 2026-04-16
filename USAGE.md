@@ -65,6 +65,20 @@ For the detailed security model and verification evidence:
 - [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
 - [docs/security-testing-results/README.md](/mnt/s/Development/GuardianAgent/docs/security-testing-results/README.md)
 
+## Intelligent Sandbox Selection
+
+GuardianAgent includes an advisory system that automatically selects the best execution isolation for your task.
+
+- **Vercel Sandbox:** Prioritized for "burst" or stateless tasks (e.g., simple dependency installs, linting, single-run tests) where fast startup is preferred.
+- **Daytona Sandbox:** Prioritized for stateful, complex, or iterative tasks (e.g., full builds, dev servers, projects with native dependencies).
+
+The system performs language-agnostic **Workspace Fingerprinting** to work out behavioral equivalence:
+- **Build System Detection:** Projects with `Makefile`, `go.mod`, `Cargo.toml`, or `pyproject.toml` are automatically routed to Daytona to ensure a full build environment is available.
+- **Native Dependency Awareness:** Detection of heavy packages (e.g., `node-pty`, `pandas`, `cryptography`) triggers an automatic "Vercel Veto," ensuring that tasks requiring native compilation don't fail in lean serverless sandboxes.
+- **Agentic Advice:** The assistant will proactively explain why it chose a specific backend: *"I'm using Daytona for this run because I detected a Makefile and native dependencies in your workspace."*
+- **Manual Lifecycle Control:** Persistent managed sandboxes feature **Stop** and **Start** buttons in the web UI. You can hibernate a session to save on costs and resume it instantly when needed.
+- **Real-time Status Visibility:** Sandboxes display clear **RUNNING**, **STOPPED**, or **UNREACHABLE** badges so you can monitor cloud resource usage at a glance.
+
 ## More Detail
 
 - Architecture overview: [docs/architecture/OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)

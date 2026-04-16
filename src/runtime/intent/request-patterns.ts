@@ -21,3 +21,17 @@ export function isExplicitComplexPlanningRequest(content: string | undefined): b
     || /\b(?:route|send) (?:this|it|the request)?\s*(?:through|to) (?:your |the )?complex[- ]planning path\b/.test(normalized)
     || /\b(?:use|run|route|handle|take)\b[^.!?\n]{0,80}\b(?:dag planner|dag path|planner path)\b/.test(normalized);
 }
+
+export function isExplicitCodingExecutionRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  
+  const hasCodingTool = /\b(npm|pnpm|yarn|bun|pip|pip3|python|python3|go|cargo|rustc|javac|make|cmake|git|docker|kubectl)\b/i.test(normalized);
+  const hasCodingCommand = /\b(install|run|test|build|deploy|ci|add|remove|update|status|diff|commit|push|pull)\b/i.test(normalized);
+  
+  // Also match "run [anything] in [path]" which is almost always a task
+  // Ensure we don't match across sentences by excluding period/newline
+  const isRunInPath = /\brun\s+[^.!?\n]+?\s+in\s+[^.!?\n]+?\b/i.test(normalized);
+  
+  return (hasCodingTool && hasCodingCommand) || isRunInPath;
+}

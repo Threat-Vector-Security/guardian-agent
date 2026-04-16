@@ -847,6 +847,7 @@ describe('ToolExecutor', () => {
       durationMs: 25,
       sandboxId: 'sandbox-managed-1',
       remoteWorkspaceRoot: '/vercel/sandbox',
+      state: 'expired',
     }));
     const remoteExecutionService = {
       inspectLease,
@@ -890,6 +891,7 @@ describe('ToolExecutor', () => {
     expect(first.sandboxes).toHaveLength(1);
     expect(first.sandboxes[0]).toMatchObject({
       status: 'unreachable',
+      state: 'expired',
       healthState: 'unreachable',
       healthReason: 'Sandbox not found',
       healthCheckedAt: 40_000,
@@ -904,6 +906,7 @@ describe('ToolExecutor', () => {
     expect(inspectLease).toHaveBeenCalledTimes(1);
     expect(second.sandboxes[0]).toMatchObject({
       status: 'unreachable',
+      state: 'expired',
       healthState: 'unreachable',
       healthReason: 'Sandbox not found',
       healthCheckedAt: 40_000,
@@ -916,6 +919,115 @@ describe('ToolExecutor', () => {
     });
 
     expect(inspectLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves managed sandbox card order instead of resorting by activity', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Sandbox Ordering Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [
+          {
+            leaseId: 'lease-daytona',
+            targetId: 'daytona:daytona-main',
+            backendKind: 'daytona_sandbox',
+            profileId: 'daytona-main',
+            profileName: 'Daytona Main',
+            sandboxId: 'sandbox-daytona',
+            localWorkspaceRoot: root,
+            remoteWorkspaceRoot: '/workspace/daytona',
+            status: 'active',
+            state: 'running',
+            acquiredAt: 1,
+            lastUsedAt: 10,
+            trackedRemotePaths: [],
+          },
+          {
+            leaseId: 'lease-vercel',
+            targetId: 'vercel:vercel-main',
+            backendKind: 'vercel_sandbox',
+            profileId: 'vercel-main',
+            profileName: 'Vercel Main',
+            sandboxId: 'sandbox-vercel',
+            localWorkspaceRoot: root,
+            remoteWorkspaceRoot: '/vercel/sandbox',
+            status: 'stopped',
+            state: 'stopped',
+            acquiredAt: 2,
+            lastUsedAt: 200,
+            trackedRemotePaths: [],
+          },
+        ],
+      },
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'daytona.io', 'vercel.com'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+        }],
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService: {
+        inspectLease: vi.fn(async ({ lease }) => ({
+          targetId: lease.targetId,
+          backendKind: lease.backendKind,
+          profileId: lease.profileId,
+          profileName: lease.profileName,
+          healthState: lease.id === 'lease-vercel' ? 'unknown' : 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+          state: lease.id === 'lease-vercel' ? 'stopped' : 'running',
+        })),
+        listActiveLeases: vi.fn(() => []),
+        getKnownTargetHealth: vi.fn(() => ({})),
+        runBoundedJob: vi.fn(),
+      },
+    });
+
+    const result = await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+    });
+
+    expect(result.sandboxes.map((sandbox) => sandbox.leaseId)).toEqual([
+      'lease-daytona',
+      'lease-vercel',
+    ]);
   });
 
   it('releases all managed sandboxes before a code session is deleted', async () => {
@@ -8241,7 +8353,7 @@ describe('ToolExecutor', () => {
       expect(callTool).not.toHaveBeenCalled();
     });
 
-    it('denies private metadata endpoints during preflight without suggesting add_domain remediation', () => {
+    it('denies private metadata endpoints during preflight without suggesting add_domain remediation', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         enabled: true,
@@ -8256,7 +8368,7 @@ describe('ToolExecutor', () => {
         } as unknown as import('./mcp-client.js').MCPClientManager,
       });
 
-      const [result] = executor.preflightTools([
+      const [result] = await executor.preflightTools([
         { name: 'browser_navigate', args: { url: 'http://169.254.169.254/latest/' } },
       ]);
 
@@ -8621,7 +8733,7 @@ describe('ToolExecutor', () => {
   });
 
   describe('preflightTools', () => {
-    it('returns allow for read-only tools and require_approval for mutating tools', () => {
+    it('returns allow for read-only tools and require_approval for mutating tools', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8634,7 +8746,7 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const results = executor.preflightTools(['fs_read', 'fs_write', 'web_search']);
+      const results = await executor.preflightTools(['fs_read', 'fs_write', 'web_search']);
       expect(results).toHaveLength(3);
 
       const fsRead = results.find((r) => r.name === 'fs_read');
@@ -8651,7 +8763,7 @@ describe('ToolExecutor', () => {
       expect(webSearch?.decision).toBe('allow');
     });
 
-    it('returns not found for unknown tools', () => {
+    it('returns not found for unknown tools', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8663,13 +8775,13 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const results = executor.preflightTools(['nonexistent_tool']);
+      const results = await executor.preflightTools(['nonexistent_tool']);
       expect(results).toHaveLength(1);
       expect(results[0].found).toBe(false);
       expect(results[0].decision).toBe('deny');
     });
 
-    it('respects per-tool auto policy overrides', () => {
+    it('respects per-tool auto policy overrides', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8682,12 +8794,12 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const results = executor.preflightTools(['fs_write']);
+      const results = await executor.preflightTools(['fs_write']);
       expect(results[0].decision).toBe('allow');
       expect(results[0].fixes).toHaveLength(0);
     });
 
-    it('surfaces blocked domains from tool args during preflight', () => {
+    it('surfaces blocked domains from tool args during preflight', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8699,7 +8811,7 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const [result] = executor.preflightTools([
+      const [result] = await executor.preflightTools([
         { name: 'web_fetch', args: { url: 'https://example.com/status' } },
       ]);
 
@@ -8713,7 +8825,7 @@ describe('ToolExecutor', () => {
       ]);
     });
 
-    it('surfaces blocked domains from bare hostnames during preflight', () => {
+    it('surfaces blocked domains from bare hostnames during preflight', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8725,7 +8837,7 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const [result] = executor.preflightTools([
+      const [result] = await executor.preflightTools([
         { name: 'web_fetch', args: { url: 'www.webjet.com.au' } },
       ]);
 
@@ -8734,7 +8846,7 @@ describe('ToolExecutor', () => {
       expect(result.fixes[0]?.value).toBe('www.webjet.com.au');
     });
 
-    it('marks all mutating tools as allow in autonomous mode', () => {
+    it('marks all mutating tools as allow in autonomous mode', async () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
         workspaceRoot: root,
@@ -8746,7 +8858,7 @@ describe('ToolExecutor', () => {
         enabled: true,
       });
 
-      const results = executor.preflightTools(['fs_write', 'fs_mkdir', 'shell_safe']);
+      const results = await executor.preflightTools(['fs_write', 'fs_mkdir', 'shell_safe']);
       for (const r of results) {
         expect(r.decision).toBe('allow');
       }

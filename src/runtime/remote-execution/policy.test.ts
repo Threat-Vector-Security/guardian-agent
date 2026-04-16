@@ -238,4 +238,59 @@ describe('remote execution policy', () => {
       profileId: 'daytona-main',
     });
   });
+
+  it('routes burst tasks to Vercel and stateful tasks to Daytona when both are available', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: { enabled: true, projectId: 'prj_123' },
+      }],
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Main Daytona',
+        apiKey: 'daytona-secret',
+        enabled: true,
+      }],
+    }));
+
+    const burst = prioritizeReadyRemoteExecutionTargets(targets, [], 'npm install lodash');
+    expect(burst[0]?.id).toBe('vercel:vercel-main');
+
+    const stateful = prioritizeReadyRemoteExecutionTargets(targets, [], 'npm run build');
+    expect(stateful[0]?.id).toBe('daytona:daytona-main');
+  });
+
+  it('vetoes Vercel and prioritizes Daytona when native dependencies are detected', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: { enabled: true, projectId: 'prj_123' },
+      }],
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Main Daytona',
+        apiKey: 'daytona-secret',
+        enabled: true,
+      }],
+    }));
+
+    // Even if it's a burst task (which usually goes to Vercel), native deps should force Daytona
+    const result = prioritizeReadyRemoteExecutionTargets(
+      targets, 
+      [], 
+      'npm install lodash', 
+      { hasNativeDependencies: true, detectedNativePackages: ['node-pty'] }
+    );
+    
+    expect(result[0]?.id).toBe('daytona:daytona-main');
+    expect(result[0]?.routingReason).toBe('build_environment_required');
+  });
 });

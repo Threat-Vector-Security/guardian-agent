@@ -381,9 +381,9 @@ export function createToolsDashboardCallbacks(
       return result;
     },
 
-    onToolsPreflight: ({ tools, requests }) => {
+    onToolsPreflight: async ({ tools, requests }) => {
       const inputs = Array.isArray(requests) && requests.length > 0 ? requests : (tools ?? []);
-      const results = options.toolExecutor.preflightTools(inputs);
+      const results = await options.toolExecutor.preflightTools(inputs);
       const policy = options.toolExecutor.getPolicy();
       return {
         results,

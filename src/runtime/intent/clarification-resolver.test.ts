@@ -1,41 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import {
-  repairIntentGatewayOperation,
-  repairIntentGatewayRoute,
-} from './clarification-resolver.js';
+import { repairIntentGatewayOperation, repairIntentGatewayRoute } from './clarification-resolver.js';
 import type { IntentGatewayRepairContext } from './types.js';
 
 describe('clarification-resolver', () => {
   it('pins clarification answers back to the pending personal-assistant route and operation', () => {
     const repairContext: IntentGatewayRepairContext = {
-      sourceContent: 'Friday Board Review',
+      sourceContent: 'JORDAN LEE',
       pendingAction: {
-        id: 'pending-routine-name',
+        id: 'pa-1',
         status: 'pending',
         blockerKind: 'clarification',
+        field: 'query',
         route: 'personal_assistant_task',
-        operation: 'create',
-        prompt: 'What should I call this Second Brain routine?',
-        originalRequest: 'Create a review for Board prep every Friday at 4 pm.',
-        transferPolicy: 'origin_surface_only',
+        operation: 'read',
+        prompt: 'Who is this contact?',
+        originalRequest: ' jordan lee',
+        transferPolicy: 'always',
       },
     };
 
     const route = repairIntentGatewayRoute(
-      'automation_control',
-      'update',
+      'personal_assistant_task',
+      'search',
       'clarification_answer',
       repairContext,
     );
     const operation = repairIntentGatewayOperation(
-      'update',
+      'search',
       route,
       'clarification_answer',
       repairContext,
     );
 
     expect(route).toBe('personal_assistant_task');
-    expect(operation).toBe('create');
+    expect(operation).toBe('read');
   });
 
   it('repairs remote sandbox requests away from coding_session_control', () => {
@@ -51,6 +49,28 @@ describe('clarification-resolver', () => {
     );
     const operation = repairIntentGatewayOperation(
       'navigate',
+      route,
+      'new_request',
+      repairContext,
+    );
+
+    expect(route).toBe('coding_task');
+    expect(operation).toBe('run');
+  });
+
+  it('repairs npm install requests misclassified as coding_session_control', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'Run npm install in the GuardianAgent root directory.',
+    };
+
+    const route = repairIntentGatewayRoute(
+      'coding_session_control',
+      'run',
+      'new_request',
+      repairContext,
+    );
+    const operation = repairIntentGatewayOperation(
+      'run',
       route,
       'new_request',
       repairContext,

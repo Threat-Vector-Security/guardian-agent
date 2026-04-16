@@ -19,7 +19,7 @@ import {
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
 import { normalizeOperation, normalizeRoute } from './normalization.js';
-import { isExplicitComplexPlanningRequest } from './request-patterns.js';
+import { isExplicitComplexPlanningRequest, isExplicitCodingExecutionRequest } from './request-patterns.js';
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from './text.js';
 import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.js';
 
@@ -33,17 +33,20 @@ export function repairIntentGatewayRoute(
   if (isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'complex_planning_task';
   }
-  if (isExplicitProviderConfigRequest(rawSourceContent)) {
-    return 'general_assistant';
-  }
-  if (isExplicitAutomationOutputRequest(rawSourceContent)) {
-    return 'automation_output_task';
+  if (isExplicitAutomationAuthoringRequest(rawSourceContent)) {
+    return 'automation_authoring';
   }
   if (isExplicitAutomationControlRequest(rawSourceContent)) {
     return 'automation_control';
   }
-  if (isExplicitAutomationAuthoringRequest(rawSourceContent)) {
-    return 'automation_authoring';
+  if (isExplicitAutomationOutputRequest(rawSourceContent)) {
+    return 'automation_output_task';
+  }
+  if (isExplicitProviderConfigRequest(rawSourceContent)) {
+    return 'general_assistant';
+  }
+  if (isExplicitCodingExecutionRequest(rawSourceContent)) {
+    return 'coding_task';
   }
   if (route === 'personal_assistant_task') {
     return route;

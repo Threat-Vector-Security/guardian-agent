@@ -144,7 +144,7 @@ interface CodingToolRegistrarContext {
   ) => { session?: CodeSessionRecord; error?: string };
   getCurrentCodeSessionRecord: (request?: Partial<ToolExecutionRequest>) => CodeSessionRecord | null;
   getRemoteExecutionTargets?: () => RemoteExecutionTargetDescriptor[];
-  resolveRemoteExecutionTarget?: (profileId?: string, command?: string) => RemoteExecutionResolvedTarget | null;
+  resolveRemoteExecutionTarget?: (profileId?: string, command?: string, workspaceRoot?: string) => Promise<RemoteExecutionResolvedTarget | null>;
   runRemoteExecutionJob?: (input: {
     request?: Partial<ToolExecutionRequest>;
     profileId?: string;
@@ -347,6 +347,7 @@ function buildRemoteExecutionOutput(result: RemoteExecutionRunResult): Record<st
     leaseMode: result.leaseMode,
     healthState: result.healthState,
     healthReason: result.healthReason,
+    routingReason: result.routingReason,
     command: result.requestedCommand,
     exitCode: result.exitCode,
     durationMs: result.durationMs,
@@ -522,7 +523,7 @@ async function runRemoteCodingCommand(
   }
   let target;
   try {
-    target = context.resolveRemoteExecutionTarget(input.profileId, input.command);
+    target = await context.resolveRemoteExecutionTarget?.(input.profileId, input.command);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const match = message.match(/Host '([^']+)' is not in allowedDomains\./);
@@ -622,7 +623,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
 
       // Automatic tier promotion if a remote execution target is available
       if (context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
-        const remoteTarget = context.resolveRemoteExecutionTarget(undefined, command);
+        const remoteTarget = await context.resolveRemoteExecutionTarget(undefined, command, request.codeContext?.workspaceRoot);
         if (remoteTarget) {
           const resolvedCwd = cwd ? await context.resolveAllowedPath(cwd, request) : context.getEffectiveWorkspaceRoot(request);
           context.guardAction(request, 'execute_command', {
@@ -1523,13 +1524,13 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         const command = requireString(args.command, 'command');
 
         // Automatic tier promotion if a remote execution target is available
-        const hasRemoteTarget = context.resolveRemoteExecutionTarget && context.resolveRemoteExecutionTarget(remoteProfile, command) != null;
+        const hasRemoteTarget = context.resolveRemoteExecutionTarget && (await context.resolveRemoteExecutionTarget(remoteProfile, command, request.codeContext?.workspaceRoot)) != null;
         if (isolation === 'local' && hasRemoteTarget && !args.isolation) {
           isolation = 'remote_if_available';
         }
 
         if (isolation !== 'local' && context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
-          const remoteTarget = context.resolveRemoteExecutionTarget(remoteProfile, command);
+          const remoteTarget = await context.resolveRemoteExecutionTarget(remoteProfile, command, request.codeContext?.workspaceRoot);
           if (remoteTarget) {
             const remoteRun = await runRemoteCodingCommand(context, {
               request,

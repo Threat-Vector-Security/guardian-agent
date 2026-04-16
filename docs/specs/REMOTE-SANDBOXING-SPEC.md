@@ -5,17 +5,14 @@
 **Owner:** Runtime + Code Workspace + WebUI  
 **Related:** [Security Isolation Spec](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-ISOLATION-SPEC.md), [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [WebUI Design Spec](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [Cloud Hosting Integration Spec](/mnt/s/Development/GuardianAgent/docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md)
 
-## Goal
-
-Define the provider-neutral remote sandboxing model Guardian uses for bounded coding execution.
-
-This spec exists so Vercel and Daytona behave as alternate backends under one orchestration model instead of growing into separate execution products with different lifecycle rules.
+## Goals
 
 The remote sandbox system must:
 
 - work when only Vercel is configured
 - work when only Daytona is configured
 - work when both are configured
+- automatically select the most compatible backend based on project characteristics (Intelligent Sandbox Advisory)
 - keep normal Guardian control-plane ownership local
 - support both short-lived isolated runs and intentionally reusable code-session sandboxes
 - expose longer-lived sandbox lifecycle control directly in the Code workspace
@@ -27,7 +24,6 @@ This spec does not turn Guardian into a hosted IDE or move the full runtime into
 It does not define:
 
 - full remote shell or terminal parity
-- provider-specific routing heuristics such as "always use Daytona for installs"
 - provider-owned approvals, memory, audit, or intent routing
 - hidden promotion of whole conversations into a remote sandbox runtime
 
@@ -74,6 +70,8 @@ Guardian supports two remote lease modes:
   - created deliberately for a code session
   - reused across later compatible runs
   - intended for retained prerequisites, warmed caches, repeated test/build loops, and longer-running coding work
+  - **Manual Lifecycle Control:** Managed sandboxes can be manually **Stopped** from the web UI to manage costs. Restartable providers such as Daytona also expose **Start** to resume the same sandbox; non-restartable providers such as Vercel require release and recreation after stop.
+  - **Real-time Status:** Each managed sandbox displays the provider-reported lifecycle state (for example **RUNNING**, **STOPPED**, **STARTING**, **EXPIRED**, **FAILED**, or **UNREACHABLE**).
 
 ## Control-Plane Ownership
 
@@ -197,6 +195,8 @@ Reusable sandbox operations live under the Code workspace and are exposed throug
 - `GET /api/code/sessions/:id/sandboxes`
 - `POST /api/code/sessions/:id/sandboxes`
 - `DELETE /api/code/sessions/:id/sandboxes/:leaseId`
+- `POST /api/code/sessions/:id/sandboxes/:leaseId/stop`
+- `POST /api/code/sessions/:id/sandboxes/:leaseId/start`
 
 The callback and route layers stay provider-neutral. They list targets, create managed sandboxes, and release managed sandboxes without branching into Vercel-specific or Daytona-specific orchestration paths.
 
@@ -262,9 +262,12 @@ Implemented in the current slice:
 - provider-neutral target prioritization
 - managed and ephemeral lease modes
 - lease resume support in the shared remote-execution service
+- **Intelligent Sandbox Advisory:** automatic backend selection based on project build requirements and native dependencies
+- **Manual Lifecycle Control:** web UI buttons to stop persistent sandboxes and resume restartable persistent sandboxes
+- **Real-time Status Visibility:** provider-reported lifecycle badges rather than only running/unreachable summaries
 - persisted managed sandbox records on code sessions
 - Code-page `Sandboxes` tab with provider tooltips and create/release actions
-- backend API routes for list/create/delete sandbox operations
+- backend API routes for list/create/delete/stop/start sandbox operations
 - backend-owned cleanup before code-session deletion
 
 Not in scope for this slice:

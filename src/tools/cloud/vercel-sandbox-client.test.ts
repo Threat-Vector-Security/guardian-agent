@@ -106,6 +106,20 @@ describe('VercelSandboxClient', () => {
     });
   });
 
+  it('updates the wrapped status after a sandbox is stopped', async () => {
+    createMock.mockResolvedValueOnce(createSandboxRecord());
+
+    const client = new VercelSandboxClient();
+    const session = await client.createSandbox({
+      target: TARGET,
+      timeoutMs: 45_000,
+    });
+
+    expect(session.status).toBe('running');
+    await session.stop(true);
+    expect(session.status).toBe('stopped');
+  });
+
   it('skips known Vercel base directories when ensuring nested paths', async () => {
     const client = new VercelSandboxClient();
     const session = {

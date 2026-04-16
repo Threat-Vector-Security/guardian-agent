@@ -2051,6 +2051,7 @@ function buildDashboardCallbacks(
       identity,
       conversations,
       runTimeline,
+      toolExecutor,
       refreshRunTimelineSnapshots,
       maybeScheduleCodeSession: (session) => sharedCodeWorkspaceTrustService?.maybeSchedule(session) ?? session,
       hydrateCodeSessionRuntimeState,
