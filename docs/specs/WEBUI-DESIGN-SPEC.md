@@ -400,6 +400,8 @@ The Code side rail must expose:
 
 - `Sessions` for saved coding workspaces and attachments
 - `Sandboxes` for managed reusable remote sandbox control tied to the active code session
+  - **Lifecycle Controls:** must include manual **Stop** and **Start** actions for persistent managed sandboxes to manage cloud costs.
+  - **Active Status:** must display real-time status badges (**RUNNING**, **STOPPED**) for each managed sandbox.
 
 ## Security
 

@@ -276,7 +276,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
         sendJSON(res, 400, { error: 'tools array or requests array is required' });
         return true;
       }
-      sendJSON(res, 200, dashboard.onToolsPreflight({ tools, requests }));
+      sendJSON(res, 200, await dashboard.onToolsPreflight({ tools, requests }));
       return true;
     } catch (err) {
       sendBadRequestError(res, err);

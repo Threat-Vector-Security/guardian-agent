@@ -261,6 +261,57 @@ describe('RemoteExecutionService', () => {
     })).rejects.toThrow(/includePath/i);
   });
 
+  it('stops a persisted managed lease through the provider using the resolved target', async () => {
+    const root = createRoot();
+    const providerStopLease = vi.fn(async () => undefined);
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => createLease(request.localWorkspaceRoot)),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(),
+        releaseLease: vi.fn(async () => undefined),
+        stopLease: providerStopLease,
+        run: vi.fn(),
+      }],
+    });
+    const lease = createLease(root, { leaseMode: 'managed' });
+
+    await service.stopLease({
+      target: TARGET,
+      lease,
+    });
+
+    expect(providerStopLease).toHaveBeenCalledWith(TARGET, lease);
+    expect(lease.state).toBe('stopped');
+  });
+
   it('supports remote commands that do not need a workspace snapshot', async () => {
     const root = createRoot();
     mkdirSync(join(root, 'node_modules', 'huge-package'), { recursive: true });

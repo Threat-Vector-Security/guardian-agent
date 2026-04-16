@@ -117,6 +117,21 @@ function assertDaytonaLease(lease: RemoteExecutionProviderLease) {
   return session as Awaited<ReturnType<DaytonaSandboxClient['createSandbox']>>;
 }
 
+function extractDaytonaSandboxState(state: unknown): string | undefined {
+  if (typeof state === 'string') {
+    const trimmed = state.trim();
+    return trimmed || undefined;
+  }
+  if (state && typeof state === 'object') {
+    const nested = (state as { state?: unknown }).state;
+    if (typeof nested === 'string') {
+      const trimmed = nested.trim();
+      return trimmed || undefined;
+    }
+  }
+  return undefined;
+}
+
 function classifyDaytonaLeaseState(state: string | undefined): {
   healthState: RemoteExecutionLeaseInspectionResult['healthState'];
   reason: string;
@@ -219,6 +234,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         target,
         sandboxId: existingLease.sandboxId,
         timeoutMs: target.defaultTimeoutMs,
+        remoteWorkspaceRootHint: existingLease.remoteWorkspaceRoot,
       });
       const checkedAt = Date.now();
       const classification = classifyDaytonaLeaseState(session.state);
@@ -233,6 +249,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         durationMs: checkedAt - startedAt,
         sandboxId: session.sandboxId,
         remoteWorkspaceRoot: session.workspaceRoot,
+        state: session.state,
       };
     } catch (error) {
       const checkedAt = Date.now();
@@ -247,6 +264,7 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         durationMs: checkedAt - startedAt,
         sandboxId: existingLease.sandboxId,
         remoteWorkspaceRoot: existingLease.remoteWorkspaceRoot,
+        state: extractDaytonaSandboxState(existingLease.state),
       };
     }
   }
@@ -291,8 +309,9 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       target,
       sandboxId: existingLease.sandboxId,
       timeoutMs: target.defaultTimeoutMs,
+      remoteWorkspaceRootHint: existingLease.remoteWorkspaceRoot,
     });
-    if (session.state && !/\b(started|running)\b/i.test(session.state)) {
+    if (session.state && !/\b(started|running|ready|starting)\b/i.test(session.state)) {
       await session.start(Math.max(1, Math.ceil((target.defaultTimeoutMs ?? 60_000) / 1000)));
     }
     const acquiredAt = Date.now();
@@ -443,6 +462,25 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
   async releaseLease(lease: RemoteExecutionProviderLease): Promise<void> {
     const session = assertDaytonaLease(lease);
     await session.destroy();
+  }
+
+  async stopLease(
+    targetInput: RemoteExecutionPreparedRequest['target'],
+    lease: RemoteExecutionLease | RemoteExecutionProviderLease,
+  ): Promise<void> {
+    const target = assertDaytonaTarget(targetInput);
+    const session = lease.state && typeof lease.state === 'object'
+      ? lease.state as Awaited<ReturnType<DaytonaSandboxClient['createSandbox']>>
+      : await this.client.getSandbox({
+        target,
+        sandboxId: lease.sandboxId,
+        timeoutMs: target.defaultTimeoutMs,
+        remoteWorkspaceRootHint: lease.remoteWorkspaceRoot,
+      });
+    const state = extractDaytonaSandboxState(session.state);
+    if (!state || /\b(started|running|ready|starting)\b/i.test(state)) {
+      await session.stop(Math.max(1, Math.ceil((target.defaultTimeoutMs ?? 60_000) / 1000)));
+    }
   }
 
   async run(request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult> {

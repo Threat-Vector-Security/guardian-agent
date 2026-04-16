@@ -42,12 +42,12 @@ export interface AutomationValidationResult {
   issues: AutomationValidationIssue[];
 }
 
-export function validateAutomationCompilation(
+export async function validateAutomationCompilation(
   compilation: AutomationAuthoringCompilation,
   requestText: string,
-  preflightTools: (requests: ToolPreflightRequest[]) => ToolPreflightResult[],
+  preflightTools: (requests: ToolPreflightRequest[]) => Promise<ToolPreflightResult[]>,
   options?: { workspaceRoot?: string; allowedPaths?: string[] },
-): AutomationValidationResult {
+): Promise<AutomationValidationResult> {
   const workspaceRoot = options?.workspaceRoot?.trim() || process.cwd();
   const allowedPaths = (options?.allowedPaths?.filter((value) => value.trim()) ?? [workspaceRoot])
     .map((value) => resolveWorkspacePath(workspaceRoot, value));
@@ -101,7 +101,7 @@ export function validateAutomationCompilation(
   }
 
   const preflightResults = normalizedRequests.length > 0
-    ? preflightTools(normalizedRequests)
+    ? await preflightTools(normalizedRequests)
     : [];
   for (const [index, result] of preflightResults.entries()) {
     const request = normalizedRequests[index];

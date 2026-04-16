@@ -481,9 +481,10 @@ The brokered chat worker is also launched through the managed sandbox layer with
 
 Guardian treats Layer 1.5 as a capability-driven execution boundary, not as a single sandbox implementation.
 
-The same control-plane rules can be satisfied by different backends depending on host capabilities and workload:
-
-- brokered worker isolation for the built-in chat/planner loop
+- **Intelligent Routing Heuristics:** Guardian analyzes your project (e.g., detecting `Makefile`, `go.mod`, `node-pty`) to automatically select the most compatible backend. It prioritize **Daytona** for complex builds requiring a full OS environment and **Vercel** for fast, stateless burst tasks.
+- **Language-Agnostic Fingerprinting:** The system works out behavioral equivalence for Python, Go, Rust, and C/C++ projects by scanning for build manifests and native dependencies, ensuring the "Build Essential" tier is used where appropriate.
+- **Manual Lifecycle Control & Visibility:** Persistent sandboxes can be manually **Stopped** or **Started** from the web UI to optimize cloud resource usage. Real-time status badges (**RUNNING**, **STOPPED**, **UNREACHABLE**) provide visibility into the active state of remote environments.
+- **Brokered worker isolation** for the built-in chat/planner loop.
 - local process sandboxing for managed child processes
 - stronger local virtualized execution for hostile or semi-trusted jobs when available
 - remote virtualized execution for bounded jobs when an operator has configured a trusted provider-backed sandbox

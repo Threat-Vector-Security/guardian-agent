@@ -58,6 +58,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
       executeCommand: vi.fn(async () => ({
         exitCode: 0,
@@ -115,6 +116,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
       executeCommand: vi.fn(async () => {
         throw new Error('Command timed out while waiting for completion.');
@@ -162,6 +164,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
       executeCommand: vi.fn()
         .mockResolvedValueOnce({
@@ -231,6 +234,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
       executeCommand: vi.fn(async () => ({
         exitCode: 0,
@@ -270,6 +274,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
       executeCommand: vi.fn(async () => ({
         exitCode: 0,
@@ -303,8 +308,49 @@ describe('DaytonaRemoteExecutionProvider', () => {
     expect(result.healthState).toBe('healthy');
     expect(result.reason).toContain('restartable');
     expect(result.remoteWorkspaceRoot).toBe('/home/daytona/guardian-workspace');
+    expect(result.state).toBe('stopped');
     expect(session.start).not.toHaveBeenCalled();
     expect(session.executeCommand).not.toHaveBeenCalled();
     expect(session.destroy).not.toHaveBeenCalled();
+  });
+
+  it('stops a managed lease by looking up the sandbox when only persisted lease data is available', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_stop_lookup',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => ({ exitCode: 0, result: '' })),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    await provider.stopLease(TARGET, {
+      id: 'lease_existing',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: session.workspaceRoot,
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+    });
+
+    expect(session.stop).toHaveBeenCalledWith(60);
   });
 });

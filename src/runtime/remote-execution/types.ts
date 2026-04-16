@@ -20,6 +20,7 @@ export interface RemoteExecutionResolvedTargetBase {
   allowedCidrs: string[];
   defaultTimeoutMs?: number;
   defaultVcpus?: number;
+  routingReason?: string;
 }
 
 export interface VercelRemoteExecutionResolvedTarget extends RemoteExecutionResolvedTargetBase {
@@ -43,6 +44,15 @@ export interface DaytonaRemoteExecutionResolvedTarget extends RemoteExecutionRes
 export type RemoteExecutionResolvedTarget =
   | VercelRemoteExecutionResolvedTarget
   | DaytonaRemoteExecutionResolvedTarget;
+
+export type RemoteExecutionCapabilityTier = 'runtime_only' | 'build_essential' | 'full_os_persistence';
+
+export interface RemoteExecutionWorkspaceContext {
+  hasNativeDependencies?: boolean;
+  detectedNativePackages?: string[];
+  requiredCapabilityTier?: RemoteExecutionCapabilityTier;
+  detectedBuildMarkers?: string[];
+}
 
 export interface RemoteExecutionCommandSpec {
   requestedCommand: string;
@@ -121,6 +131,7 @@ export interface RemoteExecutionLeaseInspectionResult {
   durationMs: number;
   sandboxId?: string;
   remoteWorkspaceRoot?: string;
+  state?: string;
 }
 
 export interface RemoteExecutionLease {
@@ -140,10 +151,10 @@ export interface RemoteExecutionLease {
   vcpus?: number;
   trackedRemotePaths: string[];
   leaseMode: RemoteExecutionLeaseMode;
+  state?: unknown;
 }
 
 export interface RemoteExecutionProviderLease extends RemoteExecutionLease {
-  state?: unknown;
 }
 
 export interface RemoteExecutionLeaseCreateRequest {
@@ -185,6 +196,7 @@ export interface RemoteExecutionRunResult {
   onProgress?: (message: string) => void;
   healthState?: RemoteExecutionHealthState;
   healthReason?: string;
+  routingReason?: string;
   leaseId?: string;
   leaseScope?: RemoteExecutionLeaseScope;
   leaseReused?: boolean;
@@ -208,13 +220,21 @@ export interface RemoteExecutionProvider {
   resumeLease(target: RemoteExecutionResolvedTarget, lease: RemoteExecutionLease): Promise<RemoteExecutionProviderLease>;
   runWithLease(lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult>;
   releaseLease(lease: RemoteExecutionProviderLease): Promise<void>;
+  stopLease?(target: RemoteExecutionResolvedTarget, lease: RemoteExecutionLease | RemoteExecutionProviderLease): Promise<void>;
   run(request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult>;
 }
 
 export interface RemoteExecutionServiceLike {
   runBoundedJob(request: RemoteExecutionRunRequest): Promise<RemoteExecutionRunResult>;
   acquireLease?(request: RemoteExecutionLeaseAcquireRequest): Promise<RemoteExecutionLease>;
+  resumeLease?(
+    target: RemoteExecutionResolvedTarget,
+    lease: RemoteExecutionLease,
+    request?: RemoteExecutionLeaseCreateRequest,
+  ): Promise<RemoteExecutionProviderLease>;
   disposeLease?(request: { target: RemoteExecutionResolvedTarget; lease: RemoteExecutionLease }): Promise<void>;
+  stopLease?(request: { target: RemoteExecutionResolvedTarget; lease: RemoteExecutionLease }): Promise<void>;
+  stopAllManagedLeases?(): Promise<void>;
   inspectLease?(request: {
     target: RemoteExecutionResolvedTarget;
     lease: RemoteExecutionLease;

@@ -8,6 +8,9 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_VCPUS = 2;
 const SUPPORTED_API_BASE_URL = 'https://api.vercel.com/';
 const VERCEL_DIRECTORY_PREFIXES = new Set(['/vercel', '/vercel/sandbox']);
+type VercelSandboxHandle =
+  | Awaited<ReturnType<typeof Sandbox.create>>
+  | Awaited<ReturnType<typeof Sandbox.get>>;
 
 export interface VercelSandboxSession {
   sandboxId: string;
@@ -65,6 +68,42 @@ function assertSupportedApiBaseUrl(apiBaseUrl: string | undefined): void {
   }
 }
 
+function buildWrappedVercelSandbox(sandbox: VercelSandboxHandle): VercelSandboxSession {
+  const wrapped: VercelSandboxSession = {
+    sandboxId: sandbox.sandboxId,
+    status: sandbox.status,
+    mkDir: async (path) => {
+      await sandbox.mkDir(path);
+    },
+    writeFiles: async (files) => {
+      await sandbox.writeFiles(files);
+    },
+    runCommand: async (command) => {
+      const result = await sandbox.runCommand({
+        cmd: command.cmd,
+        args: command.args,
+        cwd: command.cwd,
+        env: command.env,
+      });
+      return {
+        exitCode: result.exitCode,
+        stdout: await result.stdout(),
+        stderr: await result.stderr(),
+      };
+    },
+    readFileToBuffer: async (file) => sandbox.readFileToBuffer(file),
+    stop: async (blocking) => {
+      await sandbox.stop({ blocking });
+      wrapped.status = 'stopped';
+    },
+    extendTimeout: async (durationMs) => {
+      await sandbox.extendTimeout(durationMs);
+      wrapped.status = sandbox.status ?? wrapped.status;
+    },
+  };
+  return wrapped;
+}
+
 async function defaultSandboxFactory(input: VercelSandboxCreateInput): Promise<VercelSandboxSession> {
   assertSupportedApiBaseUrl(input.target.apiBaseUrl);
   const timeout = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -93,36 +132,7 @@ async function defaultSandboxFactory(input: VercelSandboxCreateInput): Promise<V
         runtime: input.runtime ?? DEFAULT_RUNTIME,
         networkPolicy,
       });
-  return {
-    sandboxId: sandbox.sandboxId,
-    status: sandbox.status,
-    mkDir: async (path) => {
-      await sandbox.mkDir(path);
-    },
-    writeFiles: async (files) => {
-      await sandbox.writeFiles(files);
-    },
-    runCommand: async (command) => {
-      const result = await sandbox.runCommand({
-        cmd: command.cmd,
-        args: command.args,
-        cwd: command.cwd,
-        env: command.env,
-      });
-      return {
-        exitCode: result.exitCode,
-        stdout: await result.stdout(),
-        stderr: await result.stderr(),
-      };
-    },
-    readFileToBuffer: async (file) => sandbox.readFileToBuffer(file),
-    stop: async (blocking) => {
-      await sandbox.stop({ blocking });
-    },
-    extendTimeout: async (durationMs) => {
-      await sandbox.extendTimeout(durationMs);
-    },
-  };
+  return buildWrappedVercelSandbox(sandbox);
 }
 
 async function defaultSandboxLookup(input: VercelSandboxGetInput): Promise<VercelSandboxSession> {
@@ -133,36 +143,7 @@ async function defaultSandboxLookup(input: VercelSandboxGetInput): Promise<Verce
     teamId: input.target.teamId,
     projectId: input.target.projectId,
   });
-  return {
-    sandboxId: sandbox.sandboxId,
-    status: sandbox.status,
-    mkDir: async (path) => {
-      await sandbox.mkDir(path);
-    },
-    writeFiles: async (files) => {
-      await sandbox.writeFiles(files);
-    },
-    runCommand: async (command) => {
-      const result = await sandbox.runCommand({
-        cmd: command.cmd,
-        args: command.args,
-        cwd: command.cwd,
-        env: command.env,
-      });
-      return {
-        exitCode: result.exitCode,
-        stdout: await result.stdout(),
-        stderr: await result.stderr(),
-      };
-    },
-    readFileToBuffer: async (file) => sandbox.readFileToBuffer(file),
-    stop: async (blocking) => {
-      await sandbox.stop({ blocking });
-    },
-    extendTimeout: async (durationMs) => {
-      await sandbox.extendTimeout(durationMs);
-    },
-  };
+  return buildWrappedVercelSandbox(sandbox);
 }
 
 export class VercelSandboxClient {

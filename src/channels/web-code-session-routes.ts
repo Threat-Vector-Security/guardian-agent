@@ -436,6 +436,76 @@ export async function handleWebCodeSessionRoutes(
     return true;
   }
 
+  const codeSessionSandboxStopMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/sandboxes\/([^/]+)\/stop$/)
+    : null;
+  if (codeSessionSandboxStopMatch) {
+    if (!dashboard.onCodeSessionSandboxStop) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const sessionId = decodeURIComponent(codeSessionSandboxStopMatch[1]);
+    const leaseId = decodeURIComponent(codeSessionSandboxStopMatch[2]);
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as {
+      userId?: string;
+      channel?: string;
+      surfaceId?: string;
+    };
+    const principal = context.resolveRequestPrincipal(req);
+    try {
+      const result = await dashboard.onCodeSessionSandboxStop({
+        sessionId,
+        leaseId,
+        userId: parsed.userId || 'web-user',
+        principalId: principal.principalId,
+        channel: parsed.channel || 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      });
+      sendJSON(res, 200, result);
+    } catch (err) {
+      context.logInternalError('Code session sandbox stop failed', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+    }
+    return true;
+  }
+
+  const codeSessionSandboxStartMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/sandboxes\/([^/]+)\/start$/)
+    : null;
+  if (codeSessionSandboxStartMatch) {
+    if (!dashboard.onCodeSessionSandboxStart) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const sessionId = decodeURIComponent(codeSessionSandboxStartMatch[1]);
+    const leaseId = decodeURIComponent(codeSessionSandboxStartMatch[2]);
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as {
+      userId?: string;
+      channel?: string;
+      surfaceId?: string;
+    };
+    const principal = context.resolveRequestPrincipal(req);
+    try {
+      const result = await dashboard.onCodeSessionSandboxStart({
+        sessionId,
+        leaseId,
+        userId: parsed.userId || 'web-user',
+        principalId: principal.principalId,
+        channel: parsed.channel || 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      });
+      sendJSON(res, 200, result);
+    } catch (err) {
+      context.logInternalError('Code session sandbox start failed', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+    }
+    return true;
+  }
+
   const codeSessionMatch = url.pathname.match(/^\/api\/code\/sessions\/([^/]+)$/);
   if (codeSessionMatch) {
     const sessionId = decodeURIComponent(codeSessionMatch[1]);

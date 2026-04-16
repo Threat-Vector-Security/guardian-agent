@@ -1,5 +1,6 @@
 import type { AssistantCloudConfig } from '../../config/types.js';
 import type { CodeSessionWorkflowType } from '../coding-workflows.js';
+import type { RemoteExecutionWorkspaceContext } from './types.js';
 
 export type RemoteExecutionBackendKind = 'vercel_sandbox' | 'daytona_sandbox';
 export type RemoteExecutionCapabilityState = 'disabled' | 'incomplete' | 'ready';
@@ -40,6 +41,7 @@ export interface RemoteExecutionTargetDescriptor {
   healthDurationMs?: number;
   activeLeaseId?: string;
   activeSandboxId?: string;
+  routingReason?: string;
 }
 
 export interface WorkflowIsolationRecommendation {
@@ -57,15 +59,57 @@ export interface WorkflowIsolationRecommendation {
 export function prioritizeReadyRemoteExecutionTargets(
   targets: RemoteExecutionTargetDescriptor[],
   preferredTargetIds: Array<string | null | undefined> = [],
+  commandString?: string,
+  workspaceContext?: RemoteExecutionWorkspaceContext,
 ): RemoteExecutionTargetDescriptor[] {
   const readyTargets = targets.filter((entry) => isRemoteExecutionTargetReady(entry));
   if (readyTargets.length === 0) {
     return [];
   }
 
-  const orderedPreferredIds = preferredTargetIds
+  let orderedPreferredIds = preferredTargetIds
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value) && value !== 'automatic');
+
+  if (commandString) {
+    const isBurst = /^(npm|pnpm|yarn|bun|pip) (install|add|remove|ci)/.test(commandString)
+      || /^(npm|pnpm|yarn|bun) run (lint|test|format)/.test(commandString)
+      || /^(pytest|jest|vitest|eslint|prettier)/.test(commandString);
+    const isStateful = /^(npm|pnpm|yarn|bun) run (build|dev|start)/.test(commandString)
+      || /^(tsc|webpack|vite|rollup|next build)/.test(commandString);
+      
+    const hasVercel = readyTargets.some((t) => t.backendKind === 'vercel_sandbox');
+    const hasDaytona = readyTargets.some((t) => t.backendKind === 'daytona_sandbox');
+    
+    if (hasVercel && hasDaytona) {
+       // Heuristic: If workspace requires build-essential capabilities or native dependencies, veto Vercel.
+       // Vercel sandboxes are typically lean and lack build tools for compilation (C++, Rust, Go, Python native).
+       const needsBuildEnv = workspaceContext?.requiredCapabilityTier === 'build_essential' 
+          || workspaceContext?.requiredCapabilityTier === 'full_os_persistence'
+          || workspaceContext?.hasNativeDependencies;
+
+       if (needsBuildEnv) {
+          const bestDaytona = readyTargets.find((t) => t.backendKind === 'daytona_sandbox');
+          if (bestDaytona) {
+            bestDaytona.routingReason = 'build_environment_required';
+            orderedPreferredIds = [bestDaytona.id, ...orderedPreferredIds.filter((id) => id !== bestDaytona.id)];
+          }
+       } else if (isBurst) {
+          const bestVercel = readyTargets.find((t) => t.backendKind === 'vercel_sandbox');
+          if (bestVercel) {
+            bestVercel.routingReason = 'burst_task_optimization';
+            orderedPreferredIds = [bestVercel.id, ...orderedPreferredIds.filter((id) => id !== bestVercel.id)];
+          }
+       } else if (isStateful) {
+          const bestDaytona = readyTargets.find((t) => t.backendKind === 'daytona_sandbox');
+          if (bestDaytona) {
+            bestDaytona.routingReason = 'stateful_task_optimization';
+            orderedPreferredIds = [bestDaytona.id, ...orderedPreferredIds.filter((id) => id !== bestDaytona.id)];
+          }
+       }
+    }
+  }
+
   if (orderedPreferredIds.length === 0) {
     return sortSnapshotBackedTargets(readyTargets);
   }

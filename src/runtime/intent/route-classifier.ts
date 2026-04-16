@@ -489,7 +489,7 @@ const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
   'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
   'Use only these exact resolution values: ready, needs_clarification.',
   'Prefer coding_session_control for switching, attaching, detaching, listing, or inspecting coding workspaces or sessions.',
-  'Prefer coding_task for code work inside a workspace, repo inspection, implementation, review, or explicit coding-backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',
+  'Prefer coding_task for code work inside a workspace, repo inspection, implementation, review, environment setup (e.g. npm/pip install), or explicit coding-backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',
   'Prefer complex_planning_task only when the user explicitly asks for Guardian\'s complex-planning path, planner path, or DAG planner route itself.',
   'Prefer personal_assistant_task for Second Brain notes, tasks, calendar planning, briefs, contacts, routines, and personal retrieval.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, or Outlook Calendar CRUD.',

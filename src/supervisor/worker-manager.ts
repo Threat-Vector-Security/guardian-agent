@@ -528,13 +528,13 @@ export class WorkerManager {
     const workspaceRoot = allowedPaths[0] || process.cwd();
     const preflightTools = this.tools.preflightTools
       ? (requests: Array<{ name: string; args?: Record<string, unknown> }>) => this.tools.preflightTools(requests)
-      : (requests: Array<{ name: string; args?: Record<string, unknown> }>) => requests.map((request) => ({
+      : (requests: Array<{ name: string; args?: Record<string, unknown> }>) => Promise.resolve(requests.map((request) => ({
           name: request.name,
           found: true,
           decision: 'allow' as const,
           reason: 'No worker-manager preflight available; allowing direct automation compile fallback.',
           fixes: [],
-        }));
+        })));
     const trackedPendingApprovalIds: string[] = [];
     const result = await tryAutomationPreRoute({
       agentId: input.agentId,

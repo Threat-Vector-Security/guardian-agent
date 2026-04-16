@@ -12,6 +12,7 @@ import type {
   RemoteExecutionPreparedRequest,
   RemoteExecutionProvider,
   RemoteExecutionProviderLease,
+  RemoteExecutionResolvedTarget,
   RemoteExecutionRunRequest,
   RemoteExecutionRunResult,
   RemoteExecutionServiceLike,
@@ -139,6 +140,7 @@ export class RemoteExecutionTargetUnavailableError extends Error {
 export class RemoteExecutionService implements RemoteExecutionServiceLike {
   private readonly providers = new Map<RemoteExecutionProvider['backendKind'], RemoteExecutionProvider>();
   private readonly targetHealth = new Map<string, RemoteExecutionTargetHealthSummary>();
+  private readonly targetsById = new Map<string, RemoteExecutionResolvedTarget>();
   private readonly leasesByKey = new Map<string, RemoteExecutionProviderLease>();
   private readonly defaultMaxFiles: number;
   private readonly defaultMaxBytes: number;
@@ -194,11 +196,13 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       vcpus: lease.vcpus,
       trackedRemotePaths: [...lease.trackedRemotePaths],
       leaseMode: lease.leaseMode,
+      state: lease.state,
     }));
   }
 
   async acquireLease(request: RemoteExecutionLeaseAcquireRequest): Promise<RemoteExecutionLease> {
     await this.releaseExpiredLeases();
+    this.rememberTarget(request.target);
 
     const provider = this.providers.get(request.target.backendKind);
     if (!provider) {
@@ -229,7 +233,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
 
     if (!lease) {
       lease = request.existingLease
-        ? await this.resumeLease(provider, request.target, request.existingLease, {
+        ? await this.resumeLease(request.target, request.existingLease, {
           ...request,
           localWorkspaceRoot: workspaceRoot,
           codeSessionId: normalizedCodeSessionId,
@@ -266,12 +270,13 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     target: RemoteExecutionRunRequest['target'];
     lease: RemoteExecutionLease;
   }): Promise<void> {
+    this.rememberTarget(request.target);
     const provider = this.providers.get(request.target.backendKind);
     if (!provider) return;
     const leaseKey = this.findLeaseKey(request.lease.id);
     const activeLease = leaseKey ? this.leasesByKey.get(leaseKey) : undefined;
     const lease = activeLease
-      ?? await this.resumeLease(provider, request.target, request.lease, {
+      ?? await this.resumeLease(request.target, request.lease, {
         target: request.target,
         localWorkspaceRoot: request.lease.localWorkspaceRoot,
         codeSessionId: request.lease.codeSessionId,
@@ -288,6 +293,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     target: RemoteExecutionRunRequest['target'];
     lease: RemoteExecutionLease;
   }): Promise<RemoteExecutionLeaseInspectionResult> {
+    this.rememberTarget(request.target);
     const provider = this.providers.get(request.target.backendKind);
     if (!provider) {
       return {
@@ -308,6 +314,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
 
   async runBoundedJob(request: RemoteExecutionRunRequest): Promise<RemoteExecutionRunResult> {
     await this.releaseExpiredLeases();
+    this.rememberTarget(request.target);
 
     const provider = this.providers.get(request.target.backendKind);
     if (!provider) {
@@ -340,7 +347,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
 
     if (!lease) {
       if (request.preferredLease && this.isLeaseCompatible(request.preferredLease, request, prepared.workspaceRoot)) {
-        lease = await this.resumeLease(provider, request.target, request.preferredLease, {
+        lease = await this.resumeLease(request.target, request.preferredLease, {
           target: request.target,
           localWorkspaceRoot: prepared.workspaceRoot,
           codeSessionId: normalizedCodeSessionId,
@@ -391,6 +398,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
         healthReason: leaseReused
           ? 'Remote sandbox lease reused successfully.'
           : 'Remote sandbox lease created successfully.',
+        routingReason: request.target.routingReason,
         leaseId: lease.id,
         leaseScope: normalizedCodeSessionId ? 'code_session' : 'ephemeral',
         leaseReused,
@@ -500,18 +508,24 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     return lease;
   }
 
-  private async resumeLease(
-    provider: RemoteExecutionProvider,
+  async resumeLease(
     target: RemoteExecutionRunRequest['target'],
     existingLease: RemoteExecutionLease,
-    request: RemoteExecutionLeaseCreateRequest,
+    request?: RemoteExecutionLeaseCreateRequest,
   ): Promise<RemoteExecutionProviderLease> {
+    this.rememberTarget(target);
+    const provider = this.providers.get(target.backendKind);
+    if (!provider) {
+      throw new Error(`Remote execution provider '${target.backendKind}' is not available.`);
+    }
     const lease = await provider.resumeLease(target, existingLease);
-    lease.localWorkspaceRoot = request.localWorkspaceRoot;
-    lease.codeSessionId = request.codeSessionId;
-    lease.runtime = request.runtime ?? existingLease.runtime;
-    lease.vcpus = request.vcpus ?? existingLease.vcpus;
-    lease.leaseMode = normalizeLeaseMode(request.leaseMode ?? existingLease.leaseMode);
+    if (request) {
+      lease.localWorkspaceRoot = request.localWorkspaceRoot;
+      lease.codeSessionId = request.codeSessionId;
+      lease.runtime = request.runtime ?? existingLease.runtime;
+      lease.vcpus = request.vcpus ?? existingLease.vcpus;
+      lease.leaseMode = normalizeLeaseMode(request.leaseMode ?? existingLease.leaseMode);
+    }
     lease.trackedRemotePaths = Array.isArray(existingLease.trackedRemotePaths)
       ? [...existingLease.trackedRemotePaths]
       : [];
@@ -550,6 +564,42 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     return true;
   }
 
+  async stopLease(request: { target: RemoteExecutionResolvedTarget; lease: RemoteExecutionLease }): Promise<void> {
+    this.rememberTarget(request.target);
+    const provider = this.providers.get(request.target.backendKind);
+    if (!provider?.stopLease) return;
+    const leaseKey = this.findLeaseKey(request.lease.id);
+    const internalLease = leaseKey ? this.leasesByKey.get(leaseKey) : undefined;
+    const lease = internalLease ?? request.lease;
+    await provider.stopLease(request.target, lease);
+    lease.state = 'stopped';
+    if (leaseKey) {
+      this.leasesByKey.delete(leaseKey);
+    }
+  }
+
+  async stopAllManagedLeases(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    for (const lease of this.leasesByKey.values()) {
+      if (lease.leaseMode === 'managed') {
+        const target = this.targetsById.get(lease.targetId);
+        const provider = this.providers.get(lease.backendKind);
+        if (target && provider?.stopLease && lease.state !== 'stopped') {
+          promises.push(
+            provider.stopLease(target, lease).then(() => {
+              lease.state = 'stopped';
+              const leaseKey = this.findLeaseKey(lease.id);
+              if (leaseKey) {
+                this.leasesByKey.delete(leaseKey);
+              }
+            }).catch(() => undefined)
+          );
+        }
+      }
+    }
+    await Promise.all(promises);
+  }
+
   private updateLeaseTimestamps(lease: RemoteExecutionProviderLease, mode: RemoteExecutionLeaseMode): void {
     const now = this.now();
     lease.lastUsedAt = now;
@@ -561,13 +611,25 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
   private async releaseExpiredLeases(): Promise<void> {
     const now = this.now();
     for (const [leaseKey, lease] of this.leasesByKey.entries()) {
-      if (lease.leaseMode === 'managed') continue;
-      if (lease.expiresAt > now) continue;
       const provider = this.providers.get(lease.backendKind);
       if (!provider) {
         this.leasesByKey.delete(leaseKey);
         continue;
       }
+
+      if (lease.leaseMode === 'managed') {
+        const target = this.targetsById.get(lease.targetId);
+        if (target && provider.stopLease && (now - lease.lastUsedAt > this.leaseIdleTtlMs)) {
+          if (lease.state !== 'stopped') {
+            await provider.stopLease(target, lease).catch(() => undefined);
+            lease.state = 'stopped';
+            this.leasesByKey.delete(leaseKey);
+          }
+        }
+        continue;
+      }
+
+      if (lease.expiresAt > now) continue;
       await this.releaseLease(provider, lease, leaseKey);
     }
   }
@@ -588,6 +650,10 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       if (lease.id === leaseId) return leaseKey;
     }
     return null;
+  }
+
+  private rememberTarget(target: RemoteExecutionResolvedTarget): void {
+    this.targetsById.set(target.id, target);
   }
 
   private async prepareRequest(request: RemoteExecutionRunRequest): Promise<RemoteExecutionPreparedRequest> {

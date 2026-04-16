@@ -4,6 +4,7 @@ import type { DaytonaRemoteExecutionResolvedTarget } from '../../runtime/remote-
 
 const {
   createMock,
+  getMock,
   disposeMock,
   getWorkDirMock,
   getUserHomeDirMock,
@@ -13,9 +14,11 @@ const {
   executeCommandMock,
   downloadFileMock,
   deleteMock,
+  startMock,
   DaytonaCtor,
 } = vi.hoisted(() => ({
   createMock: vi.fn(),
+  getMock: vi.fn(),
   disposeMock: vi.fn(async () => undefined),
   getWorkDirMock: vi.fn(async () => '/home/daytona'),
   getUserHomeDirMock: vi.fn(async () => '/home/daytona'),
@@ -25,8 +28,12 @@ const {
   executeCommandMock: vi.fn(async () => ({ exitCode: 0, result: '' })),
   downloadFileMock: vi.fn(async () => null),
   deleteMock: vi.fn(async () => undefined),
+  startMock: vi.fn(async function (this: { state?: string }) {
+    this.state = 'started';
+  }),
   DaytonaCtor: class {
     create = createMock;
+    get = getMock;
     [Symbol.asyncDispose] = disposeMock;
   },
 }));
@@ -50,9 +57,10 @@ const TARGET: DaytonaRemoteExecutionResolvedTarget = {
   allowedCidrs: [],
 };
 
-function createSandboxRecord() {
+function createSandboxRecord(state = 'started') {
   return {
     id: 'sandbox_123',
+    state,
     getWorkDir: getWorkDirMock,
     getUserHomeDir: getUserHomeDirMock,
     fs: {
@@ -64,6 +72,7 @@ function createSandboxRecord() {
     process: {
       executeCommand: executeCommandMock,
     },
+    start: startMock,
     delete: deleteMock,
   };
 }
@@ -71,6 +80,7 @@ function createSandboxRecord() {
 describe('DaytonaSandboxClient', () => {
   beforeEach(() => {
     createMock.mockReset();
+    getMock.mockReset();
     disposeMock.mockClear();
     getWorkDirMock.mockClear();
     getUserHomeDirMock.mockClear();
@@ -80,6 +90,7 @@ describe('DaytonaSandboxClient', () => {
     executeCommandMock.mockClear();
     downloadFileMock.mockClear();
     deleteMock.mockClear();
+    startMock.mockClear();
   });
 
   it('retries sandbox creation without resources when Daytona rejects snapshot-backed resources', async () => {
@@ -122,5 +133,36 @@ describe('DaytonaSandboxClient', () => {
     expect(createMock).toHaveBeenCalledWith(expect.not.objectContaining({
       resources: expect.anything(),
     }), { timeout: 15 });
+  });
+
+  it('uses the persisted workspace root hint for stopped sandboxes without querying toolbox metadata', async () => {
+    getMock.mockResolvedValueOnce(createSandboxRecord('stopped'));
+
+    const client = new DaytonaSandboxClient();
+    const session = await client.getSandbox({
+      target: TARGET,
+      sandboxId: 'sandbox_123',
+      remoteWorkspaceRootHint: '/home/daytona/guardian-workspace',
+    });
+
+    expect(session.workspaceRoot).toBe('/home/daytona/guardian-workspace');
+    expect(getWorkDirMock).not.toHaveBeenCalled();
+    expect(getUserHomeDirMock).not.toHaveBeenCalled();
+  });
+
+  it('updates the wrapped session state after start', async () => {
+    getMock.mockResolvedValueOnce(createSandboxRecord('stopped'));
+
+    const client = new DaytonaSandboxClient();
+    const session = await client.getSandbox({
+      target: TARGET,
+      sandboxId: 'sandbox_123',
+      remoteWorkspaceRootHint: '/home/daytona/guardian-workspace',
+    });
+
+    expect(session.state).toBe('stopped');
+    await session.start(30);
+    expect(session.state).toBe('started');
+    expect(startMock).toHaveBeenCalledWith(30);
   });
 });

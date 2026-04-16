@@ -48,6 +48,8 @@ Core layers:
 - `ToolExecutor` exposes coding-session tools and enforces repo-scoped coding sandbox rules
 - the shared remote-execution service can keep a session-scoped remote sandbox lease for repeated bounded verification/setup jobs so installs and caches can survive across multiple runs in the same coding session
 - the Code side rail exposes `Sessions` and `Sandboxes`, with `Sandboxes` owning reusable remote sandbox lifecycle for the active code session
+  - **Lifecycle Management:** Users can manually **Stop** (hibernate) and **Start** (resume) persistent managed sandboxes to manage costs.
+  - **Live Status:** Managed sandboxes display real-time status badges (**RUNNING**, **STOPPED**) based on their active cloud state.
 - the Code page renders and edits a server-owned session, but still keeps transient UI cache locally
 
 ## Backend-Owned Code Sessions

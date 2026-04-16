@@ -16,6 +16,7 @@ export interface DaytonaSandboxSession {
   uploadFiles(files: Array<{ path: string; content: string | Uint8Array }>, timeoutSec?: number): Promise<void>;
   setFileMode(path: string, mode: number): Promise<void>;
   start(timeoutSec?: number): Promise<void>;
+  stop(timeoutSec?: number, force?: boolean): Promise<void>;
   refreshActivity(): Promise<void>;
   executeCommand(
     command: string,
@@ -39,6 +40,7 @@ export interface DaytonaSandboxGetInput {
   target: DaytonaRemoteExecutionResolvedTarget;
   sandboxId: string;
   timeoutMs?: number;
+  remoteWorkspaceRootHint?: string;
 }
 
 export interface DaytonaSandboxClientOptions {
@@ -70,6 +72,17 @@ function isSnapshotResourcesConflictError(error: unknown): boolean {
   return /cannot specify sandbox resources when using a snapshot/i.test(message);
 }
 
+function normalizeWorkspaceRootHint(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.replace(/\\/g, '/') : undefined;
+}
+
+function isSandboxToolboxReady(state: string | undefined): boolean {
+  const normalized = state?.trim().toLowerCase();
+  if (!normalized) return true;
+  return /\b(started|running|ready|starting)\b/.test(normalized);
+}
+
 async function createDaytonaSandbox(
   client: Daytona,
   params: Record<string, unknown>,
@@ -92,7 +105,7 @@ function buildWrappedDaytonaSandbox(
   timeoutSec: number,
   workspaceRoot: string,
 ): DaytonaSandboxSession {
-  return {
+  const session: DaytonaSandboxSession = {
     sandboxId: sandbox.id,
     workspaceRoot,
     state: sandbox.state,
@@ -119,9 +132,17 @@ function buildWrappedDaytonaSandbox(
     },
     start: async (startTimeoutSec = timeoutSec) => {
       await sandbox.start(startTimeoutSec);
+      session.state = sandbox.state;
+    },
+    stop: async (stopTimeoutSec = timeoutSec, force = false) => {
+      if (typeof sandbox.stop === 'function') {
+        await sandbox.stop(stopTimeoutSec, force);
+        session.state = sandbox.state;
+      }
     },
     refreshActivity: async () => {
       await sandbox.refreshActivity();
+      session.state = sandbox.state;
     },
     executeCommand: async (command, cwd, env, commandTimeoutSec = timeoutSec) => {
       const result = await sandbox.process.executeCommand(command, cwd, env, commandTimeoutSec);
@@ -148,6 +169,26 @@ function buildWrappedDaytonaSandbox(
       }
     },
   };
+  return session;
+}
+
+async function resolveDaytonaWorkspaceRoot(input: {
+  sandbox: Awaited<ReturnType<Daytona['create']>>;
+  remoteWorkspaceRootHint?: string;
+}): Promise<string> {
+  const hintedRoot = normalizeWorkspaceRootHint(input.remoteWorkspaceRootHint);
+  if (!isSandboxToolboxReady(input.sandbox.state)) {
+    return hintedRoot ?? '/tmp/guardian-workspace';
+  }
+  try {
+    const baseWorkDir = await input.sandbox.getWorkDir() ?? await input.sandbox.getUserHomeDir() ?? '/tmp';
+    return path.posix.join(baseWorkDir.replace(/\\/g, '/'), 'guardian-workspace');
+  } catch (error) {
+    if (hintedRoot) {
+      return hintedRoot;
+    }
+    throw error;
+  }
 }
 
 async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<DaytonaSandboxSession> {
@@ -213,8 +254,10 @@ async function defaultSandboxLookup(input: DaytonaSandboxGetInput): Promise<Dayt
   const timeoutMs = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
   const timeoutSec = toTimeoutSec(timeoutMs);
   const sandbox = await client.get(input.sandboxId);
-  const baseWorkDir = await sandbox.getWorkDir() ?? await sandbox.getUserHomeDir() ?? '/tmp';
-  const workspaceRoot = path.posix.join(baseWorkDir.replace(/\\/g, '/'), 'guardian-workspace');
+  const workspaceRoot = await resolveDaytonaWorkspaceRoot({
+    sandbox,
+    remoteWorkspaceRootHint: input.remoteWorkspaceRootHint,
+  });
   return buildWrappedDaytonaSandbox(sandbox, client, timeoutSec, workspaceRoot);
 }
 

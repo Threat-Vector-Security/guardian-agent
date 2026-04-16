@@ -698,6 +698,14 @@ export const api = {
     method: 'DELETE',
     body: JSON.stringify(payload),
   }),
+  codeSessionSandboxStop: (sessionId, leaseId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/sandboxes/${encodeURIComponent(leaseId)}/stop`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionSandboxStart: (sessionId, leaseId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/sandboxes/${encodeURIComponent(leaseId)}/start`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   codeSessionDelete: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'DELETE',
     body: JSON.stringify(payload),

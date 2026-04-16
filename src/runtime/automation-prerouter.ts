@@ -33,13 +33,13 @@ interface AutomationPreRouteParams {
   agentId: string;
   message: UserMessage;
   checkAction?: AgentContext['checkAction'];
-  preflightTools?: (requests: Array<{ name: string; args?: Record<string, unknown> }>) => Array<{
+  preflightTools?: (requests: Array<{ name: string; args?: Record<string, unknown> }>) => Promise<Array<{
     name: string;
     found: boolean;
     decision: 'allow' | 'deny' | 'require_approval';
     reason: string;
     fixes: Array<{ type: 'tool_policy' | 'path' | 'command' | 'domain'; value: string; description: string }>;
-  }>;
+  }>>;
   workspaceRoot?: string;
   allowedPaths?: string[];
   executeTool: (
@@ -98,10 +98,10 @@ export async function tryAutomationPreRoute(
   const compilation = outcome.compilation;
 
   if (params.preflightTools) {
-    const validation = validateAutomationCompilation(
+    const validation = await validateAutomationCompilation(
       compilation,
       params.message.content,
-      params.preflightTools,
+      params.preflightTools ?? (() => Promise.resolve([])),
       { workspaceRoot: params.workspaceRoot, allowedPaths: params.allowedPaths },
     );
     if (!validation.ok) {

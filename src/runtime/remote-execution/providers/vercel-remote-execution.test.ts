@@ -356,9 +356,54 @@ describe('VercelRemoteExecutionProvider', () => {
     });
 
     expect(result.healthState).toBe('unreachable');
+    expect(result.state).toBe('expired');
     expect(result.reason).toContain('no longer reusable');
     expect(result.remoteWorkspaceRoot).toBe('/vercel/sandbox');
     expect(session.runCommand).not.toHaveBeenCalled();
+    expect(session.extendTimeout).not.toHaveBeenCalled();
+    expect(session.stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stopped sandbox visible during inspection without marking it unreachable', async () => {
+    const session: VercelSandboxSession = {
+      sandboxId: 'sandbox_stopped',
+      status: 'stopped',
+      mkDir: vi.fn(async () => undefined),
+      writeFiles: vi.fn(async () => undefined),
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      })),
+      readFileToBuffer: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+      extendTimeout: vi.fn(async () => undefined),
+    };
+    const provider = new VercelRemoteExecutionProvider({
+      client: new VercelSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.inspectLease(TARGET, {
+      id: 'lease_stopped',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: '/vercel/sandbox',
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+    });
+
+    expect(result.healthState).toBe('unknown');
+    expect(result.state).toBe('stopped');
+    expect(result.reason).toContain('is stopped');
     expect(session.extendTimeout).not.toHaveBeenCalled();
     expect(session.stop).not.toHaveBeenCalled();
   });
@@ -402,5 +447,84 @@ describe('VercelRemoteExecutionProvider', () => {
     expect(lease.sandboxId).toBe('sandbox_existing');
     expect(lease.leaseMode).toBe('managed');
     expect(session.extendTimeout).toHaveBeenCalled();
+  });
+
+  it('rejects attempts to resume a stopped Vercel sandbox', async () => {
+    const session: VercelSandboxSession = {
+      sandboxId: 'sandbox_existing',
+      status: 'stopped',
+      mkDir: vi.fn(async () => undefined),
+      writeFiles: vi.fn(async () => undefined),
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      })),
+      readFileToBuffer: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+      extendTimeout: vi.fn(async () => undefined),
+    };
+    const provider = new VercelRemoteExecutionProvider({
+      client: new VercelSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    await expect(provider.resumeLease(TARGET, {
+      id: 'lease_123',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: '/vercel/sandbox',
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: 1,
+      trackedRemotePaths: ['/workspace/package.json'],
+      leaseMode: 'managed',
+    })).rejects.toThrow(/cannot be restarted/i);
+    expect(session.extendTimeout).not.toHaveBeenCalled();
+  });
+
+  it('stops a running managed Vercel sandbox lease', async () => {
+    const session: VercelSandboxSession = {
+      sandboxId: 'sandbox_stop',
+      status: 'running',
+      mkDir: vi.fn(async () => undefined),
+      writeFiles: vi.fn(async () => undefined),
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      })),
+      readFileToBuffer: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+      extendTimeout: vi.fn(async () => undefined),
+    };
+    const provider = new VercelRemoteExecutionProvider({
+      client: new VercelSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    await provider.stopLease(TARGET, {
+      id: 'lease_stop',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: '/vercel/sandbox',
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+    });
+
+    expect(session.stop).toHaveBeenCalledWith(true);
   });
 });

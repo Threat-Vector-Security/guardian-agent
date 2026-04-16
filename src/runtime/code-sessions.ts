@@ -97,7 +97,8 @@ export interface CodeSessionManagedSandbox {
   sandboxId: string;
   localWorkspaceRoot: string;
   remoteWorkspaceRoot: string;
-  status: 'active' | 'released' | 'unreachable';
+  status: 'active' | 'released' | 'unreachable' | 'stopped';
+  state?: string;
   acquiredAt: number;
   lastUsedAt: number;
   expiresAt?: number;

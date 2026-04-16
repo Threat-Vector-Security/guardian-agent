@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { VercelSandboxClient } from '../../../tools/cloud/vercel-sandbox-client.js';
+import { VercelSandboxClient, type VercelSandboxSession } from '../../../tools/cloud/vercel-sandbox-client.js';
 import type {
   RemoteExecutionArtifact,
   RemoteExecutionLease,
@@ -156,10 +156,31 @@ function formatVercelExecutionError(
     : message;
 }
 
-function isReusableVercelSandboxStatus(status: string | undefined): boolean {
+function normalizeVercelSandboxStatus(status: string | undefined): string | undefined {
   const normalized = status?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function isStoppedVercelSandboxStatus(status: string | undefined): boolean {
+  return /\bstopped\b/.test(normalizeVercelSandboxStatus(status) ?? '');
+}
+
+function isStoppingVercelSandboxStatus(status: string | undefined): boolean {
+  return /\bstopping\b/.test(normalizeVercelSandboxStatus(status) ?? '');
+}
+
+function isTerminalVercelSandboxStatus(status: string | undefined): boolean {
+  return /\b(expired|delet(?:ed|ing)|terminat(?:ed|ing)|failed|error|dead)\b/.test(
+    normalizeVercelSandboxStatus(status) ?? '',
+  );
+}
+
+function isReusableVercelSandboxStatus(status: string | undefined): boolean {
+  const normalized = normalizeVercelSandboxStatus(status);
   if (!normalized) return true;
-  return !/\b(stopped|stopping|expired|delet(?:ed|ing)|terminat(?:ed|ing)|failed|error|dead)\b/.test(normalized);
+  return !isStoppedVercelSandboxStatus(normalized)
+    && !isStoppingVercelSandboxStatus(normalized)
+    && !isTerminalVercelSandboxStatus(normalized);
 }
 
 function encodeArtifact(pathValue: string, buffer: Buffer, maxBytes: number): RemoteExecutionArtifact {
@@ -194,6 +215,13 @@ function assertVercelLease(lease: RemoteExecutionProviderLease) {
     throw new Error(`Vercel lease '${lease.id}' does not have an active sandbox session.`);
   }
   return session as Awaited<ReturnType<VercelSandboxClient['createSandbox']>>;
+}
+
+function isVercelSandboxSession(value: unknown): value is VercelSandboxSession {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as VercelSandboxSession).sandboxId === 'string'
+    && typeof (value as VercelSandboxSession).stop === 'function';
 }
 
 export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
@@ -267,23 +295,37 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
         sandboxId: existingLease.sandboxId,
       });
       const checkedAt = Date.now();
-      const reusable = isReusableVercelSandboxStatus(session.status);
-      const quotedStatus = session.status?.trim()
-        ? ` (status: ${session.status.trim()})`
+      const normalizedStatus = normalizeVercelSandboxStatus(session.status);
+      const reusable = isReusableVercelSandboxStatus(normalizedStatus);
+      const quotedStatus = normalizedStatus
+        ? ` (status: ${normalizedStatus})`
         : '';
+      const healthState = isTerminalVercelSandboxStatus(normalizedStatus)
+        ? 'unreachable'
+        : (isStoppedVercelSandboxStatus(normalizedStatus) || isStoppingVercelSandboxStatus(normalizedStatus))
+          ? 'unknown'
+          : 'healthy';
+      const reason = isTerminalVercelSandboxStatus(normalizedStatus)
+        ? `Managed Vercel sandbox is no longer reusable${quotedStatus}.`
+        : isStoppedVercelSandboxStatus(normalizedStatus)
+          ? `Managed Vercel sandbox is stopped${quotedStatus}.`
+          : isStoppingVercelSandboxStatus(normalizedStatus)
+            ? `Managed Vercel sandbox is stopping${quotedStatus}.`
+            : reusable
+              ? `Managed Vercel sandbox is reachable${quotedStatus}.`
+              : `Managed Vercel sandbox is not reusable${quotedStatus}.`;
       return {
         targetId: target.id,
         backendKind: target.backendKind,
         profileId: target.profileId,
         profileName: target.profileName,
-        healthState: reusable ? 'healthy' : 'unreachable',
-        reason: reusable
-          ? `Managed Vercel sandbox is reachable${quotedStatus}.`
-          : `Managed Vercel sandbox is no longer reusable${quotedStatus}.`,
+        healthState,
+        reason,
         checkedAt,
         durationMs: checkedAt - startedAt,
         sandboxId: session.sandboxId,
         remoteWorkspaceRoot: VERCEL_WRITABLE_WORKSPACE_ROOT,
+        state: normalizedStatus,
       };
     } catch (error) {
       const checkedAt = Date.now();
@@ -341,6 +383,19 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
       target,
       sandboxId: existingLease.sandboxId,
     });
+    const normalizedStatus = normalizeVercelSandboxStatus(session.status);
+    if (!isReusableVercelSandboxStatus(normalizedStatus)) {
+      if (isStoppedVercelSandboxStatus(normalizedStatus)) {
+        throw new Error(
+          'Managed Vercel sandboxes cannot be restarted after stop. Release this sandbox and create a new one.',
+        );
+      }
+      throw new Error(
+        normalizedStatus
+          ? `Managed Vercel sandbox is not reusable while it is '${normalizedStatus}'. Release this sandbox and create a new one.`
+          : 'Managed Vercel sandbox is not reusable. Release this sandbox and create a new one.',
+      );
+    }
     const extensionMs = Math.max(5_000, target.defaultTimeoutMs ?? 300_000);
     await session.extendTimeout(extensionMs).catch(() => undefined);
     const acquiredAt = Date.now();
@@ -355,6 +410,28 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
       leaseMode: existingLease.leaseMode,
       state: session,
     };
+  }
+
+  async stopLease(
+    targetInput: RemoteExecutionPreparedRequest['target'],
+    existingLease: RemoteExecutionLease,
+  ): Promise<void> {
+    const target = assertVercelTarget(targetInput);
+    const session = isVercelSandboxSession(existingLease.state)
+      ? existingLease.state
+      : await this.client.getSandbox({
+        target,
+        sandboxId: existingLease.sandboxId,
+      });
+    const normalizedStatus = normalizeVercelSandboxStatus(session.status);
+    if (
+      isStoppedVercelSandboxStatus(normalizedStatus)
+      || isStoppingVercelSandboxStatus(normalizedStatus)
+      || isTerminalVercelSandboxStatus(normalizedStatus)
+    ) {
+      return;
+    }
+    await session.stop(true);
   }
 
   async runWithLease(

@@ -172,7 +172,17 @@ It provides strong guardrails, bounded containment, and tamper-evident telemetry
 
 Users remain responsible for deployment context, host hardening, credential hygiene, and legal/compliance requirements.
 
+## 16. Intelligent Isolation Advisory
+
+GuardianAgent treats execution isolation as a strategic technical choice, not just a configuration detail.
+
+GuardianAgent MUST:
+- proactively analyze project characteristics (e.g., native dependencies, build complexity) before selecting an isolation strategy
+- advise the user against technically incompatible sandbox routes (e.g., attempting native compilation in serverless-style lean sandboxes)
+- explain the rationale for sandbox selection when requested or when overriding default heuristics (e.g., choosing Daytona for persistence or native build support)
+- suggest higher-tier isolation or local execution with strict approvals if the current remote targets are unsuitable for the task
+
 ---
 
-Version: 1.1  
-Last Updated: 2026-03-19
+Version: 1.2  
+Last Updated: 2026-04-16

@@ -7,6 +7,7 @@ import { MAX_CODE_SESSIONS_PER_USER } from '../code-sessions.js';
 import type { CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
 import type { IdentityService } from '../identity.js';
 import type { RunTimelineStore } from '../run-timeline.js';
+import { ToolExecutor } from '../../tools/executor.js';
 
 type WorkspaceDashboardCallbacks = Pick<
   DashboardCallbacks,
@@ -18,6 +19,8 @@ type WorkspaceDashboardCallbacks = Pick<
   | 'onCodeSessionUpdate'
   | 'onCodeSessionSandboxCreate'
   | 'onCodeSessionSandboxDelete'
+  | 'onCodeSessionSandboxStop'
+  | 'onCodeSessionSandboxStart'
   | 'onCodeSessionDelete'
   | 'onCodeSessionAttach'
   | 'onCodeSessionDetach'
@@ -44,6 +47,7 @@ interface WorkspaceDashboardCallbackOptions {
   identity: IdentityService;
   conversations: ConversationService;
   runTimeline: RunTimelineStore;
+  toolExecutor: ToolExecutor;
   refreshRunTimelineSnapshots: () => void;
   maybeScheduleCodeSession: (session: CodeSessionRecord) => CodeSessionRecord;
   hydrateCodeSessionRuntimeState: (session: CodeSessionRecord) => CodeSessionRecord;
@@ -319,6 +323,50 @@ export function createWorkspaceDashboardCallbacks(
       return options.deleteCodeSessionSandbox({
         session: resolvedSession.session,
         canonicalUserId,
+        leaseId,
+      });
+    },
+
+    onCodeSessionSandboxStop: async ({ sessionId, leaseId, userId, principalId, channel, surfaceId }) => {
+      const {
+        canonicalUserId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) {
+        throw options.createStructuredRequestError('Code session not found.', 404, 'CODE_SESSION_NOT_FOUND');
+      }
+      return options.toolExecutor.stopManagedSandboxForCodeSession({
+        sessionId: resolvedSession.session.id,
+        ownerUserId: canonicalUserId,
+        leaseId,
+      });
+    },
+
+    onCodeSessionSandboxStart: async ({ sessionId, leaseId, userId, principalId, channel, surfaceId }) => {
+      const {
+        canonicalUserId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) {
+        throw options.createStructuredRequestError('Code session not found.', 404, 'CODE_SESSION_NOT_FOUND');
+      }
+      return options.toolExecutor.startManagedSandboxForCodeSession({
+        sessionId: resolvedSession.session.id,
+        ownerUserId: canonicalUserId,
         leaseId,
       });
     },
