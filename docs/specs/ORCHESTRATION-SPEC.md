@@ -138,6 +138,7 @@ Current as-built delegation foundations:
 - brokered worker dispatch records delegated lineage into assistant job state rather than leaving it as ad hoc log-only state
 - operator-facing assistant job views now merge primary assistant jobs with delegated-worker jobs
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
+- delegated worker setup can attach structured orchestration role descriptors such as coordinator, explorer, implementer, and verifier, and known capabilities narrow against runtime-owned contracts before the worker runs
 - delegated jobs carry a bounded handoff object with summary, unresolved blocker kind, approval count, next action, and reporting mode
 - operator-facing assistant job summaries derive bounded display state for delegated origin, outcome, and follow-up instead of forcing channels to parse raw delegated metadata
 - delegated completion now follows a server-owned reporting policy: `inline_response`, `held_for_approval`, `status_only`, or operator-held review

@@ -91,7 +91,7 @@ This harness is the preferred regression path for the shipped contextual-securit
 ### Option A: Standalone (harness starts the app)
 
 This will:
-1. Start the app in background with `npx tsx src/index.ts`
+1. Start the app in background with the repo-local `tsx` loader (for example `node --import tsx src/index.ts`, or the shared `scripts/spawn-tsx.mjs` helper inside Node harnesses)
 2. Wait for `/health` to return OK
 3. Inject a known auth token into a temporary harness config
 4. Run all test cases via HTTP
@@ -133,6 +133,7 @@ The app stays running after tests finish. Useful for manual follow-up testing.
 When you run the Node-based harnesses from Windows PowerShell instead of WSL:
 
 - launch them from the repository root with `node scripts/<name>.mjs`
+- prefer the shared `scripts/spawn-tsx.mjs` helper when a harness needs to boot Guardian from Node; it uses the current Node binary with `--import tsx` instead of relying on shell-specific `npx` resolution
 - expect brokered cold starts to take longer than the shortest local Linux lane; a healthy Windows brokered startup can take close to 90 seconds with a fresh temp profile
 - run `npm run build` before the brokered `dist/` harnesses such as `scripts/test-brokered-isolation.mjs` and `scripts/test-brokered-approvals.mjs`
 - if a temp harness directory cannot be deleted immediately on Windows because SQLite or log handles are still draining, rerun with `HARNESS_KEEP_TMP=1` and inspect the preserved logs before cleaning up manually
@@ -147,7 +148,7 @@ The **preferred method** for automated testing and bug reproduction is to write 
 
 **Process for Creating an Isolated Node.js Test:**
 1. **Create a dummy configuration:** Generate a temporary `.yaml` file within the script to configure the agent to use a `mock` LLM provider (or explicit local provider like Ollama) and an isolated port.
-2. **Spawn the backend:** Use `child_process.spawn` to launch `npx tsx src/index.ts` in the background, piping `stdout` and `stderr` to a temporary log file.
+2. **Spawn the backend:** Use `child_process.spawn` to launch Guardian through the repo-local `tsx` loader in the background, preferably via `scripts/spawn-tsx.mjs`, piping `stdout` and `stderr` to a temporary log file.
 3. **Wait for Health:** Poll the `/health` endpoint until the server is fully ready.
 4. **Setup the Environment:** For security-sensitive control-plane mutations, mint a privileged ticket first via `POST /api/auth/ticket`, then make the actual HTTP call (for example `/api/tools/policy` with `action: "tools.policy"` or `/api/config` with `action: "config.security"` / `"memory.config"`).
 5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload. When validating contextual security or approval ownership, include the same principal-bearing auth path and direct tool API context fields the real UI uses.

@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
 
 const HARNESS_USER_ID = 'harness';
 const HARNESS_CHANNEL = 'web';
 const HARNESS_SURFACE_ID = 'web-guardian-chat';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -486,7 +488,7 @@ guardian:
   let completed = false;
   try {
     appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
-      cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
+      cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,

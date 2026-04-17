@@ -818,7 +818,7 @@ function renderPromotedFindings(promotedFindings) {
 function renderCreateForm(tools, packs, agents) {
   const assistantAgents = (agents || [])
     .filter((agent) => agent?.canChat !== false && agent?.internal !== true)
-    .map((agent) => `<option value="${escAttr(agent.id)}">${esc(agent.name ? `${agent.name} (${agent.id})` : agent.id)}</option>`)
+    .map((agent) => `<option value="${escAttr(agent.id)}">${esc(formatAssistantAgentOptionLabel(agent))}</option>`)
     .join('');
 
   return `
@@ -1075,6 +1075,18 @@ function renderCreateForm(tools, packs, agents) {
     <input type="hidden" id="auto-edit-source" value="">
     <input type="hidden" id="auto-edit-task-id" value="">
   `;
+}
+
+function formatAssistantAgentOptionLabel(agent) {
+  const baseLabel = agent?.name ? `${agent.name} (${agent.id})` : agent?.id || 'Unknown assistant';
+  const orchestrationLabel = typeof agent?.orchestrationLabel === 'string' && agent.orchestrationLabel.trim()
+    ? agent.orchestrationLabel.trim()
+    : '';
+  const routingRole = typeof agent?.routingRole === 'string' && agent.routingRole.trim()
+    ? `${agent.routingRole.trim().replace(/\b\w/g, (match) => match.toUpperCase())} lane`
+    : '';
+  const suffix = orchestrationLabel || routingRole;
+  return suffix ? `${baseLabel} - ${suffix}` : baseLabel;
 }
 
 function renderRunHistory(entries) {

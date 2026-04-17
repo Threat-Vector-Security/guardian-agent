@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
 import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+import { spawnTsx } from './spawn-tsx.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -692,7 +693,7 @@ async function main() {
 
   let appProcess;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+    appProcess = spawnTsx('src/index.ts', [configPath], {
       cwd: projectRoot,
       env: { ...process.env, NO_COLOR: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],

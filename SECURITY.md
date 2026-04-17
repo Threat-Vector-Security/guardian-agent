@@ -24,7 +24,7 @@ GuardianAgent is an AI agent orchestration system where:
 - **Supervisor-side framework code is trusted** — Runtime, orchestration, approvals, and tool execution run in the supervisor process
 - **The built-in chat/planner loop is isolated from the supervisor** — it runs in a brokered worker and reaches tools and approvals through broker RPC
 - **Automation authoring is compiler-mediated** — clear "create a workflow/automation" requests are compiled into native control-plane mutations before the generic planner can drift into script generation
-- **Inter-agent delegation is contract-mediated** — orchestration handoffs are validated in runtime code before downstream agents receive filtered context
+- **Inter-agent delegation is contract-mediated** — orchestration handoffs are validated in runtime code before downstream agents receive filtered context, and core specialist roles narrow known capabilities through runtime-owned contracts instead of prompt-only labels
 - **LLM output is NOT trusted** — Models can hallucinate, leak secrets, or be prompt-injected
 - **User input is NOT trusted** — External input may contain injection attempts
 - **Remote/tool output is NOT trusted by default** — tool results are classified as `trusted`, `low_trust`, or `quarantined` before they re-enter planning, memory, or delegation
@@ -47,7 +47,7 @@ The as-built spec is the canonical current-state document for the defensive suit
 | Credential leakage through model output | `GuardedLLMProvider`, recursive secret scanning, redaction/blocking, audit trail | Enabled by default | credentials are still resolved in-process, not through a separate secret broker |
 | Secret leakage through inter-agent events | event-payload secret scanning, source validation, audit logging | Enabled by default | events are mediated only on managed framework paths |
 | Unauthorized managed file access | `allowedPaths`, denied-path patterns, path normalization, symlink resolution, code-session workspace scoping | Restricted by default | manual PTY shells remain a separate operator surface |
-| Capability escalation by an agent | frozen per-agent capabilities, Guardian action checks, no raw `ctx.fs` / `ctx.http` / `ctx.exec` | Enabled by default | supervisor/runtime code is still the trusted computing base |
+| Capability escalation by an agent | frozen per-agent capabilities, runtime-owned orchestration role contracts for known capability narrowing, Guardian action checks, no raw `ctx.fs` / `ctx.http` / `ctx.exec` | Enabled by default | supervisor/runtime code is still the trusted computing base |
 | Tool-policy widening from chat or remote channels | `update_tool_policy` approval flow plus `assistant.tools.agentPolicyUpdates.*` gates | Disabled by default for paths, commands, domains, and per-tool policy changes | if operators enable these gates, each change still needs explicit approval |
 | Shell command injection and shell-expression abuse | tokenizer, shell chain splitting, redirect validation, execution-class checks, direct exec for simple binaries | Restricted by default | descendant executable identity is not fully enforced after the allowed top-level launch |
 | Package-manager or remote-launch trampoline abuse on degraded hosts | degraded-backend package-manager block, coding-session launcher bans, explicit allowlist requirements | Disabled by default on degraded backends | once explicitly enabled, package managers can still execute third-party code on the real host |

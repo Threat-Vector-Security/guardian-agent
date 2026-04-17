@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+
+import { spawnTsx } from './spawn-tsx.mjs';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -233,7 +234,7 @@ assistant:
   fs.writeFileSync(configPath, config);
 
   console.log('Starting GuardianAgent...');
-  const app = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+  const app = spawnTsx('src/index.ts', [configPath], {
     stdio: 'inherit',
     env: { ...process.env, NODE_ENV: 'test' }
   });
