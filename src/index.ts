@@ -5689,6 +5689,7 @@ async function main(): Promise<void> {
         schedule: agentConfig.schedule,
         grantedCapabilities: agentConfig.capabilities,
         resourceLimits: agentConfig.resourceLimits,
+        orchestration: agentConfig.orchestration,
       }));
       router.registerAgent(
         agentConfig.id,
@@ -5736,6 +5737,9 @@ async function main(): Promise<void> {
       agent: localAgent,
       providerName: localProviderName,
       grantedCapabilities: agentCapabilities,
+      orchestration: {
+        role: 'coordinator',
+      },
     }));
 
     const externalAgent = new ChatAgent(
@@ -5772,6 +5776,9 @@ async function main(): Promise<void> {
       agent: externalAgent,
       providerName: externalProviderName,
       grantedCapabilities: agentCapabilities,
+      orchestration: {
+        role: 'coordinator',
+      },
     }));
 
     // Register with router using default domain rules
@@ -5833,6 +5840,9 @@ async function main(): Promise<void> {
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
       grantedCapabilities: agentCapabilities,
+      orchestration: {
+        role: 'coordinator',
+      },
     }));
     router.registerAgent('default', agentCapabilities);
   }
@@ -5877,6 +5887,11 @@ async function main(): Promise<void> {
         maxInvocationBudgetMs: 120_000,
         maxConcurrentTools: 4,
       },
+      orchestration: {
+        role: 'verifier',
+        label: 'Security Verifier',
+        lenses: ['security'],
+      },
     }));
   }
 
@@ -5893,6 +5908,11 @@ async function main(): Promise<void> {
     resourceLimits: {
       maxInvocationBudgetMs: 120_000,
       maxQueueDepth: 256,
+    },
+    orchestration: {
+      role: 'verifier',
+      label: 'Security Event Verifier',
+      lenses: ['security'],
     },
   }));
 
@@ -5951,6 +5971,11 @@ async function main(): Promise<void> {
     runtime.registerAgent(createAgentDefinition({
       agent: sentinelAuditAgent,
       schedule: auditSchedule,
+      orchestration: {
+        role: 'verifier',
+        label: 'Sentinel Verifier',
+        lenses: ['security'],
+      },
     }));
     console.log(`  Sentinel Audit: scheduled (${auditSchedule})`);
   }

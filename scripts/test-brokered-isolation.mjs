@@ -79,6 +79,7 @@ async function main() {
       '  cli:',
       '    enabled: false',
       '  web:',
+      '    host: 127.0.0.1',
       `    port: ${port}`,
       '    enabled: true',
       `    authToken: "${token}"`,
@@ -120,7 +121,7 @@ async function main() {
   app.stderr.pipe(createWriteStream(errorPath, { flags: 'a' }));
 
   try {
-    await waitForHealth(30_000);
+    await waitForHealth(90_000);
 
     const message = await request('/api/message', {
       method: 'POST',
@@ -162,7 +163,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     app.kill('SIGKILL');
-    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 

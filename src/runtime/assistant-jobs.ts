@@ -5,6 +5,12 @@
  * so operators can inspect what is running and what recently failed.
  */
 
+import {
+  formatOrchestrationRoleDescriptor,
+  normalizeOrchestrationRoleDescriptor,
+  type OrchestrationRoleDescriptor,
+} from './orchestration-role-descriptors.js';
+
 export type AssistantJobStatus = 'running' | 'succeeded' | 'failed';
 export type AssistantJobSource = 'manual' | 'scheduled' | 'system';
 export type DelegatedWorkerRunClass = 'in_invocation' | 'short_lived' | 'long_running' | 'automation_owned';
@@ -54,6 +60,9 @@ export interface DelegatedWorkerHandoff {
 export interface DelegatedWorkerMetadata {
   kind: 'brokered_worker';
   lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
+  agentId?: string;
+  agentName?: string;
+  orchestration?: OrchestrationRoleDescriptor;
   originChannel?: string;
   continuityKey?: string;
   codeSessionId?: string;
@@ -264,6 +273,7 @@ export function buildAssistantJobDisplay(job: Pick<AssistantJobRecord, 'detail' 
 
   const originParts = [
     typeof delegated.originChannel === 'string' ? delegated.originChannel : '',
+    readDelegatedWorkerSummary(delegated),
     typeof delegated.codeSessionId === 'string' ? `code ${delegated.codeSessionId}` : '',
     typeof delegated.continuityKey === 'string' ? `continuity ${delegated.continuityKey}` : '',
   ].filter((value) => typeof value === 'string' && value.trim().length > 0);
@@ -282,6 +292,7 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
   if (!isRecord(delegated) || delegated.kind !== 'brokered_worker') {
     return null;
   }
+  const orchestration = normalizeOrchestrationRoleDescriptor(delegated.orchestration);
   let handoff: DelegatedWorkerHandoff | undefined;
   if (isRecord(delegated.handoff)) {
     handoff = {
@@ -326,6 +337,9 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
       && ['running', 'completed', 'blocked', 'failed'].includes(delegated.lifecycle)
       ? { lifecycle: delegated.lifecycle as DelegatedWorkerMetadata['lifecycle'] }
       : {}),
+    ...(typeof delegated.agentId === 'string' ? { agentId: delegated.agentId } : {}),
+    ...(typeof delegated.agentName === 'string' ? { agentName: delegated.agentName } : {}),
+    ...(orchestration ? { orchestration } : {}),
     ...(typeof delegated.originChannel === 'string' ? { originChannel: delegated.originChannel } : {}),
     ...(typeof delegated.continuityKey === 'string' ? { continuityKey: delegated.continuityKey } : {}),
     ...(typeof delegated.codeSessionId === 'string' ? { codeSessionId: delegated.codeSessionId } : {}),
@@ -405,6 +419,16 @@ function buildDelegatedWorkerFollowUp(
   }
 
   return undefined;
+}
+
+function readDelegatedWorkerSummary(delegated: DelegatedWorkerMetadata): string | undefined {
+  const roleSummary = formatOrchestrationRoleDescriptor(delegated.orchestration);
+  const agentSummary = delegated.agentName?.trim() || delegated.agentId?.trim();
+  if (roleSummary && agentSummary) {
+    if (roleSummary === agentSummary) return roleSummary;
+    return `${roleSummary} • ${agentSummary}`;
+  }
+  return roleSummary || agentSummary;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

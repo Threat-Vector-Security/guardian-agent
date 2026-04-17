@@ -13,6 +13,7 @@ export function createAgentTable(agents, title = 'Agents') {
           <th>ID</th>
           <th>Name</th>
           <th>State</th>
+          <th>Role</th>
           <th>Provider</th>
           <th>Capabilities</th>
         </tr>
@@ -37,6 +38,7 @@ function renderRows(tbody, agents) {
       <td>${esc(a.id)}</td>
       <td>${esc(a.name)}</td>
       <td><span class="badge badge-${a.state}">${esc(a.state)}</span></td>
+      <td>${esc(a.orchestrationLabel || a.routingRole || '-')}</td>
       <td>${esc(a.provider || '-')}</td>
       <td>${(a.capabilities || []).map(c => esc(c)).join(', ') || '-'}</td>
     </tr>

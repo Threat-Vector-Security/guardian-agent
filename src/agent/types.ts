@@ -10,6 +10,7 @@ import type { AgentEvent } from '../queue/event-bus.js';
 import type { AuditLog } from '../guardian/audit-log.js';
 import type { SharedStateView } from '../runtime/shared-state.js';
 import type { AgentHandoffContract } from '../runtime/handoffs.js';
+import type { OrchestrationRoleDescriptor } from '../runtime/orchestration-role-descriptors.js';
 
 // ─── Event-Driven Agent Types ─────────────────────────────────
 
@@ -172,6 +173,8 @@ export interface AgentDefinition {
   grantedCapabilities: readonly string[];
   /** Resource limits for this agent. */
   resourceLimits: AgentResourceLimits;
+  /** Optional orchestration role descriptor for operator and delegation surfaces. */
+  orchestration?: OrchestrationRoleDescriptor;
 }
 
 /** Runtime state of a registered agent. */

@@ -21,6 +21,10 @@ import {
   type DelegatedWorkerOperatorFollowUpState,
   type DelegatedWorkerRunClass,
 } from '../runtime/assistant-jobs.js';
+import {
+  normalizeOrchestrationRoleDescriptor,
+  type OrchestrationRoleDescriptor,
+} from '../runtime/orchestration-role-descriptors.js';
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import { buildApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
@@ -77,6 +81,14 @@ export interface WorkerDelegationMetadata {
   pendingActionId?: string;
   codeSessionId?: string;
   runClass?: DelegatedWorkerRunClass;
+  agentName?: string;
+  orchestration?: OrchestrationRoleDescriptor;
+}
+
+interface ResolvedDelegatedTargetMetadata {
+  agentId: string;
+  agentName?: string;
+  orchestration?: OrchestrationRoleDescriptor;
 }
 
 export interface WorkerProcess {
@@ -174,12 +186,14 @@ export class WorkerManager {
       if (directAutomation) return directAutomation;
     }
 
+    const delegatedTarget = resolveDelegatedTargetMetadata(this.runtime, input);
+
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
       source: 'system',
       detail: describeDelegatedJob(input),
       metadata: {
-        delegation: buildDelegationJobMetadata(input, { lifecycle: 'running' }),
+        delegation: buildDelegationJobMetadata(input, { lifecycle: 'running', target: delegatedTarget }),
       },
     });
     this.runtime.auditLog.record({
@@ -211,6 +225,7 @@ export class WorkerManager {
           delegation: buildDelegationJobMetadata(input, {
             lifecycle: 'running',
             workerId: worker.id,
+            target: delegatedTarget,
           }),
         },
       });
@@ -253,6 +268,7 @@ export class WorkerManager {
             lifecycle: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
             workerId: worker.id,
             handoff,
+            target: delegatedTarget,
           }),
         },
       });
@@ -281,6 +297,7 @@ export class WorkerManager {
         metadata: {
           delegation: buildDelegationJobMetadata(input, {
             lifecycle: 'failed',
+            target: delegatedTarget,
             handoff: {
               summary: truncateInlineText(error instanceof Error ? error.message : String(error), 220),
               nextAction: 'Inspect the delegated worker failure details.',
@@ -1356,18 +1373,38 @@ function readDelegatedAgentId(metadata: Record<string, unknown> | undefined): st
   return typeof agentId === 'string' && agentId.trim().length > 0 ? agentId : undefined;
 }
 
+function resolveDelegatedTargetMetadata(
+  runtime: Runtime,
+  input: WorkerMessageRequest,
+): ResolvedDelegatedTargetMetadata {
+  const registeredAgent = runtime.registry?.get?.(input.agentId);
+  const explicitOrchestration = normalizeOrchestrationRoleDescriptor(input.delegation?.orchestration);
+  const registeredOrchestration = normalizeOrchestrationRoleDescriptor(registeredAgent?.definition?.orchestration);
+  const agentName = input.delegation?.agentName?.trim() || registeredAgent?.agent?.name?.trim();
+  return {
+    agentId: input.agentId,
+    ...(agentName ? { agentName } : {}),
+    ...(explicitOrchestration ?? registeredOrchestration
+      ? { orchestration: explicitOrchestration ?? registeredOrchestration }
+      : {}),
+  };
+}
+
 function buildDelegationJobMetadata(
   input: WorkerMessageRequest,
   options: {
     lifecycle: 'running' | 'completed' | 'blocked' | 'failed';
     workerId?: string;
     handoff?: DelegatedWorkerHandoff;
+    target?: ResolvedDelegatedTargetMetadata;
   },
 ): Record<string, unknown> {
   return {
     kind: 'brokered_worker',
     lifecycle: options.lifecycle,
-    agentId: input.agentId,
+    agentId: options.target?.agentId ?? input.agentId,
+    ...(options.target?.agentName ? { agentName: options.target.agentName } : {}),
+    ...(options.target?.orchestration ? { orchestration: options.target.orchestration } : {}),
     workerSessionId: input.sessionId,
     originChannel: input.delegation?.originChannel ?? input.message.channel,
     runClass: normalizeDelegatedRunClass(input.delegation?.runClass),

@@ -1946,8 +1946,25 @@ export class CLIChannel implements ChannelAdapter {
     const handoff = delegation.handoff && typeof delegation.handoff === 'object'
       ? delegation.handoff as Record<string, unknown>
       : null;
+    const orchestration = delegation.orchestration && typeof delegation.orchestration === 'object'
+      ? delegation.orchestration as Record<string, unknown>
+      : null;
+    const roleLabel = typeof orchestration?.label === 'string'
+      ? orchestration.label
+      : typeof orchestration?.role === 'string'
+        ? orchestration.role.replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase())
+        : '';
+    const lensSummary = Array.isArray(orchestration?.lenses) && orchestration.lenses.length > 0
+      ? `(${orchestration.lenses
+        .map((lens) => String(lens).replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase()))
+        .join(', ')})`
+      : '';
     const parts = [
       typeof delegation.originChannel === 'string' ? delegation.originChannel : '',
+      roleLabel,
+      lensSummary,
+      typeof delegation.agentName === 'string' ? delegation.agentName : '',
+      typeof delegation.agentId === 'string' ? delegation.agentId : '',
       typeof delegation.codeSessionId === 'string' ? `code ${delegation.codeSessionId}` : '',
       typeof handoff?.summary === 'string' ? handoff.summary : '',
       typeof handoff?.unresolvedBlockerKind === 'string' ? `blocker ${handoff.unresolvedBlockerKind}` : '',
