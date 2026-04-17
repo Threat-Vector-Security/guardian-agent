@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+
+import { spawnTsx } from './spawn-tsx.mjs';
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -301,8 +305,8 @@ guardian:
   let appProcess;
   let logStream;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
-      cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
+    appProcess = spawnTsx('src/index.ts', [configPath], {
+      cwd: projectRoot,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' },

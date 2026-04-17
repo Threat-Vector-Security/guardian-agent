@@ -1,0 +1,153 @@
+import { describe, expect, it } from 'vitest';
+import { BaseAgent, createAgentDefinition } from '../agent/agent.js';
+import type { IntentGatewayDecision } from './intent/types.js';
+import {
+  constrainCapabilitiesToOrchestrationRole,
+  inferDelegatedOrchestrationDescriptor,
+  resolveOrchestrationCapabilityContract,
+} from './orchestration-role-contracts.js';
+
+class TestAgent extends BaseAgent {
+  constructor() {
+    super('test-agent', 'Test Agent', { handleMessages: true });
+  }
+}
+
+function buildDecision(overrides: Partial<IntentGatewayDecision>): IntentGatewayDecision {
+  return {
+    route: 'general_assistant',
+    confidence: 'high',
+    operation: 'read',
+    summary: 'Handles a request.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'direct_assistant',
+    preferredTier: 'local',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    entities: {},
+    ...overrides,
+  };
+}
+
+describe('orchestration role contracts', () => {
+  it('resolves role contracts with role and lens capability packs', () => {
+    const contract = resolveOrchestrationCapabilityContract({
+      role: 'implementer',
+      label: 'Workspace Implementer',
+      lenses: ['coding-workspace'],
+    });
+
+    expect(contract).toMatchObject({
+      recommendedTrustPreset: 'balanced',
+      descriptor: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+    });
+    expect(contract?.allowedCapabilities).toEqual(expect.arrayContaining([
+      'write_files',
+      'execute_commands',
+      'git_operations',
+      'install_packages',
+    ]));
+  });
+
+  it('narrows known capabilities but preserves internal runtime capabilities', () => {
+    const narrowed = constrainCapabilitiesToOrchestrationRole(
+      [
+        'read_files',
+        'write_files',
+        'network_access',
+        'install_packages',
+        'agent.dispatch',
+      ],
+      {
+        role: 'explorer',
+        label: 'Research Explorer',
+        lenses: ['research'],
+      },
+    );
+
+    expect(narrowed).toEqual([
+      'read_files',
+      'network_access',
+      'agent.dispatch',
+    ]);
+  });
+
+  it('does not widen an empty capability set', () => {
+    const narrowed = constrainCapabilitiesToOrchestrationRole(
+      [],
+      {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+    );
+
+    expect(narrowed).toEqual([]);
+  });
+
+  it('applies orchestration contracts when creating an agent definition', () => {
+    const definition = createAgentDefinition({
+      agent: new TestAgent(),
+      grantedCapabilities: ['read_files', 'write_files', 'execute_commands', 'agent.dispatch'],
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+    });
+
+    expect(definition.grantedCapabilities).toEqual([
+      'read_files',
+      'write_files',
+      'execute_commands',
+      'agent.dispatch',
+    ]);
+    expect(definition.orchestration).toEqual({
+      role: 'explorer',
+      label: 'Workspace Explorer',
+      lenses: ['coding-workspace'],
+    });
+  });
+
+  it('infers workspace specialist roles from structured coding decisions', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'coding_task',
+      operation: 'update',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'implementer',
+      label: 'Workspace Implementer',
+      lenses: ['coding-workspace'],
+    });
+  });
+
+  it('infers executive assistant metadata for personal assistant delegation', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'personal_assistant_task',
+      operation: 'read',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      preferredAnswerPath: 'chat_synthesis',
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'coordinator',
+      label: 'Executive Assistant',
+      lenses: ['personal-assistant', 'second-brain'],
+    });
+  });
+});

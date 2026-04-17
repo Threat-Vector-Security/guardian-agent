@@ -248,6 +248,10 @@ import {
   readSelectedExecutionProfileMetadata,
   type SelectedExecutionProfile,
 } from './runtime/execution-profiles.js';
+import {
+  constrainCapabilitiesToOrchestrationRole,
+  inferDelegatedOrchestrationDescriptor,
+} from './runtime/orchestration-role-contracts.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
 import { getProviderLocality, getProviderTier } from './llm/provider-metadata.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
@@ -3581,11 +3585,19 @@ type DirectIntentShadowCandidate =
         const workerMessage = workerMetadata
           ? { ...routedScopedMessage, metadata: workerMetadata }
           : routedScopedMessage;
+        const delegatedOrchestration = inferDelegatedOrchestrationDescriptor(
+          earlyGateway?.decision,
+          { hasCodeSession: !!resolvedCodeSession?.session.id },
+        );
+        const workerCapabilities = constrainCapabilitiesToOrchestrationRole(
+          [...ctx.capabilities],
+          delegatedOrchestration,
+        );
         const result = await workerManager.handleMessage({
           sessionId: `${conversationUserId}:${conversationChannel}`,
           agentId: this.id,
           userId: conversationUserId,
-          grantedCapabilities: [...ctx.capabilities],
+          grantedCapabilities: [...workerCapabilities],
           message: workerMessage,
           systemPrompt: workerSystemPrompt,
           history: priorHistory,
@@ -3606,6 +3618,7 @@ type DirectIntentShadowCandidate =
             ...(continuitySummary?.activeExecutionRefs?.length ? { activeExecutionRefs: continuitySummary.activeExecutionRefs } : {}),
             ...(pendingAction?.id ? { pendingActionId: pendingAction.id } : {}),
             ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
+            ...(delegatedOrchestration ? { orchestration: delegatedOrchestration } : {}),
           },
         });
         const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };

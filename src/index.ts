@@ -41,6 +41,7 @@ import type { LLMConfig } from './config/types.js';
 import { BaseAgent } from './agent/agent.js';
 import { createAgentDefinition } from './agent/agent.js';
 import { GuardianAgentService, SentinelAuditService } from './runtime/sentinel.js';
+import type { OrchestrationRoleDescriptor } from './runtime/orchestration-role-descriptors.js';
 import { createPolicyEngine, loadPolicyFiles, ShadowEvaluator } from './policy/index.js';
 import type { PolicyModeConfig } from './policy/index.js';
 import {
@@ -5640,6 +5641,32 @@ async function main(): Promise<void> {
   const chatAgents = new Map<string, ChatAgentInstance>();
   const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   const routingIntentGateway = new IntentGateway();
+
+  const defaultOrchestrationForRoutingRole = (
+    role: 'local' | 'external' | 'general' | undefined,
+  ): OrchestrationRoleDescriptor | undefined => {
+    if (role === 'local') {
+      return {
+        role: 'coordinator',
+        label: 'Guardian Coordinator',
+        lenses: ['coding-workspace'],
+      };
+    }
+    if (role === 'external') {
+      return {
+        role: 'coordinator',
+        label: 'Guardian Coordinator',
+        lenses: ['research', 'provider-admin'],
+      };
+    }
+    if (role === 'general') {
+      return {
+        role: 'coordinator',
+        label: 'Guardian Coordinator',
+      };
+    }
+    return undefined;
+  };
   await intentRoutingTrace.init();
 
   if (config.agents.length > 0) {
@@ -5689,7 +5716,7 @@ async function main(): Promise<void> {
         schedule: agentConfig.schedule,
         grantedCapabilities: agentConfig.capabilities,
         resourceLimits: agentConfig.resourceLimits,
-        orchestration: agentConfig.orchestration,
+        orchestration: agentConfig.orchestration ?? defaultOrchestrationForRoutingRole(agentConfig.role),
       }));
       router.registerAgent(
         agentConfig.id,
@@ -5739,6 +5766,8 @@ async function main(): Promise<void> {
       grantedCapabilities: agentCapabilities,
       orchestration: {
         role: 'coordinator',
+        label: 'Guardian Coordinator',
+        lenses: ['coding-workspace'],
       },
     }));
 
@@ -5778,6 +5807,8 @@ async function main(): Promise<void> {
       grantedCapabilities: agentCapabilities,
       orchestration: {
         role: 'coordinator',
+        label: 'Guardian Coordinator',
+        lenses: ['research', 'provider-admin'],
       },
     }));
 
@@ -5842,6 +5873,7 @@ async function main(): Promise<void> {
       grantedCapabilities: agentCapabilities,
       orchestration: {
         role: 'coordinator',
+        label: 'Guardian Coordinator',
       },
     }));
     router.registerAgent('default', agentCapabilities);

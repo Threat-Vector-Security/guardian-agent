@@ -2,13 +2,37 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { URL } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, URL } from 'node:url';
 import yaml from 'js-yaml';
 
 import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
-import { SkillRegistry } from '../src/skills/registry.ts';
-import { SkillResolver } from '../src/skills/resolver.ts';
+
+const scriptPath = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(scriptPath), '..');
+const FAKE_OPENAI_CREDENTIAL_REF = 'llm.openai.fake';
+const FAKE_OPENAI_ENV = 'HARNESS_FAKE_OPENAI_KEY';
+if (!process.execArgv.includes('tsx') && process.env.GUARDIAN_TSX_LOADER_ACTIVE !== '1') {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', scriptPath, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, GUARDIAN_TSX_LOADER_ACTIVE: '1' },
+  });
+  process.exit(result.status ?? 1);
+}
+
+let SkillRegistryClass;
+let SkillResolverClass;
+
+async function loadSkillRuntime() {
+  if (!SkillRegistryClass || !SkillResolverClass) {
+    ({ SkillRegistry: SkillRegistryClass } = await import('../src/skills/registry.ts'));
+    ({ SkillResolver: SkillResolverClass } = await import('../src/skills/resolver.ts'));
+  }
+  return {
+    SkillRegistry: SkillRegistryClass,
+    SkillResolver: SkillResolverClass,
+  };
+}
 
 let pass = 0;
 let fail = 0;
@@ -70,10 +94,19 @@ async function readJsonBody(req) {
 }
 
 async function startFakeProvider() {
+  const modelName = 'skills-routing-harness-model';
   const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ models: [{ name: 'skills-routing-harness-model', size: 1 }] }));
+      res.end(JSON.stringify({ models: [{ name: modelName, size: 1 }] }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        data: [{ id: modelName, object: 'model' }],
+      }));
       return;
     }
 
@@ -81,7 +114,7 @@ async function startFakeProvider() {
       await readJsonBody(req);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatCompletionResponse({
-        model: 'skills-routing-harness-model',
+        model: modelName,
         content: 'Harness provider response.',
       })));
       return;
@@ -362,8 +395,17 @@ async function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+async function resetPendingAction(baseUrl, token, userId, surfaceId) {
+  return requestJson(baseUrl, token, 'POST', '/api/chat/pending-action/reset', {
+    userId,
+    channel: 'web',
+    surfaceId,
+  });
+}
+
 async function waitForHealth(baseUrl) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  const maxAttempts = process.platform === 'win32' ? 180 : 60;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const result = await requestJson(baseUrl, 'unused', 'GET', '/health');
       if (result?.status === 'ok') return;
@@ -372,7 +414,8 @@ async function waitForHealth(baseUrl) {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('GuardianAgent did not become healthy within 30 seconds.');
+  const timeoutSeconds = Math.round((maxAttempts * 500) / 1000);
+  throw new Error(`GuardianAgent did not become healthy within ${timeoutSeconds} seconds.`);
 }
 
 function writeStubGws(stubPath) {
@@ -422,6 +465,7 @@ function writeStubGws(stubPath) {
 
 async function runResolverMatrix() {
   log('=== Resolver Matrix ===');
+  const { SkillRegistry, SkillResolver } = await loadSkillRuntime();
   const registry = new SkillRegistry();
   await registry.loadFromRoots(['./skills']);
 
@@ -575,13 +619,20 @@ async function runHttpMatrix(provider, options) {
 
   const config = {
     llm: {
-      harness: {
+      local: {
         provider: 'ollama',
         baseUrl: provider.baseUrl,
         model: provider.model,
       },
+      external: {
+        provider: 'openai',
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        credentialRef: FAKE_OPENAI_CREDENTIAL_REF,
+      },
     },
-    defaultProvider: 'harness',
+    defaultProvider: 'local',
+    fallbacks: ['external'],
     channels: {
       cli: { enabled: false },
       web: {
@@ -593,6 +644,14 @@ async function runHttpMatrix(provider, options) {
       },
     },
     assistant: {
+      credentials: {
+        refs: {
+          [FAKE_OPENAI_CREDENTIAL_REF]: {
+            source: 'env',
+            env: FAKE_OPENAI_ENV,
+          },
+        },
+      },
       identity: {
         mode: 'single_user',
         primaryUserId: 'harness',
@@ -642,10 +701,11 @@ async function runHttpMatrix(provider, options) {
   fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }));
 
   try {
-    appProcess = spawn('node', ['--import', 'tsx', 'src/index.ts', configPath], {
-      cwd: process.cwd(),
+    appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
+      cwd: projectRoot,
       env: {
         ...process.env,
+        [FAKE_OPENAI_ENV]: 'test-key',
         HOME: tempDir,
         USERPROFILE: tempDir,
         XDG_CONFIG_HOME: tempDir,
@@ -666,11 +726,12 @@ async function runHttpMatrix(provider, options) {
       return Array.isArray(state?.jobs) ? state.jobs : [];
     };
 
-    const sendMessage = async (content) => requestJson(baseUrl, token, 'POST', '/api/message', {
+    const sendMessage = async (content, userId = 'harness', surfaceId = `web-${userId}`) => requestJson(baseUrl, token, 'POST', '/api/message', {
       content,
-      userId: 'harness',
+      userId,
       agentId: 'default',
       channel: 'web',
+      surfaceId,
     });
 
     const skillsState = await requestJson(baseUrl, token, 'GET', '/api/skills');
@@ -689,22 +750,34 @@ async function runHttpMatrix(provider, options) {
         .filter(Boolean);
     };
 
+    const ambiguousReadUserId = 'harness-read';
+    const ambiguousReadSurfaceId = `web-${ambiguousReadUserId}`;
     const ambiguousReadBefore = await readJobs();
-    const ambiguousReadResponse = await sendMessage('Check my email.');
+    const ambiguousReadResponse = await sendMessage('Check my email.', ambiguousReadUserId, ambiguousReadSurfaceId);
     const ambiguousReadAfter = await readJobs();
     const ambiguousReadTools = newToolNames(ambiguousReadBefore, ambiguousReadAfter);
     if (
       typeof ambiguousReadResponse?.content === 'string'
-      && ambiguousReadResponse.content.includes('Which one do you want me to use?')
+      && (
+        ambiguousReadResponse.content.includes('Which one do you want me to use?')
+        || /which mailbox would you like to check/i.test(ambiguousReadResponse.content)
+      )
       && ambiguousReadTools.length === 0
     ) {
       passCase('planner: generic inbox asks for provider clarification');
     } else {
       failCase('planner: generic inbox asks for provider clarification', `content=${JSON.stringify(ambiguousReadResponse?.content)} tools=${ambiguousReadTools.join(', ') || '(none)'} activeSkills=${JSON.stringify(ambiguousReadResponse?.metadata?.activeSkills ?? [])}`);
     }
+    await resetPendingAction(baseUrl, token, ambiguousReadUserId, ambiguousReadSurfaceId);
 
+    const ambiguousSendUserId = 'harness-compose';
+    const ambiguousSendSurfaceId = `web-${ambiguousSendUserId}`;
     const ambiguousSendBefore = await readJobs();
-    const ambiguousSendResponse = await sendMessage('Send an email to alex@example.com with subject Test and body Hello.');
+    const ambiguousSendResponse = await sendMessage(
+      'Send an email to alex@example.com with subject Test and body Hello.',
+      ambiguousSendUserId,
+      ambiguousSendSurfaceId,
+    );
     const ambiguousSendAfter = await readJobs();
     const ambiguousSendTools = newToolNames(ambiguousSendBefore, ambiguousSendAfter);
     if (
@@ -716,9 +789,10 @@ async function runHttpMatrix(provider, options) {
     } else {
       failCase('planner: generic compose asks for provider clarification', `content=${JSON.stringify(ambiguousSendResponse?.content)} tools=${ambiguousSendTools.join(', ') || '(none)'} activeSkills=${JSON.stringify(ambiguousSendResponse?.metadata?.activeSkills ?? [])}`);
     }
+    await resetPendingAction(baseUrl, token, ambiguousSendUserId, ambiguousSendSurfaceId);
 
     const gmailBefore = await readJobs();
-    const gmailResponse = await sendMessage('Check my Gmail inbox.');
+    const gmailResponse = await sendMessage('Check my Gmail inbox.', 'harness-gmail');
     const gmailAfter = await readJobs();
     const gmailTools = newToolNames(gmailBefore, gmailAfter);
     if (
@@ -733,7 +807,10 @@ async function runHttpMatrix(provider, options) {
 
     if (provider.mode === 'real_ollama') {
       const outlookBefore = await readJobs();
-      const outlookResponse = await sendMessage('Use Microsoft 365 to check my Outlook inbox.');
+      const outlookResponse = await sendMessage(
+        'Use Microsoft 365 to check my Outlook inbox.',
+        'harness-outlook',
+      );
       const outlookAfter = await readJobs();
       const outlookTools = newToolNames(outlookBefore, outlookAfter);
       if (

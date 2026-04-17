@@ -4,9 +4,12 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { URL } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
   const message = {
@@ -566,7 +569,6 @@ async function runHarness() {
   const harnessHome = path.join(tmpDir, 'home');
   const configPath = path.join(tmpDir, 'config.yaml');
   const logPath = path.join(tmpDir, 'guardian.log');
-  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
   const fakeBrowserMcpPath = path.join(scriptDir, 'fake-browser-mcp.mjs');
   const provider = await resolveHarnessProvider(options);
   fs.mkdirSync(harnessHome, { recursive: true });
@@ -646,7 +648,7 @@ guardian:
   let logStream;
   try {
     appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
-      cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
+      cwd: projectRoot,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {

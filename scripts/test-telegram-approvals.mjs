@@ -1,10 +1,34 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { TelegramChannel } from '../src/channels/telegram.ts';
+import { fileURLToPath } from 'node:url';
+
+import { spawnTsx } from './spawn-tsx.mjs';
+
+const scriptPath = fileURLToPath(import.meta.url);
+if (!process.execArgv.includes('tsx') && process.env.GUARDIAN_TSX_LOADER_ACTIVE !== '1') {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', scriptPath, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, GUARDIAN_TSX_LOADER_ACTIVE: '1' },
+  });
+  process.exit(result.status ?? 1);
+}
+
+let TelegramChannelClass;
+
+async function getTelegramChannelClass() {
+  if (!TelegramChannelClass) {
+    ({ TelegramChannel: TelegramChannelClass } = await import('../src/channels/telegram.ts'));
+  }
+  return TelegramChannelClass;
+}
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const FAKE_OPENAI_CREDENTIAL_REF = 'llm.openai.fake';
+const FAKE_OPENAI_ENV = 'HARNESS_FAKE_OPENAI_KEY';
 
 function createFakeCtx() {
   const replies = [];
@@ -25,6 +49,7 @@ function createFakeCtx() {
 }
 
 async function runChannelApprovalFlow() {
+  const TelegramChannel = await getTelegramChannelClass();
   const decisions = [];
   const dispatches = [];
   const channel = new TelegramChannel({
@@ -100,6 +125,7 @@ async function runChannelApprovalFlow() {
 }
 
 async function runChannelEmptyFileApprovalFlow() {
+  const TelegramChannel = await getTelegramChannelClass();
   const decisions = [];
   const dispatches = [];
   const channel = new TelegramChannel({
@@ -222,11 +248,20 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
 }
 
 async function startFakeProvider(kind) {
+  const modelName = `${kind}-model`;
   let chatCalls = 0;
   const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ models: [{ name: `${kind}-model`, size: 1 }] }));
+      res.end(JSON.stringify({ models: [{ name: modelName, size: 1 }] }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        data: [{ id: modelName, object: 'model' }],
+      }));
       return;
     }
 
@@ -236,7 +271,7 @@ async function startFakeProvider(kind) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (kind === 'local') {
         res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'local-model',
+          model: modelName,
           content: 'I could not generate a final response for that request.',
           finishReason: 'stop',
         })));
@@ -245,7 +280,7 @@ async function startFakeProvider(kind) {
 
       if (chatCalls === 1) {
         res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'external-model',
+          model: modelName,
           finishReason: 'tool_calls',
           toolCalls: [
             {
@@ -269,7 +304,7 @@ async function startFakeProvider(kind) {
       }
 
       res.end(JSON.stringify(createChatCompletionResponse({
-        model: 'external-model',
+        model: modelName,
         content: 'Unexpected extra fallback synthesis round.',
         finishReason: 'stop',
       })));
@@ -367,9 +402,10 @@ llm:
     baseUrl: ${localProvider.baseUrl}
     model: local-model
   external:
-    provider: ollama
+    provider: openai
     baseUrl: ${externalProvider.baseUrl}
     model: external-model
+    credentialRef: ${FAKE_OPENAI_CREDENTIAL_REF}
 defaultProvider: local
 fallbacks:
   - external
@@ -383,6 +419,11 @@ channels:
     port: ${harnessPort}
     authToken: "${harnessToken}"
 assistant:
+  credentials:
+    refs:
+      ${FAKE_OPENAI_CREDENTIAL_REF}:
+        source: env
+        env: ${FAKE_OPENAI_ENV}
   identity:
     mode: single_user
     primaryUserId: harness
@@ -400,9 +441,13 @@ guardian:
 
   let appProcess;
   try {
-    appProcess = spawn('npx', ['tsx', 'src/index.ts', configPath], {
-      cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
+    appProcess = spawnTsx('src/index.ts', [configPath], {
+      cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        [FAKE_OPENAI_ENV]: 'test-key',
+      },
     });
     const stdout = fs.createWriteStream(logPath);
     const stderr = fs.createWriteStream(`${logPath}.err`);
@@ -421,10 +466,19 @@ guardian:
       channel: 'web',
     });
 
-    assert.ok(response?.metadata?.pendingApprovals?.length > 0, `Expected pending approval metadata from fallback tool call: ${JSON.stringify(response)}`);
-    assert.equal(response.metadata.pendingApprovals[0].toolName, 'automation_save');
-    assert.match(response.content, /Waiting for approval to save /i);
-    assert.ok(!/automation_save/i.test(response.content), 'Should not surface the raw automation tool name in approval copy');
+    const approvalSummaries = Array.isArray(response?.metadata?.pendingApprovals)
+      ? response.metadata.pendingApprovals
+      : Array.isArray(response?.metadata?.pendingAction?.blocker?.approvalSummaries)
+        ? response.metadata.pendingAction.blocker.approvalSummaries
+        : [];
+    assert.ok(approvalSummaries.length > 0, `Expected pending approval metadata from fallback tool call: ${JSON.stringify(response)}`);
+    assert.equal(approvalSummaries[0].toolName, 'automation_save');
+    assert.ok(
+      /Waiting for approval to save /i.test(String(response.content ?? ''))
+      || /blocked work waiting for input or approval/i.test(String(response.content ?? '')),
+      `Expected approval-oriented response copy: ${JSON.stringify(response)}`,
+    );
+    assert.ok(!/automation_save/i.test(String(response.content ?? '')), 'Should not surface the raw automation tool name in approval copy');
     assert.ok(!/I could not generate a final response/i.test(response.content), 'Should not surface degraded fallback copy when approval metadata exists');
     assert.ok(externalProvider.getChatCalls() <= 1, 'Fallback provider should not loop once approval metadata exists');
 

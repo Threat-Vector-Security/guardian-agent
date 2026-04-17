@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
 
-const projectRoot = path.resolve(new URL('..', import.meta.url).pathname);
+import { spawnTsx } from './spawn-tsx.mjs';
+
+const projectRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -215,7 +217,7 @@ async function main() {
     XDG_DATA_HOME: path.join(tempRoot, '.data'),
   };
 
-  const guardian = spawn('npx', ['tsx', 'src/index.ts', configPath], {
+  const guardian = spawnTsx('src/index.ts', [configPath], {
     cwd: projectRoot,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

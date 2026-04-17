@@ -811,12 +811,18 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
               : (agent?.providerModel
                 ? `${agent.providerModel}${agent.providerLocality ? ` • ${agent.providerLocality}` : ''}`
                 : '-');
+            const agentSummary = agent?.orchestrationLabel
+              ? `
+                  <div>${esc(agent?.name || session.agentId)}</div>
+                  <div style="color:var(--text-muted);font-size:0.74rem;">${esc(agent.orchestrationLabel)}</div>
+                `
+              : esc(agent?.name || session.agentId);
             const activityTs = session.lastStartedAt || session.lastQueuedAt || session.lastCompletedAt;
             return `
               <tr>
                 <td title="${escAttr(`${session.channel}:${session.userId}:${session.agentId}`)}">${esc(session.channel)}:${esc(session.userId)}</td>
                 <td><span class="badge ${statusBadgeClass}">${esc(session.status)}</span></td>
-                <td>${esc(agent?.name || session.agentId)}</td>
+                <td>${agentSummary}</td>
                 <td>${esc(providerSummary)}</td>
                 <td>${esc(modelSummary)}</td>
                 <td>${activityTs ? esc(formatTime(activityTs)) : '-'}</td>

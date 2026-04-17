@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { CLIChannel } from '../src/channels/cli.ts';
+import { fileURLToPath } from 'node:url';
+
+const scriptPath = fileURLToPath(import.meta.url);
+if (!process.execArgv.includes('tsx') && process.env.GUARDIAN_TSX_LOADER_ACTIVE !== '1') {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', scriptPath, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, GUARDIAN_TSX_LOADER_ACTIVE: '1' },
+  });
+  process.exit(result.status ?? 1);
+}
+
+let CLIChannelClass;
+
+async function getCLIChannelClass() {
+  if (!CLIChannelClass) {
+    ({ CLIChannel: CLIChannelClass } = await import('../src/channels/cli.ts'));
+  }
+  return CLIChannelClass;
+}
 
 function readOutput(stream) {
   return stream.read()?.toString() ?? '';
@@ -16,6 +35,7 @@ async function send(input, text) {
 }
 
 async function runStandardApprovalFlow() {
+  const CLIChannel = await getCLIChannelClass();
   const input = new PassThrough();
   const output = new PassThrough();
   const decisions = [];
@@ -103,6 +123,7 @@ async function runStandardApprovalFlow() {
 }
 
 async function runStaleApprovalRefreshFlow() {
+  const CLIChannel = await getCLIChannelClass();
   const input = new PassThrough();
   const output = new PassThrough();
   const decisions = [];
@@ -165,6 +186,7 @@ async function runStaleApprovalRefreshFlow() {
 }
 
 async function runEmptyFileApprovalFlow() {
+  const CLIChannel = await getCLIChannelClass();
   const input = new PassThrough();
   const output = new PassThrough();
   const decisions = [];
