@@ -8,6 +8,7 @@
 import { DEFAULT_PII_ENTITIES, type PiiEntityType, type PiiRedactionMode } from '../guardian/pii-scanner.js';
 import type { ToolCategory, ToolRisk } from '../tools/types.js';
 import type { SecondBrainDeliveryChannel } from '../runtime/second-brain/types.js';
+import type { OrchestrationRoleDescriptor } from '../runtime/orchestration-role-descriptors.js';
 import type {
   AssistantSecurityAutoContainmentCategory,
   AssistantSecurityAutoContainmentSeverity,
@@ -246,6 +247,8 @@ export interface AgentConfig {
   resourceLimits?: Partial<AgentResourceLimitsConfig>;
   /** Agent role for routing purposes. */
   role?: 'local' | 'external' | 'general';
+  /** Optional orchestration role descriptor for operator and delegation surfaces. */
+  orchestration?: OrchestrationRoleDescriptor;
 }
 
 /** Routing rule for a specific agent. */

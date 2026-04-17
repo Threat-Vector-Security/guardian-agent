@@ -101,6 +101,7 @@ import type {
   SecurityOperatingMode,
   SecurityPostureAssessment,
 } from '../runtime/security-posture.js';
+import type { OrchestrationCoreRole } from '../runtime/orchestration-role-descriptors.js';
 import type {
   AssistantSecurityAutoContainmentCategory,
   AssistantSecurityAutoContainmentSeverity,
@@ -148,6 +149,9 @@ export interface DashboardAgentInfo {
   providerType?: string;
   providerModel?: string;
   providerLocality?: 'local' | 'external';
+  orchestrationRole?: OrchestrationCoreRole;
+  orchestrationLabel?: string;
+  orchestrationLenses?: string[];
   schedule?: string;
   lastActivityMs: number;
   consecutiveErrors: number;

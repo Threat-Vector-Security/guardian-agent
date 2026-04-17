@@ -14,7 +14,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -219,7 +223,7 @@ async function runBrokeredApprovalHarness() {
   const scenarioLog = [];
   const provider = await startFakeProvider(testDir, scenarioLog);
 
-  const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const projectRoot = path.resolve(__dirname, '..');
   const distEntry = path.join(projectRoot, 'dist', 'index.js');
   const workerEntry = path.join(projectRoot, 'dist', 'worker', 'worker-entry.js');
 
@@ -408,7 +412,7 @@ guardian:
     if (!completed || preserveArtifacts) {
       console.log(`Harness artifacts preserved at: ${tmpDir}`);
     } else {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
     }
   }
 }

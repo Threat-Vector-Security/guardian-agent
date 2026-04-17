@@ -16,6 +16,7 @@ import type {
 } from './types.js';
 import { DEFAULT_RESOURCE_LIMITS } from './types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
+import type { OrchestrationRoleDescriptor } from '../runtime/orchestration-role-descriptors.js';
 
 /** Abstract base class for agents. Override handlers as needed. */
 export abstract class BaseAgent implements Agent {
@@ -56,6 +57,8 @@ export interface CreateAgentOptions {
   grantedCapabilities?: string[];
   /** Resource limits (merged with defaults). */
   resourceLimits?: Partial<AgentResourceLimits>;
+  /** Optional orchestration role descriptor for operator surfaces. */
+  orchestration?: OrchestrationRoleDescriptor;
 }
 
 /** Create an agent definition with defaults. */
@@ -69,5 +72,6 @@ export function createAgentDefinition(options: CreateAgentOptions): AgentDefinit
       ...DEFAULT_RESOURCE_LIMITS,
       ...options.resourceLimits,
     },
+    ...(options.orchestration ? { orchestration: options.orchestration } : {}),
   };
 }

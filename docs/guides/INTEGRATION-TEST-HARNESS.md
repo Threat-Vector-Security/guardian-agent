@@ -128,6 +128,17 @@ Set the port to your web channel port and the token to the auth token shown in t
 
 The app stays running after tests finish. Useful for manual follow-up testing.
 
+### Windows Node Harness Notes
+
+When you run the Node-based harnesses from Windows PowerShell instead of WSL:
+
+- launch them from the repository root with `node scripts/<name>.mjs`
+- expect brokered cold starts to take longer than the shortest local Linux lane; a healthy Windows brokered startup can take close to 90 seconds with a fresh temp profile
+- run `npm run build` before the brokered `dist/` harnesses such as `scripts/test-brokered-isolation.mjs` and `scripts/test-brokered-approvals.mjs`
+- if a temp harness directory cannot be deleted immediately on Windows because SQLite or log handles are still draining, rerun with `HARNESS_KEEP_TMP=1` and inspect the preserved logs before cleaning up manually
+
+This Codex desktop session is using Windows PowerShell, so those Windows-hosted notes apply directly here.
+
 ### Automated Node.js / Jest Test Scripts (Preferred for Coding Assistants)
 
 When debugging complex state loops (e.g., approval systems, UI-specific message formatting, or LLM context poisoning), the standard PowerShell test harness can be difficult for AI coding assistants to reliably generate and execute automatically within a Linux/WSL environment.

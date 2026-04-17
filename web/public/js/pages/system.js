@@ -1078,8 +1078,18 @@ function summarizeAssistantJobOrigin(job) {
   }
   const delegation = readDelegationJobMetadata(job);
   if (delegation) {
+    const roleLabel = typeof delegation.orchestration?.label === 'string'
+      ? delegation.orchestration.label
+      : typeof delegation.orchestration?.role === 'string'
+        ? delegation.orchestration.role.replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase())
+        : '';
+    const lensSummary = Array.isArray(delegation.orchestration?.lenses) && delegation.orchestration.lenses.length > 0
+      ? `(${delegation.orchestration.lenses.map((lens) => String(lens).replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase())).join(', ')})`
+      : '';
+    const workerSummary = [roleLabel, lensSummary, delegation.agentName || delegation.agentId].filter(Boolean).join(' • ');
     const parts = [
       typeof delegation.originChannel === 'string' ? delegation.originChannel : '',
+      workerSummary,
       typeof delegation.codeSessionId === 'string' ? `code ${delegation.codeSessionId}` : '',
       typeof delegation.continuityKey === 'string' ? `continuity ${delegation.continuityKey}` : '',
     ].filter(Boolean);

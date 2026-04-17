@@ -90,6 +90,12 @@ describe('AssistantJobTracker', () => {
       metadata: {
         delegation: {
           kind: 'brokered_worker',
+          agentId: 'security-triage',
+          agentName: 'Security Triage Agent',
+          orchestration: {
+            role: 'verifier',
+            lenses: ['security'],
+          },
           originChannel: 'web',
           codeSessionId: 'code-1',
           continuityKey: 'continuity-1',
@@ -104,7 +110,7 @@ describe('AssistantJobTracker', () => {
       },
     });
 
-    expect(display.originSummary).toBe('web • code code-1 • continuity continuity-1');
+    expect(display.originSummary).toBe('web • Verifier (Security) • Security Triage Agent • code code-1 • continuity continuity-1');
     expect(display.outcomeSummary).toBe('Importer fix is paused.');
     expect(display.followUp).toMatchObject({
       reportingMode: 'held_for_approval',
@@ -122,6 +128,13 @@ describe('AssistantJobTracker', () => {
       metadata: {
         delegation: {
           kind: 'brokered_worker',
+          agentId: 'external',
+          agentName: 'External Agent',
+          orchestration: {
+            role: 'explorer',
+            label: 'Repository Explorer',
+            lenses: ['coding_workspace'],
+          },
           originChannel: 'web',
           runClass: 'long_running',
           handoff: {
@@ -135,7 +148,7 @@ describe('AssistantJobTracker', () => {
       },
     });
 
-    expect(display.originSummary).toBe('web');
+    expect(display.originSummary).toBe('web • Repository Explorer (Coding Workspace) • External Agent');
     expect(display.outcomeSummary).toBe('Repository digest is complete.');
     expect(display.followUp).toMatchObject({
       reportingMode: 'held_for_operator',

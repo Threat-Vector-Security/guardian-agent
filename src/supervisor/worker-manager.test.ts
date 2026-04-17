@@ -129,6 +129,19 @@ describe('WorkerManager', () => {
       {
         getFallbackProviderConfig: () => undefined,
         auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Local Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'coordinator',
+                    label: 'Primary Coordinator',
+                  },
+                },
+              }
+            : undefined,
+        },
       } as never,
       {
         workerEntryPoint: 'src/worker/worker-entry.ts',
@@ -448,6 +461,19 @@ describe('WorkerManager', () => {
       {
         getFallbackProviderConfig: () => ({ provider: 'fallback' }),
         auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Local Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'coordinator',
+                    label: 'Primary Coordinator',
+                  },
+                },
+              }
+            : undefined,
+        },
       } as never,
       {
         workerEntryPoint: 'src/worker/worker-entry.ts',
@@ -500,6 +526,12 @@ describe('WorkerManager', () => {
         delegation: {
           kind: 'brokered_worker',
           lifecycle: 'blocked',
+          agentId: 'local',
+          agentName: 'Local Agent',
+          orchestration: {
+            role: 'coordinator',
+            label: 'Primary Coordinator',
+          },
           requestId: 'm-delegated',
           originChannel: 'web',
           originSurfaceId: 'web-chat',
