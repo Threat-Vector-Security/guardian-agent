@@ -2088,14 +2088,17 @@ function normalizeTreeEntries(entries) {
 
 function normalizeSessionUiStateRecord(record, existing = {}) {
   const uiState = record?.uiState || {};
+  const workspaceRoot = record?.resolvedRoot || record?.workspaceRoot || existing?.resolvedRoot || existing?.workspaceRoot || '.';
   const fallbackSelectedFilePath = (
     (typeof existing.selectedFilePath === 'string' && existing.selectedFilePath.trim())
     || getOpenTabSelectedFilePath(existing)
     || null
   );
+  const nextCurrentDirectory = uiState.currentDirectory || existing.currentDirectory || workspaceRoot;
+  const nextSelectedFilePath = uiState.selectedFilePath || fallbackSelectedFilePath;
   return {
-    currentDirectory: uiState.currentDirectory || existing.currentDirectory || record?.resolvedRoot || record?.workspaceRoot || '.',
-    selectedFilePath: uiState.selectedFilePath || fallbackSelectedFilePath,
+    currentDirectory: isPathWithinWorkspaceRoot(nextCurrentDirectory, workspaceRoot) ? nextCurrentDirectory : workspaceRoot,
+    selectedFilePath: isPathWithinWorkspaceRoot(nextSelectedFilePath, workspaceRoot) ? nextSelectedFilePath : null,
     showDiff: !!uiState.showDiff,
     terminalTabs: normalizeTerminalTabs(uiState.terminalTabs, existing.terminalTabs),
     terminalCollapsed: !!uiState.terminalCollapsed,
@@ -6090,7 +6093,7 @@ function renderManagedSandboxStatusBadge(sandbox) {
     return sandbox.status === 'unreachable'
       ? '<span class="badge badge-warn">UNREACHABLE</span>'
       : sandbox.status === 'stopped'
-        ? '<span class="badge badge-dead">STOPPED</span>'
+        ? '<span class="badge badge-errored">STOPPED</span>'
         : '<span class="badge badge-success">RUNNING</span>';
   }
   if (/\b(running|ready|started|active)\b/.test(lifecycleState)) {
@@ -6100,7 +6103,7 @@ function renderManagedSandboxStatusBadge(sandbox) {
     return `<span class="badge badge-info">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
   }
   if (/\b(stopped|stopping)\b/.test(lifecycleState)) {
-    return `<span class="badge badge-dead">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
+    return `<span class="badge badge-errored">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
   }
   if (/\b(expired|failed|error|dead|terminated|deleted)\b/.test(lifecycleState)) {
     return `<span class="badge badge-errored">${esc(formatManagedSandboxLifecycleLabel(lifecycleState))}</span>`;
@@ -7890,4 +7893,12 @@ function normalizeComparablePath(value) {
     .replace(/[\\/]+/g, '/')
     .replace(/\/$/, '')
     .toLowerCase();
+}
+
+function isPathWithinWorkspaceRoot(path, workspaceRoot) {
+  const normalizedPath = normalizeComparablePath(path);
+  const normalizedWorkspaceRoot = normalizeComparablePath(workspaceRoot);
+  if (!normalizedPath || !normalizedWorkspaceRoot) return false;
+  return normalizedPath === normalizedWorkspaceRoot
+    || normalizedPath.startsWith(`${normalizedWorkspaceRoot}/`);
 }

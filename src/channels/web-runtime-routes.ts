@@ -1443,6 +1443,11 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const limit = Number.parseInt(url.searchParams.get('limit') || '20', 10);
     const continuityKey = trimOptionalString(url.searchParams.get('continuityKey'));
     const activeExecutionRef = trimOptionalString(url.searchParams.get('activeExecutionRef'));
+    const executionId = trimOptionalString(url.searchParams.get('executionId'));
+    const rootExecutionId = trimOptionalString(url.searchParams.get('rootExecutionId'));
+    const taskExecutionId = trimOptionalString(url.searchParams.get('taskExecutionId'));
+    const pendingActionId = trimOptionalString(url.searchParams.get('pendingActionId'));
+    const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
     const stage = trimOptionalString(url.searchParams.get('stage'));
     const channel = trimOptionalString(url.searchParams.get('channel'));
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
@@ -1452,6 +1457,11 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       limit: Number.isFinite(limit) ? limit : 20,
       ...(continuityKey ? { continuityKey } : {}),
       ...(activeExecutionRef ? { activeExecutionRef } : {}),
+      ...(executionId ? { executionId } : {}),
+      ...(rootExecutionId ? { rootExecutionId } : {}),
+      ...(taskExecutionId ? { taskExecutionId } : {}),
+      ...(pendingActionId ? { pendingActionId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
       ...(stage ? { stage } : {}),
       ...(channel ? { channel } : {}),
       ...(agentId ? { agentId } : {}),

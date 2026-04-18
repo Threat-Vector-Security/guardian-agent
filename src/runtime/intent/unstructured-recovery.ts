@@ -5,6 +5,8 @@ import {
   inferExplicitFilesystemTaskOperation,
   inferExplicitCodingBackendRequest,
   inferExplicitCodingTaskOperation,
+  isExplicitRemoteSandboxTaskRequest,
+  resolveExplicitRemoteProfileId,
 } from './entity-resolvers/coding.js';
 import {
   inferSecondBrainOperation,
@@ -28,6 +30,7 @@ import {
 import { normalizeConfidence, normalizeOperation } from './normalization.js';
 import {
   isExplicitComplexPlanningRequest,
+  isExplicitRepoPlanningRequest,
   looksLikeStandaloneGreetingTurn,
 } from './request-patterns.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
@@ -78,6 +81,17 @@ export function repairUnavailableIntentGatewayDecision(
       simpleVsComplex: 'simple',
     }, repairContext, { classifierSource: 'repair.unstructured' });
   }
+  if (isExplicitRepoPlanningRequest(rawSourceContent)) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'coding_task',
+      operation: 'inspect',
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered repo-scoped implementation-planning intent after an unstructured gateway response.',
+    }, repairContext, { classifierSource: 'repair.unstructured' });
+  }
   const inferredProviderConfigDecision = inferExplicitProviderConfigDecision(
     repairContext,
     parsed,
@@ -108,7 +122,8 @@ export function repairUnavailableIntentGatewayDecision(
     sourceContent,
     parsedOperation === 'unknown' ? 'run' : parsedOperation,
   );
-  if (inferredRemoteExecCommand) {
+  if (inferredRemoteExecCommand || isExplicitRemoteSandboxTaskRequest(rawSourceContent, sourceContent)) {
+    const resolvedProfileId = resolveExplicitRemoteProfileId(rawSourceContent);
     return normalizeIntentGatewayDecision({
       ...(parsed ?? {}),
       route: 'coding_task',
@@ -117,8 +132,9 @@ export function repairUnavailableIntentGatewayDecision(
       summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
         ? parsed.summary.trim()
         : 'Recovered explicit remote-sandbox coding intent after an unstructured gateway response.',
-      command: inferredRemoteExecCommand,
+      ...(inferredRemoteExecCommand ? { command: inferredRemoteExecCommand } : {}),
       codingRemoteExecRequested: true,
+      ...(resolvedProfileId ? { profileId: resolvedProfileId } : {}),
       ...(extractCodingWorkspaceTarget(rawSourceContent)
         ? { sessionTarget: extractCodingWorkspaceTarget(rawSourceContent) }
         : {}),

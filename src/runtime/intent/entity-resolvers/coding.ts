@@ -1,6 +1,12 @@
 import type { IntentGatewayOperation } from '../types.js';
 import { collapseIntentGatewayWhitespace } from '../text.js';
 
+const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandbox\b/i;
+const NAMED_REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?(?:existing\s+|current\s+|managed\s+)?[a-z0-9][a-z0-9._ -]*?\s+sandbox\b/i;
+const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
+const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
+const REMOTE_SANDBOX_ACTION_PATTERN = /\b(?:run|execute|create|write|read|open|install|test|build|lint|check|restart|resume|reuse|continue|report|verify|cat|show)\b/i;
+
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
   'a',
   'active',
@@ -164,6 +170,35 @@ export function extractExplicitRepoFilePath(rawContent: string): string | undefi
   return undefined;
 }
 
+export function resolveExplicitRemoteProfileId(rawContent: string): string | undefined {
+  if (!rawContent) return undefined;
+  const explicitMatch = rawContent.match(EXPLICIT_REMOTE_PROFILE_PATTERN);
+  if (explicitMatch?.[1]?.trim()) {
+    return explicitMatch[1].trim().replace(/[)"'\].,!?;]+$/g, '');
+  }
+  const namedMatch = rawContent.match(NAMED_REMOTE_PROFILE_PATTERN);
+  const namedProfile = (namedMatch?.[1]?.trim() || '').replace(/[)"'\].,!?;]+$/g, '');
+  return namedProfile || undefined;
+}
+
+export function hasExplicitRemoteSandboxReference(rawContent: string, normalized: string): boolean {
+  if (!rawContent || !normalized) return false;
+  return REMOTE_SANDBOX_REQUEST_PATTERN.test(normalized)
+    || NAMED_REMOTE_SANDBOX_REQUEST_PATTERN.test(rawContent)
+    || !!resolveExplicitRemoteProfileId(rawContent);
+}
+
+export function isExplicitRemoteSandboxTaskRequest(
+  rawContent: string,
+  normalized: string,
+): boolean {
+  if (!hasExplicitRemoteSandboxReference(rawContent, normalized)) {
+    return false;
+  }
+  return REMOTE_SANDBOX_ACTION_PATTERN.test(normalized)
+    || hasExplicitRepoFileReference(normalized);
+}
+
 export function extractExplicitRemoteExecCommand(
   rawContent: string,
   normalized: string,
@@ -171,9 +206,11 @@ export function extractExplicitRemoteExecCommand(
 ): string | undefined {
   if (!rawContent || !normalized) return undefined;
   if (operation !== 'run') return undefined;
-  if (!/\b(?:remote|isolated|cloud)\s+sandbox\b/.test(normalized)) return undefined;
+  if (!hasExplicitRemoteSandboxReference(rawContent, normalized)) return undefined;
 
-  const runMatch = rawContent.match(/\b[Rr]un\s+(.+?)\s+in\s+(?:the\s+)?(?:remote|isolated|cloud)\s+sandbox\b/);
+  const runMatch = rawContent.match(/\b[Rr]un\s+(.+?)\s+in\s+(?:the\s+)?(?:remote|isolated|cloud|managed)\s+sandbox\b/)
+    ?? rawContent.match(/\b[Rr]un\s+(.+?)\s+using\s+(?:the\s+)?[a-z0-9][a-z0-9._ -]*?\s+profile\b/i)
+    ?? rawContent.match(/\b[Rr]un\s+(.+?)\s+using\s+(?:the\s+)?(?:existing\s+|current\s+|managed\s+)?[a-z0-9][a-z0-9._ -]*?\s+sandbox\b/i);
   const command = collapseIntentGatewayWhitespace(runMatch?.[1] ?? '')
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();

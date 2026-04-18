@@ -1,6 +1,6 @@
 # Multi-Agent Workflow Hardening Specification
 
-**Status:** Completed
+**Status:** Implemented current architecture
 **Date:** 2026-03-10
 
 This specification formalizes the implementation of [MULTI-AGENT-WORKFLOW-HARDENING-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented/MULTI-AGENT-WORKFLOW-HARDENING-PROPOSAL.md).
@@ -10,6 +10,29 @@ This specification formalizes the implementation of [MULTI-AGENT-WORKFLOW-HARDEN
 GuardianAgent is hardening its multi-agent layer by introducing typed orchestration contracts, strict tool schema validation, dispatch lineage tracking, causal workflow tracing, and conflict-aware parallel tool execution.
 
 This hardening assumes top-level user-turn interpretation has already happened before orchestration begins. Corrections, clarification answers, and route selection are resolved by the main `IntentGateway` path; multi-agent dispatch consumes that structured interpretation rather than re-deciding user intent ad hoc inside downstream agents.
+
+Related execution-state contract:
+- `docs/specs/EXECUTION-STATE-SPEC.md`
+
+## Current As-Built Delegation Contract
+
+Guardian's current multi-agent / delegated-worker path is hardened around these rules:
+
+- top-level user intent is decided once by the `IntentGateway`
+- the originating request should carry durable execution identity before or during delegation
+- delegated workers preserve lineage back to the originating assistant run, continuity key, and execution lineage where available
+- delegated workers may publish structured orchestration role identity such as coordinator, explorer, implementer, or verifier
+- operator-facing follow-up is normalized server-side into bounded reporting modes instead of forcing channels to parse arbitrary worker prose
+
+Current server-owned delegated follow-up modes:
+- `inline_response`
+- `held_for_approval`
+- `status_only`
+- operator-held review for long-running or automation-owned delegated runs
+
+Current as-built limitation:
+- delegated completion still normalizes around worker `content` plus bounded handoff metadata
+- the stronger typed return contract split into channels such as `userSummary`, `evidence`, `progressEvents`, and `nextAction` remains follow-on work
 
 ## Phases
 

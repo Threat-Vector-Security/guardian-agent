@@ -1,11 +1,20 @@
 import { isRecord } from '../../chat-agent-helpers.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import {
+  type ContinuityThreadExecutionRef,
   type ContinuityThreadContinuationState,
   type ContinuityThreadRecord,
   type ContinuityThreadScope,
   ContinuityThreadStore,
 } from '../continuity-threads.js';
+import type { ExecutionIdentityMetadata } from '../execution-identity.js';
+import {
+  ExecutionStore,
+  resolveExecutionIntentContent,
+  type ExecutionIntent,
+  type ExecutionRecord,
+  type ExecutionScope,
+} from '../executions.js';
 import type { IntentGatewayRecord } from '../intent-gateway.js';
 import {
   defaultPendingActionTransferPolicy,
@@ -47,6 +56,8 @@ export interface PendingActionReplacementInput {
   blocker: PendingActionRecord['blocker'];
   intent: PendingActionRecord['intent'];
   resume?: PendingActionRecord['resume'];
+  executionId?: PendingActionRecord['executionId'];
+  rootExecutionId?: PendingActionRecord['rootExecutionId'];
   codeSessionId?: PendingActionRecord['codeSessionId'];
   expiresAt: number;
 }
@@ -61,6 +72,7 @@ export interface ChatAgentOrchestrationStateDeps {
   stateAgentId: string;
   pendingActionStore?: PendingActionStore;
   continuityThreadStore?: ContinuityThreadStore;
+  executionStore?: ExecutionStore;
   tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listApprovals' | 'listPendingApprovalIdsForUser'> | null;
 }
 
@@ -74,16 +86,102 @@ function clonePendingActionIntentProvenance(
   };
 }
 
+function cloneContinuityExecutionRef(
+  ref: ContinuityThreadExecutionRef,
+): ContinuityThreadExecutionRef {
+  return {
+    kind: ref.kind,
+    id: ref.id,
+    ...(ref.label ? { label: ref.label } : {}),
+  };
+}
+
+function mergeContinuityExecutionRefs(
+  existing: readonly ContinuityThreadExecutionRef[] | undefined,
+  additions: readonly ContinuityThreadExecutionRef[],
+): ContinuityThreadExecutionRef[] | undefined {
+  const merged = new Map<string, ContinuityThreadExecutionRef>();
+  for (const ref of existing ?? []) {
+    merged.set(`${ref.kind}:${ref.id}`, cloneContinuityExecutionRef(ref));
+  }
+  for (const ref of additions) {
+    merged.set(`${ref.kind}:${ref.id}`, cloneContinuityExecutionRef(ref));
+  }
+  const values = [...merged.values()];
+  return values.length > 0 ? values : undefined;
+}
+
+function replaceContinuityExecutionRefsByKind(
+  existing: readonly ContinuityThreadExecutionRef[] | undefined,
+  kindsToReplace: ReadonlySet<ContinuityThreadExecutionRef['kind']>,
+  additions: readonly ContinuityThreadExecutionRef[],
+): ContinuityThreadExecutionRef[] | undefined {
+  const retained = (existing ?? [])
+    .filter((ref) => !kindsToReplace.has(ref.kind))
+    .map(cloneContinuityExecutionRef);
+  return mergeContinuityExecutionRefs(retained, additions);
+}
+
+function buildExecutionRefLabel(record: ExecutionRecord | null | undefined): string | undefined {
+  const summary = record?.intent.summary?.trim();
+  if (summary) return summary;
+  const content = resolveExecutionIntentContent(record);
+  if (!content) return undefined;
+  return content.length > 120
+    ? `${content.slice(0, 117).trimEnd()}...`
+    : content;
+}
+
+function resolveSurfaceId(surfaceId: string | undefined, userId: string): string {
+  return surfaceId?.trim() || userId.trim() || 'default-surface';
+}
+
+function isResumableExecution(record: ExecutionRecord | null | undefined): boolean {
+  return record?.status === 'running'
+    || record?.status === 'blocked'
+    || record?.status === 'failed';
+}
+
+function buildExecutionContinuationRef(
+  record: ExecutionRecord | null | undefined,
+): ContinuityThreadExecutionRef | null {
+  if (!record) return null;
+  const label = buildExecutionRefLabel(record);
+  return {
+    kind: 'execution',
+    id: record.executionId,
+    ...(label ? { label } : {}),
+  };
+}
+
+function cloneExecutionIntent(intent: ExecutionIntent): ExecutionIntent {
+  return {
+    ...intent,
+    ...(intent.missingFields ? { missingFields: [...intent.missingFields] } : {}),
+    ...(intent.provenance
+      ? {
+          provenance: {
+            ...intent.provenance,
+            ...(intent.provenance.entities ? { entities: { ...intent.provenance.entities } } : {}),
+          },
+        }
+      : {}),
+    ...(intent.entities ? { entities: { ...intent.entities } } : {}),
+  };
+}
+
 export class ChatAgentOrchestrationState {
   private readonly stateAgentId: string;
   private pendingActionStore?: PendingActionStore;
   private continuityThreadStore?: ContinuityThreadStore;
+  private executionStore?: ExecutionStore;
   private readonly tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listApprovals' | 'listPendingApprovalIdsForUser'> | null;
 
   constructor(deps: ChatAgentOrchestrationStateDeps) {
     this.stateAgentId = deps.stateAgentId;
     this.pendingActionStore = deps.pendingActionStore;
     this.continuityThreadStore = deps.continuityThreadStore;
+    this.executionStore = deps.executionStore;
     this.tools = deps.tools;
   }
 
@@ -103,12 +201,20 @@ export class ChatAgentOrchestrationState {
     this.continuityThreadStore = store;
   }
 
+  getExecutionStore(): ExecutionStore | undefined {
+    return this.executionStore;
+  }
+
+  setExecutionStore(store: ExecutionStore | undefined): void {
+    this.executionStore = store;
+  }
+
   private buildPendingActionScope(userId: string, channel: string, surfaceId?: string): PendingActionScope {
     return {
       agentId: this.stateAgentId,
       userId,
       channel,
-      surfaceId: surfaceId?.trim() || userId || 'default-surface',
+      surfaceId: resolveSurfaceId(surfaceId, userId),
     };
   }
 
@@ -116,6 +222,23 @@ export class ChatAgentOrchestrationState {
     return {
       assistantId: this.stateAgentId,
       userId: userId.trim(),
+    };
+  }
+
+  private buildExecutionScope(
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+    codeSessionId?: string,
+    continuityKey?: string,
+  ): ExecutionScope {
+    return {
+      assistantId: this.stateAgentId,
+      userId: userId.trim(),
+      channel: channel.trim(),
+      surfaceId: resolveSurfaceId(surfaceId, userId),
+      ...(codeSessionId?.trim() ? { codeSessionId: codeSessionId.trim() } : {}),
+      ...(continuityKey?.trim() ? { continuityKey: continuityKey.trim() } : {}),
     };
   }
 
@@ -150,6 +273,221 @@ export class ChatAgentOrchestrationState {
     return this.continuityThreadStore?.get(this.buildContinuityThreadScope(normalizedUserId), nowMs) ?? null;
   }
 
+  private findActiveExecutionRef(
+    continuityThread: ContinuityThreadRecord | null | undefined,
+  ): ContinuityThreadExecutionRef | null {
+    const executionRef = continuityThread?.activeExecutionRefs?.find((ref) => ref.kind === 'execution') ?? null;
+    return executionRef ? cloneContinuityExecutionRef(executionRef) : null;
+  }
+
+  getActiveExecution(input: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    pendingAction?: PendingActionRecord | null;
+    excludeExecutionId?: string;
+  }): ExecutionRecord | null {
+    if (!this.executionStore) return null;
+    const pendingExecutionId = input.pendingAction?.executionId?.trim();
+    if (pendingExecutionId && pendingExecutionId !== input.excludeExecutionId) {
+      return this.executionStore.get(pendingExecutionId);
+    }
+    const continuityExecutionId = this.findActiveExecutionRef(input.continuityThread)?.id;
+    if (continuityExecutionId && continuityExecutionId !== input.excludeExecutionId) {
+      return this.executionStore.get(continuityExecutionId);
+    }
+    const latestForScope = this.executionStore.listForScope(
+      this.buildExecutionScope(input.userId, input.channel, input.surfaceId),
+    ).find((record) =>
+      record.executionId !== input.excludeExecutionId
+      && isResumableExecution(record));
+    if (latestForScope) {
+      return latestForScope;
+    }
+    return this.executionStore.listForAssistantUser(this.stateAgentId, input.userId)
+      .find((record) =>
+        record.executionId !== input.excludeExecutionId
+        && isResumableExecution(record)) ?? null;
+  }
+
+  registerExecutionTurn(input: {
+    executionIdentity: ExecutionIdentityMetadata;
+    requestId: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    content: string;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): ExecutionRecord | null {
+    if (!this.executionStore) return null;
+    const nowMs = input.nowMs ?? Date.now();
+    return this.executionStore.begin({
+      executionId: input.executionIdentity.executionId,
+      requestId: input.requestId,
+      parentExecutionId: input.executionIdentity.parentExecutionId,
+      rootExecutionId: input.executionIdentity.rootExecutionId,
+      scope: this.buildExecutionScope(
+        input.userId,
+        input.channel,
+        input.surfaceId,
+        input.codeSessionId,
+        input.continuityThread?.continuityKey,
+      ),
+      originalUserContent: input.content,
+      lastUserContent: input.content,
+      status: 'running',
+    }, nowMs);
+  }
+
+  updateExecutionFromIntent(input: {
+    executionIdentity: ExecutionIdentityMetadata;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    gateway: IntentGatewayRecord | null;
+    routingContent: string;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): ExecutionRecord | null {
+    if (!this.executionStore) return null;
+    const nowMs = input.nowMs ?? Date.now();
+    const existing = this.executionStore.get(input.executionIdentity.executionId);
+    const decision = input.gateway?.decision;
+    const priorExecutionRef = this.findActiveExecutionRef(input.continuityThread);
+    const priorExecution = priorExecutionRef?.id
+      ? this.executionStore.get(priorExecutionRef.id)
+      : null;
+    const isNewRequest = decision?.turnRelation === 'new_request' || !priorExecution;
+    const nextRootExecutionId = isNewRequest
+      ? input.executionIdentity.executionId
+      : (priorExecution?.rootExecutionId ?? priorExecution?.executionId ?? input.executionIdentity.rootExecutionId ?? input.executionIdentity.executionId);
+    const nextParentExecutionId = isNewRequest
+      ? undefined
+      : (priorExecution?.executionId ?? input.executionIdentity.parentExecutionId);
+    const retryOfExecutionId = !isNewRequest
+      ? (priorExecution?.executionId ?? undefined)
+      : undefined;
+    const priorExecutionContent = resolveExecutionIntentContent(priorExecution);
+    const intent: ExecutionIntent = {
+      ...(existing?.intent ? cloneExecutionIntent(existing.intent) : { originalUserContent: input.routingContent }),
+      ...(decision?.route ? { route: decision.route } : {}),
+      ...(decision?.operation ? { operation: decision.operation } : {}),
+      ...(decision?.summary ? { summary: decision.summary } : {}),
+      ...(decision?.turnRelation ? { turnRelation: decision.turnRelation } : {}),
+      ...(decision?.resolution ? { resolution: decision.resolution } : {}),
+      ...(decision?.missingFields?.length ? { missingFields: [...decision.missingFields] } : {}),
+      originalUserContent: (!isNewRequest && priorExecutionContent)
+        ? priorExecutionContent
+        : (existing?.intent.originalUserContent?.trim() || input.routingContent.trim()),
+      ...(decision?.resolvedContent?.trim() ? { resolvedContent: decision.resolvedContent.trim() } : {}),
+      ...(decision?.provenance ? { provenance: clonePendingActionIntentProvenance(decision.provenance) } : {}),
+      ...(decision?.entities ? { entities: { ...decision.entities } as Record<string, unknown> } : {}),
+    };
+    const nextStatus = decision?.resolution === 'needs_clarification'
+      ? 'blocked'
+      : (existing?.status === 'completed' || existing?.status === 'cancelled' ? 'running' : existing?.status ?? 'running');
+    const updated = this.executionStore.update(input.executionIdentity.executionId, {
+      requestId: existing?.requestId ?? input.executionIdentity.executionId,
+      parentExecutionId: nextParentExecutionId,
+      rootExecutionId: nextRootExecutionId,
+      retryOfExecutionId,
+      scope: this.buildExecutionScope(
+        input.userId,
+        input.channel,
+        input.surfaceId,
+        input.codeSessionId,
+        input.continuityThread?.continuityKey,
+      ),
+      status: nextStatus,
+      intent,
+      lastUserContent: input.routingContent.trim(),
+      completedAt: undefined,
+      failedAt: undefined,
+    }, nowMs);
+    if (updated) return updated;
+    return this.executionStore.begin({
+      executionId: input.executionIdentity.executionId,
+      requestId: input.executionIdentity.executionId,
+      parentExecutionId: nextParentExecutionId,
+      rootExecutionId: nextRootExecutionId,
+      retryOfExecutionId,
+      scope: this.buildExecutionScope(
+        input.userId,
+        input.channel,
+        input.surfaceId,
+        input.codeSessionId,
+        input.continuityThread?.continuityKey,
+      ),
+      originalUserContent: intent.originalUserContent,
+      lastUserContent: input.routingContent.trim(),
+      status: nextStatus,
+    }, nowMs);
+  }
+
+  private syncExecutionBlockerFromPendingAction(
+    pendingAction: PendingActionRecord | null | undefined,
+    nowMs: number = Date.now(),
+  ): void {
+    if (!this.executionStore || !pendingAction?.executionId?.trim()) {
+      return;
+    }
+    if (isPendingActionActive(pendingAction.status)) {
+      this.executionStore.attachBlocker(pendingAction.executionId, {
+        pendingActionId: pendingAction.id,
+        kind: pendingAction.blocker.kind,
+        prompt: sanitizePendingActionPrompt(pendingAction.blocker.prompt, pendingAction.blocker.kind),
+        ...(pendingAction.blocker.field ? { field: pendingAction.blocker.field } : {}),
+        ...(pendingAction.blocker.provider ? { provider: pendingAction.blocker.provider } : {}),
+        ...(pendingAction.blocker.service ? { service: pendingAction.blocker.service } : {}),
+        ...(pendingAction.blocker.options?.length ? { options: pendingAction.blocker.options.map((option) => ({ ...option })) } : {}),
+        ...(pendingAction.blocker.approvalIds?.length ? { approvalIds: [...pendingAction.blocker.approvalIds] } : {}),
+        ...(pendingAction.blocker.approvalSummaries?.length
+          ? { approvalSummaries: pendingAction.blocker.approvalSummaries.map((item) => ({ ...item })) }
+          : {}),
+        ...(pendingAction.blocker.currentSessionId ? { currentSessionId: pendingAction.blocker.currentSessionId } : {}),
+        ...(pendingAction.blocker.currentSessionLabel ? { currentSessionLabel: pendingAction.blocker.currentSessionLabel } : {}),
+        ...(pendingAction.blocker.targetSessionId ? { targetSessionId: pendingAction.blocker.targetSessionId } : {}),
+        ...(pendingAction.blocker.targetSessionLabel ? { targetSessionLabel: pendingAction.blocker.targetSessionLabel } : {}),
+        ...(pendingAction.blocker.metadata ? { metadata: { ...pendingAction.blocker.metadata } } : {}),
+      }, nowMs);
+      return;
+    }
+
+    if (pendingAction.status === 'completed') {
+      this.executionStore.clearBlocker(pendingAction.executionId, { status: 'running' }, nowMs);
+      return;
+    }
+
+    if (pendingAction.status === 'failed') {
+      this.executionStore.clearBlocker(
+        pendingAction.executionId,
+        { status: 'failed', failedAt: nowMs },
+        nowMs,
+      );
+      return;
+    }
+
+    this.executionStore.clearBlocker(pendingAction.executionId, { status: 'cancelled' }, nowMs);
+  }
+
+  private resolvePendingActionExecutionBinding(input: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    pendingAction?: PendingActionRecord | null;
+  }): { executionId?: string; rootExecutionId?: string } {
+    const boundExecution = this.getActiveExecution(input);
+    return {
+      ...(boundExecution?.executionId ? { executionId: boundExecution.executionId } : {}),
+      ...(boundExecution?.rootExecutionId ? { rootExecutionId: boundExecution.rootExecutionId } : {}),
+    };
+  }
+
   touchContinuityThread(
     userId: string,
     channel: string,
@@ -160,7 +498,18 @@ export class ChatAgentOrchestrationState {
     const normalizedUserId = userId.trim();
     const normalizedChannel = channel.trim();
     if (!normalizedUserId || !normalizedChannel || !this.continuityThreadStore) return null;
-    const normalizedSurfaceId = surfaceId?.trim() || normalizedUserId || 'default-surface';
+    const normalizedSurfaceId = resolveSurfaceId(surfaceId, normalizedUserId);
+    const existing = this.getContinuityThread(normalizedUserId, nowMs);
+    const nextExecutionRefs = codeSessionId?.trim()
+      ? replaceContinuityExecutionRefsByKind(
+          existing?.activeExecutionRefs,
+          new Set<ContinuityThreadExecutionRef['kind']>(['code_session']),
+          [{
+            kind: 'code_session',
+            id: codeSessionId.trim(),
+          }],
+        )
+      : existing?.activeExecutionRefs;
     return this.continuityThreadStore.upsert(
       this.buildContinuityThreadScope(normalizedUserId),
       {
@@ -168,20 +517,14 @@ export class ChatAgentOrchestrationState {
           channel: normalizedChannel,
           surfaceId: normalizedSurfaceId,
         },
-        ...(codeSessionId?.trim()
-          ? {
-              activeExecutionRefs: [{
-                kind: 'code_session',
-                id: codeSessionId.trim(),
-              }],
-            }
-          : {}),
+        ...(nextExecutionRefs ? { activeExecutionRefs: nextExecutionRefs } : {}),
       },
       nowMs,
     );
   }
 
   updateContinuityThreadFromIntent(input: {
+    executionIdentity: ExecutionIdentityMetadata;
     userId: string;
     channel: string;
     surfaceId?: string;
@@ -207,24 +550,36 @@ export class ChatAgentOrchestrationState {
       ? candidateLastActionableRequest
       : input.continuityThread?.lastActionableRequest;
     const summary = normalizeUserFacingIntentGatewaySummary(decision.summary);
+    const existingExecutionRef = this.findActiveExecutionRef(input.continuityThread);
+    const currentExecution = this.executionStore?.get(input.executionIdentity.executionId) ?? null;
+    const currentExecutionRef = buildExecutionContinuationRef(currentExecution);
+    const nextExecutionRef = decision.turnRelation === 'new_request' || !existingExecutionRef
+      ? (currentExecutionRef ?? existingExecutionRef)
+      : existingExecutionRef;
+    const nextExecutionRefs = replaceContinuityExecutionRefsByKind(
+      input.continuityThread?.activeExecutionRefs,
+      new Set<ContinuityThreadExecutionRef['kind']>(['execution', 'code_session']),
+      [
+        ...(nextExecutionRef ? [nextExecutionRef] : []),
+        ...(input.codeSessionId?.trim()
+          ? [{
+              kind: 'code_session' as const,
+              id: input.codeSessionId.trim(),
+            }]
+          : []),
+      ],
+    );
     return this.continuityThreadStore.upsert(
       this.buildContinuityThreadScope(normalizedUserId),
       {
         touchSurface: {
           channel: normalizedChannel,
-          surfaceId: input.surfaceId?.trim() || normalizedUserId || 'default-surface',
+          surfaceId: resolveSurfaceId(input.surfaceId, normalizedUserId),
         },
         ...(summary ? { focusSummary: summary } : {}),
         ...(nextLastActionableRequest ? { lastActionableRequest: nextLastActionableRequest } : {}),
         ...(summary ? { safeSummary: summary } : {}),
-        ...(input.codeSessionId?.trim()
-          ? {
-              activeExecutionRefs: [{
-                kind: 'code_session',
-                id: input.codeSessionId.trim(),
-              }],
-            }
-          : {}),
+        ...(nextExecutionRefs ? { activeExecutionRefs: nextExecutionRefs } : {}),
       },
     );
   }
@@ -244,7 +599,7 @@ export class ChatAgentOrchestrationState {
       {
         touchSurface: {
           channel: normalizedChannel,
-          surfaceId: surfaceId?.trim() || normalizedUserId || 'default-surface',
+          surfaceId: resolveSurfaceId(surfaceId, normalizedUserId),
         },
         continuationState,
       },
@@ -260,12 +615,14 @@ export class ChatAgentOrchestrationState {
     const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
     const pendingAction = this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
     if (!this.pendingActionStore || !this.tools?.listPendingApprovalIdsForUser) {
+      this.syncExecutionBlockerFromPendingAction(pendingAction, nowMs);
       return pendingAction;
     }
     if (!pendingAction) {
       return null;
     }
     if (!isPendingActionActive(pendingAction.status)) {
+      this.syncExecutionBlockerFromPendingAction(pendingAction, nowMs);
       return pendingAction;
     }
     const liveApprovalIds = this.tools?.listPendingApprovalIdsForUser?.(userId, channel, {
@@ -280,9 +637,11 @@ export class ChatAgentOrchestrationState {
       scope: primaryScope,
       nowMs,
     });
-    return reconciled && isPendingActionActive(reconciled.status)
+    const active = reconciled && isPendingActionActive(reconciled.status)
       ? reconciled
       : null;
+    this.syncExecutionBlockerFromPendingAction(active ?? reconciled ?? pendingAction, nowMs);
+    return active;
   }
 
   private createPendingActionReplacementInput(
@@ -311,6 +670,8 @@ export class ChatAgentOrchestrationState {
             },
           }
         : {}),
+      ...(input.executionId ? { executionId: input.executionId } : {}),
+      ...(input.rootExecutionId ? { rootExecutionId: input.rootExecutionId } : {}),
       ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
       expiresAt: input.expiresAt,
     };
@@ -447,6 +808,12 @@ export class ChatAgentOrchestrationState {
         ...(isRecord(value.intent.entities) ? { entities: { ...value.intent.entities } } : {}),
       },
       ...(resume ? { resume } : {}),
+      ...(typeof value.executionId === 'string' && value.executionId.trim()
+        ? { executionId: value.executionId.trim() }
+        : {}),
+      ...(typeof value.rootExecutionId === 'string' && value.rootExecutionId.trim()
+        ? { rootExecutionId: value.rootExecutionId.trim() }
+        : {}),
       ...(typeof value.codeSessionId === 'string' && value.codeSessionId.trim()
         ? { codeSessionId: value.codeSessionId.trim() }
         : {}),
@@ -519,11 +886,25 @@ export class ChatAgentOrchestrationState {
     nowMs: number = Date.now(),
   ): PendingActionRecord | null {
     if (!this.pendingActionStore) return null;
-    return this.pendingActionStore.replaceActive(
+    const continuityThread = this.getContinuityThread(userId, nowMs);
+    const boundExecution = this.resolvePendingActionExecutionBinding({
+      userId,
+      channel,
+      surfaceId,
+      continuityThread,
+      pendingAction: input.id ? this.pendingActionStore.get(input.id, nowMs) : undefined,
+    });
+    const next = this.pendingActionStore.replaceActive(
       this.buildPendingActionScope(userId, channel, surfaceId),
-      input,
+      {
+        ...input,
+        ...(input.executionId ? { executionId: input.executionId } : boundExecution.executionId ? { executionId: boundExecution.executionId } : {}),
+        ...(input.rootExecutionId ? { rootExecutionId: input.rootExecutionId } : boundExecution.rootExecutionId ? { rootExecutionId: boundExecution.rootExecutionId } : {}),
+      },
       nowMs,
     );
+    this.syncExecutionBlockerFromPendingAction(next, nowMs);
+    return next;
   }
 
   updatePendingAction(
@@ -531,15 +912,19 @@ export class ChatAgentOrchestrationState {
     patch: Partial<Omit<PendingActionRecord, 'id' | 'scope' | 'createdAt'>>,
     nowMs: number = Date.now(),
   ): PendingActionRecord | null {
-    return this.pendingActionStore?.update(actionId, patch, nowMs) ?? null;
+    const next = this.pendingActionStore?.update(actionId, patch, nowMs) ?? null;
+    this.syncExecutionBlockerFromPendingAction(next, nowMs);
+    return next;
   }
 
   completePendingAction(actionId: string, nowMs: number = Date.now()): void {
-    this.pendingActionStore?.complete(actionId, nowMs);
+    const next = this.pendingActionStore?.complete(actionId, nowMs);
+    this.syncExecutionBlockerFromPendingAction(next, nowMs);
   }
 
   private cancelPendingAction(actionId: string, nowMs: number = Date.now()): void {
-    this.pendingActionStore?.cancel(actionId, nowMs);
+    const next = this.pendingActionStore?.cancel(actionId, nowMs);
+    this.syncExecutionBlockerFromPendingAction(next, nowMs);
   }
 
   private clearActivePendingAction(
@@ -626,6 +1011,8 @@ export class ChatAgentOrchestrationState {
         missingFields: active?.intent.missingFields,
         entities: active?.intent.entities,
         resume: active?.resume,
+        executionId: active?.executionId,
+        rootExecutionId: active?.rootExecutionId,
         codeSessionId: active?.codeSessionId,
       },
       nowMs,
@@ -671,6 +1058,8 @@ export class ChatAgentOrchestrationState {
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
@@ -713,6 +1102,8 @@ export class ChatAgentOrchestrationState {
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
@@ -743,6 +1134,8 @@ export class ChatAgentOrchestrationState {
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
       ...(input.resume ? { resume: input.resume } : {}),
+      ...(input.executionId ? { executionId: input.executionId } : {}),
+      ...(input.rootExecutionId ? { rootExecutionId: input.rootExecutionId } : {}),
       ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     }, nowMs);
@@ -774,6 +1167,8 @@ export class ChatAgentOrchestrationState {
       targetSessionLabel?: string;
       metadata?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
     },
     nowMs: number = Date.now(),
   ): PendingActionSetResult {
@@ -806,6 +1201,8 @@ export class ChatAgentOrchestrationState {
         ...(input.entities ? { entities: { ...input.entities } } : {}),
       },
       ...(input.resume ? { resume: input.resume } : {}),
+      ...(input.executionId ? { executionId: input.executionId } : {}),
+      ...(input.rootExecutionId ? { rootExecutionId: input.rootExecutionId } : {}),
       ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     }, nowMs);

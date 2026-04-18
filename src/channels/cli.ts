@@ -1819,7 +1819,7 @@ export class CLIChannel implements ChannelAdapter {
         .slice(0, limit);
       if (traces.length === 0) {
         this.write('\n');
-        this.write(contextFilters.continuityKey || contextFilters.activeExecutionRef
+        this.write(this.hasContextFilters(contextFilters)
           ? 'No recent assistant traces matched the requested context filters.\n\n'
           : 'No recent assistant traces.\n\n');
         return;
@@ -1871,7 +1871,7 @@ export class CLIChannel implements ChannelAdapter {
       const entries = Array.isArray(result?.entries) ? result.entries : [];
       if (entries.length === 0) {
         this.write('\n');
-        this.write(contextFilters.continuityKey || contextFilters.activeExecutionRef
+        this.write(this.hasContextFilters(contextFilters)
           ? 'No recent routing trace entries matched the requested context filters.\n\n'
           : 'No recent routing trace entries.\n\n');
         return;
@@ -5096,9 +5096,19 @@ export class CLIChannel implements ChannelAdapter {
   private parseContextFilters(args: string[]): {
     continuityKey?: string;
     activeExecutionRef?: string;
+    executionId?: string;
+    rootExecutionId?: string;
+    taskExecutionId?: string;
+    pendingActionId?: string;
+    codeSessionId?: string;
   } {
     let continuityKey: string | undefined;
     let activeExecutionRef: string | undefined;
+    let executionId: string | undefined;
+    let rootExecutionId: string | undefined;
+    let taskExecutionId: string | undefined;
+    let pendingActionId: string | undefined;
+    let codeSessionId: string | undefined;
 
     for (const token of args) {
       if (typeof token !== 'string' || token.trim().length === 0) continue;
@@ -5112,13 +5122,58 @@ export class CLIChannel implements ChannelAdapter {
       }
       if ((key === 'exec' || key === 'execution' || key === 'activeexecutionref') && !activeExecutionRef) {
         activeExecutionRef = value;
+        continue;
+      }
+      if ((key === 'executionid' || key === 'traceexecutionid') && !executionId) {
+        executionId = value;
+        continue;
+      }
+      if ((key === 'rootexecutionid' || key === 'rootexec') && !rootExecutionId) {
+        rootExecutionId = value;
+        continue;
+      }
+      if ((key === 'taskexecutionid' || key === 'taskexec') && !taskExecutionId) {
+        taskExecutionId = value;
+        continue;
+      }
+      if ((key === 'pendingactionid' || key === 'pending') && !pendingActionId) {
+        pendingActionId = value;
+        continue;
+      }
+      if ((key === 'codesessionid' || key === 'codesession' || key === 'sessionid') && !codeSessionId) {
+        codeSessionId = value;
       }
     }
 
     return {
       ...(continuityKey ? { continuityKey } : {}),
       ...(activeExecutionRef ? { activeExecutionRef } : {}),
+      ...(executionId ? { executionId } : {}),
+      ...(rootExecutionId ? { rootExecutionId } : {}),
+      ...(taskExecutionId ? { taskExecutionId } : {}),
+      ...(pendingActionId ? { pendingActionId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
     };
+  }
+
+  private hasContextFilters(filters: {
+    continuityKey?: string;
+    activeExecutionRef?: string;
+    executionId?: string;
+    rootExecutionId?: string;
+    taskExecutionId?: string;
+    pendingActionId?: string;
+    codeSessionId?: string;
+  }): boolean {
+    return Boolean(
+      filters.continuityKey
+      || filters.activeExecutionRef
+      || filters.executionId
+      || filters.rootExecutionId
+      || filters.taskExecutionId
+      || filters.pendingActionId
+      || filters.codeSessionId,
+    );
   }
 
   private summarizeIntentRoutingEntry(entry: {
@@ -5130,12 +5185,20 @@ export class CLIChannel implements ChannelAdapter {
     const parts = [
       ...(typeof details?.route === 'string' ? [`route ${details.route}`] : []),
       ...(typeof details?.tier === 'string' ? [`tier ${details.tier}`] : []),
+      ...(typeof details?.executionId === 'string' ? [`execution ${details.executionId}`] : []),
+      ...(typeof details?.taskExecutionId === 'string' ? [`task ${details.taskExecutionId}`] : []),
+      ...(typeof details?.codeSessionId === 'string' ? [`code ${details.codeSessionId}`] : []),
       ...(typeof details?.agentName === 'string' ? [`worker ${details.agentName}`] : []),
       ...(typeof details?.orchestrationLabel === 'string' ? [`role ${details.orchestrationLabel}`] : []),
+      ...(typeof details?.executionProfileName === 'string'
+        ? [`profile ${details.executionProfileName}${typeof details?.executionProfileModel === 'string' ? ` (${details.executionProfileModel})` : ''}`]
+        : []),
       ...(typeof details?.lifecycle === 'string' ? [`lifecycle ${details.lifecycle}`] : []),
       ...(typeof details?.reportingMode === 'string' ? [`handoff ${details.reportingMode}`] : []),
       ...(typeof details?.unresolvedBlockerKind === 'string' ? [`blocker ${details.unresolvedBlockerKind}`] : []),
       ...(typeof details?.approvalCount === 'number' ? [`approvals ${details.approvalCount}`] : []),
+      ...(typeof details?.runClass === 'string' ? [`run ${details.runClass}`] : []),
+      ...(typeof details?.reason === 'string' ? [details.reason] : []),
       ...(typeof details?.continuityKey === 'string' ? [`continuity ${details.continuityKey}`] : []),
       ...(Array.isArray(details?.activeExecutionRefs) && details.activeExecutionRefs.length > 0
         ? [`exec ${(details.activeExecutionRefs as unknown[])

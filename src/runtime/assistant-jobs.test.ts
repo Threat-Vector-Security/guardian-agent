@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { AssistantJobTracker, buildAssistantJobDisplay, mergeAssistantJobStates } from './assistant-jobs.js';
+import {
+  AssistantJobTracker,
+  buildAssistantJobDisplay,
+  mergeAssistantJobStates,
+  readDelegatedWorkerMetadata,
+} from './assistant-jobs.js';
 
 describe('AssistantJobTracker', () => {
   it('supports mutable job updates and completion handoff metadata', () => {
@@ -118,6 +123,19 @@ describe('AssistantJobTracker', () => {
       needsOperatorAction: true,
       blockerKind: 'approval',
       approvalCount: 2,
+    });
+  });
+
+  it('preserves delegated execution identity metadata for operator views', () => {
+    expect(readDelegatedWorkerMetadata({
+      delegation: {
+        kind: 'brokered_worker',
+        executionId: 'exec-operator-1',
+        rootExecutionId: 'exec-root-1',
+      },
+    })).toMatchObject({
+      executionId: 'exec-operator-1',
+      rootExecutionId: 'exec-root-1',
     });
   });
 

@@ -65,6 +65,11 @@ export interface IntentRoutingTraceListOptions {
   limit?: number;
   continuityKey?: string;
   activeExecutionRef?: string;
+  executionId?: string;
+  rootExecutionId?: string;
+  taskExecutionId?: string;
+  pendingActionId?: string;
+  codeSessionId?: string;
   stage?: IntentRoutingTraceStage;
   channel?: string;
   agentId?: string;

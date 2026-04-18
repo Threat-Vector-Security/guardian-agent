@@ -95,12 +95,21 @@ describe('trace context filters', () => {
       details: {
         continuityKey: 'continuity-1',
         activeExecutionRefs: ['code_session:Repo Fix', 'pending_action:approval-1'],
+        executionId: 'execution-123',
+        taskExecutionId: 'task-456',
+        pendingActionId: 'approval-1',
+        codeSessionId: 'code-session-789',
       },
     };
 
     expect(intentRoutingTraceEntryMatchesContextFilters(entry, { continuityKey: 'continuity-1' })).toBe(true);
     expect(intentRoutingTraceEntryMatchesContextFilters(entry, { activeExecutionRef: 'repo fix' })).toBe(true);
     expect(intentRoutingTraceEntryMatchesContextFilters(entry, { activeExecutionRef: 'approval-1' })).toBe(true);
+    expect(intentRoutingTraceEntryMatchesContextFilters(entry, { executionId: 'execution-123' })).toBe(true);
+    expect(intentRoutingTraceEntryMatchesContextFilters(entry, { taskExecutionId: 'task-456' })).toBe(true);
+    expect(intentRoutingTraceEntryMatchesContextFilters(entry, { pendingActionId: 'approval-1' })).toBe(true);
+    expect(intentRoutingTraceEntryMatchesContextFilters(entry, { codeSessionId: 'session-789' })).toBe(true);
     expect(intentRoutingTraceEntryMatchesContextFilters(entry, { continuityKey: 'continuity-other' })).toBe(false);
+    expect(intentRoutingTraceEntryMatchesContextFilters(entry, { executionId: 'execution-other' })).toBe(false);
   });
 });

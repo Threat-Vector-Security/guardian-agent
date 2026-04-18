@@ -32,7 +32,7 @@ This is a migration target, not a rewrite license. Existing behavior must be pre
 1. Composition roots compose. They do not own feature logic.
 2. Channel adapters translate protocols. They do not invent business rules.
 3. Control-plane services own configuration, mutation, persistence, and runtime application.
-4. Runtime orchestration owns intent routing, pending actions, approvals, and cross-turn state.
+4. Runtime orchestration owns intent routing, execution state, pending actions, approvals, and cross-turn state.
 5. Tool execution owns registration, policy enforcement, approval flow, execution lifecycle, and result shaping.
 6. Capability modules own domain-specific implementations behind stable contracts.
 7. Security decisions stay centralized in Guardian, policy, sandbox, and shared orchestration layers.
@@ -168,7 +168,7 @@ src/runtime/control-plane/
 Primary responsibility:
 - execute the authoritative user-turn pipeline
 - own intent classification through the Intent Gateway
-- manage pending actions, approvals, continuation, and shared response metadata
+- manage execution records, pending actions, approvals, continuation, and shared response metadata
 - coordinate conversations, analytics, identities, budgets, watchdogs, and scheduled execution
 
 Primary locations:
@@ -179,12 +179,13 @@ Primary locations:
 
 Rules:
 - Intent classification must stay gateway-first.
-- Approval flow and blocked-work state must remain shared abstractions, not feature-specific forks.
+- Execution identity, approval flow, and blocked-work state must remain shared abstractions, not feature-specific forks.
 - Runtime services should depend on interfaces and helpers, not channel-specific details.
 
 Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` is now the shared boundary between channel adapters/bootstrap startup and the Runtime dispatch pipeline.
 - `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
+- `src/runtime/executions.ts` now owns the durable execution record for user work, including route/intent snapshots, blocker state, and parent/root/retry lineage used by resume and delegated-run correlation.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
 - `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
 - `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.

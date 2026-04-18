@@ -227,15 +227,15 @@ For workspace-local JS package mutations executed through `shell_safe`, the runt
   - `pending_approval` with `approvalId`
 - approvals now carry requesting principal/role metadata and reject decisions from unauthorized principals or roles
 - **Suspended Execution (Continuation Interception)**:
-  - When an LLM tool call requires approval, `ChatAgent` suspends the internal tool loop by caching the entire message context (`suspendedSessions`) and returning a `pending_approval` state to the client.
+  - When an LLM tool call requires approval, `ChatAgent` suspends the internal tool loop by caching the relevant message context (`suspendedSessions`), associating it with the active execution/pending-action state, and returning a `pending_approval` state to the client.
   - The UI prompts the user and hits the `/api/tools/approvals/decision` REST endpoint.
-  - The UI then sends a "continuation message" back to the agent.
-  - `ChatAgent` detects the continuation message, restores the suspended `llmMessages` context, fetches the actual tool execution result from `ToolExecutor`, and injects it as the `tool` role response. This prevents the LLM from losing context and retrying identical calls.
+  - The UI may then send a continuation signal back to the agent only when the backend confirms there is suspended tool-call context to resume.
+  - `ChatAgent` treats that signal as a control-plane resume, restores the suspended `llmMessages` context, fetches the actual tool execution result from `ToolExecutor`, and injects it as the `tool` role response. This prevents the LLM from losing context and retrying identical calls.
   - This continuation detection is one of the few allowed pre-gateway intercepts. Normal clarification answers such as `Use Outlook` or `Codex, the CLI coding assistant` remain ordinary interpreted user turns and do not go through the approval continuation path.
 - Current lifetime model:
   - pending approval ids are tracked per logical user/channel with a 30 minute TTL
   - approval-backed continuations can therefore survive unrelated intervening turns inside that TTL window
-  - approval resume is more durable than ordinary conversational clarification repair because it is tied to explicit pending approval state rather than only bounded recent history
+  - approval resume is more durable than ordinary conversational clarification repair because it is tied to explicit pending approval state and the stored execution envelope rather than only bounded recent history
 - **Immediate Execution on Approval**:
   - When a user approves an action via the REST API or UI, `ToolExecutor.decideApproval` executes the tool handler immediately in the backend, rather than waiting for the LLM to reissue the command.
 - **Retry Caching (Loop Prevention)**:
@@ -253,7 +253,7 @@ Practical consequence:
 - the user may ask an unrelated question while one or more approvals are still pending
 - if the approval originated from a suspended LLM tool loop, approving later resumes that specific loop
 - if the approval originated from a deterministic direct route, approving later may simply return the stored follow-up copy or direct tool result instead of resuming a suspended planner loop
-- this is a targeted continuation model, not a general-purpose stack of arbitrary paused conversations
+- this is a targeted execution-backed continuation model, not a general-purpose stack of arbitrary paused conversations
 - unrelated replies should not keep re-inlining old approval UI unless the current response explicitly carries `response.metadata.pendingAction`
 
 ### Verification Status

@@ -98,6 +98,10 @@ describe('ContinuityThreadStore', () => {
       focusSummary: 'Continue the coding task in the current workspace.',
       lastActionableRequest: 'Use Codex to create the smoke test file.',
       activeExecutionRefs: [{ kind: 'code_session', id: 'session-1', label: 'Test Tactical Game App' }],
+      continuationState: {
+        kind: 'retry_after_failure',
+        payload: { source: 'sandbox_prerequisite' },
+      },
     });
 
     expect(summarizeContinuityThreadForGateway(record)).toMatchObject({
@@ -105,10 +109,12 @@ describe('ContinuityThreadStore', () => {
       linkedSurfaceCount: 1,
       focusSummary: 'Continue the coding task in the current workspace.',
       lastActionableRequest: 'Use Codex to create the smoke test file.',
+      continuationStateKind: 'retry_after_failure',
     });
     expect(toContinuityThreadClientMetadata(record)).toMatchObject({
       continuityKey: record.continuityKey,
       focusSummary: 'Continue the coding task in the current workspace.',
+      continuationStateKind: 'retry_after_failure',
     });
     expect(formatContinuityThreadForPrompt(record)).toContain('<continuity-context>');
     expect(formatContinuityThreadForPrompt(record)).toContain('lastActionableRequest:');

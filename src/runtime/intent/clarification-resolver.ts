@@ -1,5 +1,6 @@
 import {
   extractExplicitRemoteExecCommand,
+  isExplicitRemoteSandboxTaskRequest,
   inferExplicitFilesystemTaskOperation,
 } from './entity-resolvers/coding.js';
 import {
@@ -10,7 +11,6 @@ import {
   isExplicitAutomationOutputRequest,
 } from './entity-resolvers/automation.js';
 import {
-  continuitySuggestsRoutine,
   inferSecondBrainOperation,
   isExplicitSecondBrainEntityRequest,
   isExplicitSecondBrainRoutineRequest,
@@ -22,7 +22,11 @@ import {
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
 import { normalizeOperation, normalizeRoute } from './normalization.js';
-import { isExplicitComplexPlanningRequest, isExplicitCodingExecutionRequest } from './request-patterns.js';
+import {
+  isExplicitComplexPlanningRequest,
+  isExplicitCodingExecutionRequest,
+  isExplicitRepoPlanningRequest,
+} from './request-patterns.js';
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from './text.js';
 import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.js';
 
@@ -51,13 +55,16 @@ export function repairIntentGatewayRoute(
   if (isExplicitCodingExecutionRequest(rawSourceContent)) {
     return 'coding_task';
   }
+  if (isExplicitRepoPlanningRequest(rawSourceContent)) {
+    return 'coding_task';
+  }
   if (route === 'personal_assistant_task') {
     return route;
   }
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   if (
-    route === 'coding_session_control'
-    && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
+    (route === 'coding_session_control' || route === 'filesystem_task')
+    && isExplicitRemoteSandboxTaskRequest(rawSourceContent, normalizedSourceContent)
   ) {
     return 'coding_task';
   }
@@ -75,7 +82,6 @@ export function repairIntentGatewayRoute(
     && (
       pendingActionSuggestsPersonalAssistantTask(repairContext)
       || pendingActionSuggestsRoutine(repairContext)
-      || continuitySuggestsRoutine(repairContext)
     )) {
     return 'personal_assistant_task';
   }
@@ -92,6 +98,9 @@ export function repairIntentGatewayOperation(
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
+  }
+  if (route === 'coding_task' && isExplicitRepoPlanningRequest(rawSourceContent)) {
+    return 'inspect';
   }
   if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
     return inferProviderConfigOperation(rawSourceContent, operation);
@@ -113,7 +122,10 @@ export function repairIntentGatewayOperation(
   }
   if (
     route === 'coding_task'
-    && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
+    && (
+      extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
+      || isExplicitRemoteSandboxTaskRequest(rawSourceContent, normalizedSourceContent)
+    )
   ) {
     return 'run';
   }

@@ -4,6 +4,8 @@ import {
   extractCodingWorkspaceTarget,
   extractExplicitRemoteExecCommand,
   inferExplicitCodingBackendRequest,
+  hasExplicitRemoteSandboxReference,
+  resolveExplicitRemoteProfileId,
 } from './entity-resolvers/coding.js';
 import {
   inferEmailProviderFromSource,
@@ -71,10 +73,13 @@ export function resolveIntentGatewayEntities(
   if (typeof manualOnly === 'boolean') provenance.manualOnly = classifierSource;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
   if (typeof scheduled === 'boolean') provenance.scheduled = classifierSource;
-  const personalItemType = normalizePersonalItemType(parsed.personalItemType)
+  const parsedPersonalItemType = route === 'personal_assistant_task'
+    ? normalizePersonalItemType(parsed.personalItemType)
+    : undefined;
+  const personalItemType = parsedPersonalItemType
     ?? inferSecondBrainPersonalItemType(repairContext, route, operation);
   if (personalItemType) {
-    provenance.personalItemType = normalizePersonalItemType(parsed.personalItemType)
+    provenance.personalItemType = parsedPersonalItemType
       ? classifierSource
       : 'resolver.personal_assistant';
   }
@@ -199,6 +204,9 @@ export function resolveIntentGatewayEntities(
   const codingRemoteExecRequested = typeof parsed.codingRemoteExecRequested === 'boolean'
     ? parsed.codingRemoteExecRequested
     : inferredRemoteExecCommand
+      || (rawSourceContent && route === 'coding_task'
+        ? hasExplicitRemoteSandboxReference(rawSourceContent, normalizedSourceContent)
+        : false)
       ? true
       : undefined;
   if (typeof codingRemoteExecRequested === 'boolean') {
@@ -216,8 +224,14 @@ export function resolveIntentGatewayEntities(
   if (toolName) provenance.toolName = classifierSource;
   const profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
     ? parsed.profileId.trim()
+    : rawSourceContent && route === 'coding_task'
+      ? resolveExplicitRemoteProfileId(rawSourceContent)
     : undefined;
-  if (profileId) provenance.profileId = classifierSource;
+  if (profileId) {
+    provenance.profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
+      ? classifierSource
+      : 'resolver.coding';
+  }
   const command = typeof parsed.command === 'string' && parsed.command.trim()
     ? parsed.command.trim()
     : inferredRemoteExecCommand;

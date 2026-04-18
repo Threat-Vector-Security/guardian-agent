@@ -20,11 +20,12 @@ The worker process owns:
 - prompt assembly
 - conversation-context assembly from supervisor-provided state
 - the LLM chat/tool loop
-- pending-approval continuation state
+- bounded suspended tool-loop state for approval-backed resumes
 - post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
 
 Brokered approval continuation should use structured supervisor-owned metadata over the broker boundary. The worker should resume suspended approval-backed execution from stored tool/approval state rather than reclassifying a synthetic user-like continuation prompt.
 The supervisor-side approval executor must also retain a durable or reconstructable execution envelope for approved actions; brokered isolation should not force approvals to depend on a fragile in-memory callback map that can vanish before execution.
+Execution identity remains supervisor-owned. When delegated work, blocked work, or approval-backed resumes cross the broker boundary, the runtime should preserve execution lineage such as `executionId`, `parentExecutionId`, and `rootExecutionId` where that lineage is available.
 
 The shared prompt/context contract for both supervisor-provided state and worker-side assembly is defined in:
 - `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
@@ -192,6 +193,7 @@ Implemented and accurate:
 - LLM API calls are proxied through the broker — the worker has no network access
 - approvals remain supervisor-side
 - brokered direct routes still respect the gateway-first contract; weak or unavailable gateway results do not trigger heuristic capability-lane fallback
+- continuation and approval-backed resume remain control-plane driven; the brokered worker does not become a second semantic routing authority
 - supervisor-owned delegated follow-up policy can normalize delegated completion output before it reaches channels, while keeping the worker unable to widen authority
 - final responses are still scanned by `OutputGuardian`
 - tool results returned across the broker now include `trustLevel` and `taintReasons`
@@ -201,6 +203,7 @@ Implemented and accurate:
 - `memory_save` suppression enforced both in the worker loop and at the broker level
 - partial approval continuation: mixed approval/success tool rounds handled correctly
 - brokered approval continuation uses structured control-plane metadata instead of synthetic `[User approved ...]` text shims
+- delegated child runs and resumed work can preserve execution lineage for downstream timeline and chat correlation when that metadata is available
 - context budget compaction applied in the worker loop
 - quality-based fallback to external provider via broker-proxied `llm.chat`
 - degraded hosts use `workspace-write` profile (not `full-access`)

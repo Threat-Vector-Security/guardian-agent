@@ -64,8 +64,6 @@ export function buildSecondBrainContextRepairText(
   const contextualText = [
     repairContext?.pendingAction?.originalRequest,
     repairContext?.pendingAction?.prompt,
-    repairContext?.continuity?.lastActionableRequest,
-    repairContext?.continuity?.focusSummary,
   ]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .join('\n');
@@ -154,8 +152,7 @@ export function inferRoutinePersonalItemType(
     return undefined;
   }
   if (isExplicitSecondBrainRoutineRequest(normalized, operation)
-    || pendingActionSuggestsRoutine(repairContext)
-    || continuitySuggestsRoutine(repairContext)) {
+    || pendingActionSuggestsRoutine(repairContext)) {
     return 'routine';
   }
   return undefined;
@@ -279,7 +276,13 @@ export function normalizePersonalItemType(
 }
 
 export function containsSecondBrainRoutineConcept(content: string): boolean {
-  return /\broutines?\b/.test(content)
+  return /\b(?:show|list|view|read|inspect)\s+(?:my\s+)?routines?\b/.test(content)
+    || /\b(?:my|enabled|disabled|paused|active)\s+routines?\b/.test(content)
+    || /\bwhat\s+routines?\b/.test(content)
+    || /\broutines?\s+tab\b/.test(content)
+    || /\bsecond brain\s+routines?\b/.test(content)
+    || /\broutines?\b.*\bin second brain\b/.test(content)
+    || /\bin second brain\b.*\broutines?\b/.test(content)
     || /\bmorning brief\b/.test(content)
     || /\bpre[- ]meeting brief\b/.test(content)
     || /\bfollow[- ]up (?:watch|draft)\b/.test(content)
@@ -311,6 +314,9 @@ export function isExplicitSecondBrainRoutineRequest(
   }
   if ((operation === 'create' || operation === 'update' || operation === 'toggle' || operation === 'delete')
     && /\b(?:that|this|my)\s+routine\b/.test(normalized)) {
+    return true;
+  }
+  if (operation === 'create' && /\bcreate\b/.test(normalized) && /\broutine\b/.test(normalized)) {
     return true;
   }
   if (operation === 'create' && /\breview\b/.test(normalized) && hasRoutineSchedulePhrase(normalized)) {
@@ -358,17 +364,6 @@ export function pendingActionSuggestsPersonalAssistantTask(
   const pendingAction = repairContext?.pendingAction;
   if (!pendingAction) return false;
   return normalizeRoute(pendingAction.route) === 'personal_assistant_task';
-}
-
-export function continuitySuggestsRoutine(
-  repairContext: IntentGatewayRepairContext | undefined,
-): boolean {
-  const continuity = repairContext?.continuity;
-  if (!continuity) return false;
-  return isExplicitSecondBrainRoutineRequest(
-    `${continuity.focusSummary ?? ''}\n${continuity.lastActionableRequest ?? ''}`,
-    'unknown',
-  );
 }
 
 export function inferCalendarWindowDays(

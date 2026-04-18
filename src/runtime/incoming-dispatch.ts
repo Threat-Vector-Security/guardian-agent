@@ -20,6 +20,7 @@ import {
   selectExecutionProfile,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
+import { attachExecutionIdentityMetadata } from './execution-identity.js';
 import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
 import {
   readChatProviderSelectionMetadata,
@@ -50,6 +51,7 @@ export interface ParsedCodeRequestMetadata {
 
 export interface PreparedIncomingDispatch {
   requestId: string;
+  executionId: string;
   decision: RouteDecision;
   gateway: IntentGatewayRecord | null;
   routedMessage: IncomingDispatchMessage;
@@ -399,6 +401,8 @@ export function createIncomingDispatchPreparer(args: {
             providerLocality: profile.providerLocality,
             executionProfileId: profile.id,
             requestedTier: profile.requestedTier,
+            ...(profile.routingMode ? { routingMode: profile.routingMode } : {}),
+            ...(profile.selectionSource ? { selectionSource: profile.selectionSource } : {}),
             reason: profile.reason,
             fallbackProviderOrder: profile.fallbackProviderOrder,
             ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
@@ -584,6 +588,7 @@ export function createIncomingDispatchPreparer(args: {
     msg: IncomingDispatchMessage,
   ): Promise<PreparedIncomingDispatch> => {
     const requestId = msg.requestId?.trim() || randomUUID();
+    const executionId = requestId;
     const requestedChatProvider = readChatProviderSelectionMetadata(msg.metadata, args.configRef.current);
     const resolvedChannelDefault = resolveConfiguredAgentId(channelDefault);
     recordIntentRoutingTrace('incoming_dispatch', {
@@ -615,9 +620,12 @@ export function createIncomingDispatchPreparer(args: {
         })
       : null;
     const routedMetadata = attachSelectedExecutionProfileMetadata(
-      routed.gateway
-        ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
-        : sanitizedMetadata,
+      attachExecutionIdentityMetadata(
+        routed.gateway
+          ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
+          : sanitizedMetadata,
+        { executionId, rootExecutionId: executionId },
+      ),
       selectedProfile,
     );
     if (routed.gateway) {
@@ -652,6 +660,7 @@ export function createIncomingDispatchPreparer(args: {
     }
     return {
       requestId,
+      executionId,
       decision: routed.decision,
       gateway: routed.gateway,
       routedMessage: {

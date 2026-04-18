@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import {
   attachSelectedExecutionProfileMetadata,
   readSelectedExecutionProfileMetadata,
+  selectDelegatedExecutionProfile,
   selectExecutionProfile,
 } from './execution-profiles.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
@@ -394,6 +395,112 @@ describe('execution profiles', () => {
     });
     expect(profile?.fallbackProviderOrder[0]).toBe('ollama-cloud-direct');
     expect(profile?.reason).toContain("request-scoped provider override selected provider 'ollama-cloud-direct'");
+  });
+
+  it('selects a managed-cloud coding profile for delegated workspace exploration even when the parent used frontier', () => {
+    const config = createConfig();
+    const parentProfile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'auto',
+    });
+
+    const profile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile,
+      gatewayDecision: createGatewayDecision(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+    });
+
+    expect(parentProfile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+    });
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerModel: 'qwen3-coder-next',
+      providerTier: 'managed_cloud',
+      selectionSource: 'delegated_role',
+      routingMode: 'auto',
+    });
+    expect(profile?.reason).toContain('Workspace Explorer');
+  });
+
+  it('keeps security verification on frontier when delegating to a security verifier', () => {
+    const config = createConfig();
+    const parentProfile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        route: 'search_task',
+        operation: 'search',
+        executionClass: 'tool_orchestration',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      mode: 'auto',
+    });
+
+    const profile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile,
+      gatewayDecision: createGatewayDecision({
+        route: 'security_task',
+        operation: 'inspect',
+        executionClass: 'security_analysis',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      }),
+      orchestration: {
+        role: 'verifier',
+        label: 'Security Verifier',
+        lenses: ['security'],
+      },
+    });
+
+    expect(parentProfile).toMatchObject({
+      providerName: 'ollama-cloud-tools',
+      providerTier: 'managed_cloud',
+    });
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      selectionSource: 'delegated_role',
+    });
+  });
+
+  it('preserves explicit provider overrides across delegated profile selection', () => {
+    const config = createConfig();
+    const parentProfile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'auto',
+      forcedProviderName: 'ollama-cloud-direct',
+    });
+
+    const profile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile,
+      gatewayDecision: createGatewayDecision(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+    });
+
+    expect(profile).toEqual(parentProfile);
+    expect(profile?.selectionSource).toBe('request_override');
   });
 
   it('round-trips execution profile metadata through message metadata', () => {

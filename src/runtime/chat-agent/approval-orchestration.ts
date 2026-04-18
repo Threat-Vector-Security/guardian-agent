@@ -169,6 +169,8 @@ export async function handleApprovalMessage(input: {
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
       codeSessionId?: string;
     },
   ) => PendingActionSetResult;
@@ -411,6 +413,8 @@ export async function handleApprovalMessage(input: {
         provenance: pendingAction?.intent.provenance,
         entities: pendingAction?.intent.entities,
         resume: pendingAction?.resume,
+        executionId: pendingAction?.executionId,
+        rootExecutionId: pendingAction?.rootExecutionId,
         codeSessionId: pendingAction?.codeSessionId,
       },
     );

@@ -634,8 +634,7 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
         `continuity key: ${input.continuity.continuityKey}`,
         `linked surfaces: ${input.continuity.linkedSurfaceCount}`,
         ...(input.continuity.linkedSurfaces?.length ? [`surface list: ${input.continuity.linkedSurfaces.join(', ')}`] : []),
-        ...(input.continuity.focusSummary ? [`focus summary: ${input.continuity.focusSummary}`] : []),
-        ...(input.continuity.lastActionableRequest ? [`last actionable request: ${input.continuity.lastActionableRequest}`] : []),
+        ...(input.continuity.continuationStateKind ? [`continuation state: ${input.continuity.continuationStateKind}`] : []),
         ...(input.continuity.activeExecutionRefs?.length ? [`active execution refs: ${input.continuity.activeExecutionRefs.join(', ')}`] : []),
         '',
       ].join('\n')

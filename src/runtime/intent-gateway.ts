@@ -7,9 +7,8 @@ import {
 } from './intent/provenance.js';
 import { classifyIntentGatewayPass } from './intent/route-classifier.js';
 import {
-  resolveHistoricalCodingBackendRequest,
-  shouldRepairHistoricalCodingBackendTurn,
-} from './intent/history-context.js';
+  extractExplicitAutomationName,
+} from './intent/entity-resolvers/automation.js';
 import {
   normalizeIntentGatewayDecision,
   parseStructuredContent,
@@ -67,30 +66,6 @@ const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
   'The route and operation are already known to be about controlling an existing saved automation.',
   'Return only the exact automationName the user referenced.',
   'Call the resolve_automation_name tool exactly once.',
-].join(' ');
-
-const HISTORICAL_REFERENCE_REPAIR_TOOL: ToolDefinition = {
-  name: 'resolve_historical_reference',
-  description: 'Rewrite a short follow-up into a standalone request using the provided continuity context. Call exactly once.',
-  parameters: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      resolvedContent: {
-        type: 'string',
-      },
-    },
-    required: ['resolvedContent'],
-  },
-};
-
-const HISTORICAL_REFERENCE_REPAIR_SYSTEM_PROMPT = [
-  'You repair short context-dependent Guardian routing follow-ups.',
-  'The route is already known, and this pass is only for recovering missing resolvedContent.',
-  'Use the provided recent history and continuity context to decide whether the current request depends on an earlier actionable request.',
-  'If it does, return a standalone resolvedContent that preserves the current backend selection.',
-  'If the current request is already standalone, return it unchanged.',
-  'Call the resolve_historical_reference tool exactly once.',
 ].join(' ');
 
 export class IntentGateway {
@@ -154,19 +129,6 @@ export class IntentGateway {
             ...decision.entities,
             automationName: repairedName,
           },
-        };
-      }
-    }
-    if (needsHistoricalReferenceRepair(input, decision)) {
-      const repairedResolvedContent = await repairHistoricalReference(input, decision, chat);
-      if (repairedResolvedContent) {
-        decision = {
-          ...decision,
-          provenance: {
-            ...(decision.provenance ?? {}),
-            resolvedContent: decision.provenance?.resolvedContent ?? 'repair.historical_reference',
-          },
-          resolvedContent: repairedResolvedContent,
         };
       }
     }
@@ -465,12 +427,6 @@ function buildAutomationNameRepairMessages(
       .map((entry) => `${entry.role}: ${entry.content}`)
       .join('\n')
     : '';
-  const continuitySection = input.continuity
-    ? [
-        input.continuity.focusSummary ? `Focus summary: ${input.continuity.focusSummary}` : '',
-        input.continuity.lastActionableRequest ? `Last actionable request: ${input.continuity.lastActionableRequest}` : '',
-      ].filter(Boolean).join('\n')
-    : '';
   return [
     {
       role: 'system',
@@ -485,54 +441,8 @@ function buildAutomationNameRepairMessages(
         'Extract the saved automation name from this request.',
         '',
         historySection ? `Recent history:\n${historySection}` : '',
-        continuitySection,
         input.content.trim(),
       ].join('\n'),
-    },
-  ];
-}
-
-function buildHistoricalReferenceRepairMessages(
-  input: IntentGatewayInput,
-  decision: IntentGatewayDecision,
-): ChatMessage[] {
-  const channelLabel = input.channel?.trim() || 'unknown';
-  const currentRequest = input.content.trim();
-  const backendId = decision.entities.codingBackend?.trim() || 'unknown';
-  const historySection = Array.isArray(input.recentHistory) && input.recentHistory.length > 0
-    ? input.recentHistory
-      .slice(-6)
-      .map((entry) => `${entry.role}: ${entry.content}`)
-      .join('\n')
-    : '';
-  const continuitySection = input.continuity
-    ? [
-        input.continuity.focusSummary ? `Focus summary: ${input.continuity.focusSummary}` : '',
-        input.continuity.lastActionableRequest ? `Last actionable request: ${input.continuity.lastActionableRequest}` : '',
-        input.continuity.activeExecutionRefs?.length
-          ? `Active execution refs: ${input.continuity.activeExecutionRefs.join(', ')}`
-          : '',
-      ].filter(Boolean).join('\n')
-    : '';
-  return [
-    {
-      role: 'system',
-      content: HISTORICAL_REFERENCE_REPAIR_SYSTEM_PROMPT,
-    },
-    {
-      role: 'user',
-      content: [
-        `Channel: ${channelLabel}`,
-        `Route: ${decision.route}`,
-        `Operation: ${decision.operation}`,
-        `Coding backend: ${backendId}`,
-        decision.summary?.trim() ? `Classifier summary: ${decision.summary.trim()}` : '',
-        'Resolve this request into a standalone coding task if it depends on prior context.',
-        '',
-        continuitySection ? `Continuity:\n${continuitySection}` : '',
-        historySection ? `Recent history:\n${historySection}` : '',
-        `Current request:\n${currentRequest}`,
-      ].filter(Boolean).join('\n'),
     },
   ];
 }
@@ -545,19 +455,19 @@ function parseAutomationNameRepair(response: ChatResponse): string | undefined {
   return automationName || undefined;
 }
 
-function parseHistoricalReferenceRepair(response: ChatResponse): string | undefined {
-  const parsed = parseStructuredToolArguments(response)
-    ?? parseStructuredContent(response.content);
-  if (!parsed) return undefined;
-  const resolvedContent = typeof parsed.resolvedContent === 'string' ? parsed.resolvedContent.trim() : '';
-  return resolvedContent || undefined;
-}
-
 async function repairAutomationName(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
   chat: IntentGatewayChatFn,
 ): Promise<string | undefined> {
+  const explicitName = extractExplicitAutomationName(input.content);
+  if (explicitName) {
+    return explicitName;
+  }
+  const followUpHistoryName = readAutomationNameFromRecentHistory(input.recentHistory);
+  if (followUpHistoryName) {
+    return followUpHistoryName;
+  }
   try {
     const response = await chat(buildAutomationNameRepairMessages(input, decision), {
       maxTokens: 80,
@@ -565,23 +475,6 @@ async function repairAutomationName(
       tools: [AUTOMATION_NAME_REPAIR_TOOL],
     });
     return parseAutomationNameRepair(response);
-  } catch {
-    return undefined;
-  }
-}
-
-async function repairHistoricalReference(
-  input: IntentGatewayInput,
-  decision: IntentGatewayDecision,
-  chat: IntentGatewayChatFn,
-): Promise<string | undefined> {
-  try {
-    const response = await chat(buildHistoricalReferenceRepairMessages(input, decision), {
-      maxTokens: 160,
-      temperature: 0,
-      tools: [HISTORICAL_REFERENCE_REPAIR_TOOL],
-    });
-    return parseHistoricalReferenceRepair(response);
   } catch {
     return undefined;
   }
@@ -597,27 +490,18 @@ function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
     && ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation);
 }
 
-function needsHistoricalReferenceRepair(
-  input: IntentGatewayInput,
-  decision: IntentGatewayDecision,
-): boolean {
-  if (decision.route !== 'coding_task') return false;
-  if (decision.resolution !== 'ready') return false;
-  if (decision.resolvedContent?.trim()) return false;
-  if (!decision.entities.codingBackend?.trim()) return false;
-  const lastActionableRequest = input.continuity?.lastActionableRequest?.trim();
-  if (!lastActionableRequest) return false;
-  if (!shouldRepairHistoricalCodingBackendTurn({
-    content: input.content,
-    lastActionableRequest,
-  })) {
-    return false;
+function readAutomationNameFromRecentHistory(
+  recentHistory: IntentGatewayInput['recentHistory'],
+): string | undefined {
+  for (let index = (recentHistory?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const entry = recentHistory?.[index];
+    if (!entry || entry.role !== 'assistant') continue;
+    const quoted = [...entry.content.matchAll(/['"`]([^'"`]+)['"`]/g)]
+      .map((match) => match[1]?.trim())
+      .filter((value): value is string => Boolean(value));
+    if (quoted.length > 0) {
+      return quoted[quoted.length - 1];
+    }
   }
-
-  const deterministicResolution = resolveHistoricalCodingBackendRequest({
-    backendId: decision.entities.codingBackend,
-    content: input.content,
-    lastActionableRequest,
-  });
-  return Boolean(deterministicResolution);
+  return undefined;
 }

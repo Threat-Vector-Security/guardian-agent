@@ -8,7 +8,7 @@ import { dirname } from 'node:path';
 import type { SQLiteDatabase } from './sqlite-driver.js';
 
 export interface SQLiteSecurityEvent {
-  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'second_brain';
+  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'executions' | 'second_brain';
   severity: 'info' | 'warn';
   code:
     | 'permissions_hardened'
@@ -24,7 +24,7 @@ export interface SQLiteSecurityEvent {
 }
 
 export interface SQLiteSecurityMonitorOptions {
-  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'second_brain';
+  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'executions' | 'second_brain';
   db: SQLiteDatabase;
   sqlitePath: string;
   onEvent?: (event: SQLiteSecurityEvent) => void;
@@ -34,7 +34,7 @@ export interface SQLiteSecurityMonitorOptions {
 }
 
 export class SQLiteSecurityMonitor {
-  private readonly service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'second_brain';
+  private readonly service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'executions' | 'second_brain';
   private readonly db: SQLiteDatabase;
   private readonly sqlitePath: string;
   private readonly onEvent?: (event: SQLiteSecurityEvent) => void;

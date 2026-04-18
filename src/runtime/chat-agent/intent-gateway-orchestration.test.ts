@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayRecord } from '../intent-gateway.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
+import type { ExecutionRecord } from '../executions.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import {
   buildGatewayClarificationResponse,
@@ -111,6 +112,31 @@ function makeContinuityThread(
     createdAt: 1,
     updatedAt: 1,
     expiresAt: 2,
+    ...overrides,
+  };
+}
+
+function makeExecutionRecord(
+  overrides: Partial<ExecutionRecord> = {},
+): ExecutionRecord {
+  return {
+    executionId: 'exec-1',
+    requestId: 'request-1',
+    rootExecutionId: 'exec-1',
+    scope: {
+      assistantId: 'assistant',
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    },
+    status: 'running',
+    intent: {
+      route: 'coding_task',
+      operation: 'inspect',
+      originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+    },
+    createdAt: 1,
+    updatedAt: 1,
     ...overrides,
   };
 }
@@ -236,14 +262,14 @@ describe('intent-gateway-orchestration', () => {
       gateway,
       currentContent: 'Use Codex instead.',
       pendingAction: null,
-      priorHistory: [
-        { role: 'assistant', content: 'Which coding backend should I use?' },
-        { role: 'user', content: 'Please refactor src/chat-agent.ts to extract the gateway continuation helpers.' },
-      ],
+      priorHistory: [],
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'Please refactor src/chat-agent.ts to extract the gateway continuation helpers.',
+      }),
     })).toBe('Use codex for this request: Please refactor src/chat-agent.ts to extract the gateway continuation helpers.');
   });
 
-  it('skips backend-only follow-ups when rewriting a coding-backend correction turn', () => {
+  it('rewrites coding-backend correction turns from the active execution context', () => {
     const gateway = makeGatewayRecord({
       turnRelation: 'correction',
       entities: {
@@ -255,15 +281,12 @@ describe('intent-gateway-orchestration', () => {
       gateway,
       currentContent: 'Okay now do the same thing with Claude Code',
       pendingAction: null,
-      priorHistory: [
-        { role: 'user', content: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.' },
-        { role: 'assistant', content: 'This repo is GuardianAgent.' },
-        { role: 'user', content: 'Okay now do the same thing with Claude Code' },
-      ],
+      priorHistory: [],
+      activeExecution: makeExecutionRecord(),
     })).toBe('Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
   });
 
-  it('falls back to continuity when a short coding-backend follow-up no longer has the original request in recent history', () => {
+  it('does not rewrite short coding-backend follow-ups unless the gateway marks them as corrections', () => {
     const gateway = makeGatewayRecord({
       route: 'coding_task',
       turnRelation: 'new_request',
@@ -283,7 +306,28 @@ describe('intent-gateway-orchestration', () => {
       continuityThread: makeContinuityThread({
         lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
       }),
-    })).toBe('Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
+    })).toBeNull();
+  });
+
+  it('does not rewrite new-request coding-backend follow-ups even when an active execution exists', () => {
+    const gateway = makeGatewayRecord({
+      route: 'coding_task',
+      turnRelation: 'new_request',
+      entities: {
+        codingBackend: 'claude-code',
+      },
+    });
+
+    expect(resolveIntentGatewayContent({
+      gateway,
+      currentContent: 'Okay now do the same thing with Claude Code',
+      pendingAction: null,
+      priorHistory: [
+        { role: 'assistant', content: 'This repo is GuardianAgent.' },
+        { role: 'user', content: 'Okay now do the same thing with Claude Code' },
+      ],
+      activeExecution: makeExecutionRecord(),
+    })).toBeNull();
   });
 
   it('resumes workspace-switch pending actions once the target session is active', () => {
@@ -313,8 +357,6 @@ describe('intent-gateway-orchestration', () => {
       continuityThread: makeContinuityThread({
         lastActionableRequest: 'Check my unread email.',
       }),
-      conversationKey: { agentId: 'assistant', userId: 'user-1', channel: 'web' },
-      readLatestAssistantOutput: () => 'Please connect your provider and try again.',
     })).toBe('Check my unread email.');
   });
 
@@ -324,9 +366,40 @@ describe('intent-gateway-orchestration', () => {
       continuityThread: makeContinuityThread({
         lastActionableRequest: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.',
       }),
-      conversationKey: { agentId: 'assistant', userId: 'user-1', channel: 'web' },
-      readLatestAssistantOutput: () => 'The remote execution failed. The Daytona Main sandbox is currently stopped and cannot accept commands until restarted.',
     })).toBe('In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.');
+  });
+
+  it('prefers active execution content over continuity fallback for retry continuations', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: 'retry',
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'Tell me what coding session is currently active.',
+      }),
+      activeExecution: makeExecutionRecord({
+        intent: {
+          route: 'coding_task',
+          operation: 'sandbox_run',
+          originalUserContent: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.',
+        },
+      }),
+    })).toBe('In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.');
+  });
+
+  it('does not require assistant failure text when continuity already points at the resumable request', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: "I've started that Daytona sandbox, try again with the same request.",
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.',
+      }),
+    })).toBe('In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.');
+  });
+
+  it('returns null when there is no execution-backed retry target', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: 'retry',
+      continuityThread: null,
+      activeExecution: null,
+    })).toBeNull();
   });
 
   it('delegates affirmative workspace-switch replies to the attach handler', async () => {

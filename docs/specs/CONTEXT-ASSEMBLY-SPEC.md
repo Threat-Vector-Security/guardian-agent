@@ -47,7 +47,7 @@ This spec is cross-cutting. Route-specific, tool-specific, memory-specific, skil
 Guardian currently has two main context consumers:
 
 1. Intent classification context
-   Used by `IntentGateway` to classify the turn, repair short corrections, and decide whether clarification is needed.
+   Used by `IntentGateway` to classify the turn and decide whether clarification is needed.
 
 2. Execution context
    Used by the main chat agent and brokered worker after routing, including coding-session turns and post-tool rounds.
@@ -72,7 +72,8 @@ Examples:
 - selected execution profile and context budget
 - coding-session identity
 - workspace trust state
-- focus summary
+- active execution refs
+- continuation state
 - route-relevant provider/backend availability
 
 Rules:
@@ -147,6 +148,11 @@ Use retrieval-backed working context, not broad prompt stuffing, for code, memor
 
 If a bounded session or continuity summary already exists, the runtime should refresh and reuse that maintained artifact rather than repeatedly deriving a new summary from a growing raw transcript on every turn.
 
+For the Intent Gateway specifically:
+- structured continuity projection is preferred
+- free-text continuity summaries should not become semantic routing authority
+- execution state and pending actions own continuation correctness
+
 ### Semantic Parity Across Local And External
 
 Local and external paths may differ in description length or formatting, but they must receive the same availability semantics. A tool, provider, or backend must not "exist" for one tier and be silently undiscoverable for the other.
@@ -202,8 +208,16 @@ The gateway already uses bounded context:
 - current user message
 - recent bounded history
 - summarized pending action
-- summarized continuity thread
+- structured continuity projection
 - compact provider/backend availability
+
+Current gateway continuity contract:
+- continuity key
+- linked surfaces
+- optional continuation state
+- optional active execution refs
+
+Human-facing continuity text such as `focusSummary` and `lastActionableRequest` may still exist elsewhere in runtime state, but they are not part of the primary classifier semantic contract.
 
 ### Deferred Tool Discovery
 

@@ -2,10 +2,7 @@ import type { AgentContext, AgentResponse, UserMessage } from '../../agent/types
 import { isAffirmativeContinuation, stripLeadingContextPrefix } from '../../chat-agent-helpers.js';
 import type { ResolvedSkill } from '../../skills/types.js';
 import { resolveAffirmativeMemoryContinuationFromHistory } from '../../util/memory-intent.js';
-import type { ConversationKey } from '../conversation.js';
-import { resolveHistoricalCodingBackendRequest } from '../intent/history-context.js';
 import { looksLikePendingActionContextTurn } from '../intent/request-patterns.js';
-import { normalizeIntentGatewayRepairText } from '../intent/text.js';
 import {
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
@@ -16,6 +13,10 @@ import {
   isWorkspaceSwitchPendingActionSatisfied,
 } from '../pending-action-resume.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
+import {
+  resolveExecutionIntentContent,
+  type ExecutionRecord,
+} from '../executions.js';
 import {
   sanitizePendingActionPrompt,
   type PendingActionBlocker,
@@ -29,7 +30,18 @@ import {
 
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated|started|restarted|running)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated|started|restarted)\b/i;
-const STATUS_CHECK_FOLLOW_UP_PATTERN = /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/i;
+
+function resolveExecutionBackedRequest(input: {
+  activeExecution?: ExecutionRecord | null;
+  continuityThread?: ContinuityThreadRecord | null;
+}): string | null {
+  const activeExecutionContent = resolveExecutionIntentContent(input.activeExecution);
+  if (activeExecutionContent) {
+    return activeExecutionContent;
+  }
+  const continuityRequest = input.continuityThread?.lastActionableRequest?.trim();
+  return continuityRequest || null;
+}
 
 export interface IntentGatewayClassificationContext {
   recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
@@ -254,6 +266,7 @@ export function resolveIntentGatewayContent(input: {
   pendingAction: PendingActionRecord | null;
   priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
   continuityThread?: ContinuityThreadRecord | null;
+  activeExecution?: ExecutionRecord | null;
 }): string | null {
   const decision = input.gateway?.decision;
   if (!decision) return null;
@@ -266,17 +279,6 @@ export function resolveIntentGatewayContent(input: {
   }
   if (decision.resolvedContent?.trim()) {
     return decision.resolvedContent.trim();
-  }
-  if (decision.route === 'coding_task' && decision.entities.codingBackend) {
-    const historicalFallback = resolveHistoricalCodingBackendRequest({
-      backendId: decision.entities.codingBackend,
-      content: stripLeadingContextPrefix(input.currentContent),
-      lastActionableRequest: input.continuityThread?.lastActionableRequest
-        ?? findLatestActionableUserRequest(input.priorHistory),
-    });
-    if (historicalFallback) {
-      return historicalFallback;
-    }
   }
 
   if (input.pendingAction?.blocker.kind === 'clarification'
@@ -308,7 +310,10 @@ export function resolveIntentGatewayContent(input: {
   }
 
   if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
-    const priorRequest = findLatestActionableUserRequest(input.priorHistory);
+    const priorRequest = resolveExecutionBackedRequest({
+      activeExecution: input.activeExecution,
+      continuityThread: input.continuityThread,
+    });
     if (priorRequest) {
       if (priorRequest.toLowerCase().includes(decision.entities.codingBackend.toLowerCase())) {
         return priorRequest;
@@ -377,22 +382,16 @@ export function resolvePendingActionContinuationContent(
 export function resolveRetryAfterFailureContinuationContent(input: {
   content: string;
   continuityThread: ContinuityThreadRecord | null | undefined;
-  conversationKey: ConversationKey;
-  readLatestAssistantOutput: (conversationKey: ConversationKey) => string;
+  activeExecution?: ExecutionRecord | null | undefined;
 }): string | null {
   const normalized = stripLeadingContextPrefix(input.content).trim();
   if (!isRetryAfterFailureRequest(normalized)) {
     return null;
   }
-  const lastActionableRequest = input.continuityThread?.lastActionableRequest?.trim();
-  if (!lastActionableRequest) {
-    return null;
-  }
-  const latestAssistantOutput = input.readLatestAssistantOutput(input.conversationKey).trim();
-  if (!isRetryableProviderFailureMessage(latestAssistantOutput)) {
-    return null;
-  }
-  return lastActionableRequest;
+  return resolveExecutionBackedRequest({
+    activeExecution: input.activeExecution,
+    continuityThread: input.continuityThread,
+  });
 }
 
 export async function tryHandleWorkspaceSwitchContinuation(input: {
@@ -549,62 +548,8 @@ export function toPendingActionEntities(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function findLatestActionableUserRequest(
-  history: Array<{ role: 'user' | 'assistant'; content: string }>,
-): string | null {
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const entry = history[index];
-    if (entry.role !== 'user') continue;
-    const text = entry.content.trim();
-    if (!text || text.length < 16) continue;
-    if (/^(?:no|yes|yeah|yep|gmail|outlook|codex|claude code|gemini|aider)\b/i.test(text)) {
-      continue;
-    }
-    if (isCodingBackendSwitchFollowUp(text)) {
-      continue;
-    }
-    if (isStatusCheckFollowUp(text)) {
-      continue;
-    }
-    return text;
-  }
-  return null;
-}
-
 function isRetryAfterFailureRequest(content: string): boolean {
   const normalized = content.trim();
   return RETRY_AFTER_FAILURE_PATTERN.test(normalized)
     || PREREQUISITE_RECOVERY_PATTERN.test(normalized);
-}
-
-function isRetryableProviderFailureMessage(content: string): boolean {
-  const normalized = content.trim();
-  if (!normalized) return false;
-  return /^Could not reach Ollama(?: Cloud)?\b/i.test(normalized)
-    || /\brate limit exceeded or quota depleted\. Please try again shortly\./i.test(normalized)
-    || /\b(?:internal server error|service(?: temporarily)? unavailable|gateway timeout|bad gateway)\b/i.test(normalized)
-    || /\bollama cloud api error\b/i.test(normalized)
-    || /\bnot authenticated\b/i.test(normalized)
-    || /\bplease connect your\b/i.test(normalized)
-    || /\b(?:integration|provider).*\b(?:isn['’]?t|is not)\b.*\bconnected\b/i.test(normalized)
-    || /\b(?:isn['’]?t|is not)\s+currently connected\b/i.test(normalized)
-    || /\baccess denied\b/i.test(normalized)
-    || /\bdisconnected\b/i.test(normalized)
-    || /\bmodel not found\b/i.test(normalized)
-    || /\bmodel\b.+\bnot available\b/i.test(normalized)
-    || /\bremote execution failed\b/i.test(normalized)
-    || /\bsandbox is currently stopped\b/i.test(normalized)
-    || /\bcannot accept commands until restarted\b/i.test(normalized)
-    || /\breturned a 502 error\b/i.test(normalized);
-}
-
-function isStatusCheckFollowUp(content: string): boolean {
-  return STATUS_CHECK_FOLLOW_UP_PATTERN.test(content.trim());
-}
-
-function isCodingBackendSwitchFollowUp(content: string): boolean {
-  const normalized = normalizeIntentGatewayRepairText(content);
-  if (!normalized) return false;
-  return /^(?:(?:ok(?:ay)?|sure|actually|please|right)\s+)*(?:now\s+)?do\s+the\s+same\s+thing(?:\s+(?:with|using|via))?\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b[.!?]*$/.test(normalized)
-    || /^(?:(?:ok(?:ay)?|sure|actually|please|right)\s+)*(?:now\s+)?(?:same\s+thing|use|switch\s+to|try)\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b(?:\s+(?:instead|for\s+(?:that|this|it)))?[.!?]*$/.test(normalized);
 }
