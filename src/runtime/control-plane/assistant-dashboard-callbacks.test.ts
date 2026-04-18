@@ -225,4 +225,94 @@ describe('createAssistantDashboardCallbacks', () => {
     expect(callbacks.onAssistantRunDetail?.('run-1')).toEqual(runTimelineEntry);
     expect(refreshRunTimelineSnapshots).toHaveBeenCalledTimes(2);
   });
+
+  it('prefers delegated task run ids from routing trace details when matching a run', async () => {
+    const delegatedRun = {
+      summary: {
+        runId: 'delegated-task:job-1',
+        parentRunId: 'run-1',
+        groupId: 'run-1',
+        kind: 'delegated_task',
+        status: 'failed',
+        title: 'Delegated task',
+        codeSessionId: 'code-1',
+        startedAt: 10,
+        lastUpdatedAt: 20,
+        pendingApprovalCount: 0,
+        verificationPendingCount: 0,
+        tags: [],
+      },
+      items: [
+        {
+          id: 'handoff-item',
+          runId: 'delegated-task:job-1',
+          timestamp: 11,
+          type: 'handoff_completed',
+          status: 'error',
+          source: 'orchestrator',
+          title: 'Delegated worker failed',
+        },
+      ],
+    };
+
+    const callbacks = createAssistantDashboardCallbacks({
+      configRef: { current: createConfig() },
+      runtime: {
+        auditLog: { query: vi.fn(() => []) },
+        providers: new Map(),
+        scheduler: { getJobs: vi.fn(() => []) },
+        workerManager: {
+          getJobState: vi.fn(() => ({ summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] })),
+          applyJobFollowUpAction: vi.fn(() => ({ success: true, message: 'ok' })),
+        },
+      } as never,
+      orchestrator: {
+        getState: vi.fn(() => ({ activeRequests: [] })),
+      } as never,
+      intentRoutingTrace: {
+        getStatus: vi.fn(() => ({ enabled: true, filePath: '/tmp/intent-routing.jsonl' })),
+        listRecent: vi.fn(async () => [{
+          id: 'trace-child-1',
+          timestamp: 101,
+          stage: 'delegated_worker_failed',
+          requestId: 'run-1',
+          details: {
+            taskRunId: 'delegated-task:job-1',
+          },
+        }]),
+      } as never,
+      jobTracker: {
+        getState: vi.fn(() => ({ summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] })),
+      } as never,
+      runTimeline: {
+        listRuns: vi.fn(() => [delegatedRun]),
+        getRun: vi.fn((runId: string) => (runId === 'delegated-task:job-1' ? delegatedRun : null)),
+      } as never,
+      refreshRunTimelineSnapshots: vi.fn(),
+    });
+
+    await expect(callbacks.onIntentRoutingTrace?.({ limit: 10 })).resolves.toEqual({
+      entries: [{
+        id: 'trace-child-1',
+        timestamp: 101,
+        stage: 'delegated_worker_failed',
+        requestId: 'run-1',
+        details: {
+          taskRunId: 'delegated-task:job-1',
+        },
+        matchedRun: {
+          runId: 'delegated-task:job-1',
+          title: 'Delegated task',
+          status: 'failed',
+          kind: 'delegated_task',
+          href: '#/system?assistantRunId=delegated-task%3Ajob-1',
+          codeSessionId: 'code-1',
+          codeSessionHref: '#/code?sessionId=code-1&assistantRunId=delegated-task%3Ajob-1&assistantRunItemId=handoff-item',
+          focusItemId: 'handoff-item',
+          focusItemTitle: 'Delegated worker failed',
+          focusItemHref: '#/system?assistantRunId=delegated-task%3Ajob-1&assistantRunItemId=handoff-item',
+        },
+      }],
+    });
+  });
 });

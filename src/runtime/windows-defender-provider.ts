@@ -373,7 +373,15 @@ export class WindowsDefenderProvider {
       : input.type === 'full'
         ? `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType FullScan`
         : `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType CustomScan -ScanPath ${escapePowerShellString(input.path ?? '')}`;
-    await this.runPowerShell(command);
+    try {
+      await this.runPowerShell(command);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isScanAlreadyInProgressError(message)) {
+        throw error;
+      }
+      return { success: true, message: `Windows Defender ${input.type} scan is already in progress.` };
+    }
     return { success: true, message: `Windows Defender ${input.type} scan requested.` };
   }
 
@@ -587,6 +595,11 @@ function asString(value: unknown): string {
 
 function isDefenderServiceDisabledError(message: string): boolean {
   return /\b0x800106ba\b/i.test(message) || /800106BA/.test(message);
+}
+
+function isScanAlreadyInProgressError(message: string): boolean {
+  return /scan is already in progress/i.test(message)
+    || /0x80508023/i.test(message);
 }
 
 function isMicrosoftAntivirusProvider(name: string): boolean {

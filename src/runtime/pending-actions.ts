@@ -967,12 +967,24 @@ export function reconcilePendingApprovalAction(
       argsPreview: string;
       actionLabel?: string;
     }>;
+    /**
+     * Scope-agnostic set of approval ids currently pending in the executor.
+     * Used only to decide whether a pending action should be completed when
+     * the scoped `liveApprovalIds` query returns empty. The pending action's
+     * approval may live under a different scope (e.g. a code-session tool
+     * call bound to a web-chat pending action), so a scoped miss is not a
+     * safe signal for lifecycle cleanup.
+     */
+    allPendingApprovalIds?: readonly string[];
     scope?: PendingActionScope;
     nowMs?: number;
   },
 ): PendingActionRecord | null {
   const nowMs = input.nowMs ?? Date.now();
   const liveApprovalIds = normalizeApprovalIds(input.liveApprovalIds);
+  const allPendingApprovalIds = input.allPendingApprovalIds
+    ? new Set(normalizeApprovalIds(input.allPendingApprovalIds))
+    : null;
 
   if (!pendingAction || !isPendingActionActive(pendingAction.status) || pendingAction.blocker.kind !== 'approval') {
     if (liveApprovalIds.length === 0) {
@@ -1034,6 +1046,17 @@ export function reconcilePendingApprovalAction(
   const liveApprovalSet = new Set(liveApprovalIds);
   const remainingApprovalIds = currentApprovalIds.filter((approvalId) => liveApprovalSet.has(approvalId));
   if (remainingApprovalIds.length === 0) {
+    // Cross-scope safety net: if any of the pending action's approval ids are
+    // still pending anywhere in the executor (different scope than this
+    // reconcile query), do not complete the pending action. This avoids losing
+    // cross-scope work such as a web-chat pending action waiting on a
+    // code-session-scoped coding_backend_run approval.
+    if (allPendingApprovalIds) {
+      const anyStillPending = currentApprovalIds.some((id) => allPendingApprovalIds.has(id));
+      if (anyStillPending) {
+        return pendingAction;
+      }
+    }
     return store.complete(pendingAction.id, nowMs);
   }
 

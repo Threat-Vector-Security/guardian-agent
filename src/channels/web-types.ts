@@ -1285,6 +1285,7 @@ export interface DashboardCallbacks {
     limit?: number;
     status?: DashboardRunStatus;
     kind?: DashboardRunKind;
+    parentRunId?: string;
     channel?: string;
     agentId?: string;
     codeSessionId?: string;

@@ -7,6 +7,21 @@ export function looksLikeContextDependentPromptSelectionTurn(request: string): b
     || /\b(?:that|those|it|them|same\s+(?:one|workspace|session)|again)\b/.test(normalized);
 }
 
+export function looksLikePendingActionContextTurn(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized) return false;
+  return looksLikeContextDependentPromptSelectionTurn(normalized)
+    || /^\/?(?:approve|approved|deny|denied|reject|decline)\b/.test(normalized)
+    || /^pending approvals?\??$/.test(normalized)
+    || /(?:\bwhat\b|\bwhich\b|\bshow\b|\blist\b|\bare there\b|\bdo i have\b|\bany\b|\bcurrent\b).*(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b)/.test(normalized)
+    || /(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b).*\b(?:right now|currently|today)\b/.test(normalized)
+    || /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/.test(normalized)
+    || /\bwhat are you waiting for\b/.test(normalized)
+    || /\bwhy (?:are you|is this)\s+blocked\b/.test(normalized)
+    || /\b(?:use|switch to)\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/.test(normalized)
+    || /\bcoding backend\b/.test(normalized);
+}
+
 export function looksLikeStandaloneGreetingTurn(request: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(request);
   if (!normalized || normalized.length > 48) return false;

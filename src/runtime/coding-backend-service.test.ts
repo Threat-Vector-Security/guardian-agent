@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { CodingBackendService } from './coding-backend-service.js';
 import type { CodingBackendTerminalControl } from '../channels/web-types.js';
@@ -57,6 +58,16 @@ function createMockTerminalControl(): CodingBackendTerminalControl & {
       return () => { set!.delete(cb); };
     }),
   };
+}
+
+function toHostCapturePath(pathValue: string): string {
+  const mnt = pathValue.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+  if (mnt) {
+    const drive = mnt[1].toUpperCase();
+    const rest = mnt[2].replace(/\//g, '\\');
+    return `${drive}:\\${rest}`;
+  }
+  return pathValue;
 }
 
 const BASE_CONFIG: CodingBackendsConfig = {
@@ -127,7 +138,197 @@ describe('CodingBackendService', () => {
     const backend = codexService.resolveBackend('codex');
     expect(backend).not.toBeNull();
     expect(backend!.command).toBe('codex');
-    expect(backend!.args).toEqual(['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{task}}']);
+    expect(backend!.args).toEqual([
+      'exec',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'workspace-write',
+      '{{assistant_response_args}}',
+      '{{task}}',
+    ]);
+  });
+
+  it('captures Codex assistant responses separately from the raw terminal transcript', async () => {
+    const codexService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex',
+            name: 'OpenAI Codex CLI',
+            enabled: true,
+            command: 'codex',
+            args: ['--quiet', '{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex',
+      },
+      terminalControl: mock,
+    });
+
+    const runPromise = codexService.run({
+      task: 'Summarize the repository',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mock.writtenInputs).toHaveLength(1);
+    expect(mock.writtenInputs[0].input).toContain('--output-last-message');
+    const capturePath = mock.writtenInputs[0].input.match(/--output-last-message '([^']+)'/)?.[1];
+    expect(capturePath).toBeTruthy();
+    await writeFile(toHostCapturePath(capturePath!), 'GuardianAgent is a security-first AI assistant platform.\n', 'utf8');
+
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId, 'bash-5.2$ codex exec ...\n');
+    mock.simulateOutput(terminalId, 'OpenAI Codex CLI completed.\n');
+    mock.simulateExit(terminalId, 0);
+
+    const result = await runPromise;
+    expect(result.assistantResponse).toBe('GuardianAgent is a security-first AI assistant platform.');
+    expect(result.output).toContain('OpenAI Codex CLI completed.');
+    expect(result.output).not.toContain('GuardianAgent is a security-first AI assistant platform.');
+  });
+
+  it('falls back to parsing the Codex marker block when the capture file is empty', async () => {
+    const codexService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'codex',
+            name: 'OpenAI Codex CLI',
+            enabled: true,
+            command: 'codex',
+            args: ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{assistant_response_args}}', '{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'codex',
+      },
+      terminalControl: mock,
+    });
+
+    const runPromise = codexService.run({ task: 't', codeSessionId: 's', workspaceRoot: '/w' });
+    await new Promise((r) => setTimeout(r, 10));
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId,
+      'bash-5.2$ codex exec ...\n'
+      + 'some setup chatter\n'
+      + 'codex\n'
+      + 'This repo is GuardianAgent, a security-first AI assistant platform.\n'
+      + 'tokens used\n33,189\nbash-5.2$ exit\n',
+    );
+    mock.simulateExit(terminalId, 0);
+    const result = await runPromise;
+    expect(result.assistantResponse).toBe('This repo is GuardianAgent, a security-first AI assistant platform.');
+  });
+
+  it('falls back to shell-wrapper stripping for Claude Code output', async () => {
+    const claudeService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'claude-code',
+            name: 'Claude Code',
+            enabled: true,
+            command: 'claude',
+            args: ['--print', '{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'claude-code',
+      },
+      terminalControl: mock,
+    });
+
+    const runPromise = claudeService.run({ task: 't', codeSessionId: 's', workspaceRoot: '/w' });
+    await new Promise((r) => setTimeout(r, 10));
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId,
+      'bash-5.2$ claude --print ...\n'
+      + 'This repo is GuardianAgent.\nIt provides an event-driven agent system.\n'
+      + 'exit\nbash-5.2$ exit\n',
+    );
+    mock.simulateExit(terminalId, 0);
+    const result = await runPromise;
+    expect(result.assistantResponse).toBe('This repo is GuardianAgent.\nIt provides an event-driven agent system.');
+  });
+
+  it('falls back to shell-wrapper stripping for Gemini CLI output', async () => {
+    const geminiService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'gemini-cli',
+            name: 'Gemini CLI',
+            enabled: true,
+            command: 'gemini',
+            args: ['{{task}}'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'gemini-cli',
+      },
+      terminalControl: mock,
+    });
+
+    const runPromise = geminiService.run({ task: 't', codeSessionId: 's', workspaceRoot: '/w' });
+    await new Promise((r) => setTimeout(r, 10));
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId,
+      'bash-5.2$ gemini ...\n'
+      + 'Hello from Gemini.\n'
+      + 'exit\nbash-5.2$ exit\n',
+    );
+    mock.simulateExit(terminalId, 0);
+    const result = await runPromise;
+    expect(result.assistantResponse).toBe('Hello from Gemini.');
+  });
+
+  it('falls back to extracting the last assistant block for Aider output', async () => {
+    const aiderService = new CodingBackendService({
+      config: {
+        ...BASE_CONFIG,
+        backends: [
+          {
+            id: 'aider',
+            name: 'Aider',
+            enabled: true,
+            command: 'aider',
+            args: ['--message', '{{task}}', '--yes'],
+            timeoutMs: 5000,
+            nonInteractive: true,
+          },
+        ],
+        defaultBackend: 'aider',
+      },
+      terminalControl: mock,
+    });
+
+    const runPromise = aiderService.run({ task: 't', codeSessionId: 's', workspaceRoot: '/w' });
+    await new Promise((r) => setTimeout(r, 10));
+    const terminalId = mock.openedTerminals[0].terminalId;
+    mock.simulateOutput(terminalId,
+      'bash-5.2$ aider --message ...\n'
+      + 'Aider v0.50.0\nAdded file foo.ts to the chat.\n'
+      + '> what does this repo do?\n'
+      + 'This repo is GuardianAgent.\nIt orchestrates agents.\n'
+      + 'Tokens: 12,345 sent\nbash-5.2$ exit\n',
+    );
+    mock.simulateExit(terminalId, 0);
+    const result = await runPromise;
+    expect(result.assistantResponse).toContain('This repo is GuardianAgent.');
+    expect(result.assistantResponse).toContain('It orchestrates agents.');
+    expect(result.assistantResponse).not.toContain('Tokens:');
   });
 
   it('resolves default backend when no id given', () => {
@@ -138,6 +339,10 @@ describe('CodingBackendService', () => {
 
   it('returns null for unknown backend', () => {
     expect(service.resolveBackend('nonexistent')).toBeNull();
+  });
+
+  it('does not resolve preset-only backends unless they are configured', () => {
+    expect(service.resolveBackend('gemini-cli')).toBeNull();
   });
 
   it('launches a backend and captures successful output', async () => {
@@ -259,6 +464,37 @@ describe('CodingBackendService', () => {
 
     expect(result.success).toBe(false);
     expect(result.output).toContain('not configured');
+  });
+
+  it('returns error for preset backends that are not enabled in config', async () => {
+    const result = await service.run({
+      task: 'test',
+      backendId: 'gemini-cli',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('not enabled');
+    expect(mock.openedTerminals).toHaveLength(0);
+  });
+
+  it('returns an orchestration-disabled error when the master switch is off', async () => {
+    service.updateConfig({
+      ...BASE_CONFIG,
+      enabled: false,
+    });
+
+    const result = await service.run({
+      task: 'test',
+      backendId: 'claude-code',
+      codeSessionId: 'session-1',
+      workspaceRoot: '/workspace',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('orchestration is not enabled');
+    expect(mock.openedTerminals).toHaveLength(0);
   });
 
   it('enforces concurrent session limit', async () => {

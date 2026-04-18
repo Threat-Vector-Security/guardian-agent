@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentContext, UserMessage } from '../../agent/types.js';
-import { handleApprovalMessage } from './approval-orchestration.js';
+import { handleApprovalMessage, syncPendingApprovalsFromExecutor } from './approval-orchestration.js';
 
 describe('approval-orchestration', () => {
   it('suppresses generic tool-completed copy when a direct-route approval resumes into a final response', async () => {
@@ -84,5 +84,26 @@ describe('approval-orchestration', () => {
     });
 
     expect(result?.content).toBe('Note created: Smoke Test Note');
+  });
+
+  it('does not synthesize a pending approval action on unrelated turns when only live approvals remain', () => {
+    const setPendingApprovals = vi.fn();
+
+    syncPendingApprovalsFromExecutor({
+      tools: {
+        isEnabled: () => true,
+        listPendingApprovalIdsForUser: () => ['approval-1'],
+      },
+      sourceUserId: 'owner',
+      sourceChannel: 'web',
+      targetUserId: 'owner',
+      targetChannel: 'web',
+      surfaceId: 'web-guardian-chat',
+      getPendingApprovalAction: () => null,
+      setPendingApprovals,
+      updatePendingAction: vi.fn(),
+    });
+
+    expect(setPendingApprovals).not.toHaveBeenCalled();
   });
 });

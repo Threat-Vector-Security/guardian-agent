@@ -466,6 +466,8 @@ describe('RunTimelineStore', () => {
       id: 'delegated-1',
       kind: 'started',
       requestId: 'req-delegated-worker',
+      parentRunId: 'req-delegated-worker',
+      taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
@@ -481,6 +483,8 @@ describe('RunTimelineStore', () => {
       id: 'delegated-2',
       kind: 'running',
       requestId: 'req-delegated-worker',
+      parentRunId: 'req-delegated-worker',
+      taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
@@ -496,6 +500,8 @@ describe('RunTimelineStore', () => {
       id: 'delegated-3',
       kind: 'blocked',
       requestId: 'req-delegated-worker',
+      parentRunId: 'req-delegated-worker',
+      taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
@@ -544,11 +550,33 @@ describe('RunTimelineStore', () => {
         activeExecutionRefs: ['code_session:Repo Fix'],
       },
     });
+    const delegatedTaskRun = store.getRun('delegated-task:job-1');
+    expect(delegatedTaskRun?.summary).toMatchObject({
+      runId: 'delegated-task:job-1',
+      parentRunId: 'req-delegated-worker',
+      kind: 'delegated_task',
+      status: 'awaiting_approval',
+      title: 'Delegated task: Workspace Implementer',
+      codeSessionId: 'code-1',
+      pendingApprovalCount: 1,
+      verificationPendingCount: 0,
+    });
+    expect(delegatedTaskRun?.items.find((item) => item.id === 'delegated-2')).toMatchObject({
+      runId: 'delegated-task:job-1',
+      type: 'note',
+      status: 'running',
+      title: 'Workspace Implementer is working',
+    });
+    expect(store.listRuns({ parentRunId: 'req-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
+      'delegated-task:job-1',
+    ]);
     expect(store.listRuns({ continuityKey: 'continuity-1' }).map((entry) => entry.summary.runId)).toEqual([
       'req-delegated-worker',
+      'delegated-task:job-1',
     ]);
     expect(store.listRuns({ activeExecutionRef: 'repo fix' }).map((entry) => entry.summary.runId)).toEqual([
       'req-delegated-worker',
+      'delegated-task:job-1',
     ]);
   });
 

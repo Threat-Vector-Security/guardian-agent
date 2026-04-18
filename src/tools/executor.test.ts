@@ -5891,6 +5891,7 @@ describe('ToolExecutor', () => {
           task: 'Say hello',
           status: 'succeeded',
           durationMs: 123,
+          assistantResponse: 'Hello from Codex.',
           output: 'Hello from Codex.',
           terminalTabId: 'term-1',
         }),
@@ -5916,8 +5917,125 @@ describe('ToolExecutor', () => {
 
     const approved = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
     expect(approved.success).toBe(true);
-    expect(approved.message).toContain('OpenAI Codex CLI completed.');
-    expect(approved.message).toContain('Hello from Codex.');
+    expect(approved.approved).toBe(true);
+    expect(approved.executionSucceeded).toBe(true);
+    expect(approved.message).toBe('OpenAI Codex CLI completed.');
+  });
+
+  it('keeps approved coding backend decisions approved even when backend execution fails', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Failing Backend Session',
+      workspaceRoot: root,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      codingBackendService: {
+        listBackends: () => [],
+        getStatus: () => [],
+        run: async () => ({
+          success: false,
+          backendId: 'claude-code',
+          backendName: 'Claude Code',
+          task: 'Inspect repo',
+          status: 'failed',
+          durationMs: 87,
+          output: 'Claude Code could not complete the requested task.',
+          terminalTabId: 'term-fail-1',
+        }),
+      },
+    });
+
+    const run = await executor.runTool({
+      toolName: 'coding_backend_run',
+      args: { task: 'Inspect repo', backend: 'claude-code' },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const approved = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.approved).toBe(true);
+    expect(approved.executionSucceeded).toBe(false);
+    expect(approved.result?.success).toBe(false);
+    expect(approved.result?.status).toBe('failed');
+    expect(approved.result?.output).toMatchObject({
+      backendName: 'Claude Code',
+      output: 'Claude Code could not complete the requested task.',
+    });
+    expect(approved.message).toContain("Approval received for 'coding_backend_run', but execution failed:");
+    expect(approved.message).toContain('Claude Code could not complete the requested task.');
+  });
+
+  it('fails disabled coding backend requests before creating an approval', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Disabled Backend Session',
+      workspaceRoot: root,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      codingBackendService: {
+        listBackends: () => [{ id: 'gemini-cli', enabled: false }],
+        getStatus: () => [],
+        getRunPrerequisiteError: () => 'Coding backend \'Gemini CLI\' is not enabled. Enable it in Configuration > Integrations > Coding Assistants.',
+        run: async () => {
+          throw new Error('run should not execute when pre-approval validation fails');
+        },
+      } as never,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'coding_backend_run',
+      args: { task: 'Say hello', backend: 'gemini-cli' },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('failed');
+    expect(run.approvalId).toBeUndefined();
+    expect(run.message).toContain('not enabled');
   });
 
   it('uses a coding backend service attached after executor startup', async () => {
@@ -5952,6 +6070,7 @@ describe('ToolExecutor', () => {
         task: 'Inspect repo',
         status: 'succeeded',
         durationMs: 42,
+        assistantResponse: 'Changed files: src/index.ts',
         output: 'Changed files: src/index.ts',
         terminalTabId: 'term-late',
       }),
@@ -5976,8 +6095,7 @@ describe('ToolExecutor', () => {
 
     const approved = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
     expect(approved.success).toBe(true);
-    expect(approved.message).toContain('OpenAI Codex CLI completed.');
-    expect(approved.message).toContain('Changed files: src/index.ts');
+    expect(approved.message).toBe('OpenAI Codex CLI completed.');
   });
 
   it('scopes coding backend status to the active code session by default', async () => {

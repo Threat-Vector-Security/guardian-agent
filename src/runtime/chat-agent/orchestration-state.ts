@@ -61,7 +61,7 @@ export interface ChatAgentOrchestrationStateDeps {
   stateAgentId: string;
   pendingActionStore?: PendingActionStore;
   continuityThreadStore?: ContinuityThreadStore;
-  tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listPendingApprovalIdsForUser'> | null;
+  tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listApprovals' | 'listPendingApprovalIdsForUser'> | null;
 }
 
 function clonePendingActionIntentProvenance(
@@ -78,7 +78,7 @@ export class ChatAgentOrchestrationState {
   private readonly stateAgentId: string;
   private pendingActionStore?: PendingActionStore;
   private continuityThreadStore?: ContinuityThreadStore;
-  private readonly tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listPendingApprovalIdsForUser'> | null;
+  private readonly tools?: Pick<ToolExecutor, 'getApprovalSummaries' | 'listApprovals' | 'listPendingApprovalIdsForUser'> | null;
 
   constructor(deps: ChatAgentOrchestrationStateDeps) {
     this.stateAgentId = deps.stateAgentId;
@@ -117,6 +117,28 @@ export class ChatAgentOrchestrationState {
       assistantId: this.stateAgentId,
       userId: userId.trim(),
     };
+  }
+
+  private listAllPendingApprovalIds(limit = 200): string[] | undefined {
+    if (!this.tools?.listApprovals) {
+      return undefined;
+    }
+    return this.tools.listApprovals(limit, 'pending').map((approval) => approval.id);
+  }
+
+  private hasPendingApprovalIdsAnywhere(ids: readonly string[]): boolean {
+    const normalizedIds = ids
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    if (normalizedIds.length === 0) {
+      return false;
+    }
+    const allPendingApprovalIds = this.listAllPendingApprovalIds();
+    if (!allPendingApprovalIds) {
+      return false;
+    }
+    const allPendingApprovalSet = new Set(allPendingApprovalIds);
+    return normalizedIds.some((id) => allPendingApprovalSet.has(id));
   }
 
   getContinuityThread(
@@ -240,13 +262,21 @@ export class ChatAgentOrchestrationState {
     if (!this.pendingActionStore || !this.tools?.listPendingApprovalIdsForUser) {
       return pendingAction;
     }
+    if (!pendingAction) {
+      return null;
+    }
+    if (!isPendingActionActive(pendingAction.status)) {
+      return pendingAction;
+    }
     const liveApprovalIds = this.tools?.listPendingApprovalIdsForUser?.(userId, channel, {
       includeUnscoped: channel === 'web',
     }) ?? [];
     const approvalSummaries = this.tools?.getApprovalSummaries?.(liveApprovalIds);
+    const allPendingApprovalIds = this.listAllPendingApprovalIds();
     const reconciled = reconcilePendingApprovalAction(this.pendingActionStore, pendingAction, {
       liveApprovalIds,
       liveApprovalSummaries: approvalSummaries,
+      allPendingApprovalIds,
       scope: primaryScope,
       nowMs,
     });
@@ -561,6 +591,9 @@ export class ChatAgentOrchestrationState {
     const active = this.getPendingApprovalAction(userId, channel, surfaceId, nowMs);
     const approvalIds = [...new Set(ids.filter((id) => id.trim().length > 0))];
     if (approvalIds.length === 0) {
+      if (active?.blocker.kind === 'approval' && this.hasPendingApprovalIdsAnywhere(active.blocker.approvalIds ?? [])) {
+        return;
+      }
       if (active) this.completePendingAction(active.id, nowMs);
       return;
     }

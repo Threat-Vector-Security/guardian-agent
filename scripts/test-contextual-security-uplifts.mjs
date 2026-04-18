@@ -202,6 +202,24 @@ async function waitForHealth(baseUrl) {
   throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
+function createIsolatedHarnessEnv(tmpDir, extraEnv = {}) {
+  const appData = path.join(tmpDir, 'AppData', 'Roaming');
+  const localAppData = path.join(tmpDir, 'AppData', 'Local');
+  fs.mkdirSync(appData, { recursive: true });
+  fs.mkdirSync(localAppData, { recursive: true });
+  return {
+    ...process.env,
+    HOME: tmpDir,
+    USERPROFILE: tmpDir,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: tmpDir,
+    XDG_DATA_HOME: tmpDir,
+    XDG_CACHE_HOME: tmpDir,
+    ...extraEnv,
+  };
+}
+
 async function waitForJob(baseUrl, token, predicate, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -309,7 +327,7 @@ guardian:
       cwd: projectRoot,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NO_COLOR: '1' },
+      env: createIsolatedHarnessEnv(tmpDir, { NO_COLOR: '1' }),
     });
     logStream = fs.createWriteStream(logPath, { flags: 'a' });
     appProcess.stdout.pipe(logStream);

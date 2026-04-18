@@ -13,6 +13,7 @@ import {
   type IntentGatewayInput,
   type IntentGatewayRecord,
 } from './intent-gateway.js';
+import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import {
   attachSelectedExecutionProfileMetadata,
   findProviderByTier,
@@ -183,13 +184,6 @@ export function createIncomingDispatchPreparer(args: {
     const classifierProviders = requestedProviderName?.trim()
       ? [requestedProviderName.trim()]
       : listClassifierProvidersForMode(currentConfig, routingMode);
-    const recentHistory = args.conversations.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: canonicalUserId,
-      channel,
-    }, {
-      query: normalizedContent,
-    });
     const pendingAction = args.pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,
       userId: canonicalUserId,
@@ -199,6 +193,16 @@ export function createIncomingDispatchPreparer(args: {
     const continuity = args.continuityThreadStore.get({
       assistantId: stateAgentId,
       userId: canonicalUserId,
+    });
+    const recentHistory = args.conversations.getHistoryForContext({
+      agentId: stateAgentId,
+      userId: canonicalUserId,
+      channel,
+    }, {
+      query: buildIntentGatewayHistoryQuery({
+        content: normalizedContent,
+        continuity: args.summarizeContinuityThreadForGateway(continuity),
+      }),
     });
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;

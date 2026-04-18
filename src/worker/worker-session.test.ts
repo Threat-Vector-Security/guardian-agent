@@ -181,6 +181,14 @@ describe('BrokeredWorkerSession automation control', () => {
 
     expect(result.content).toContain('Acceptance Gates');
     expect(result.content).toContain('Existing Checks To Reuse');
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        source: 'tool_loop',
+        completionReason: 'answer_first_response',
+        responseQuality: 'final',
+      },
+    });
     expect(llmChat).toHaveBeenCalled();
     expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.length === 0)).toBe(true);
     expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'code_plan'))).toBe(false);
@@ -240,12 +248,77 @@ describe('BrokeredWorkerSession automation control', () => {
 
     expect(result.content).toBe('I did not create a real approval request for that action. Please try again.');
     expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'failed',
+        source: 'tool_loop',
+        completionReason: 'phantom_approval_response',
+        responseQuality: 'degraded',
+      },
       responseSource: {
         locality: 'external',
         providerName: 'anthropic',
       },
     });
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
+  });
+
+  it('marks narration-only worker replies as failed execution metadata instead of completed work', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'none',
+            confidence: 'low',
+            summary: 'Stay in the normal assistant path.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: 'I will inspect the repository first and then start making the requested changes.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-intermediate-worker',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect the repo and fix the bug.',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.content).toContain('inspect the repository first');
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'failed',
+        source: 'tool_loop',
+        completionReason: 'intermediate_response',
+        responseQuality: 'intermediate',
+        toolCallCount: 0,
+        toolResultCount: 0,
+      },
+    });
   });
 
   it('marks quarantined tool results so the worker can explain inspection limits instead of inventing a summary', async () => {
@@ -1544,6 +1617,12 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(resumed.content).toContain('Completed nodes: search-repo.');
     expect(resumed.content).not.toContain('```json');
     expect(resumed.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        source: 'planner',
+        completionReason: 'planner_completed',
+        responseQuality: 'final',
+      },
       plannerExecution: {
         status: 'completed',
         totalNodes: 1,
@@ -2261,6 +2340,12 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.content).toContain('Plan summary: 1 node, 1 pending.');
     expect(result.content).not.toContain('```json');
     expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'failed',
+        source: 'planner',
+        completionReason: 'unsupported_actions',
+        responseQuality: 'final',
+      },
       plannerExecution: {
         status: 'unsupported_actions',
         totalNodes: 1,

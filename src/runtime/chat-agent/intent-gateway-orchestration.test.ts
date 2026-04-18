@@ -243,6 +243,49 @@ describe('intent-gateway-orchestration', () => {
     })).toBe('Use codex for this request: Please refactor src/chat-agent.ts to extract the gateway continuation helpers.');
   });
 
+  it('skips backend-only follow-ups when rewriting a coding-backend correction turn', () => {
+    const gateway = makeGatewayRecord({
+      turnRelation: 'correction',
+      entities: {
+        codingBackend: 'claude-code',
+      },
+    });
+
+    expect(resolveIntentGatewayContent({
+      gateway,
+      currentContent: 'Okay now do the same thing with Claude Code',
+      pendingAction: null,
+      priorHistory: [
+        { role: 'user', content: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.' },
+        { role: 'assistant', content: 'This repo is GuardianAgent.' },
+        { role: 'user', content: 'Okay now do the same thing with Claude Code' },
+      ],
+    })).toBe('Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
+  });
+
+  it('falls back to continuity when a short coding-backend follow-up no longer has the original request in recent history', () => {
+    const gateway = makeGatewayRecord({
+      route: 'coding_task',
+      turnRelation: 'new_request',
+      entities: {
+        codingBackend: 'claude-code',
+      },
+    });
+
+    expect(resolveIntentGatewayContent({
+      gateway,
+      currentContent: 'Okay now do the same thing with Claude Code',
+      pendingAction: null,
+      priorHistory: [
+        { role: 'assistant', content: 'This repo is GuardianAgent.' },
+        { role: 'user', content: 'Okay now do the same thing with Claude Code' },
+      ],
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+      }),
+    })).toBe('Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
+  });
+
   it('resumes workspace-switch pending actions once the target session is active', () => {
     const pendingAction = makePendingAction({
       blocker: {

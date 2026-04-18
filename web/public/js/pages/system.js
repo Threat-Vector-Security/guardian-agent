@@ -475,6 +475,7 @@ export async function renderSystem(container, options = {}) {
       toolsState,
       routingTrace,
       assistantDispatchRunsPayload,
+      delegatedTaskRunsPayload,
       scheduledTaskRunsPayload,
       codeSessionRunsPayload,
       requestedAssistantRun,
@@ -498,6 +499,7 @@ export async function renderSystem(container, options = {}) {
       api.toolsState(80).catch(() => ({ approvals: [] })),
       api.routingTrace(buildRoutingTraceQueryParams(8)).catch(() => ({ entries: [] })),
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'assistant_dispatch' }).catch(() => ({ runs: [] })),
+      api.assistantRuns({ ...runtimeTimelineParams, kind: 'delegated_task' }).catch(() => ({ runs: [] })),
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'scheduled_task' }).catch(() => ({ runs: [] })),
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'code_session' }).catch(() => ({ runs: [] })),
       requestedAssistantRunId ? api.assistantRun(requestedAssistantRunId).catch(() => null) : Promise.resolve(null),
@@ -526,6 +528,11 @@ export async function renderSystem(container, options = {}) {
       Array.isArray(assistantDispatchRunsPayload?.runs) ? assistantDispatchRunsPayload.runs : [],
       requestedAssistantRun,
       'assistant_dispatch',
+    );
+    const delegatedTaskRuns = normalizeRequestedRunCollection(
+      Array.isArray(delegatedTaskRunsPayload?.runs) ? delegatedTaskRunsPayload.runs : [],
+      requestedAssistantRun,
+      'delegated_task',
     );
     const scheduledTaskRuns = normalizeRequestedRunCollection(
       Array.isArray(scheduledTaskRunsPayload?.runs) ? scheduledTaskRunsPayload.runs : [],
@@ -676,6 +683,7 @@ export async function renderSystem(container, options = {}) {
     container.appendChild(createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assistantState }));
     container.appendChild(createRuntimeExecutionSection({
       assistantDispatchRuns,
+      delegatedTaskRuns,
       scheduledTaskRuns,
       codeSessionRuns,
     }));
@@ -877,7 +885,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
   return section;
 }
 
-function createRuntimeExecutionSection({ assistantDispatchRuns, scheduledTaskRuns, codeSessionRuns }) {
+function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRuns, scheduledTaskRuns, codeSessionRuns }) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
   const section = document.createElement('div');
@@ -911,11 +919,13 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, scheduledTaskRun
     </form>
     <div class="cards-grid" style="padding:0 1rem 1rem;">
       ${renderMiniCard('Assistant', assistantDispatchRuns.length, 'Normal chat and assistant dispatch runs', assistantDispatchRuns.length > 0 ? 'info' : 'success', 'Recent assistant dispatch execution visible on the System page.')}
+      ${renderMiniCard('Delegated', delegatedTaskRuns.length, 'Specialist and worker child-task runs', delegatedTaskRuns.length > 0 ? 'accent' : 'success', 'Recent delegated specialist and worker task execution visible on the System page.')}
       ${renderMiniCard('Scheduled', scheduledTaskRuns.length, 'Routines and other scheduled work', scheduledTaskRuns.length > 0 ? 'accent' : 'success', 'Recent scheduled-task execution, including Second Brain routine scans, visible on the System page.')}
       ${renderMiniCard('Code', codeSessionRuns.length, 'Code-session timeline runs', codeSessionRuns.length > 0 ? 'warning' : 'success', 'Recent coding-session execution visible on the System page.')}
     </div>
     <div style="padding:0 1rem 1rem;display:flex;flex-direction:column;gap:1rem">
       ${renderRuntimeExecutionTable('Assistant Dispatch', 'assistant_dispatch', assistantDispatchRuns, 'No recent assistant dispatch runs.')}
+      ${renderRuntimeExecutionTable('Delegated Tasks', 'delegated_task', delegatedTaskRuns, 'No recent delegated task runs.')}
       ${renderRuntimeExecutionTable('Scheduled Tasks & Routines', 'scheduled_task', scheduledTaskRuns, 'No recent scheduled-task or routine runs.')}
       ${renderRuntimeExecutionTable('Code Sessions', 'code_session', codeSessionRuns, 'No recent code-session runs.')}
     </div>
@@ -972,6 +982,9 @@ function renderRuntimeExecutionRows(kind, runs, emptyMessage) {
 function formatRuntimeExecutionSubtitle(kind, summary) {
   const subtitle = typeof summary?.subtitle === 'string' ? summary.subtitle.trim() : '';
   if (subtitle) return subtitle;
+  if (kind === 'delegated_task') {
+    return [summary.parentRunId || '', summary.runId || ''].filter(Boolean).join(' • ');
+  }
   if (kind === 'scheduled_task') {
     const tags = Array.isArray(summary?.tags) ? summary.tags : [];
     const taskType = typeof tags[1] === 'string' ? tags[1] : '';
@@ -989,6 +1002,11 @@ function formatRuntimeExecutionSubtitle(kind, summary) {
 }
 
 function formatRuntimeExecutionOwner(kind, summary) {
+  if (kind === 'delegated_task') {
+    return [summary.agentId || summary.channel || '-', summary.parentRunId ? `parent ${summary.parentRunId}` : '']
+      .filter(Boolean)
+      .join(' • ');
+  }
   if (kind === 'scheduled_task') {
     const tags = Array.isArray(summary?.tags) ? summary.tags : [];
     const taskType = typeof tags[1] === 'string' ? tags[1] : '';

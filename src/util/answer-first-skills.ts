@@ -10,6 +10,46 @@ interface SkillLike {
   id?: string | null;
 }
 
+type AnswerFirstSkillId = 'writing-plans' | 'verification-before-completion' | 'code-review';
+
+function collectSkillIds(skills: readonly SkillLike[]): Set<string> {
+  return new Set(
+    skills
+      .map((skill) => (typeof skill.id === 'string' ? skill.id : ''))
+      .filter((skillId) => skillId.length > 0),
+  );
+}
+
+function selectPrimaryAnswerFirstSkill(
+  skillIds: ReadonlySet<string>,
+  originalRequest?: string,
+): AnswerFirstSkillId | null {
+  const normalizedRequest = originalRequest?.trim().toLowerCase() ?? '';
+  const looksLikeVerification = /\b(?:verified?|verification|before completion|done and passing|must be verified|claim .* done|full legitimate green|proof surface)\b/.test(normalizedRequest);
+  const looksLikeReview = /\bcode review\b|\breview this\b|\breview\b/.test(normalizedRequest);
+  const looksLikePlan = /\b(?:implementation plan|write a plan|plan\b|break this down|before editing|acceptance gates)\b/.test(normalizedRequest);
+
+  if (looksLikeVerification && skillIds.has('verification-before-completion')) {
+    return 'verification-before-completion';
+  }
+  if (looksLikeReview && skillIds.has('code-review')) {
+    return 'code-review';
+  }
+  if (looksLikePlan && skillIds.has('writing-plans')) {
+    return 'writing-plans';
+  }
+  if (skillIds.has('verification-before-completion')) {
+    return 'verification-before-completion';
+  }
+  if (skillIds.has('code-review')) {
+    return 'code-review';
+  }
+  if (skillIds.has('writing-plans')) {
+    return 'writing-plans';
+  }
+  return null;
+}
+
 export function shouldUseAnswerFirstForSkills(skills: readonly SkillLike[]): boolean {
   return skills.some((skill) => (
     typeof skill.id === 'string'
@@ -20,20 +60,18 @@ export function shouldUseAnswerFirstForSkills(skills: readonly SkillLike[]): boo
 export function isAnswerFirstSkillResponseSufficient(
   skills: readonly SkillLike[],
   content: string,
+  originalRequest?: string,
 ): boolean {
   const normalized = content.trim();
   if (!normalized || isResponseDegraded(normalized)) {
     return false;
   }
 
-  const skillIds = new Set(
-    skills
-      .map((skill) => (typeof skill.id === 'string' ? skill.id : ''))
-      .filter((skillId) => skillId.length > 0),
-  );
+  const skillIds = collectSkillIds(skills);
+  const primarySkill = selectPrimaryAnswerFirstSkill(skillIds, originalRequest);
 
   if (
-    skillIds.has('writing-plans')
+    primarySkill === 'writing-plans'
     && (
       !/acceptance gates/i.test(normalized)
       || !/existing checks to reuse/i.test(normalized)
@@ -43,7 +81,7 @@ export function isAnswerFirstSkillResponseSufficient(
   }
 
   if (
-    skillIds.has('verification-before-completion')
+    primarySkill === 'verification-before-completion'
     && (
       !/full legitimate green/i.test(normalized)
       || !/proof surface/i.test(normalized)
@@ -60,14 +98,11 @@ export function buildAnswerFirstSkillCorrectionPrompt(
   originalRequest: string,
 ): string | undefined {
   const normalizedRequest = originalRequest.trim();
-  const skillIds = new Set(
-    skills
-      .map((skill) => (typeof skill.id === 'string' ? skill.id : ''))
-      .filter((skillId) => skillId.length > 0),
-  );
+  const skillIds = collectSkillIds(skills);
+  const primarySkill = selectPrimaryAnswerFirstSkill(skillIds, normalizedRequest);
   const lines: string[] = [];
 
-  if (skillIds.has('writing-plans')) {
+  if (primarySkill === 'writing-plans') {
     lines.push('System correction: the Writing Plans skill is active for this turn.');
     if (normalizedRequest) {
       lines.push(`Answer this original request directly: "${normalizedRequest}"`);
@@ -80,7 +115,7 @@ export function buildAnswerFirstSkillCorrectionPrompt(
     lines.push('If you genuinely need grounding first, use the available repo or skill-reading tools now instead of narrating.');
   }
 
-  if (skillIds.has('verification-before-completion')) {
+  if (primarySkill === 'verification-before-completion') {
     lines.push('System correction: the Verification Before Completion skill is active for this turn.');
     if (normalizedRequest) {
       lines.push(`Answer this original request directly: "${normalizedRequest}"`);
@@ -91,7 +126,7 @@ export function buildAnswerFirstSkillCorrectionPrompt(
     lines.push('Do not stop at generic commentary about maybe running a test later.');
   }
 
-  if (skillIds.has('code-review')) {
+  if (primarySkill === 'code-review') {
     lines.push('System correction: the Code Review skill is active for this turn.');
     if (normalizedRequest) {
       lines.push(`Answer this original request directly: "${normalizedRequest}"`);
@@ -108,13 +143,10 @@ export function buildAnswerFirstSkillFallbackResponse(
   originalRequest: string,
 ): string | undefined {
   const normalizedRequest = originalRequest.trim();
-  const skillIds = new Set(
-    skills
-      .map((skill) => (typeof skill.id === 'string' ? skill.id : ''))
-      .filter((skillId) => skillId.length > 0),
-  );
+  const skillIds = collectSkillIds(skills);
+  const primarySkill = selectPrimaryAnswerFirstSkill(skillIds, normalizedRequest);
 
-  if (skillIds.has('writing-plans')) {
+  if (primarySkill === 'writing-plans') {
     return [
       '# Implementation Plan',
       '',
@@ -153,11 +185,11 @@ export function buildAnswerFirstSkillFallbackResponse(
     ].join('\n');
   }
 
-  if (skillIds.has('verification-before-completion')) {
+  if (primarySkill === 'verification-before-completion') {
     return 'Do not call it done yet. The bar is full legitimate green on the real proof surface, not a weaker subset. Identify the strongest check that proves the claim, run it fresh, read the full result, and only then decide whether the work is complete.';
   }
 
-  if (skillIds.has('code-review')) {
+  if (primarySkill === 'code-review') {
     return [
       'No grounded review findings were produced yet.',
       'A valid code review response needs findings first, ordered by severity, with file references when available.',

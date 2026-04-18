@@ -226,6 +226,8 @@ export class BrokerServer {
           const decided = await this.tools.decideApproval(approvalId, decision, actor, actorRole, reason);
           result = {
             success: decided.success,
+            approved: decided.approved,
+            executionSucceeded: decided.executionSucceeded,
             message: decided.message,
             status: decided.result?.status ?? decided.job?.status,
             jobId: decided.job?.id ?? decided.result?.jobId,

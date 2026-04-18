@@ -2256,6 +2256,67 @@ describe('IntentGateway', () => {
     expect(callCount).toBe(2);
   });
 
+  it('repairs short coding-backend follow-ups into standalone resolved content using continuity context', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Okay now do the same thing with Claude Code',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.' },
+          { role: 'assistant', content: 'This repo is GuardianAgent.' },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          focusSummary: 'Repo summary handoff',
+          lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+          activeExecutionRefs: ['code_session:Guardian Agent'],
+        },
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'coding_task',
+              confidence: 'high',
+              operation: 'inspect',
+              summary: 'Runs the same repo-inspection task with Claude Code.',
+              turnRelation: 'new_request',
+              resolution: 'ready',
+              codingBackend: 'claude-code',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        expect(options?.tools?.[0]?.name).toBe('resolve_historical_reference');
+        const userPrompt = messages[messages.length - 1]?.content || '';
+        expect(userPrompt).toContain('Last actionable request');
+        expect(userPrompt).toContain('Coding backend: claude-code');
+        return {
+          content: JSON.stringify({
+            resolvedContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codingBackend).toBe('claude-code');
+    expect(result.decision.resolvedContent).toBe('Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
+    expect(result.decision.provenance?.resolvedContent).toBe('repair.historical_reference');
+    expect(callCount).toBe(2);
+  });
+
   it('classifies session listing as coding_session_control with navigate operation', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

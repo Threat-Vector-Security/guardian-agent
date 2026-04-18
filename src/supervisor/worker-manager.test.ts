@@ -661,6 +661,7 @@ describe('WorkerManager', () => {
         codeSessionId: 'code-1',
         agentName: 'Local Agent',
         orchestrationLabel: 'Primary Coordinator',
+        taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
         lifecycle: 'running',
       },
     });
@@ -668,6 +669,7 @@ describe('WorkerManager', () => {
       stage: 'delegated_worker_completed',
       requestId: 'm-observe',
       details: {
+        taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
         lifecycle: 'blocked',
         unresolvedBlockerKind: 'approval',
         approvalCount: 1,
@@ -845,6 +847,129 @@ describe('WorkerManager', () => {
         unresolvedBlockerKind: 'approval',
         approvalCount: 1,
       },
+    });
+
+    manager.shutdown();
+  });
+
+  it('marks delegated workers as failed when the worker loop reports a non-terminal execution state', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'I will inspect the repository first and then start fixing the bug.',
+      metadata: {
+        workerExecution: {
+          lifecycle: 'failed',
+          source: 'tool_loop',
+          completionReason: 'intermediate_response',
+          responseQuality: 'intermediate',
+          toolCallCount: 0,
+          toolResultCount: 0,
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 123_456,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-failed-delegated',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect the repo and fix the bug.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-failed-delegated',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('progress update instead of a terminal result');
+
+    const state = manager.getJobState(5);
+    expect(state.jobs[0]).toMatchObject({
+      type: 'delegated_worker',
+      status: 'failed',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          lifecycle: 'failed',
+          handoff: {
+            reportingMode: 'inline_response',
+            nextAction: 'Inspect the delegated worker failure details before retrying.',
+          },
+        },
+      },
+    });
+
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_failed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_failed',
+      requestId: 'm-failed-delegated',
+      details: {
+        taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
+        lifecycle: 'failed',
+        reason: 'Delegated worker returned a progress update instead of a terminal result.',
+      },
+    });
+
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'failed',
+    ]);
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
+      id: expect.stringMatching(/^delegated-worker:job-[^:]+:failed$/),
+      kind: 'failed',
+      requestId: 'm-failed-delegated',
+      detail: 'Delegated worker returned a progress update instead of a terminal result.',
     });
 
     manager.shutdown();

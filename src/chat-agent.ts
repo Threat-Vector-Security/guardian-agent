@@ -38,7 +38,7 @@ import {
 import type { GmailMessageSummary } from './chat-agent-helpers.js';
 import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import type { ContextCompactionResult } from './util/context-budget.js';
-import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
+import { isIntermediateStatusResponse as _isIntermediateStatusResponse, isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
   buildAnswerFirstSkillFallbackResponse,
@@ -119,6 +119,10 @@ import {
   type IntentGatewayRoute,
   type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
+import {
+  buildIntentGatewayHistoryQuery,
+  shouldRepairHistoricalCodingBackendTurn,
+} from './runtime/intent/history-context.js';
 import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
 import {
   parseWebSearchIntent,
@@ -214,6 +218,7 @@ import {
 } from './runtime/chat-agent/orchestration-state.js';
 import {
   buildGatewayClarificationResponse as buildGatewayClarificationResponseHelper,
+  filterIntentGatewayClassificationContext as filterIntentGatewayClassificationContextHelper,
   resolveIntentGatewayContent as resolveIntentGatewayContentHelper,
   resolvePendingActionContinuationContent as resolvePendingActionContinuationContentHelper,
   resolveRetryAfterFailureContinuationContent as resolveRetryAfterFailureContinuationContentHelper,
@@ -1018,6 +1023,24 @@ function buildDirectHandlerResponseSource(
     default:
       return null;
   }
+}
+
+function buildCodingBackendResponseSource(input: {
+  backendId?: string;
+  backendName?: string;
+  durationMs?: number;
+}): ResponseSourceMetadata {
+  const backendName = input.backendName?.trim() || input.backendId?.trim() || 'Coding Backend';
+  return {
+    locality: 'local',
+    providerName: backendName,
+    providerTier: 'local',
+    usedFallback: false,
+    notice: `Handled by ${backendName} in the attached workspace.`,
+    ...(typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
+      ? { durationMs: Math.max(0, input.durationMs) }
+      : {}),
+  };
 }
 
 function extractQuotedText(text: string): string {
@@ -2338,8 +2361,12 @@ type DirectIntentShadowCandidate =
     return shouldUseAnswerFirstForSkills(skills);
   }
 
-  private isAnswerFirstSkillResponseSufficient(skills: readonly ResolvedSkill[], content: string): boolean {
-    return isAnswerFirstSkillResponseSufficientForSkills(skills, content);
+  private isAnswerFirstSkillResponseSufficient(
+    skills: readonly ResolvedSkill[],
+    content: string,
+    originalRequest?: string,
+  ): boolean {
+    return isAnswerFirstSkillResponseSufficientForSkills(skills, content, originalRequest);
   }
 
   private async tryRecoverDirectAnswerAfterTools(
@@ -2354,6 +2381,7 @@ type DirectIntentShadowCandidate =
       currentContextTrustLevel,
       currentTaintReasons,
       isResponseDegraded: (content) => this.isResponseDegraded(content),
+      isIntermediateStatusResponse: (content) => this.isIntermediateStatusResponse(content),
     });
   }
 
@@ -2560,19 +2588,23 @@ type DirectIntentShadowCandidate =
           },
         }
       : effectiveMessage;
-    const priorHistory = this.conversationService?.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: conversationUserId,
-      channel: conversationChannel,
-    }, {
-      query: stripLeadingContextPrefix(scopedMessage.content),
-    }) ?? [];
     let continuityThread = this.touchContinuityThread(
       pendingActionUserId,
       pendingActionChannel,
       pendingActionSurfaceId,
       effectiveCodeContext?.sessionId,
     );
+    const continuitySummaryForHistory = summarizeContinuityThreadForGateway(continuityThread);
+    const priorHistory = this.conversationService?.getHistoryForContext({
+      agentId: stateAgentId,
+      userId: conversationUserId,
+      channel: conversationChannel,
+    }, {
+      query: buildIntentGatewayHistoryQuery({
+        content: stripLeadingContextPrefix(scopedMessage.content),
+        continuity: continuitySummaryForHistory,
+      }),
+    }) ?? [];
     const buildScopedDirectIntentResponse = (input: Omit<DirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>) => this.buildDirectIntentResponse({
       ...input,
       surfaceUserId: pendingActionUserId,
@@ -2871,6 +2903,7 @@ type DirectIntentShadowCandidate =
         currentContent: groundedScopedMessage.content,
         pendingAction,
         priorHistory,
+        continuityThread,
       });
       if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
         routedScopedMessage = {
@@ -3815,6 +3848,7 @@ type DirectIntentShadowCandidate =
       let forcedPolicyRetryUsed = false;
       let forcedSkillShapeRetryCount = 0;
       let forcedSkillGroundingUsed = false;
+      let forcedIntermediateStatusRetryCount = 0;
       let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
       const currentTaintReasons = new Set<string>();
       let seededAnswerFirstResponse: import('./llm/types.js').ChatResponse | null = null;
@@ -3824,6 +3858,7 @@ type DirectIntentShadowCandidate =
       const answerFirstFallbackResponse = this.shouldPreferAnswerFirstForSkills(activeSkills)
         ? buildAnswerFirstSkillFallbackResponse(activeSkills, stripLeadingContextPrefix(requestIntentContent))
         : undefined;
+      const answerFirstOriginalRequest = stripLeadingContextPrefix(requestIntentContent);
       if (this.shouldPreferAnswerFirstForSkills(activeSkills)) {
         try {
           let answerFirstResponse = await chatFn(
@@ -3844,7 +3879,7 @@ type DirectIntentShadowCandidate =
           const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
           if (
             answerFirstContent
-            && this.isAnswerFirstSkillResponseSufficient(activeSkills, answerFirstContent)
+            && this.isAnswerFirstSkillResponseSufficient(activeSkills, answerFirstContent, answerFirstOriginalRequest)
             && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
           ) {
             finalContent = answerFirstContent;
@@ -3919,7 +3954,7 @@ type DirectIntentShadowCandidate =
           forcedSkillShapeRetryCount < 2
           && (!response.toolCalls || response.toolCalls.length === 0)
           && answerFirstCorrectionPrompt
-          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '')
+          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '', answerFirstOriginalRequest)
         ) {
           forcedSkillShapeRetryCount += 1;
           response = await chatFn(
@@ -3947,7 +3982,7 @@ type DirectIntentShadowCandidate =
           !forcedSkillGroundingUsed
           && (!response.toolCalls || response.toolCalls.length === 0)
           && this.shouldPreferAnswerFirstForSkills(activeSkills)
-          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '')
+          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '', answerFirstOriginalRequest)
           && llmToolDefs.some((definition) => definition.name === 'fs_read')
         ) {
           const skillSourcePaths = [...new Set(
@@ -4022,6 +4057,37 @@ type DirectIntentShadowCandidate =
                 };
                 finalContent = '';
               }
+            }
+          }
+        }
+        if (
+          forcedIntermediateStatusRetryCount < 2
+          && (!response.toolCalls || response.toolCalls.length === 0)
+          && this.shouldRetryIntermediateStatusCorrection(response.content ?? '', {
+            hasToolResults: lastToolRoundResults.length > 0,
+            hasAnswerFirstContract: !!answerFirstCorrectionPrompt,
+            hasToolExecutionContract: false,
+          })
+        ) {
+          forcedIntermediateStatusRetryCount += 1;
+          response = await chatFn(
+            [
+              ...plannerMessages,
+              { role: 'assistant', content: response.content ?? '' },
+              { role: 'user', content: this.buildIntermediateStatusCorrectionPrompt() },
+            ],
+            { tools: llmToolDefs },
+          );
+          finalContent = response.content;
+          if (!response.toolCalls || response.toolCalls.length === 0) {
+            const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+            if (recoveredToolCalls?.toolCalls.length) {
+              response = {
+                ...response,
+                toolCalls: recoveredToolCalls.toolCalls,
+                finishReason: 'tool_calls',
+              };
+              finalContent = '';
             }
           }
         }
@@ -4335,7 +4401,17 @@ type DirectIntentShadowCandidate =
         rounds += 1;
       }
 
-      if (!finalContent && lastToolRoundResults.length > 0) {
+      if (
+        (
+          !finalContent
+          || this.isIntermediateStatusResponse(finalContent)
+          || (
+            !!answerFirstFallbackResponse
+            && !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
+          )
+        )
+        && lastToolRoundResults.length > 0
+      ) {
         finalContent = await this.tryRecoverDirectAnswerAfterTools(
           llmMessages,
           chatFn,
@@ -4350,7 +4426,7 @@ type DirectIntentShadowCandidate =
       // LLM can call tools, not just produce text.
       if (
         this.qualityFallbackEnabled
-        && this.isResponseDegraded(finalContent)
+        && (this.isResponseDegraded(finalContent) || this.isIntermediateStatusResponse(finalContent))
         && this.fallbackChain
         && providerLocality === 'local'
         // If the tool round already produced concrete results or a real approval,
@@ -4586,8 +4662,10 @@ type DirectIntentShadowCandidate =
 
       if (
         answerFirstFallbackResponse
-        && lastToolRoundResults.length === 0
-        && !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '')
+        && (
+          !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
+          || this.isIntermediateStatusResponse(finalContent)
+        )
       ) {
         finalContent = answerFirstFallbackResponse;
       }
@@ -4641,7 +4719,7 @@ type DirectIntentShadowCandidate =
         }
       }
 
-      if (!finalContent && lastToolRoundResults.length > 0) {
+      if ((!finalContent || this.isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
         finalContent = summarizeToolRoundFallback(lastToolRoundResults);
       }
 
@@ -5966,7 +6044,15 @@ type DirectIntentShadowCandidate =
       };
     }
 
-    const delegatedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || message.content).trim();
+    const currentTask = stripLeadingContextPrefix(message.content).trim();
+    const resolvedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || '').trim();
+    const delegatedTask = resolvedTask
+      && (!currentTask || shouldRepairHistoricalCodingBackendTurn({
+        content: currentTask,
+        lastActionableRequest: resolvedTask,
+      }))
+      ? resolvedTask
+      : currentTask || resolvedTask;
     this.recordIntentRoutingTrace('direct_tool_call_started', {
       message,
       contentPreview: delegatedTask,
@@ -6006,7 +6092,11 @@ type DirectIntentShadowCandidate =
         success: toBoolean(result.success),
         message: toString(result.message),
       },
-      contentPreview: toString(result.output && isRecord(result.output) ? result.output.output : undefined),
+      contentPreview: toString(
+        result.output && isRecord(result.output)
+          ? result.output.assistantResponse ?? result.output.output
+          : undefined,
+      ),
     });
 
     if (result.status === 'pending_approval') {
@@ -6042,15 +6132,7 @@ type DirectIntentShadowCandidate =
         {
           prompt,
           approvalIds: pendingIds,
-          approvalSummaries: pendingIds.map((id) => {
-            const summary = summaries?.get(id);
-            return {
-              id,
-              toolName: summary?.toolName ?? 'unknown',
-              argsPreview: summary?.argsPreview ?? '',
-              actionLabel: summary?.actionLabel ?? '',
-            };
-          }),
+          approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
           originalUserContent: delegatedTask,
           route: decision.route,
           operation: decision.operation,
@@ -6061,8 +6143,33 @@ type DirectIntentShadowCandidate =
           provenance: decision.provenance,
           entities: toPendingActionEntities(decision.entities),
           codeSessionId: effectiveCodeContext?.sessionId,
+          resume: {
+            kind: 'direct_route',
+            payload: {
+              type: 'coding_backend_run',
+              task: delegatedTask,
+              backendId,
+              codeSessionId: effectiveCodeContext?.sessionId,
+              workspaceRoot: effectiveCodeContext?.workspaceRoot,
+            },
+          },
         },
       );
+      this.recordIntentRoutingTrace('direct_intent_response', {
+        message,
+        contentPreview: 'pending_action_stored',
+        details: {
+          candidate: 'coding_backend_diagnostic',
+          toolApprovalId: approvalId || null,
+          pendingIds,
+          pendingActionId: pendingActionResult.action?.id || null,
+          pendingActionApprovalIds: pendingActionResult.action?.blocker?.approvalIds ?? null,
+          pendingActionResumeKind: pendingActionResult.action?.resume?.kind ?? null,
+          pendingActionResumePayloadType: (pendingActionResult.action?.resume?.payload as { type?: string } | undefined)?.type ?? null,
+          pendingActionScope: pendingActionResult.action?.scope ?? null,
+          collision: !!pendingActionResult.collisionPrompt,
+        },
+      });
       const content = pendingActionResult.collisionPrompt ?? prompt;
       return {
         content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
@@ -6076,17 +6183,23 @@ type DirectIntentShadowCandidate =
 
     const runResult = isRecord(result.output) ? result.output : null;
     const backendName = toString(runResult?.backendName) || backendId;
+    const assistantResponse = toString(runResult?.assistantResponse)?.trim();
     const backendOutput = toString(runResult?.output)?.trim();
     const sessionId = effectiveCodeContext?.sessionId || toString(runResult?.codeSessionId);
 
     const metadata: Record<string, unknown> = {
       codingBackendDelegated: true,
       codingBackendId: backendId,
+      responseSource: buildCodingBackendResponseSource({
+        backendId,
+        backendName,
+        durationMs: toNumber(runResult?.durationMs) ?? undefined,
+      }),
       ...(switchResponseMetadata ?? {}),
       ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
     };
 
-    const content = backendOutput || `${backendName} completed successfully.`;
+    const content = assistantResponse || backendOutput || `${backendName} completed successfully.`;
     if (toBoolean(result.success)) {
       return {
         content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
@@ -6196,6 +6309,34 @@ type DirectIntentShadowCandidate =
 
   private isResponseDegraded(content: string | undefined): boolean {
     return _isResponseDegraded(content);
+  }
+
+  private isIntermediateStatusResponse(content: string | undefined): boolean {
+    return _isIntermediateStatusResponse(content);
+  }
+
+  private shouldRetryIntermediateStatusCorrection(
+    content: string,
+    context: {
+      hasToolResults: boolean;
+      hasAnswerFirstContract: boolean;
+      hasToolExecutionContract: boolean;
+    },
+  ): boolean {
+    if (!this.isIntermediateStatusResponse(content)) {
+      return false;
+    }
+    return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
+  }
+
+  private buildIntermediateStatusCorrectionPrompt(): string {
+    return [
+      'System correction: your previous reply was an intermediate progress update, not a completed response.',
+      'Continue the same request now.',
+      'If more tool calls are required, call them now instead of narrating what you will do next.',
+      'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
+      'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
+    ].join(' ');
   }
 
   private shouldRetryPolicyUpdateCorrection(
@@ -7179,17 +7320,23 @@ type DirectIntentShadowCandidate =
       return preRouted;
     }
     if (!ctx.llm) return preRouted ?? null;
+    const gatewayContext = filterIntentGatewayClassificationContextHelper({
+      content: message.content,
+      recentHistory: options?.recentHistory,
+      pendingAction: options?.pendingAction ?? null,
+      continuityThread: options?.continuityThread ?? null,
+    });
     const classified = await this.intentGateway.classify(
       {
         content: stripLeadingContextPrefix(message.content),
         channel: message.channel,
-        recentHistory: options?.recentHistory,
-        pendingAction: options?.pendingAction
-          ? summarizePendingActionForGateway(options.pendingAction)
+        recentHistory: gatewayContext.recentHistory,
+        pendingAction: gatewayContext.pendingAction
+          ? summarizePendingActionForGateway(gatewayContext.pendingAction)
           : null,
-        continuity: summarizeContinuityThreadForGateway(options?.continuityThread),
+        continuity: summarizeContinuityThreadForGateway(gatewayContext.continuityThread),
         enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
-        availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
+        availableCodingBackends: this.tools?.listEnabledCodingBackends?.() ?? [],
       },
       (messages, options) => this.chatWithFallback(
         ctx,
@@ -7218,12 +7365,19 @@ type DirectIntentShadowCandidate =
             entitySources: classified.decision.provenance?.entities,
             emailProvider: classified.decision.entities.emailProvider,
             codingBackend: classified.decision.entities.codingBackend,
-            continuityKey: options?.continuityThread?.continuityKey,
+            continuityKey: gatewayContext.continuityThread?.continuityKey,
+            pendingActionContextSuppressed: gatewayContext.contextSuppressed,
+            pendingActionContextSuppressionReason: gatewayContext.suppressionReason,
             latencyMs: classified.latencyMs,
             model: classified.model,
             rawResponsePreview: classified.rawResponsePreview,
           }
-        : { source: 'agent', available: false },
+        : {
+            source: 'agent',
+            available: false,
+            pendingActionContextSuppressed: gatewayContext.contextSuppressed,
+            pendingActionContextSuppressionReason: gatewayContext.suppressionReason,
+          },
     });
     return classified;
   }
@@ -8426,6 +8580,11 @@ type DirectIntentShadowCandidate =
         resume,
         approvalResult,
       ),
+      executeStoredCodingBackendRun: (nextPendingAction, resume, approvalResult) => this.executeStoredCodingBackendRun(
+        nextPendingAction,
+        resume,
+        approvalResult,
+      ),
     });
   }
 
@@ -8591,6 +8750,50 @@ type DirectIntentShadowCandidate =
         fallbackContent,
       ),
     });
+  }
+
+  private async executeStoredCodingBackendRun(
+    _pendingAction: PendingActionRecord,
+    resume: import('./runtime/chat-agent/direct-route-resume.js').CodingBackendRunResumePayload,
+    approvalResult?: ToolApprovalDecisionResult,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    if (!approvalResult || !approvalResult.approved) {
+      const backendName = resume.backendId || 'the coding backend';
+      return { content: `The delegated run for ${backendName} was not approved.` };
+    }
+
+    const runResult = isRecord(approvalResult.result?.output) ? approvalResult.result!.output : null;
+    const backendName = toString(runResult?.backendName) || resume.backendId || 'Coding backend';
+    const assistantResponse = toString(runResult?.assistantResponse)?.trim();
+    const backendOutput = toString(runResult?.output)?.trim();
+    const executionMessage = toString(approvalResult.result?.message)?.trim();
+    const executionError = toString(approvalResult.result?.error)?.trim();
+    const sessionId = resume.codeSessionId || toString(runResult?.codeSessionId);
+
+    const metadata: Record<string, unknown> = {
+      codingBackendDelegated: true,
+      codingBackendId: resume.backendId,
+      responseSource: buildCodingBackendResponseSource({
+        backendId: resume.backendId,
+        backendName,
+        durationMs: toNumber(runResult?.durationMs) ?? undefined,
+      }),
+      ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
+    };
+
+    const content = assistantResponse || backendOutput || `${backendName} completed successfully.`;
+    if (approvalResult.executionSucceeded !== false && (toBoolean(runResult?.success) || !runResult)) {
+      return { content, metadata };
+    }
+
+    const failureMessage = assistantResponse
+      || backendOutput
+      || executionError
+      || executionMessage
+      || approvalResult.message.trim()
+      || toString(runResult?.message)
+      || `${backendName} could not complete the requested task.`;
+    return { content: failureMessage, metadata };
   }
 
   private async executeStoredSecondBrainMutation(

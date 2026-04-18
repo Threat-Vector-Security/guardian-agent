@@ -46,4 +46,20 @@ describe('matchesRunTimelineRequest', () => {
       },
     )).toBe(true);
   });
+
+  it('matches delegated child runs through parentRunId when the originating request is active', () => {
+    expect(matchesRunTimelineRequest(
+      {
+        summary: {
+          runId: 'delegated-task:job-1',
+          parentRunId: 'req-2',
+          codeSessionId: 'session-1',
+        },
+      },
+      {
+        requestId: 'req-2',
+        codeSessionId: 'session-1',
+      },
+    )).toBe(true);
+  });
 });

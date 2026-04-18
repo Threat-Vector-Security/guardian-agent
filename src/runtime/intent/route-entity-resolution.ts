@@ -1,4 +1,5 @@
 import {
+  areEquivalentSessionTargets,
   cleanInferredSessionTarget,
   extractCodingWorkspaceTarget,
   extractExplicitRemoteExecCommand,
@@ -107,20 +108,43 @@ export function resolveIntentGatewayEntities(
     ? parsed.path.trim()
     : undefined;
   if (path) provenance.path = classifierSource;
-  const sessionTarget = cleanInferredSessionTarget(
+  const extractedSessionTarget = rawSourceContent && (route === 'coding_task' || route === 'coding_session_control')
+    ? extractCodingWorkspaceTarget(rawSourceContent)
+    : undefined;
+  const parsedSessionTarget = cleanInferredSessionTarget(
     typeof parsed.sessionTarget === 'string'
       ? parsed.sessionTarget
-      : (
-        inferredCodingBackendRequest?.sessionTarget
-        ?? (
-          rawSourceContent && (route === 'coding_task' || route === 'coding_session_control')
-            ? extractCodingWorkspaceTarget(rawSourceContent)
+      : undefined,
+  );
+  const derivedCodingTaskSessionTarget = extractedSessionTarget ?? inferredCodingBackendRequest?.sessionTarget;
+  const preferredCodingTaskParsedSessionTarget = parsedSessionTarget
+    && derivedCodingTaskSessionTarget
+    && parsedSessionTarget.length > derivedCodingTaskSessionTarget.length
+    && areEquivalentSessionTargets(parsedSessionTarget, derivedCodingTaskSessionTarget)
+      ? parsedSessionTarget
+      : undefined;
+  const sessionTargetSource = route === 'coding_session_control'
+    ? (parsedSessionTarget ? 'classifier' : extractedSessionTarget ? 'resolver' : undefined)
+    : (
+      preferredCodingTaskParsedSessionTarget
+        ? 'classifier'
+        : derivedCodingTaskSessionTarget
+          ? 'resolver'
+          : !rawSourceContent && parsedSessionTarget
+            ? 'classifier'
             : undefined
-        )
+    );
+  const sessionTarget = cleanInferredSessionTarget(
+    route === 'coding_session_control'
+      ? (parsedSessionTarget ?? extractedSessionTarget)
+      : (
+        preferredCodingTaskParsedSessionTarget
+        ?? derivedCodingTaskSessionTarget
+        ?? (!rawSourceContent ? parsedSessionTarget : undefined)
       ),
   );
-  if (sessionTarget) {
-    provenance.sessionTarget = typeof parsed.sessionTarget === 'string'
+  if (sessionTarget && sessionTargetSource) {
+    provenance.sessionTarget = sessionTargetSource === 'classifier'
       ? classifierSource
       : 'resolver.coding';
   }

@@ -79,6 +79,24 @@ async function waitForHealth(baseUrl) {
   throw new Error('GuardianAgent did not become healthy within 30 seconds.');
 }
 
+function createIsolatedHarnessEnv(tmpDir, extraEnv = {}) {
+  const appData = path.join(tmpDir, 'AppData', 'Roaming');
+  const localAppData = path.join(tmpDir, 'AppData', 'Local');
+  fs.mkdirSync(appData, { recursive: true });
+  fs.mkdirSync(localAppData, { recursive: true });
+  return {
+    ...process.env,
+    HOME: tmpDir,
+    USERPROFILE: tmpDir,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: tmpDir,
+    XDG_DATA_HOME: tmpDir,
+    XDG_CACHE_HOME: tmpDir,
+    ...extraEnv,
+  };
+}
+
 async function waitFor(predicate, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -180,8 +198,18 @@ async function resolveHarnessProvider(options) {
 }
 
 function resolveBrowserExecutable() {
+  const windowsCandidates = [
+    process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env['PROGRAMFILES(X86)'] ? path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+    process.env['PROGRAMFILES(X86)'] ? path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+  ];
   const candidates = [
     process.env.HARNESS_CHROME_BIN,
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    ...windowsCandidates,
     '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium',
@@ -349,13 +377,9 @@ guardian:
     appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        HOME: tmpDir,
-        ...(options.useRealOllama && options.bypassLocalModelComplexityGuard
-          ? { GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1' }
-          : {}),
-      },
+      env: createIsolatedHarnessEnv(tmpDir, options.useRealOllama && options.bypassLocalModelComplexityGuard
+        ? { GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1' }
+        : {}),
     });
     appProcess.stdout.pipe(fs.createWriteStream(logPath));
     appProcess.stderr.pipe(fs.createWriteStream(`${logPath}.err`));

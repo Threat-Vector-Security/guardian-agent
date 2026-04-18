@@ -45,7 +45,11 @@ import {
   prepareToolExecutionForIntent,
 } from '../runtime/routed-tool-execution.js';
 import { readApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
-import { runLlmLoop } from './worker-llm-loop.js';
+import {
+  buildWorkerExecutionMetadata,
+  type WorkerExecutionSource,
+} from '../runtime/worker-execution-metadata.js';
+import { runLlmLoop, type LlmLoopOutcome } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -177,6 +181,7 @@ export interface WorkerMessageHandleParams {
 function buildApprovalPendingActionMetadata(
   approvals: PendingApprovalMetadata[],
   responseSource?: ResponseSourceMetadata,
+  source: WorkerExecutionSource = 'tool_loop',
 ): Record<string, unknown> {
   return {
     pendingAction: {
@@ -188,8 +193,35 @@ function buildApprovalPendingActionMetadata(
       },
     },
     continueConversationAfterApproval: true,
+    ...buildWorkerExecutionMetadata({
+      lifecycle: 'blocked',
+      source,
+      completionReason: 'approval_pending',
+      responseQuality: 'final',
+      blockerKind: 'approval',
+      pendingApprovalCount: approvals.length,
+    }),
     ...(responseSource ? { responseSource } : {}),
   };
+}
+
+function buildToolLoopExecutionMetadata(
+  outcome: LlmLoopOutcome,
+  options?: { phantomApproval?: boolean },
+): Record<string, unknown> {
+  const phantomApproval = options?.phantomApproval === true;
+  const lifecycle = phantomApproval || outcome.responseQuality !== 'final'
+    ? 'failed'
+    : 'completed';
+  return buildWorkerExecutionMetadata({
+    lifecycle,
+    source: 'tool_loop',
+    completionReason: phantomApproval ? 'phantom_approval_response' : outcome.completionReason,
+    responseQuality: phantomApproval ? 'degraded' : outcome.responseQuality,
+    roundCount: outcome.roundCount,
+    toolCallCount: outcome.toolCallCount,
+    toolResultCount: outcome.toolResultCount,
+  });
 }
 
 function buildExecutionProfileResponseSource(
@@ -364,6 +396,21 @@ function buildPlannerExecutionMetadata(
   };
 }
 
+function buildPlannerWorkerExecutionMetadata(
+  status: 'completed' | 'failed' | 'unsupported_actions',
+): Record<string, unknown> {
+  return buildWorkerExecutionMetadata({
+    lifecycle: status === 'completed' ? 'completed' : 'failed',
+    source: 'planner',
+    completionReason: status === 'completed'
+      ? 'planner_completed'
+      : status === 'failed'
+        ? 'planner_failed'
+        : 'unsupported_actions',
+    responseQuality: 'final',
+  });
+}
+
 function buildPlannerExecutionResponse(
   plan: ExecutionPlan,
   status: 'completed' | 'failed' | 'unsupported_actions',
@@ -414,6 +461,25 @@ function buildPlannerExecutionResponse(
     content: lines.join('\n'),
     metadata: {
       ...buildPlannerExecutionMetadata(plan, status, options),
+      ...buildPlannerWorkerExecutionMetadata(status),
+      ...(responseSource ? { responseSource } : {}),
+    },
+  };
+}
+
+function buildPlannerFailureResponse(
+  content: string,
+  responseSource?: ResponseSourceMetadata,
+): { content: string; metadata?: Record<string, unknown> } {
+  return {
+    content,
+    metadata: {
+      ...buildWorkerExecutionMetadata({
+        lifecycle: 'failed',
+        source: 'planner',
+        completionReason: 'planner_generation_failed',
+        responseQuality: 'final',
+      }),
       ...(responseSource ? { responseSource } : {}),
     },
   };
@@ -701,10 +767,10 @@ export class BrokeredWorkerSession {
     );
     const plan = await planner.plan(message.content, decision || undefined);
     if (!plan) {
-      return {
-        content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.',
-        ...(responseSource ? { metadata: { responseSource } } : {}),
-      };
+      return buildPlannerFailureResponse(
+        'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.',
+        responseSource,
+      );
     }
 
     const unsupportedActions = [...new Set(
@@ -748,9 +814,7 @@ export class BrokeredWorkerSession {
         content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: pendingApprovalMeta.length > 0
-          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
-          : (responseSource ? { responseSource } : undefined),
+        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
       };
     }
 
@@ -1042,9 +1106,13 @@ export class BrokeredWorkerSession {
         message.principalRole ?? 'owner',
       );
       results.push(decided.message);
-      approvedAny ||= decided.success && decision === 'approved';
-      if (decision === 'approved' && decided.success) approvedIds.add(approvalId);
-      if (!decided.success) failedIds.add(approvalId);
+      const approvalGranted = decision === 'approved' && (decided.approved ?? decided.success);
+      const executionFailed = approvalGranted && decided.executionSucceeded === false;
+      approvedAny ||= approvalGranted;
+      if (approvalGranted) approvedIds.add(approvalId);
+      if (!decided.success || executionFailed || (decision === 'approved' && !approvalGranted)) {
+        failedIds.add(approvalId);
+      }
     }
 
     if (decision === 'approved' && approvedAny && this.suspendedSession) {
@@ -1055,20 +1123,25 @@ export class BrokeredWorkerSession {
     if (this.automationContinuation) {
       const affected = targetIds.filter((id) => this.automationContinuation?.pendingApprovalIds.includes(id));
       if (decision === 'approved' && affected.length > 0) {
-        const stillPending = this.automationContinuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
+        const resolvedIds = new Set(affected.filter((id) => approvedIds.has(id) || failedIds.has(id)));
+        const stillPending = this.automationContinuation.pendingApprovalIds.filter((id) => !resolvedIds.has(id));
         if (stillPending.length === 0) {
-          const originalMessage = this.automationContinuation.originalMessage;
-          this.automationContinuation = null;
-          const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor, {
-            assumeAuthoring: true,
-          });
-          if (retry) {
-            results.push('');
-            results.push(retry.content);
-            return {
-              content: results.join('\n'),
-              metadata: retry.metadata,
-            };
+          if (affected.some((id) => failedIds.has(id))) {
+            this.automationContinuation = null;
+          } else {
+            const originalMessage = this.automationContinuation.originalMessage;
+            this.automationContinuation = null;
+            const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor, {
+              assumeAuthoring: true,
+            });
+            if (retry) {
+              results.push('');
+              results.push(retry.content);
+              return {
+                content: results.join('\n'),
+                metadata: retry.metadata,
+              };
+            }
           }
         } else {
           this.automationContinuation = {
@@ -1203,9 +1276,7 @@ export class BrokeredWorkerSession {
         content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: pendingApprovalMeta.length > 0
-          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
-          : (responseSource ? { responseSource } : undefined),
+        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
       };
     }
 
@@ -1528,7 +1599,11 @@ export class BrokeredWorkerSession {
         preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills),
         answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, stripLeadingContextPrefix(message.content)),
         answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, stripLeadingContextPrefix(message.content)),
-        answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(params.activeSkills, content),
+        answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(
+          params.activeSkills,
+          content,
+          stripLeadingContextPrefix(message.content),
+        ),
         toolExecutionCorrectionPrompt,
       },
     );
@@ -1555,19 +1630,21 @@ export class BrokeredWorkerSession {
         content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: pendingApprovalMeta.length > 0
-          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
-          : undefined,
+        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource),
       };
     }
 
     this.pendingApprovals = null;
     this.suspendedSession = null;
+    const phantomApproval = isPhantomPendingApprovalMessage(result.finalContent);
     return {
-      content: isPhantomPendingApprovalMessage(result.finalContent)
+      content: phantomApproval
         ? 'I did not create a real approval request for that action. Please try again.'
         : result.finalContent,
-      metadata: responseSource ? { responseSource } : undefined,
+      metadata: {
+        ...buildToolLoopExecutionMetadata(result.outcome, { phantomApproval }),
+        ...(responseSource ? { responseSource } : {}),
+      },
     };
   }
 

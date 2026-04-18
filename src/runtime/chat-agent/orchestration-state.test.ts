@@ -210,6 +210,150 @@ describe('ChatAgentOrchestrationState', () => {
     expect(pendingAction?.resume?.kind).toBe('direct_route');
   });
 
+  it('preserves a cross-scope approval pending action when scoped lookup misses it but the executor still reports it pending globally', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = createStore(nowMs);
+    const created = store.replaceActive(
+      {
+        agentId: 'assistant',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt: 'Approve the Codex run.',
+          approvalIds: ['approval-codesession-1'],
+        },
+        intent: {
+          route: 'coding_task',
+          operation: 'update',
+          originalUserContent: 'Use Codex in this coding workspace to inspect README.md.',
+        },
+        resume: {
+          kind: 'direct_route',
+          payload: {
+            type: 'coding_backend_run',
+            backendId: 'codex',
+          },
+        },
+        codeSessionId: 'code-session-1',
+        expiresAt: nowMs + 30 * 60_000,
+      },
+    );
+
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      pendingActionStore: store,
+      tools: {
+        listPendingApprovalIdsForUser: () => [],
+        listApprovals: () => [{ id: 'approval-codesession-1' } as any],
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const pendingAction = state.getActivePendingAction(
+      'owner',
+      'web',
+      'web-guardian-chat',
+      nowMs + 1,
+    );
+
+    expect(pendingAction?.id).toBe(created.id);
+    expect(store.findActiveByApprovalId('approval-codesession-1')?.id).toBe(created.id);
+  });
+
+  it('does not clear a cross-scope approval pending action when sync receives an empty scoped approval list', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = createStore(nowMs);
+    const created = store.replaceActive(
+      {
+        agentId: 'assistant',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt: 'Approve the Codex run.',
+          approvalIds: ['approval-codesession-1'],
+        },
+        intent: {
+          route: 'coding_task',
+          operation: 'update',
+          originalUserContent: 'Use Codex in this coding workspace to inspect README.md.',
+        },
+        expiresAt: nowMs + 30 * 60_000,
+      },
+    );
+
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      pendingActionStore: store,
+      tools: {
+        listPendingApprovalIdsForUser: () => [],
+        listApprovals: () => [{ id: 'approval-codesession-1' } as any],
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    state.setPendingApprovals(
+      'owner:web',
+      [],
+      'web-guardian-chat',
+      nowMs + 1,
+    );
+
+    expect(store.findActiveByApprovalId('approval-codesession-1')?.id).toBe(created.id);
+    expect(state.getPendingApprovalIds(
+      'owner',
+      'web',
+      'web-guardian-chat',
+      nowMs + 2,
+    )).toEqual(['approval-codesession-1']);
+  });
+
+  it('does not synthesize a new pending approval action from unrelated live approvals', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = createStore(nowMs);
+
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      pendingActionStore: store,
+      tools: {
+        listPendingApprovalIdsForUser: () => ['approval-1'],
+        getApprovalSummaries: () => new Map([
+          ['approval-1', {
+            toolName: 'code_test',
+            argsPreview: '{"command":"npm test"}',
+            actionLabel: 'run npm test',
+          }],
+        ]),
+      },
+    });
+
+    const pendingAction = state.getActivePendingAction(
+      'user-1',
+      'web',
+      'web-guardian-chat',
+      nowMs + 1,
+    );
+
+    expect(pendingAction).toBeNull();
+    expect(store.resolveActiveForSurface({
+      agentId: 'assistant',
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toBeNull();
+  });
+
   it('does not replace the last actionable request with a referential status check', () => {
     const nowMs = 1_710_000_000_000;
     const continuityStore = createContinuityStore(nowMs);

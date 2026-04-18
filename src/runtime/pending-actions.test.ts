@@ -301,6 +301,34 @@ describe('PendingActionStore', () => {
     expect(store.get(created.id)?.status).toBe('completed');
   });
 
+  it('keeps cross-scope pending approvals alive when scoped liveApprovalIds misses them but they are still pending globally', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the Codex run.',
+        approvalIds: ['approval-codesession-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'update',
+        originalUserContent: 'Use Codex to inspect README.',
+      },
+    }));
+
+    const reconciled = reconcilePendingApprovalAction(store, created, {
+      liveApprovalIds: [],
+      allPendingApprovalIds: ['approval-codesession-1'],
+      nowMs: created.updatedAt + 1,
+    });
+
+    expect(reconciled?.status).toBe('pending');
+    expect(reconciled?.id).toBe(created.id);
+    expect(store.get(created.id)?.status).toBe('pending');
+  });
+
   it('expires active records when their ttl has passed', () => {
     const nowMs = 1_710_000_000_000;
     const store = new PendingActionStore({

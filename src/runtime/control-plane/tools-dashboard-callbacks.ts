@@ -134,20 +134,25 @@ export function createToolsDashboardCallbacks(
       });
     },
 
-    onPendingActionCurrent: ({ userId, channel, surfaceId }) => {
+    onPendingActionCurrent: ({ userId, principalId, channel, surfaceId }) => {
       const { canonicalUserId, scope } = resolvePendingActionScope({ userId, channel, surfaceId });
       const pendingAction = options.pendingActionStore.resolveActiveForSurface({
         ...scope,
       });
       const liveApprovalIds = options.toolExecutor.listPendingApprovalIdsForUser(canonicalUserId, channel, {
         includeUnscoped: channel === 'web',
+        ...(principalId?.trim() ? { principalId } : { principalId: canonicalUserId }),
       });
+      const allPendingApprovalIds = options.toolExecutor
+        .listApprovals(200, 'pending')
+        .map((approval) => approval.id);
       const reconciledPendingAction = reconcilePendingApprovalAction(
         options.pendingActionStore,
         pendingAction,
         {
           liveApprovalIds,
           liveApprovalSummaries: options.toolExecutor.getApprovalSummaries(liveApprovalIds),
+          allPendingApprovalIds,
           scope,
         },
       );

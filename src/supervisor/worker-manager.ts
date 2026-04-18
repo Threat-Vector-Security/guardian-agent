@@ -38,6 +38,7 @@ import type { SelectedExecutionProfile } from '../runtime/execution-profiles.js'
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
+import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 
 const log = createLogger('worker-manager');
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
@@ -209,8 +210,10 @@ export class WorkerManager {
         delegation: buildDelegationJobMetadata(input, { lifecycle: 'running', target: delegatedTarget }),
       },
     });
+    const delegatedTaskRunId = buildDelegatedTaskRunId(delegatedJob.id);
     this.recordDelegatedWorkerTrace('delegated_worker_started', input, delegatedTarget, {
       requestId,
+      taskRunId: delegatedTaskRunId,
       lifecycle: 'running',
       reason: delegatedJobDetail,
     });
@@ -218,6 +221,7 @@ export class WorkerManager {
       id: `delegated-worker:${delegatedJob.id}:started`,
       kind: 'started',
       requestId,
+      taskRunId: delegatedTaskRunId,
       detail: delegatedJobDetail,
     });
     this.runtime.auditLog.record({
@@ -255,6 +259,7 @@ export class WorkerManager {
       });
       this.recordDelegatedWorkerTrace('delegated_worker_running', input, delegatedTarget, {
         requestId,
+        taskRunId: delegatedTaskRunId,
         lifecycle: 'running',
         workerId: worker.id,
         reason: `Worker ${worker.id} is processing the delegated request.`,
@@ -263,6 +268,7 @@ export class WorkerManager {
         id: `delegated-worker:${delegatedJob.id}:running`,
         kind: 'running',
         requestId,
+        taskRunId: delegatedTaskRunId,
         workerId: worker.id,
         detail: buildDelegatedWorkerRunningDetail(worker.id, input.delegation?.codeSessionId),
       });
@@ -287,6 +293,7 @@ export class WorkerManager {
         hasFallbackProvider,
       });
       const handoff = buildDelegatedHandoff(result.content, result.metadata, input.delegation?.runClass);
+      const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind);
       const normalizedResult = applyDelegatedFollowUpPolicy(result, handoff);
       if (handoff.reportingMode === 'held_for_operator') {
         this.delegatedFollowUpPayloads.set(delegatedJob.id, {
@@ -298,11 +305,68 @@ export class WorkerManager {
       } else {
         this.delegatedFollowUpPayloads.delete(delegatedJob.id);
       }
+      if (lifecycle === 'failed') {
+        this.delegatedJobTracker.fail(delegatedJob.id, new Error(handoff.summary), {
+          detail: handoff.summary,
+          metadata: {
+            delegation: buildDelegationJobMetadata(input, {
+              lifecycle,
+              workerId: worker.id,
+              handoff,
+              target: delegatedTarget,
+            }),
+          },
+        });
+        this.recordDelegatedWorkerTrace('delegated_worker_failed', input, delegatedTarget, {
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          lifecycle,
+          workerId: worker.id,
+          unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+          approvalCount: handoff.approvalCount,
+          reportingMode: handoff.reportingMode,
+          runClass: handoff.runClass,
+          reason: handoff.summary,
+        });
+        this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+          id: `delegated-worker:${delegatedJob.id}:failed`,
+          kind: 'failed',
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          workerId: worker.id,
+          runClass: handoff.runClass,
+          unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+          approvalCount: handoff.approvalCount,
+          reportingMode: handoff.reportingMode,
+          detail: handoff.summary,
+        });
+        this.runtime.auditLog.record({
+          type: 'broker_action',
+          severity: 'warn',
+          agentId: input.agentId,
+          userId: input.userId,
+          channel: input.message.channel,
+          controller: 'WorkerManager',
+          details: {
+            actionType: 'delegated_worker_failed',
+            sessionId: input.sessionId,
+            requestId,
+            continuityKey: input.delegation?.continuityKey,
+            codeSessionId: input.delegation?.codeSessionId,
+            unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+            approvalCount: handoff.approvalCount,
+            reportingMode: handoff.reportingMode,
+            reason: handoff.summary,
+          },
+        });
+        return normalizedResult;
+      }
+
       this.delegatedJobTracker.succeed(delegatedJob.id, {
         detail: handoff.summary,
         metadata: {
           delegation: buildDelegationJobMetadata(input, {
-            lifecycle: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
+            lifecycle,
             workerId: worker.id,
             handoff,
             target: delegatedTarget,
@@ -311,28 +375,30 @@ export class WorkerManager {
       });
       this.recordDelegatedWorkerTrace('delegated_worker_completed', input, delegatedTarget, {
         requestId,
-        lifecycle: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
+        taskRunId: delegatedTaskRunId,
+        lifecycle,
         workerId: worker.id,
         unresolvedBlockerKind: handoff.unresolvedBlockerKind,
         approvalCount: handoff.approvalCount,
         reportingMode: handoff.reportingMode,
         runClass: handoff.runClass,
-        reason: handoff.unresolvedBlockerKind ? handoff.nextAction : 'Delegated worker completed.',
+        reason: lifecycle === 'blocked' ? handoff.nextAction : 'Delegated worker completed.',
       });
       this.publishDelegatedWorkerProgress(input, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:completed`,
-        kind: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
+        kind: lifecycle === 'blocked' ? 'blocked' : 'completed',
         requestId,
+        taskRunId: delegatedTaskRunId,
         workerId: worker.id,
         runClass: handoff.runClass,
         unresolvedBlockerKind: handoff.unresolvedBlockerKind,
         approvalCount: handoff.approvalCount,
         reportingMode: handoff.reportingMode,
-        detail: handoff.unresolvedBlockerKind ? handoff.nextAction : handoff.summary,
+        detail: lifecycle === 'blocked' ? handoff.nextAction : handoff.summary,
       });
       this.runtime.auditLog.record({
         type: 'broker_action',
-        severity: handoff.unresolvedBlockerKind ? 'warn' : 'info',
+        severity: lifecycle === 'blocked' ? 'warn' : 'info',
         agentId: input.agentId,
         userId: input.userId,
         channel: input.message.channel,
@@ -365,6 +431,7 @@ export class WorkerManager {
       });
       this.recordDelegatedWorkerTrace('delegated_worker_failed', input, delegatedTarget, {
         requestId,
+        taskRunId: delegatedTaskRunId,
         lifecycle: 'failed',
         reason: error instanceof Error ? error.message : String(error),
       });
@@ -372,6 +439,7 @@ export class WorkerManager {
         id: `delegated-worker:${delegatedJob.id}:failed`,
         kind: 'failed',
         requestId,
+        taskRunId: delegatedTaskRunId,
         detail: error instanceof Error ? error.message : String(error),
       });
       this.runtime.auditLog.record({
@@ -403,6 +471,7 @@ export class WorkerManager {
     target: ResolvedDelegatedTargetMetadata,
     options: {
       requestId: string;
+      taskRunId?: string;
       lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
       workerId?: string;
       unresolvedBlockerKind?: string;
@@ -429,6 +498,7 @@ export class WorkerManager {
         ...(target.agentName ? { agentName: target.agentName } : {}),
         ...(target.orchestration?.role ? { orchestrationRole: target.orchestration.role } : {}),
         ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
+        ...(options.taskRunId ? { taskRunId: options.taskRunId } : {}),
         ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
         ...(options.workerId ? { workerId: options.workerId } : {}),
         ...(options.unresolvedBlockerKind ? { unresolvedBlockerKind: options.unresolvedBlockerKind } : {}),
@@ -443,11 +513,12 @@ export class WorkerManager {
   private publishDelegatedWorkerProgress(
     input: WorkerMessageRequest,
     target: ResolvedDelegatedTargetMetadata,
-    event: Omit<DelegatedWorkerProgressEvent, 'agentId' | 'agentName' | 'orchestrationLabel' | 'originChannel' | 'requestPreview' | 'continuityKey' | 'activeExecutionRefs' | 'codeSessionId' | 'timestamp' | 'runId'>,
+    event: Omit<DelegatedWorkerProgressEvent, 'agentId' | 'agentName' | 'orchestrationLabel' | 'originChannel' | 'requestPreview' | 'continuityKey' | 'activeExecutionRefs' | 'codeSessionId' | 'timestamp' | 'runId' | 'parentRunId'>,
   ): void {
     this.observability.runTimeline?.ingestDelegatedWorkerProgress({
       ...event,
       runId: event.requestId,
+      parentRunId: event.requestId,
       codeSessionId: input.delegation?.codeSessionId,
       agentId: target.agentId,
       ...(target.agentName ? { agentName: target.agentName } : {}),
@@ -574,8 +645,12 @@ export class WorkerManager {
         input.message.principalId ?? input.message.userId,
         input.message.principalRole ?? 'owner',
       );
-      if (decision === 'approved' && decided.success) approvedIds.add(approvalId);
-      if (!decided.success) failedIds.add(approvalId);
+      const approvalGranted = decision === 'approved' && (decided.approved ?? decided.success);
+      const executionFailed = approvalGranted && decided.executionSucceeded === false;
+      if (approvalGranted) approvedIds.add(approvalId);
+      if (!decided.success || executionFailed || (decision === 'approved' && !approvalGranted)) {
+        failedIds.add(approvalId);
+      }
       results.push(decided.message);
     }
 
@@ -584,19 +659,24 @@ export class WorkerManager {
     if (continuation) {
       const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
       if (decision === 'approved' && affected.length > 0) {
-        const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
+        const resolvedIds = new Set(affected.filter((id) => approvedIds.has(id) || failedIds.has(id)));
+        const stillPending = continuation.pendingApprovalIds.filter((id) => !resolvedIds.has(id));
         if (stillPending.length === 0) {
-          this.directAutomationContinuations.delete(input.sessionId);
-          const retry = await this.tryDirectAutomationAuthoring({
-            ...continuation.request,
-          });
-          if (retry) {
-            results.push('');
-            results.push(retry.content);
-            return {
-              content: results.join('\n'),
-              metadata: retry.metadata,
-            };
+          if (affected.some((id) => failedIds.has(id))) {
+            this.directAutomationContinuations.delete(input.sessionId);
+          } else {
+            this.directAutomationContinuations.delete(input.sessionId);
+            const retry = await this.tryDirectAutomationAuthoring({
+              ...continuation.request,
+            });
+            if (retry) {
+              results.push('');
+              results.push(retry.content);
+              return {
+                content: results.join('\n'),
+                metadata: retry.metadata,
+              };
+            }
           }
         } else {
           this.directAutomationContinuations.set(input.sessionId, {
@@ -1374,12 +1454,21 @@ function describeDelegatedJob(input: WorkerMessageRequest): string {
   return codeSessionId ? `${base} in code session ${codeSessionId}` : base;
 }
 
+function buildDelegatedTaskRunId(jobId: string): string {
+  const normalized = String(jobId || '').trim();
+  return normalized ? `delegated-task:${normalized}` : `delegated-task:${randomUUID()}`;
+}
+
 function buildDelegatedWorkerRunningDetail(workerId: string, codeSessionId?: string): string {
   const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
   return `Worker ${workerId} is processing the delegated request${sessionSuffix}.`;
 }
 
 function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined): number {
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (typeof workerExecution?.pendingApprovalCount === 'number') {
+    return workerExecution.pendingApprovalCount;
+  }
   const pendingAction = metadata?.pendingAction;
   if (!isRecord(pendingAction) || !isRecord(pendingAction.blocker) || !Array.isArray(pendingAction.blocker.approvalSummaries)) {
     return 0;
@@ -1388,10 +1477,50 @@ function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined)
 }
 
 function readPendingActionKind(metadata: Record<string, unknown> | undefined): string | undefined {
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (workerExecution?.blockerKind?.trim()) {
+    return workerExecution.blockerKind.trim();
+  }
   const pendingAction = metadata?.pendingAction;
   if (!isRecord(pendingAction) || !isRecord(pendingAction.blocker)) return undefined;
   const kind = pendingAction.blocker.kind;
   return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined;
+}
+
+function resolveDelegatedWorkerLifecycle(
+  metadata: Record<string, unknown> | undefined,
+  unresolvedBlockerKind?: string,
+): 'completed' | 'blocked' | 'failed' {
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (workerExecution?.lifecycle) {
+    return workerExecution.lifecycle;
+  }
+  return unresolvedBlockerKind ? 'blocked' : 'completed';
+}
+
+function buildDelegatedFailureSummary(
+  content: string,
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (!workerExecution || workerExecution.lifecycle !== 'failed') {
+    return undefined;
+  }
+  if (workerExecution.completionReason === 'phantom_approval_response') {
+    return 'Delegated worker claimed approval was required without creating a real approval request.';
+  }
+  if (workerExecution.completionReason === 'intermediate_response' || workerExecution.responseQuality === 'intermediate') {
+    return 'Delegated worker returned a progress update instead of a terminal result.';
+  }
+  if (
+    workerExecution.completionReason === 'degraded_response'
+    || workerExecution.completionReason === 'empty_response_fallback'
+    || workerExecution.responseQuality === 'degraded'
+  ) {
+    return 'Delegated worker did not produce a usable terminal result.';
+  }
+  const summary = truncateInlineText(content, 220);
+  return summary || 'Delegated worker failed.';
 }
 
 function buildDelegatedHandoff(
@@ -1399,11 +1528,14 @@ function buildDelegatedHandoff(
   metadata: Record<string, unknown> | undefined,
   runClassInput?: DelegatedWorkerRunClass,
 ): DelegatedWorkerHandoff {
-  const summary = truncateInlineText(content, 220) || 'Delegated worker completed.';
   const unresolvedBlockerKind = readPendingActionKind(metadata);
+  const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind);
+  const summary = buildDelegatedFailureSummary(content, metadata)
+    ?? truncateInlineText(content, 220)
+    ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
   const runClass = normalizeDelegatedRunClass(runClassInput);
-  let nextAction = 'Review the delegated result.';
+  let nextAction = 'Result returned inline to the original conversation.';
   let reportingMode: DelegatedWorkerHandoff['reportingMode'] = 'inline_response';
   let operatorState: DelegatedWorkerHandoff['operatorState'] | undefined;
 
@@ -1416,6 +1548,8 @@ function buildDelegatedHandoff(
   } else if (unresolvedBlockerKind === 'workspace_switch') {
     nextAction = 'Switch to the requested coding workspace to continue the delegated run.';
     reportingMode = 'status_only';
+  } else if (lifecycle === 'failed') {
+    nextAction = 'Inspect the delegated worker failure details before retrying.';
   } else if (runClass === 'long_running' || runClass === 'automation_owned') {
     // TODO(background-delegation-uplift): Broaden run-class adoption beyond this brokered worker path,
     // define stronger per-class follow-up defaults, and extend this from bounded held-result handling
@@ -1440,10 +1574,18 @@ function applyDelegatedFollowUpPolicy(
   result: { content: string; metadata?: Record<string, unknown> },
   handoff: DelegatedWorkerHandoff,
 ): { content: string; metadata?: Record<string, unknown> } {
+  const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind);
   const metadata: Record<string, unknown> = {
     ...(result.metadata ?? {}),
     delegatedHandoff: handoff,
   };
+
+  if (lifecycle === 'failed') {
+    return {
+      content: formatFailedDelegatedMessage(handoff),
+      metadata,
+    };
+  }
 
   if (handoff.reportingMode !== 'status_only') {
     if (handoff.reportingMode === 'held_for_operator') {
@@ -1486,6 +1628,15 @@ function formatStatusOnlyDelegatedMessage(
 function formatHeldForOperatorDelegatedMessage(handoff: DelegatedWorkerHandoff): string {
   const parts = [
     'Delegated work completed and is held for operator review.',
+    handoff.summary,
+    handoff.nextAction,
+  ].filter((value) => typeof value === 'string' && value.trim().length > 0);
+  return [...new Set(parts)].join('\n');
+}
+
+function formatFailedDelegatedMessage(handoff: DelegatedWorkerHandoff): string {
+  const parts = [
+    'Delegated work failed.',
     handoff.summary,
     handoff.nextAction,
   ].filter((value) => typeof value === 'string' && value.trim().length > 0);

@@ -140,6 +140,8 @@ When you run the Node-based harnesses from Windows PowerShell instead of WSL:
 - prefer the shared `scripts/spawn-tsx.mjs` helper when a harness needs to boot Guardian from Node; it uses the current Node binary with `--import tsx` instead of relying on shell-specific `npx` resolution
 - expect brokered cold starts to take longer than the shortest local Linux lane; a healthy Windows brokered startup can take close to 90 seconds with a fresh temp profile
 - run `npm run build` before the brokered `dist/` harnesses such as `scripts/test-brokered-isolation.mjs` and `scripts/test-brokered-approvals.mjs`
+- native-protection assertions are platform-aware: Windows-hosted runs should report `windows_defender`, while Unix/WSL-hosted fake-AV lanes typically report `clamav`
+- the synthetic `.clam-detect` marker used by some coding/security harnesses is only meant to trip the Unix fake-ClamAV lane; Windows Defender lanes should validate that the native scan completed, not that the marker was treated as a real Defender detection
 - if a temp harness directory cannot be deleted immediately on Windows because SQLite or log handles are still draining, rerun with `HARNESS_KEEP_TMP=1` and inspect the preserved logs before cleaning up manually
 
 This Codex desktop session is using Windows PowerShell, so those Windows-hosted notes apply directly here.
@@ -343,7 +345,8 @@ Recommended usage:
 - Windows-hosted smoke lane: set `HARNESS_OLLAMA_BASE_URL` to the Windows host IP because WSL loopback may not reach the Windows-bound service
 
 Isolation note:
-- brokered/security Node harnesses should spawn Guardian with an isolated temporary `HOME`/`USERPROFILE`/`XDG_*` directory so runtime SQLite files, routing traces, and other operator-local state do not contaminate the test lane
+- brokered, security, and browser-smoke Node harnesses should spawn Guardian with an isolated temporary `HOME`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/`XDG_*` directory so runtime SQLite files, routing traces, and other operator-local state do not contaminate the test lane
+- Playwright browser-smoke harnesses should prefer `HARNESS_CHROME_BIN` when it is set, then probe common Linux Chrome/Chromium and Windows Chrome/Edge install paths before falling back to Playwright's default executable resolution
 
 The WSL-local smoke lane is intentionally on-demand. The harness will spin up `ollama serve` only when needed and stop it when the test exits, so it does not consume resources between runs.
 

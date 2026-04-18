@@ -53,6 +53,14 @@ function buildMatchedRunHref(
   return `${kind === 'automation_run' ? '#/automations' : '#/system'}?${params.toString()}`;
 }
 
+function readRoutingTraceTaskRunId(entry: { details?: unknown }): string | undefined {
+  if (!entry.details || typeof entry.details !== 'object' || Array.isArray(entry.details)) {
+    return undefined;
+  }
+  const taskRunId = (entry.details as { taskRunId?: unknown }).taskRunId;
+  return typeof taskRunId === 'string' && taskRunId.trim().length > 0 ? taskRunId.trim() : undefined;
+}
+
 export function createAssistantDashboardCallbacks(
   options: AssistantDashboardCallbackOptions,
 ): AssistantDashboardCallbacks {
@@ -114,13 +122,14 @@ export function createAssistantDashboardCallbacks(
       return options.runtime.workerManager.applyJobFollowUpAction(jobId, action);
     },
 
-    onAssistantRuns: ({ limit, status, kind, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {
+    onAssistantRuns: ({ limit, status, kind, parentRunId, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {
       options.refreshRunTimelineSnapshots();
       return {
         runs: options.runTimeline.listRuns({
           limit,
           ...(status ? { status } : {}),
           ...(kind ? { kind } : {}),
+          ...(parentRunId ? { parentRunId } : {}),
           ...(channel ? { channel } : {}),
           ...(agentId ? { agentId } : {}),
           ...(codeSessionId ? { codeSessionId } : {}),
@@ -141,7 +150,8 @@ export function createAssistantDashboardCallbacks(
         ...(userId ? { userId } : {}),
         ...(requestId ? { requestId } : {}),
       })).map((entry) => {
-        const matchedRun = entry.requestId ? options.runTimeline.getRun(entry.requestId) : null;
+        const matchedRunId = readRoutingTraceTaskRunId(entry) ?? entry.requestId ?? undefined;
+        const matchedRun = matchedRunId ? options.runTimeline.getRun(matchedRunId) : null;
         const codeSessionId = matchedRun?.summary.codeSessionId?.trim();
         const focusItem = matchedRun ? pickRoutingTraceFocusItem(entry, matchedRun) : null;
         return {

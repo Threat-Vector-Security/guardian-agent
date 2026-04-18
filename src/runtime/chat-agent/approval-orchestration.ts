@@ -117,13 +117,17 @@ export function syncPendingApprovalsFromExecutor(input: {
     },
   );
   const userKey = `${input.targetUserId}:${input.targetChannel}`;
+  const active = input.getPendingApprovalAction(input.targetUserId, input.targetChannel, input.surfaceId);
+  if (!active && ids.length > 0 && !input.originalUserContent?.trim()) {
+    return;
+  }
   input.setPendingApprovals(userKey, ids, input.surfaceId);
   if (ids.length > 0 && input.originalUserContent?.trim()) {
-    const active = input.getPendingApprovalAction(input.targetUserId, input.targetChannel, input.surfaceId);
-    if (active && !active.intent.originalUserContent.trim()) {
-      input.updatePendingAction(active.id, {
+    const nextActive = input.getPendingApprovalAction(input.targetUserId, input.targetChannel, input.surfaceId);
+    if (nextActive && !nextActive.intent.originalUserContent.trim()) {
+      input.updatePendingAction(nextActive.id, {
         intent: {
-          ...active.intent,
+          ...nextActive.intent,
           originalUserContent: input.originalUserContent,
         },
       });

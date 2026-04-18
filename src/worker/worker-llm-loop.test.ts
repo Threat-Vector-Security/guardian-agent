@@ -60,6 +60,47 @@ describe('runLlmLoop', () => {
     );
 
     expect(result.finalContent).toBe('Completed net_dns_lookup.');
+    expect(result.outcome).toMatchObject({
+      completionReason: 'tool_result_summary_fallback',
+      responseQuality: 'final',
+      toolCallCount: 1,
+      toolResultCount: 1,
+    });
+  });
+
+  it('classifies narration-only replies as non-terminal loop outcomes', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect the repo and start fixing the bug.' }];
+
+    const result = await runLlmLoop(
+      messages,
+      async () => ({
+        content: 'I will inspect the repository first and then start fixing the bug.',
+        model: 'test-model',
+        finishReason: 'stop',
+      }),
+      {
+        listAlwaysLoaded() {
+          return [];
+        },
+        searchTools() {
+          return [];
+        },
+        async callTool(): Promise<ToolResult> {
+          throw new Error('Tool execution should not run for a narration-only turn.');
+        },
+      },
+      2,
+      32_000,
+    );
+
+    expect(result.finalContent).toContain('inspect the repository first');
+    expect(result.outcome).toEqual({
+      completionReason: 'intermediate_response',
+      responseQuality: 'intermediate',
+      roundCount: 0,
+      toolCallCount: 0,
+      toolResultCount: 0,
+    });
   });
 
   it('tries one tool-free recovery round before falling back to a raw tool summary', async () => {
@@ -609,6 +650,102 @@ describe('runLlmLoop', () => {
 
     expect(calledTools).toEqual(['update_tool_policy']);
     expect(result.finalContent).toContain('Waiting for approval');
+  });
+
+  it('continues the tool loop when a post-tool reply is only an intermediate progress update', async () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'Write a two-line report to D:\\GuardianApprovalSmokeRound4\\round4.txt and continue once approval is granted.' },
+    ];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'update_tool_policy', arguments: JSON.stringify({ action: 'add_path', value: 'D:\\GuardianApprovalSmokeRound4' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: "Path added. Now I'll write the two-line report.",
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'fs_write', arguments: JSON.stringify({ path: 'D:\\GuardianApprovalSmokeRound4\\round4.txt', content: 'Guardian approval smoke test - round 4 completed successfully.\\napproval continuity smoke' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Done. Wrote D:\\GuardianApprovalSmokeRound4\\round4.txt with the requested two lines.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'update_tool_policy',
+            description: 'Update tool sandbox policy.',
+            parameters: {
+              type: 'object',
+              properties: {
+                action: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['action', 'value'],
+            },
+          },
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+              },
+              required: ['path', 'content'],
+            },
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        return {
+          success: true,
+          output: { message: `Completed ${request.toolName}.` },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      5,
+      32_000,
+    );
+
+    expect(calledTools).toEqual(['update_tool_policy', 'fs_write']);
+    expect(chatCalls).toHaveLength(4);
+    expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('intermediate progress update'),
+    });
+    expect(result.finalContent).toContain('Wrote D:\\GuardianApprovalSmokeRound4\\round4.txt');
   });
 
   it('recovers tool calls when the model emits JSON in content instead of native tool calls', async () => {

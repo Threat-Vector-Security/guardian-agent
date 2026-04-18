@@ -26,7 +26,7 @@ describe('AssistantJobTracker', () => {
           lifecycle: 'completed',
           handoff: {
             summary: 'Summarized delegated result.',
-            nextAction: 'Review the delegated result.',
+            nextAction: 'Result returned inline to the original conversation.',
           },
         },
       },

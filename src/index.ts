@@ -1650,6 +1650,23 @@ function buildDashboardCallbacks(
     reason?: string;
   }) => {
     const pendingActionForApproval = pendingActionStore.findActiveByApprovalId(input.approvalId);
+    intentRoutingTrace.record({
+      stage: 'approval_decision_resolved',
+      userId: input.userId,
+      channel: input.channel,
+      details: {
+        approvalId: input.approvalId,
+        decision: input.decision,
+        pendingActionFound: !!pendingActionForApproval,
+        pendingActionBlockerKind: pendingActionForApproval?.blocker.kind,
+        pendingActionResumeKind: pendingActionForApproval?.resume?.kind,
+        pendingActionResumePayloadType: (pendingActionForApproval?.resume?.payload as { type?: string } | undefined)?.type,
+        pendingActionApprovalIds: pendingActionForApproval?.blocker.approvalIds,
+        scopeAgentId: pendingActionForApproval?.scope.agentId,
+        scopeUserId: pendingActionForApproval?.scope.userId,
+        scopeChannel: pendingActionForApproval?.scope.channel,
+      },
+    });
     const result = await toolExecutor.decideApproval(
       input.approvalId,
       input.decision,
@@ -1670,11 +1687,16 @@ function buildDashboardCallbacks(
         pendingActionForApproval.scope.channel,
         {
           includeUnscoped: pendingActionForApproval.scope.channel === 'web',
+          principalId: pendingActionForApproval.scope.userId,
         },
       );
+      const allPendingApprovalIdsForReconcile = toolExecutor
+        .listApprovals(200, 'pending')
+        .map((approval) => approval.id);
       reconcilePendingApprovalAction(pendingActionStore, pendingActionAfterDecision, {
         liveApprovalIds,
         liveApprovalSummaries: toolExecutor.getApprovalSummaries(liveApprovalIds),
+        allPendingApprovalIds: allPendingApprovalIdsForReconcile,
       });
       const scopedUserIds = [...new Set([
         pendingActionForApproval.scope.userId,
@@ -1756,6 +1778,25 @@ function buildDashboardCallbacks(
     if (!displayMessage && !allowContinuation) {
       displayMessage = result.message;
     }
+    intentRoutingTrace.record({
+      stage: 'approval_continuation_resolved',
+      userId: input.userId,
+      channel: input.channel,
+      details: {
+        approvalId: input.approvalId,
+        decision: input.decision,
+        allowContinuation,
+        continuationSource: continuedResponse
+          ? (continuedResponse === undefined ? 'none' : 'resolved')
+          : 'none',
+        hasSuspendedApproval: [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId)),
+        hasPendingActionResume: !!pendingActionForApproval?.resume,
+        workerManagerSuspended: !!runtime.workerManager?.hasSuspendedApproval(input.approvalId),
+        hasAutomationContinuation: continueAutomation,
+        continuedContentPreview: continuedResponse?.content?.slice(0, 200),
+        displayMessagePreview: displayMessage?.slice(0, 200),
+      },
+    });
     analytics.track({
       type: result.success ? 'tool_approval_decided' : 'tool_approval_failed',
       channel: 'system',

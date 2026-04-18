@@ -8,6 +8,242 @@ import { attachPreRoutedIntentGatewayMetadata } from './runtime/intent-gateway.j
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 
 describe('LLMChatAgent direct intent metadata', () => {
+  it('suppresses blocked approval context for unrelated fresh turns before intent-gateway classification', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const nowMs = 1_710_000_000_000;
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-intent-gateway-context-filter.test.sqlite',
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-intent-gateway-context-filter-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    (agent as any).pendingActionStore = pendingActionStore;
+    (agent as any).continuityThreadStore = continuityThreadStore;
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Waiting for approval to run Codex.',
+        approvalIds: ['approval-codex-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      },
+      expiresAt: nowMs + 60_000,
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      focusSummary: 'Inspect the repository summary request.',
+      lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+    }, nowMs);
+
+    const classify = vi.fn(async () => ({
+      mode: 'primary',
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'general_assistant',
+        confidence: 'low',
+        operation: 'inspect',
+        summary: 'Treat as a fresh request.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'direct_assistant',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+        simpleVsComplex: 'simple',
+        entities: {},
+      },
+    }));
+    (agent as any).intentGateway = { classify };
+
+    await (agent as any).classifyIntentGateway(
+      {
+        id: 'msg-random-word',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        content: 'Hiroshima',
+        timestamp: nowMs,
+      },
+      {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        llm: { name: 'ollama_cloud' } as never,
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      {
+        recentHistory: [
+          { role: 'user', content: 'Use Codex in this coding workspace to inspect README.md and package.json.' },
+          { role: 'assistant', content: 'Waiting for approval to run Codex.' },
+        ],
+        pendingAction: (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat', nowMs),
+        continuityThread: (agent as any).getContinuityThread('owner', nowMs),
+      },
+    );
+
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'Hiroshima',
+      recentHistory: undefined,
+      pendingAction: null,
+      continuity: null,
+    }), expect.any(Function));
+  });
+
+  it('preserves blocked approval context for legitimate correction turns before intent-gateway classification', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const nowMs = 1_710_000_000_000;
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-intent-gateway-context-preserve.test.sqlite',
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-intent-gateway-context-preserve-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    (agent as any).pendingActionStore = pendingActionStore;
+    (agent as any).continuityThreadStore = continuityThreadStore;
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Waiting for approval to run Codex.',
+        approvalIds: ['approval-codex-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      },
+      expiresAt: nowMs + 60_000,
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      focusSummary: 'Inspect the repository summary request.',
+      lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+    }, nowMs);
+
+    const classify = vi.fn(async () => ({
+      mode: 'primary',
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Switches the backend for the blocked coding request.',
+        turnRelation: 'correction',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        entities: {
+          codingBackend: 'claude-code',
+        },
+      },
+    }));
+    (agent as any).intentGateway = { classify };
+
+    await (agent as any).classifyIntentGateway(
+      {
+        id: 'msg-correction',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        content: 'Can you use Claude Code instead?',
+        timestamp: nowMs,
+      },
+      {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        llm: { name: 'ollama_cloud' } as never,
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      {
+        recentHistory: [
+          { role: 'user', content: 'Use Codex in this coding workspace to inspect README.md and package.json.' },
+          { role: 'assistant', content: 'Waiting for approval to run Codex.' },
+        ],
+        pendingAction: (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat', nowMs),
+        continuityThread: (agent as any).getContinuityThread('owner', nowMs),
+      },
+    );
+
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({
+      recentHistory: expect.any(Array),
+      pendingAction: expect.objectContaining({
+        blockerKind: 'approval',
+        originalRequest: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      }),
+      continuity: expect.objectContaining({
+        lastActionableRequest: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      }),
+    }), expect.any(Function));
+  });
+
   it('backfills responseSource for direct intent responses so the UI does not show them as system output', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -540,7 +776,8 @@ describe('LLMChatAgent direct intent metadata', () => {
             success: true,
             output: {
               backendName: 'Codex',
-              output: 'Test run completed in the current workspace.',
+              assistantResponse: 'Test run completed in the current workspace.',
+              output: 'OpenAI Codex CLI completed.\n\nbash-5.2$ codex exec ...',
             },
           };
         }
@@ -614,6 +851,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     const response = await agent.onMessage!(message, ctx);
 
     expect(response.content).toContain('Test run completed in the current workspace.');
+    expect(response.content).not.toContain('bash-5.2$ codex exec');
     expect(response.metadata).toMatchObject({
       codingBackendDelegated: true,
       codingBackendId: 'codex',
@@ -641,6 +879,259 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
       }),
     );
+  });
+
+  it('uses the rewritten routed coding task instead of stale gateway resolvedContent for backend-switch follow-ups', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async () => ({
+        success: true,
+        output: {
+          backendName: 'Claude Code',
+          assistantResponse: 'Claude inspected the repo.',
+        },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-coding-backend-correction',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+      timestamp: Date.now(),
+    };
+
+    const response = await (agent as any).tryDirectCodingBackendDelegation(
+      message,
+      ctx,
+      'owner:web',
+      {
+        route: 'coding_task',
+        operation: 'inspect',
+        summary: 'Inspect the repo through Claude Code.',
+        confidence: 'high',
+        turnRelation: 'correction',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'local',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        resolvedContent: 'Okay now do the same thing with Claude Code',
+        entities: {
+          codingBackend: 'claude-code',
+        },
+      },
+      { sessionId: 'session-1', workspaceRoot: '/repo' },
+    );
+
+    expect(response?.content).toBe('Claude inspected the repo.');
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'coding_backend_run',
+      {
+        task: 'Use claude-code for this request: Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+        backend: 'claude-code',
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: 'session-1',
+          workspaceRoot: '/repo',
+        },
+      }),
+    );
+    expect(response?.metadata?.responseSource).toMatchObject({
+      locality: 'local',
+      providerName: 'Claude Code',
+      providerTier: 'local',
+      usedFallback: false,
+    });
+  });
+
+  it('falls back to gateway resolvedContent when a coding-backend follow-up is still ambiguous at execution time', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async () => ({
+        success: true,
+        output: {
+          backendName: 'Claude Code',
+          assistantResponse: 'Claude inspected the repo.',
+        },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-coding-backend-ambiguous-follow-up',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Okay now do the same thing with Claude Code',
+      timestamp: Date.now(),
+    };
+
+    const response = await (agent as any).tryDirectCodingBackendDelegation(
+      message,
+      ctx,
+      'owner:web',
+      {
+        route: 'coding_task',
+        operation: 'inspect',
+        summary: 'Inspect the repo through Claude Code.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'local',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        resolvedContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+        entities: {
+          codingBackend: 'claude-code',
+        },
+      },
+      { sessionId: 'session-1', workspaceRoot: '/repo' },
+    );
+
+    expect(response?.content).toBe('Claude inspected the repo.');
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'coding_backend_run',
+      {
+        task: 'Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+        backend: 'claude-code',
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: 'session-1',
+          workspaceRoot: '/repo',
+        },
+      }),
+    );
+  });
+
+  it('preserves request tracking metadata on approval-blocked coding backend prompts', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-coding-backend-approval-metadata.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async () => ({
+        success: false,
+        status: 'pending_approval',
+        approvalId: 'approval-codex-1',
+      })),
+      getApprovalSummaries: vi.fn(() => new Map([
+        ['approval-codex-1', {
+          toolName: 'coding_backend_run',
+          argsPreview: '{"task":"inspect repo"}',
+          actionLabel: 'run OpenAI Codex CLI',
+          requestId: 'msg-coding-backend-approval',
+          codeSessionId: 'session-approve-1',
+        }],
+      ])),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).pendingActionStore = pendingActionStore;
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-coding-backend-approval',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Use Codex in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+      timestamp: Date.now(),
+    };
+
+    const response = await (agent as any).tryDirectCodingBackendDelegation(
+      message,
+      ctx,
+      'owner:web',
+      {
+        route: 'coding_task',
+        operation: 'inspect',
+        summary: 'Inspect the repo through Codex.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'local',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingBackend: 'codex',
+        },
+      },
+      { sessionId: 'session-approve-1', workspaceRoot: '/repo' },
+    );
+
+    expect(response?.metadata?.pendingAction).toMatchObject({
+      blocker: {
+        kind: 'approval',
+        approvalIds: ['approval-codex-1'],
+        approvalSummaries: [{
+          id: 'approval-codex-1',
+          toolName: 'coding_backend_run',
+          actionLabel: 'run OpenAI Codex CLI',
+          requestId: 'msg-coding-backend-approval',
+          codeSessionId: 'session-approve-1',
+        }],
+      },
+    });
   });
 
   it('auto-switches to an explicitly named coding workspace even when the gateway response is unstructured', async () => {
@@ -5491,6 +5982,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       'approved',
       {
         success: true,
+        approved: true,
+        executionSucceeded: true,
         message: "Tool 'second_brain_note_upsert' completed.",
         result: {
           success: true,
@@ -5519,6 +6012,180 @@ describe('LLMChatAgent direct intent metadata', () => {
         }),
       }),
     );
+  });
+
+  it('resumes approved coding-backend runs with backend response-source metadata', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-coding-backend-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the Codex run.',
+        approvalIds: ['approval-coding-backend-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      },
+      resume: {
+        kind: 'direct_route',
+        payload: {
+          type: 'coding_backend_run',
+          task: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+          backendId: 'codex',
+          codeSessionId: 'session-coding-backend-1',
+          workspaceRoot: '/repo',
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const result = await (agent as any).continueDirectRouteAfterApproval(
+      pendingAction,
+      'approval-coding-backend-1',
+      'approved',
+      {
+        success: true,
+        approved: true,
+        executionSucceeded: true,
+        message: "Tool 'coding_backend_run' completed.",
+        result: {
+          success: true,
+          status: 'succeeded',
+          output: {
+            success: true,
+            backendId: 'codex',
+            backendName: 'OpenAI Codex CLI',
+            assistantResponse: 'This repo is GuardianAgent.',
+            output: 'OpenAI Codex CLI completed.',
+            codeSessionId: 'session-coding-backend-1',
+            durationMs: 1250,
+          },
+        },
+      },
+    );
+
+    expect(result?.content).toBe('This repo is GuardianAgent.');
+    expect(result?.metadata).toMatchObject({
+      codingBackendDelegated: true,
+      codingBackendId: 'codex',
+      codeSessionResolved: true,
+      codeSessionId: 'session-coding-backend-1',
+      responseSource: {
+        locality: 'local',
+        providerName: 'OpenAI Codex CLI',
+        providerTier: 'local',
+        usedFallback: false,
+        durationMs: 1250,
+      },
+    });
+  });
+
+  it('surfaces failed approved coding-backend runs as execution failures rather than approval denials', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-coding-backend-failure-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the Claude Code run.',
+        approvalIds: ['approval-coding-backend-failure-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json.',
+      },
+      resume: {
+        kind: 'direct_route',
+        payload: {
+          type: 'coding_backend_run',
+          task: 'Use Claude Code in this coding workspace to inspect README.md and package.json.',
+          backendId: 'claude-code',
+          codeSessionId: 'session-coding-backend-failure-1',
+          workspaceRoot: '/repo',
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const result = await (agent as any).continueDirectRouteAfterApproval(
+      pendingAction,
+      'approval-coding-backend-failure-1',
+      'approved',
+      {
+        success: true,
+        approved: true,
+        executionSucceeded: false,
+        message: "Approval received for 'coding_backend_run', but execution failed: Claude Code could not complete the requested task.",
+        result: {
+          success: false,
+          status: 'failed',
+          message: 'Claude Code could not complete the requested task.',
+          error: 'Claude Code could not complete the requested task.',
+          output: {
+            success: false,
+            backendId: 'claude-code',
+            backendName: 'Claude Code',
+            output: 'Claude Code could not complete the requested task.',
+            codeSessionId: 'session-coding-backend-failure-1',
+            durationMs: 875,
+          },
+        },
+      },
+    );
+
+    expect(result?.content).toBe('Claude Code could not complete the requested task.');
+    expect(result?.content).not.toContain('was not approved');
+    expect(result?.metadata).toMatchObject({
+      codingBackendDelegated: true,
+      codingBackendId: 'claude-code',
+      codeSessionResolved: true,
+      codeSessionId: 'session-coding-backend-failure-1',
+      responseSource: {
+        locality: 'local',
+        providerName: 'Claude Code',
+        providerTier: 'local',
+        usedFallback: false,
+        durationMs: 875,
+      },
+    });
   });
 
   it('stores a structured tool-loop resume payload for approval-blocked remote sandbox runs', async () => {
@@ -5898,6 +6565,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       'approved',
       {
         success: true,
+        approved: true,
+        executionSucceeded: true,
         message: "Tool 'code_remote_exec' completed.",
         result: {
           success: true,
@@ -6279,6 +6948,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       'approved',
       {
         success: false,
+        approved: true,
+        executionSucceeded: false,
         message: "Tool 'code_remote_exec' failed.",
         result: {
           success: false,
