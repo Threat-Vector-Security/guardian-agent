@@ -81,6 +81,7 @@ export type IntentGatewayProvenanceSource =
   | 'resolver.clarification'
   | 'repair.unstructured'
   | 'repair.automation_name'
+  | 'repair.historical_reference'
   | 'derived.workload';
 
 export type IntentGatewayPreferredTier =

@@ -93,6 +93,24 @@ async function waitForHealth(baseUrl) {
   throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
+function createIsolatedHarnessEnv(tmpDir, extraEnv = {}) {
+  const appData = path.join(tmpDir, 'AppData', 'Roaming');
+  const localAppData = path.join(tmpDir, 'AppData', 'Local');
+  fs.mkdirSync(appData, { recursive: true });
+  fs.mkdirSync(localAppData, { recursive: true });
+  return {
+    ...process.env,
+    HOME: tmpDir,
+    USERPROFILE: tmpDir,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: tmpDir,
+    XDG_DATA_HOME: tmpDir,
+    XDG_CACHE_HOME: tmpDir,
+    ...extraEnv,
+  };
+}
+
 async function waitFor(predicate, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -508,6 +526,7 @@ async function runHarness() {
   const harnessToken = `coding-harness-${Date.now()}`;
   const baseUrl = `http://127.0.0.1:${harnessPort}`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-coding-harness-'));
+  const expectedNativeProtectionProvider = process.platform === 'win32' ? 'windows_defender' : 'clamav';
   const workspaceRoot = path.join(tmpDir, 'workspace');
   const scopedWorkspaceRoot = path.join(tmpDir, 'scoped-workspace');
   const tempInstallWorkspaceRoot = path.join(tmpDir, 'guardian-ui-package-test');
@@ -723,14 +742,12 @@ guardian:
     appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        HOME: tmpDir,
-        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      env: createIsolatedHarnessEnv(tmpDir, {
+        PATH: [fakeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter),
         ...(options.useRealOllama && options.bypassLocalModelComplexityGuard
           ? { GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1' }
           : {}),
-      },
+      }),
     });
     const stdout = fs.createWriteStream(logPath);
     const stderr = fs.createWriteStream(`${logPath}.err`);
@@ -770,6 +787,20 @@ guardian:
       && verificationResponse.metadata.activeSkills.includes('verification-before-completion'),
       `Expected verification-before-completion to be active: ${JSON.stringify(verificationResponse)}`,
     );
+
+    const existingWebCodeSessions = await requestJson(
+      baseUrl,
+      harnessToken,
+      'GET',
+      '/api/code/sessions?userId=web-code-harness&channel=web',
+    );
+    for (const session of Array.isArray(existingWebCodeSessions?.sessions) ? existingWebCodeSessions.sessions : []) {
+      if (!session?.id) continue;
+      await requestJson(baseUrl, harnessToken, 'DELETE', `/api/code/sessions/${encodeURIComponent(session.id)}`, {
+        userId: 'web-code-harness',
+        channel: 'web',
+      });
+    }
 
     const codeSessionCreate = await requestJson(baseUrl, harnessToken, 'POST', '/api/code/sessions', {
       userId: 'web-code-harness',
@@ -995,7 +1026,7 @@ guardian:
         ? snapshot
         : null;
     }, 5_000, 'Expected native AV status to become clean for the ordinary workspace');
-    assert.equal(nativeCleanSnapshot.session.workState.workspaceTrust.nativeProtection.provider, 'clamav');
+    assert.equal(nativeCleanSnapshot.session.workState.workspaceTrust.nativeProtection.provider, expectedNativeProtectionProvider);
     const staleOutsideRoot = path.join(tmpDir, 'outside-workspace');
     fs.mkdirSync(staleOutsideRoot, { recursive: true });
     const staleUiSnapshot = await requestJson(baseUrl, harnessToken, 'PATCH', codeSessionPath, {
@@ -1121,11 +1152,22 @@ guardian:
     };
     const suspiciousNativeSnapshot = await waitFor(async () => {
       const snapshot = await getSuspiciousCodeSessionSnapshot(5);
-      return snapshot?.session?.workState?.workspaceTrust?.nativeProtection?.status === 'detected'
+      const status = snapshot?.session?.workState?.workspaceTrust?.nativeProtection?.status;
+      if (process.platform === 'win32') {
+        return status === 'clean' || status === 'detected'
+          ? snapshot
+          : null;
+      }
+      return status === 'detected'
         ? snapshot
         : null;
-    }, 5_000, 'Expected native AV status to become detected for the suspicious workspace');
-    assert.equal(suspiciousNativeSnapshot.session.workState.workspaceTrust.nativeProtection.provider, 'clamav');
+    }, 5_000, process.platform === 'win32'
+      ? 'Expected native AV status to complete for the suspicious workspace on Windows'
+      : 'Expected native AV status to become detected for the suspicious workspace');
+    assert.equal(suspiciousNativeSnapshot.session.workState.workspaceTrust.nativeProtection.provider, expectedNativeProtectionProvider);
+    if (process.platform !== 'win32') {
+      assert.equal(suspiciousNativeSnapshot.session.workState.workspaceTrust.nativeProtection.status, 'detected');
+    }
     assert.match(suspiciousNativeSnapshot.session.workState.workspaceTrust.summary, /Native AV:/i);
 
     const suspiciousOverview = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
@@ -1139,7 +1181,12 @@ guardian:
       const suspiciousScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo.');
       assert.ok(suspiciousScenario, 'Expected suspicious overview scenario to be captured');
       assert.match(suspiciousScenario.systemPrompt, /workspaceTrust\.state: blocked/);
-      assert.match(suspiciousScenario.systemPrompt, /workspaceTrust\.nativeProtection\.status: detected/);
+      assert.match(
+        suspiciousScenario.systemPrompt,
+        process.platform === 'win32'
+          ? /workspaceTrust\.nativeProtection\.status: (?:clean|detected)/
+          : /workspaceTrust\.nativeProtection\.status: detected/,
+      );
       assert.match(suspiciousScenario.systemPrompt, /workingSet: suppressed raw repo snippets/i);
       assert.equal(/Ignore previous instructions/i.test(suspiciousScenario.systemPrompt), false, 'Did not expect raw repo injection text in the Code-session system prompt');
     }

@@ -54,6 +54,44 @@ async function waitForHealth(baseUrl) {
   throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
+function createIsolatedHarnessEnv(tmpDir, extraEnv = {}) {
+  const appData = path.join(tmpDir, 'AppData', 'Roaming');
+  const localAppData = path.join(tmpDir, 'AppData', 'Local');
+  fs.mkdirSync(appData, { recursive: true });
+  fs.mkdirSync(localAppData, { recursive: true });
+  return {
+    ...process.env,
+    HOME: tmpDir,
+    USERPROFILE: tmpDir,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: tmpDir,
+    XDG_DATA_HOME: tmpDir,
+    XDG_CACHE_HOME: tmpDir,
+    ...extraEnv,
+  };
+}
+
+function resolveBrowserExecutable() {
+  const windowsCandidates = [
+    process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env['PROGRAMFILES(X86)'] ? path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+    process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+    process.env['PROGRAMFILES(X86)'] ? path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
+  ];
+  const candidates = [
+    process.env.HARNESS_CHROME_BIN,
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    ...windowsCandidates,
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+  ].filter(Boolean);
+  return candidates.find((candidate) => fs.existsSync(candidate)) || undefined;
+}
+
 function setupFakeClamAv(binDir) {
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(path.join(binDir, 'clamscan'), [
@@ -356,19 +394,18 @@ guardian:
     appProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', configPath], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        HOME: tmpDir,
-        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-      },
+      env: createIsolatedHarnessEnv(tmpDir, {
+        PATH: [fakeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter),
+      }),
     });
     appProcess.stdout.pipe(fs.createWriteStream(logPath));
     appProcess.stderr.pipe(fs.createWriteStream(`${logPath}.err`));
 
     await waitForHealth(baseUrl);
 
+    const executablePath = resolveBrowserExecutable();
     browser = await chromium.launch({
-      executablePath: '/usr/bin/google-chrome',
+      ...(executablePath ? { executablePath } : {}),
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     });
@@ -523,7 +560,12 @@ guardian:
     });
     await openCodePanel('activity');
     await page.waitForFunction(() => {
-      return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
+      return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes('Native host malware scanning reported a workspace detection')
+          || text.includes('Static repo review found high-risk indicators')
+          || text.includes('Static repo review found suspicious indicators');
+      });
     });
 
     assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').count(), 0, 'Guardian chat should not render coding workspace chrome on the Code route');

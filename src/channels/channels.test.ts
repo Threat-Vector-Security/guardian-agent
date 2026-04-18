@@ -373,6 +373,67 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('shows delegated child-run progress from shared run.timeline subscriptions in CLI', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let sseListener: ((event: { type: string; data: unknown }) => void) | null = null;
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onSSESubscribe: (listener) => {
+          sseListener = listener as typeof sseListener;
+          return () => {
+            sseListener = null;
+          };
+        },
+        onStreamDispatch: async (_agentId, msg) => {
+          const requestId = msg.requestId || 'cli-parent-run';
+          setTimeout(() => {
+            sseListener?.({
+              type: 'run.timeline',
+              data: {
+                summary: {
+                  runId: 'delegated-task:job-1',
+                  parentRunId: requestId,
+                  status: 'running',
+                },
+                items: [{
+                  id: 'delegated-running',
+                  runId: 'delegated-task:job-1',
+                  type: 'note',
+                  status: 'running',
+                  source: 'orchestrator',
+                  timestamp: Date.now(),
+                  title: 'Workspace Implementer is working',
+                  detail: 'Reviewing source files and approvals.',
+                }],
+              },
+            });
+          }, 5);
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return {
+            requestId,
+            runId: requestId,
+            content: 'Delegated task finished.',
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 175));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[progress] Workspace Implementer is working — Reviewing source files and approvals.');
+    expect(text).toContain('Delegated task finished.');
+
+    await cli.stop();
+  });
+
   it('prefers shared liveSummary commentary for CLI progress updates', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

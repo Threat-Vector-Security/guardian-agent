@@ -23,6 +23,7 @@ export type DashboardRunStatus =
 
 export type DashboardRunKind =
   | 'assistant_dispatch'
+  | 'delegated_task'
   | 'automation_run'
   | 'code_session'
   | 'scheduled_task';
@@ -176,6 +177,7 @@ export interface RunTimelineListFilters {
   limit?: number;
   status?: DashboardRunStatus;
   kind?: DashboardRunKind;
+  parentRunId?: string;
   channel?: string;
   agentId?: string;
   codeSessionId?: string;
@@ -194,7 +196,9 @@ export interface DelegatedWorkerProgressEvent {
   id: string;
   kind: 'started' | 'running' | 'completed' | 'blocked' | 'failed';
   requestId?: string;
+  parentRunId?: string;
   runId?: string;
+  taskRunId?: string;
   codeSessionId?: string;
   agentId: string;
   agentName?: string;
@@ -257,6 +261,7 @@ export class RunTimelineStore {
       .filter((detail) => {
         if (filters.status && detail.summary.status !== filters.status) return false;
         if (filters.kind && detail.summary.kind !== filters.kind) return false;
+        if (filters.parentRunId && detail.summary.parentRunId !== filters.parentRunId) return false;
         if (filters.channel && detail.summary.channel !== filters.channel) return false;
         if (filters.agentId && detail.summary.agentId !== filters.agentId) return false;
         if (filters.codeSessionId && detail.summary.codeSessionId !== filters.codeSessionId) return false;
@@ -410,21 +415,22 @@ export class RunTimelineStore {
   }
 
   ingestDelegatedWorkerProgress(event: DelegatedWorkerProgressEvent): void {
-    const runId = nonEmptyText(event.runId)
+    const parentRunId = nonEmptyText(event.parentRunId)
+      ?? nonEmptyText(event.runId)
       ?? nonEmptyText(event.requestId)
       ?? (event.codeSessionId ? resolveRunId(event.codeSessionId, undefined) : undefined);
-    if (!runId) return;
-    const existing = this.runs.get(runId);
+    if (!parentRunId) return;
+    const existing = this.runs.get(parentRunId);
     const shouldSetBaseStatus = shouldUseCodeSessionBaseStatus(existing);
     const summary = existing?.detail.summary;
 
-    this.commitRun(runId, {
+    this.commitRun(parentRunId, {
       ...(shouldSetBaseStatus
         ? { baseStatus: mapDelegatedWorkerProgressStatus(event) }
         : {}),
       summary: {
         ...(event.codeSessionId ? { codeSessionId: event.codeSessionId } : {}),
-        groupId: summary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : runId),
+        groupId: summary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : parentRunId),
         kind: summary?.kind ?? (event.codeSessionId ? 'code_session' : 'assistant_dispatch'),
         title: summary?.title ?? `Delegated worker: ${describeDelegatedWorkerTarget(event)}`,
         subtitle: summary?.subtitle ?? truncateText(nonEmptyText(event.requestPreview), 160),
@@ -438,7 +444,41 @@ export class RunTimelineStore {
           ...(event.runClass ? [event.runClass] : []),
         ],
       },
-      items: [buildDelegatedWorkerProgressItem(runId, event)],
+      items: [buildDelegatedWorkerProgressItem(parentRunId, event)],
+    });
+
+    const taskRunId = nonEmptyText(event.taskRunId);
+    if (!taskRunId) return;
+
+    const parentSummary = this.runs.get(parentRunId)?.detail.summary;
+    const delegatedTask = this.runs.get(taskRunId);
+    this.commitRun(taskRunId, {
+      baseStatus: mapDelegatedWorkerProgressStatus(event),
+      summary: {
+        parentRunId,
+        ...(event.codeSessionId ? { codeSessionId: event.codeSessionId } : {}),
+        groupId: parentSummary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : parentRunId),
+        kind: 'delegated_task',
+        title: delegatedTask?.detail.summary.title ?? `Delegated task: ${describeDelegatedWorkerTarget(event)}`,
+        subtitle: buildDelegatedWorkerTaskSubtitle(event, parentRunId),
+        agentId: event.agentId,
+        channel: event.originChannel,
+        startedAt: delegatedTask?.detail.summary.startedAt ?? event.timestamp,
+        pendingApprovalCount: event.kind === 'blocked' && event.unresolvedBlockerKind === 'approval'
+          ? Math.max(0, event.approvalCount ?? 0)
+          : 0,
+        verificationPendingCount: 0,
+        error: event.kind === 'failed' ? nonEmptyText(event.detail) : undefined,
+        tags: [
+          'delegated-worker',
+          'delegated-task',
+          event.agentId,
+          ...(event.originChannel ? [event.originChannel] : []),
+          ...(event.runClass ? [event.runClass] : []),
+          ...(event.reportingMode ? [`reporting:${event.reportingMode}`] : []),
+        ],
+      },
+      items: [buildDelegatedWorkerProgressItem(taskRunId, event)],
     });
   }
 
@@ -599,7 +639,13 @@ export class RunTimelineStore {
   private sortedRuns(): DashboardRunDetail[] {
     return [...this.runs.values()]
       .map((record) => record.detail)
-      .sort((left, right) => right.summary.lastUpdatedAt - left.summary.lastUpdatedAt);
+      .sort((left, right) => {
+        if (left.summary.runId === right.summary.parentRunId) return -1;
+        if (right.summary.runId === left.summary.parentRunId) return 1;
+        return right.summary.lastUpdatedAt - left.summary.lastUpdatedAt
+          || left.summary.startedAt - right.summary.startedAt
+          || left.summary.runId.localeCompare(right.summary.runId);
+      });
   }
 }
 
@@ -1675,6 +1721,18 @@ function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): str
     ?? nonEmptyText(event.orchestrationLabel)
     ?? nonEmptyText(event.agentId)
     ?? 'Delegated worker';
+}
+
+function buildDelegatedWorkerTaskSubtitle(
+  event: DelegatedWorkerProgressEvent,
+  parentRunId: string,
+): string | undefined {
+  return truncateText(
+    nonEmptyText(event.requestPreview)
+      ?? nonEmptyText(event.detail)
+      ?? `Parent run ${parentRunId}`,
+    160,
+  );
 }
 
 function buildDelegatedWorkerContextAssembly(

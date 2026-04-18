@@ -3,10 +3,14 @@ import type { ToolCaller } from '../broker/types.js';
 import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
-import { isResponseDegraded } from '../util/response-quality.js';
+import { isIntermediateStatusResponse, isResponseDegraded } from '../util/response-quality.js';
 import { recoverToolCallsFromStructuredText } from '../util/structured-json.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
+import type {
+  WorkerExecutionCompletionReason,
+  WorkerExecutionResponseQuality,
+} from '../runtime/worker-execution-metadata.js';
 
 export interface LlmLoopOptions {
   /** When true, model-authored memory mutation tool calls are allowed. */
@@ -25,6 +29,14 @@ export interface LlmLoopOptions {
   toolExecutionCorrectionPrompt?: string;
 }
 
+export interface LlmLoopOutcome {
+  completionReason: WorkerExecutionCompletionReason;
+  responseQuality: WorkerExecutionResponseQuality;
+  roundCount: number;
+  toolCallCount: number;
+  toolResultCount: number;
+}
+
 // Extracted LLM loop, which can run either in-process or in an isolated worker
 export async function runLlmLoop(
   messages: ChatMessage[],
@@ -34,13 +46,17 @@ export async function runLlmLoop(
   contextBudget: number,
   onToolCalled?: (toolCall: { id: string; name: string }, result: Record<string, unknown>) => void,
   options?: LlmLoopOptions,
-): Promise<{ finalContent: string; messages: ChatMessage[]; hasPendingApprovals: boolean }> {
+): Promise<{ finalContent: string; messages: ChatMessage[]; hasPendingApprovals: boolean; outcome: LlmLoopOutcome }> {
   let finalContent = '';
   let rounds = 0;
   let hasPendingApprovals = false;
+  let completionReason: WorkerExecutionCompletionReason = 'model_response';
+  let toolCallCount = 0;
+  let toolResultCount = 0;
   let forcedPolicyRetryUsed = false;
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
+  let forcedIntermediateStatusRetryCount = 0;
   let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
   let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
   const currentTaintReasons = new Set<string>();
@@ -150,6 +166,7 @@ export async function runLlmLoop(
         && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
       ) {
         finalContent = answerFirstContent;
+        completionReason = 'answer_first_response';
       } else if (answerFirstResponse.toolCalls?.length) {
         seededAnswerFirstResponse = answerFirstResponse;
       }
@@ -236,10 +253,33 @@ export async function runLlmLoop(
       finalContent = response.content ?? '';
     }
 
+    if (
+      forcedIntermediateStatusRetryCount < 2
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && shouldRetryIntermediateStatusCorrection(response.content ?? '', {
+        hasToolResults: lastToolRoundResults.length > 0,
+        hasAnswerFirstContract: typeof options?.answerFirstResponseIsSufficient === 'function',
+        hasToolExecutionContract: !!options?.toolExecutionCorrectionPrompt?.trim(),
+      })
+    ) {
+      forcedIntermediateStatusRetryCount += 1;
+      response = await chatFn(
+        [
+          ...plannerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildIntermediateStatusCorrectionPrompt() },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
+    }
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       break;
     }
 
+    toolCallCount += response.toolCalls.length;
     messages.push({
       role: 'assistant',
       content: response.content ?? '',
@@ -247,6 +287,7 @@ export async function runLlmLoop(
     });
 
     if (!toolCaller) {
+      toolResultCount += 1;
       messages.push({
         role: 'tool',
         toolCallId: response.toolCalls[0].id,
@@ -295,6 +336,7 @@ export async function runLlmLoop(
         return { toolCall: tc, result: res };
       })
     );
+    toolResultCount += toolResults.length;
     lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
       if (settled.status !== 'fulfilled') return acc;
       acc.push({
@@ -372,39 +414,89 @@ export async function runLlmLoop(
 
   // Quality-based fallback: if the primary LLM produced a degraded response
   // and a fallback chat function was provided, retry with it.
-  if (isResponseDegraded(finalContent) && options?.fallbackChatFn) {
+  if ((isResponseDegraded(finalContent) || isIntermediateStatusResponse(finalContent)) && options?.fallbackChatFn) {
     try {
       const fbResponse = await options.fallbackChatFn(messages, { tools: llmToolDefs });
       if (fbResponse.content?.trim()) {
         finalContent = fbResponse.content;
+        completionReason = 'fallback_model_response';
       }
     } catch {
       // Fallback also failed, keep original content
     }
   }
 
-  if (!finalContent && lastToolRoundResults.length > 0) {
-    finalContent = await tryRecoverDirectAnswer(messages, chatFn, options?.fallbackChatFn);
+  if (
+    (
+      !finalContent
+      || isIntermediateStatusResponse(finalContent)
+      || (
+        !!options?.answerFirstFallbackContent
+        && !!options.answerFirstResponseIsSufficient
+        && !options.answerFirstResponseIsSufficient(finalContent)
+      )
+    )
+    && lastToolRoundResults.length > 0
+  ) {
+    const recovered = await tryRecoverDirectAnswer(messages, chatFn, options?.fallbackChatFn);
+    if (recovered) {
+      finalContent = recovered;
+      completionReason = 'tool_result_recovery';
+    }
   }
 
-  if (!finalContent && lastToolRoundResults.length > 0) {
+  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
     finalContent = summarizeToolRoundFallback(lastToolRoundResults);
+    completionReason = 'tool_result_summary_fallback';
   }
 
   if (
     options?.answerFirstFallbackContent
     && options.answerFirstResponseIsSufficient
-    && !options.answerFirstResponseIsSufficient(finalContent)
-    && lastToolRoundResults.length === 0
+    && (
+      !options.answerFirstResponseIsSufficient(finalContent)
+      || isIntermediateStatusResponse(finalContent)
+    )
   ) {
     finalContent = options.answerFirstFallbackContent;
+    completionReason = 'answer_first_fallback';
   }
 
   if (!finalContent) {
     finalContent = 'I could not generate a final response for that request.';
+    completionReason = 'empty_response_fallback';
   }
 
-  return { finalContent, messages, hasPendingApprovals };
+  if (hasPendingApprovals) {
+    completionReason = 'approval_pending';
+  }
+  const responseQuality = classifyLlmLoopResponseQuality(finalContent);
+  if (!hasPendingApprovals) {
+    if (responseQuality === 'intermediate') {
+      completionReason = 'intermediate_response';
+    } else if (responseQuality === 'degraded' && completionReason !== 'empty_response_fallback') {
+      completionReason = 'degraded_response';
+    }
+  }
+
+  return {
+    finalContent,
+    messages,
+    hasPendingApprovals,
+    outcome: {
+      completionReason,
+      responseQuality,
+      roundCount: rounds,
+      toolCallCount,
+      toolResultCount,
+    },
+  };
+}
+
+function classifyLlmLoopResponseQuality(content: string | undefined): WorkerExecutionResponseQuality {
+  if (isResponseDegraded(content)) return 'degraded';
+  if (isIntermediateStatusResponse(content)) return 'intermediate';
+  return 'final';
 }
 
 async function tryRecoverDirectAnswer(
@@ -427,7 +519,7 @@ async function tryRecoverDirectAnswer(
   try {
     const recovery = await chatFn(recoveryMessages, { tools: [] });
     const content = recovery.content?.trim() ?? '';
-    if (content && !isResponseDegraded(content)) {
+    if (content && !isResponseDegraded(content) && !isIntermediateStatusResponse(content)) {
       return content;
     }
   } catch {
@@ -438,7 +530,8 @@ async function tryRecoverDirectAnswer(
 
   try {
     const fallback = await fallbackChatFn(recoveryMessages, { tools: [] });
-    return fallback.content?.trim() ?? '';
+    const content = fallback.content?.trim() ?? '';
+    return isIntermediateStatusResponse(content) ? '' : content;
   } catch {
     return '';
   }
@@ -481,6 +574,30 @@ function shouldRetryToolExecutionCorrection(
   return !!correctionPrompt?.trim()
     && responseContent.trim().length > 0
     && toolDefs.length > 0;
+}
+
+function shouldRetryIntermediateStatusCorrection(
+  responseContent: string,
+  context: {
+    hasToolResults: boolean;
+    hasAnswerFirstContract: boolean;
+    hasToolExecutionContract: boolean;
+  },
+): boolean {
+  if (!isIntermediateStatusResponse(responseContent)) {
+    return false;
+  }
+  return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
+}
+
+function buildIntermediateStatusCorrectionPrompt(): string {
+  return [
+    'System correction: your previous reply was an intermediate progress update, not a completed response.',
+    'Continue the same request now.',
+    'If more tool calls are required, call them now instead of narrating what you will do next.',
+    'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
+    'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
+  ].join(' ');
 }
 
 function buildPolicyUpdateCorrectionPrompt(): string {

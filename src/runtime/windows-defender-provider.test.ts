@@ -147,4 +147,25 @@ describe('WindowsDefenderProvider', () => {
       20_000,
     );
   });
+
+  it('treats in-progress Defender scans as a successful request', async () => {
+    const runner = vi.fn(async () => {
+      throw new Error('Start-MpScan : A scan is already in progress on this device. (0x80508023)');
+    });
+    const provider = new WindowsDefenderProvider({
+      platform: 'win32',
+      persistPath: makePersistPath(),
+      runner,
+    });
+
+    await expect(provider.runScan({ type: 'quick' })).resolves.toEqual({
+      success: true,
+      message: 'Windows Defender quick scan is already in progress.',
+    });
+    expect(runner).toHaveBeenCalledWith(
+      'powershell.exe',
+      ['-NoProfile', '-Command', `$ProgressPreference = 'SilentlyContinue'; Start-MpScan -ScanType QuickScan`],
+      20_000,
+    );
+  });
 });

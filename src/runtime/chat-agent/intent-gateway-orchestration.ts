@@ -3,6 +3,9 @@ import { isAffirmativeContinuation, stripLeadingContextPrefix } from '../../chat
 import type { ResolvedSkill } from '../../skills/types.js';
 import { resolveAffirmativeMemoryContinuationFromHistory } from '../../util/memory-intent.js';
 import type { ConversationKey } from '../conversation.js';
+import { resolveHistoricalCodingBackendRequest } from '../intent/history-context.js';
+import { looksLikePendingActionContextTurn } from '../intent/request-patterns.js';
+import { normalizeIntentGatewayRepairText } from '../intent/text.js';
 import {
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
@@ -27,6 +30,14 @@ import {
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated|started|restarted|running)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated|started|restarted)\b/i;
 const STATUS_CHECK_FOLLOW_UP_PATTERN = /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/i;
+
+export interface IntentGatewayClassificationContext {
+  recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  pendingAction: PendingActionRecord | null;
+  continuityThread: ContinuityThreadRecord | null;
+  contextSuppressed: boolean;
+  suppressionReason?: 'approval_background_only';
+}
 
 export interface IntentGatewayClarificationResponseInput {
   gateway: IntentGatewayRecord | null;
@@ -242,6 +253,7 @@ export function resolveIntentGatewayContent(input: {
   currentContent: string;
   pendingAction: PendingActionRecord | null;
   priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+  continuityThread?: ContinuityThreadRecord | null;
 }): string | null {
   const decision = input.gateway?.decision;
   if (!decision) return null;
@@ -254,6 +266,17 @@ export function resolveIntentGatewayContent(input: {
   }
   if (decision.resolvedContent?.trim()) {
     return decision.resolvedContent.trim();
+  }
+  if (decision.route === 'coding_task' && decision.entities.codingBackend) {
+    const historicalFallback = resolveHistoricalCodingBackendRequest({
+      backendId: decision.entities.codingBackend,
+      content: stripLeadingContextPrefix(input.currentContent),
+      lastActionableRequest: input.continuityThread?.lastActionableRequest
+        ?? findLatestActionableUserRequest(input.priorHistory),
+    });
+    if (historicalFallback) {
+      return historicalFallback;
+    }
   }
 
   if (input.pendingAction?.blocker.kind === 'clarification'
@@ -295,6 +318,39 @@ export function resolveIntentGatewayContent(input: {
   }
 
   return null;
+}
+
+export function filterIntentGatewayClassificationContext(input: {
+  content: string;
+  recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  pendingAction: PendingActionRecord | null;
+  continuityThread?: ContinuityThreadRecord | null;
+}): IntentGatewayClassificationContext {
+  const pendingAction = input.pendingAction ?? null;
+  const continuityThread = input.continuityThread ?? null;
+  if (!pendingAction || pendingAction.blocker.kind !== 'approval') {
+    return {
+      recentHistory: input.recentHistory,
+      pendingAction,
+      continuityThread,
+      contextSuppressed: false,
+    };
+  }
+  if (looksLikePendingActionContextTurn(input.content)) {
+    return {
+      recentHistory: input.recentHistory,
+      pendingAction,
+      continuityThread,
+      contextSuppressed: false,
+    };
+  }
+  return {
+    recentHistory: undefined,
+    pendingAction: null,
+    continuityThread: null,
+    contextSuppressed: true,
+    suppressionReason: 'approval_background_only',
+  };
 }
 
 export function resolvePendingActionContinuationContent(
@@ -504,6 +560,9 @@ export function findLatestActionableUserRequest(
     if (/^(?:no|yes|yeah|yep|gmail|outlook|codex|claude code|gemini|aider)\b/i.test(text)) {
       continue;
     }
+    if (isCodingBackendSwitchFollowUp(text)) {
+      continue;
+    }
     if (isStatusCheckFollowUp(text)) {
       continue;
     }
@@ -541,4 +600,11 @@ function isRetryableProviderFailureMessage(content: string): boolean {
 
 function isStatusCheckFollowUp(content: string): boolean {
   return STATUS_CHECK_FOLLOW_UP_PATTERN.test(content.trim());
+}
+
+function isCodingBackendSwitchFollowUp(content: string): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  return /^(?:(?:ok(?:ay)?|sure|actually|please|right)\s+)*(?:now\s+)?do\s+the\s+same\s+thing(?:\s+(?:with|using|via))?\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b[.!?]*$/.test(normalized)
+    || /^(?:(?:ok(?:ay)?|sure|actually|please|right)\s+)*(?:now\s+)?(?:same\s+thing|use|switch\s+to|try)\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b(?:\s+(?:instead|for\s+(?:that|this|it)))?[.!?]*$/.test(normalized);
 }

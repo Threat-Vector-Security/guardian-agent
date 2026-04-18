@@ -17,6 +17,7 @@ Current as-built deltas:
 - the System page exposes a compact Routing Trace inspector alongside the execution timeline
 - run and routing views support `continuityKey` and `activeExecutionRef` filters
 - routing-trace rows can deep-link to the matched run, a best-fit timeline event, and the related coding session
+- routing-trace rows now prefer delegated child task runs via `taskRunId` when the trace belongs to brokered worker activity
 - Automations history deep links support `assistantRunId` and `assistantRunItemId` so a caller can land on a specific timeline event instead of only the run row
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
@@ -145,6 +146,7 @@ type DashboardRunStatus =
 
 type DashboardRunKind =
   | 'assistant_dispatch'
+  | 'delegated_task'
   | 'automation_run'
   | 'code_session'
   | 'scheduled_task';
@@ -176,6 +178,7 @@ interface DashboardRunSummary {
 Notes:
 
 - `groupId` should group related work. For assistant dispatch this maps naturally to `sessionId`.
+- delegated child task runs should use `kind: 'delegated_task'` and set `parentRunId` to the originating assistant-dispatch run
 - `title` should be user-facing and built from safe preview text already available in runtime state.
 - Phase 1 should reserve `takeover_required` for a later phase, but it should not emit that state yet.
 

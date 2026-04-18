@@ -7,6 +7,10 @@ import {
 } from './intent/provenance.js';
 import { classifyIntentGatewayPass } from './intent/route-classifier.js';
 import {
+  resolveHistoricalCodingBackendRequest,
+  shouldRepairHistoricalCodingBackendTurn,
+} from './intent/history-context.js';
+import {
   normalizeIntentGatewayDecision,
   parseStructuredContent,
   parseStructuredToolArguments,
@@ -65,6 +69,30 @@ const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
   'Call the resolve_automation_name tool exactly once.',
 ].join(' ');
 
+const HISTORICAL_REFERENCE_REPAIR_TOOL: ToolDefinition = {
+  name: 'resolve_historical_reference',
+  description: 'Rewrite a short follow-up into a standalone request using the provided continuity context. Call exactly once.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      resolvedContent: {
+        type: 'string',
+      },
+    },
+    required: ['resolvedContent'],
+  },
+};
+
+const HISTORICAL_REFERENCE_REPAIR_SYSTEM_PROMPT = [
+  'You repair short context-dependent Guardian routing follow-ups.',
+  'The route is already known, and this pass is only for recovering missing resolvedContent.',
+  'Use the provided recent history and continuity context to decide whether the current request depends on an earlier actionable request.',
+  'If it does, return a standalone resolvedContent that preserves the current backend selection.',
+  'If the current request is already standalone, return it unchanged.',
+  'Call the resolve_historical_reference tool exactly once.',
+].join(' ');
+
 export class IntentGateway {
   async classify(
     input: IntentGatewayInput,
@@ -78,7 +106,7 @@ export class IntentGateway {
       promptProfile: primaryPromptProfile,
     });
     if (primary.available) {
-      return this.repairAutomationNameIfNeeded(input, primary, chat);
+      return this.repairDecisionIfNeeded(input, primary, chat);
     }
 
     const fallback = await classifyIntentGatewayPass(input, chat, {
@@ -87,7 +115,7 @@ export class IntentGateway {
       promptProfile: primaryPromptProfile,
     });
     if (fallback.available) {
-      return this.repairAutomationNameIfNeeded(input, fallback, chat);
+      return this.repairDecisionIfNeeded(input, fallback, chat);
     }
 
     const routeOnly = await classifyIntentGatewayPass(input, chat, {
@@ -96,15 +124,15 @@ export class IntentGateway {
       promptProfile: primaryPromptProfile,
     });
     if (routeOnly.available || routeOnly.rawResponsePreview || routeOnly.model !== 'unknown') {
-      return this.repairAutomationNameIfNeeded(input, routeOnly, chat);
+      return this.repairDecisionIfNeeded(input, routeOnly, chat);
     }
     if (fallback.rawResponsePreview || fallback.model !== 'unknown') {
-      return this.repairAutomationNameIfNeeded(input, fallback, chat);
+      return this.repairDecisionIfNeeded(input, fallback, chat);
     }
-    return this.repairAutomationNameIfNeeded(input, primary, chat);
+    return this.repairDecisionIfNeeded(input, primary, chat);
   }
 
-  private async repairAutomationNameIfNeeded(
+  private async repairDecisionIfNeeded(
     input: IntentGatewayInput,
     record: IntentGatewayRecord,
     chat: IntentGatewayChatFn,
@@ -126,6 +154,19 @@ export class IntentGateway {
             ...decision.entities,
             automationName: repairedName,
           },
+        };
+      }
+    }
+    if (needsHistoricalReferenceRepair(input, decision)) {
+      const repairedResolvedContent = await repairHistoricalReference(input, decision, chat);
+      if (repairedResolvedContent) {
+        decision = {
+          ...decision,
+          provenance: {
+            ...(decision.provenance ?? {}),
+            resolvedContent: decision.provenance?.resolvedContent ?? 'repair.historical_reference',
+          },
+          resolvedContent: repairedResolvedContent,
         };
       }
     }
@@ -451,12 +492,65 @@ function buildAutomationNameRepairMessages(
   ];
 }
 
+function buildHistoricalReferenceRepairMessages(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): ChatMessage[] {
+  const channelLabel = input.channel?.trim() || 'unknown';
+  const currentRequest = input.content.trim();
+  const backendId = decision.entities.codingBackend?.trim() || 'unknown';
+  const historySection = Array.isArray(input.recentHistory) && input.recentHistory.length > 0
+    ? input.recentHistory
+      .slice(-6)
+      .map((entry) => `${entry.role}: ${entry.content}`)
+      .join('\n')
+    : '';
+  const continuitySection = input.continuity
+    ? [
+        input.continuity.focusSummary ? `Focus summary: ${input.continuity.focusSummary}` : '',
+        input.continuity.lastActionableRequest ? `Last actionable request: ${input.continuity.lastActionableRequest}` : '',
+        input.continuity.activeExecutionRefs?.length
+          ? `Active execution refs: ${input.continuity.activeExecutionRefs.join(', ')}`
+          : '',
+      ].filter(Boolean).join('\n')
+    : '';
+  return [
+    {
+      role: 'system',
+      content: HISTORICAL_REFERENCE_REPAIR_SYSTEM_PROMPT,
+    },
+    {
+      role: 'user',
+      content: [
+        `Channel: ${channelLabel}`,
+        `Route: ${decision.route}`,
+        `Operation: ${decision.operation}`,
+        `Coding backend: ${backendId}`,
+        decision.summary?.trim() ? `Classifier summary: ${decision.summary.trim()}` : '',
+        'Resolve this request into a standalone coding task if it depends on prior context.',
+        '',
+        continuitySection ? `Continuity:\n${continuitySection}` : '',
+        historySection ? `Recent history:\n${historySection}` : '',
+        `Current request:\n${currentRequest}`,
+      ].filter(Boolean).join('\n'),
+    },
+  ];
+}
+
 function parseAutomationNameRepair(response: ChatResponse): string | undefined {
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
   if (!parsed) return undefined;
   const automationName = typeof parsed.automationName === 'string' ? parsed.automationName.trim() : '';
   return automationName || undefined;
+}
+
+function parseHistoricalReferenceRepair(response: ChatResponse): string | undefined {
+  const parsed = parseStructuredToolArguments(response)
+    ?? parseStructuredContent(response.content);
+  if (!parsed) return undefined;
+  const resolvedContent = typeof parsed.resolvedContent === 'string' ? parsed.resolvedContent.trim() : '';
+  return resolvedContent || undefined;
 }
 
 async function repairAutomationName(
@@ -476,6 +570,23 @@ async function repairAutomationName(
   }
 }
 
+async function repairHistoricalReference(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+  chat: IntentGatewayChatFn,
+): Promise<string | undefined> {
+  try {
+    const response = await chat(buildHistoricalReferenceRepairMessages(input, decision), {
+      maxTokens: 160,
+      temperature: 0,
+      tools: [HISTORICAL_REFERENCE_REPAIR_TOOL],
+    });
+    return parseHistoricalReferenceRepair(response);
+  } catch {
+    return undefined;
+  }
+}
+
 function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
   if (decision.entities.automationName?.trim()) return false;
   if (decision.route === 'automation_control' || decision.route === 'automation_output_task') {
@@ -484,4 +595,29 @@ function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
   return decision.route === 'ui_control'
     && decision.entities.uiSurface === 'automations'
     && ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation);
+}
+
+function needsHistoricalReferenceRepair(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): boolean {
+  if (decision.route !== 'coding_task') return false;
+  if (decision.resolution !== 'ready') return false;
+  if (decision.resolvedContent?.trim()) return false;
+  if (!decision.entities.codingBackend?.trim()) return false;
+  const lastActionableRequest = input.continuity?.lastActionableRequest?.trim();
+  if (!lastActionableRequest) return false;
+  if (!shouldRepairHistoricalCodingBackendTurn({
+    content: input.content,
+    lastActionableRequest,
+  })) {
+    return false;
+  }
+
+  const deterministicResolution = resolveHistoricalCodingBackendRequest({
+    backendId: decision.entities.codingBackend,
+    content: input.content,
+    lastActionableRequest,
+  });
+  return Boolean(deterministicResolution);
 }

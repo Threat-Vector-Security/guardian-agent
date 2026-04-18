@@ -30,7 +30,9 @@ export type IntentRoutingTraceStage =
   | 'direct_tool_call_started'
   | 'direct_tool_call_completed'
   | 'direct_intent_response'
-  | 'dispatch_response';
+  | 'dispatch_response'
+  | 'approval_decision_resolved'
+  | 'approval_continuation_resolved';
 
 export interface IntentRoutingTraceEntry {
   id: string;

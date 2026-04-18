@@ -47,6 +47,85 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('does not treat negated backend mentions as delegated coding backend requests', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: 'In one sentence, what kind of application is this workspace? Do not use Codex for this; answer directly from the current coding context.',
+      },
+      'coding_task',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.codingBackend).toBeUndefined();
+    expect(result.entities.codingBackendRequested).toBeUndefined();
+    expect(result.entities.sessionTarget).toBeUndefined();
+  });
+
+  it('drops classifier-provided coding-task session targets when the source does not explicitly name a target workspace', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        sessionTarget: 'one sentence, what kind of application is this',
+      },
+      {
+        sourceContent: 'In one sentence, what kind of application is this workspace? Answer directly from the current coding context.',
+      },
+      'coding_task',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.sessionTarget).toBeUndefined();
+  });
+
+  it('preserves classifier-provided coding-task session targets when no source content is available', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        sessionTarget: 'TempInstallTest coding workspace',
+      },
+      undefined,
+      'coding_task',
+      'run',
+      'classifier.primary',
+    );
+
+    expect(result.entities.sessionTarget).toBe('TempInstallTest coding workspace');
+  });
+
+  it('preserves the richer explicit coding-task session target when it matches the source-derived workspace', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        sessionTarget: 'Test Tactical Game App workspace',
+      },
+      {
+        sourceContent: 'Use Codex in the Test Tactical Game App workspace to create a smoke test file.',
+      },
+      'coding_task',
+      'create',
+      'classifier.primary',
+    );
+
+    expect(result.entities.sessionTarget).toBe('Test Tactical Game App workspace');
+    expect(result.provenance?.sessionTarget).toBe('classifier.primary');
+  });
+
+  it('keeps classifier-provided session targets for explicit coding-session control requests', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        sessionTarget: 'Guardian project',
+      },
+      {
+        sourceContent: 'Switch this chat to Guardian project.',
+      },
+      'coding_session_control',
+      'update',
+      'classifier.primary',
+    );
+
+    expect(result.entities.sessionTarget).toBe('Guardian project');
+  });
+
   it('preserves remote sandbox commands as coding-task entities', () => {
     expect(resolveIntentGatewayEntities(
       {},

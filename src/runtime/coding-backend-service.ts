@@ -1,5 +1,8 @@
 import type { CodingBackendConfig, CodingBackendsConfig } from '../config/types.js';
 import type { CodingBackendTerminalControl } from '../channels/web-types.js';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CODING_BACKEND_PRESETS } from './coding-backend-presets.js';
 import { createLogger } from '../util/logging.js';
 
@@ -14,6 +17,8 @@ export interface CodingBackendRunResult {
   status: 'succeeded' | 'failed' | 'timed_out';
   exitCode?: number;
   durationMs: number;
+  /** Final assistant answer captured separately from the raw terminal transcript. */
+  assistantResponse?: string;
   /** Cleaned output with ANSI codes stripped, truncated. */
   output: string;
   terminalTabId: string;
@@ -81,12 +86,52 @@ function shellQuote(text: string): string {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
 
+function toWslPath(value: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '/';
+  if (normalized.startsWith('/')) {
+    return normalized.replace(/\\/g, '/');
+  }
+  const driveMatch = normalized.replace(/\//g, '\\').match(/^([A-Za-z]):\\(.*)$/);
+  if (driveMatch) {
+    const [, drive, rest] = driveMatch;
+    return `/mnt/${drive.toLowerCase()}/${rest.replace(/\\/g, '/')}`;
+  }
+  return normalized.replace(/\\/g, '/');
+}
+
+function toShellVisiblePath(value: string, shell: string): string {
+  if (process.platform !== 'win32') {
+    return value;
+  }
+  if (shell === 'wsl' || shell === 'wsl-login') {
+    return toWslPath(value);
+  }
+  if (shell === 'git-bash') {
+    return value.replace(/\\/g, '/');
+  }
+  return value;
+}
+
+interface BuildCommandOptions {
+  assistantResponseArgs?: string;
+}
+
 /** Build the full CLI command from config and task. */
-function buildCommand(backend: CodingBackendConfig, task: string, cwd: string): string {
+function buildCommand(
+  backend: CodingBackendConfig,
+  task: string,
+  cwd: string,
+  options: BuildCommandOptions = {},
+): string {
   const quotedTask = shellQuote(task);
-  const args = backend.args.map((arg) =>
-    arg.replace(/\{\{task\}\}/g, quotedTask).replace(/\{\{cwd\}\}/g, shellQuote(cwd)),
-  );
+  const args = backend.args
+    .map((arg) => arg
+      .replace(/\{\{task\}\}/g, quotedTask)
+      .replace(/\{\{cwd\}\}/g, shellQuote(cwd))
+      .replace(/\{\{assistant_response_args\}\}/g, options.assistantResponseArgs?.trim() || '')
+      .trim())
+    .filter(Boolean);
   // If args already contain the quoted task (from template), join directly.
   // Otherwise the task was interpolated into the args already.
   return [backend.command, ...args].join(' ');
@@ -147,6 +192,7 @@ interface ActiveCodingBackendSession {
   requestId?: string;
   command: string;
   outputBuffer: string;
+  assistantResponseCapture?: AssistantResponseCapture | null;
   progressSequence: number;
   lastProgressDetail?: string;
   lastProgressAt?: number;
@@ -154,6 +200,127 @@ interface ActiveCodingBackendSession {
   unsubscribeExit: () => void;
   timeoutHandle?: ReturnType<typeof setTimeout>;
   resolve?: (result: CodingBackendRunResult) => void;
+}
+
+interface AssistantResponseCapture {
+  directory: string;
+  hostPath: string;
+  shellPath: string;
+}
+
+function backendSupportsAssistantResponseCapture(backend: CodingBackendConfig): boolean {
+  return backend.args.some((arg) => arg.includes('{{assistant_response_args}}'));
+}
+
+/**
+ * Extract the final assistant reply from a raw coding-backend terminal transcript.
+ * Used as a fallback when the CLI's `--output-last-message` capture file is unavailable
+ * (path translation, permissions, version drift). Backend-specific because each CLI
+ * prints its final answer in a different format.
+ */
+function extractAssistantResponseFromOutput(backendId: string, output: string): string | undefined {
+  const text = output.replace(/\r+/g, '\n');
+  if (!text.trim()) return undefined;
+
+  // Codex `exec` prints the answer between a `codex` marker line and a trailing
+  // `tokens used <n>` summary line. Allow surrounding whitespace.
+  if (backendId === 'codex') {
+    const matches = [...text.matchAll(/(^|\n)\s*codex\s*\n([\s\S]*?)(?=\n\s*tokens\s+used\b|$)/gi)];
+    if (matches.length > 0) {
+      const last = matches[matches.length - 1];
+      const body = stripTrailingShellNoise(last[2] ?? '');
+      if (body) return body;
+    }
+    return undefined;
+  }
+
+  // Aider interleaves tool logs, diffs, and assistant prose. Its own summaries
+  // come between `> <task>` and either `Tokens:` or `Applied edit` / final prompt.
+  if (backendId === 'aider') {
+    const tokenCutoff = text.search(/\n\s*Tokens:\s*/i);
+    const trimmed = tokenCutoff >= 0 ? text.slice(0, tokenCutoff) : text;
+    const afterPrompt = trimmed.match(/\n>\s+[\s\S]*?\n([\s\S]*)$/);
+    const candidate = afterPrompt ? afterPrompt[1] : trimmed;
+    const cleaned = stripTrailingShellNoise(stripLeadingCommandEcho(candidate));
+    return cleaned || undefined;
+  }
+
+  // Claude Code (`--print`) and Gemini CLI print the assistant reply directly.
+  // Strip the shell wrapper (command echo + trailing `exit` / bash prompt) and
+  // return the remainder verbatim.
+  if (backendId === 'claude-code' || backendId === 'gemini-cli') {
+    const cleaned = stripTrailingShellNoise(stripLeadingCommandEcho(text));
+    return cleaned || undefined;
+  }
+
+  // Unknown / user-configured backend: best-effort wrapper strip.
+  const cleaned = stripTrailingShellNoise(stripLeadingCommandEcho(text));
+  return cleaned || undefined;
+}
+
+/**
+ * Remove the leading command-echo line(s) produced by the PTY shell. Drops any
+ * prompt + command lines until the first line that looks like CLI output.
+ */
+function stripLeadingCommandEcho(text: string): string {
+  const lines = text.split('\n');
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+    if (/^(bash|sh|zsh|wsl)[\w.\-]*\$/.test(line)) { index += 1; continue; }
+    if (/^[\w.\-]+@[\w.\-]+:[^$]*\$/.test(line)) { index += 1; continue; }
+    if (/^(codex|claude|gemini|aider)\s+/.test(line)) { index += 1; continue; }
+    break;
+  }
+  return lines.slice(index).join('\n').trim();
+}
+
+/**
+ * Remove the trailing `exit` line, bash prompts left behind by the PTY shell,
+ * and any `[output truncated]` marker appended by buffer capping.
+ */
+function stripTrailingShellNoise(text: string): string {
+  let current = text.replace(/\n\[output truncated\]\s*$/i, '');
+  const prune = /\n\s*(?:(?:bash|sh|zsh|wsl)[\w.\-]*\$[^\n]*|exit|logout|[\w.\-]+@[\w.\-]+:[^\n]*\$[^\n]*)\s*$/i;
+  while (prune.test(current)) {
+    current = current.replace(prune, '');
+  }
+  return current.trim();
+}
+
+async function createAssistantResponseCapture(shell: string): Promise<AssistantResponseCapture | null> {
+  try {
+    const directory = await mkdtemp(join(tmpdir(), 'guardianagent-coding-backend-'));
+    const hostPath = join(directory, 'assistant-response.txt');
+    return {
+      directory,
+      hostPath,
+      shellPath: toShellVisiblePath(hostPath, shell),
+    };
+  } catch (error) {
+    log.warn({ error }, 'Could not prepare assistant response capture for coding backend run');
+    return null;
+  }
+}
+
+async function readAssistantResponseCapture(capture?: AssistantResponseCapture | null): Promise<string | undefined> {
+  if (!capture) return undefined;
+  try {
+    const text = (await readFile(capture.hostPath, 'utf8')).trim();
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function cleanupAssistantResponseCapture(capture?: AssistantResponseCapture | null): Promise<void> {
+  if (!capture) return;
+  try {
+    await rm(capture.directory, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup failures for temp capture directories.
+  }
 }
 
 export class CodingBackendService {
@@ -199,18 +366,68 @@ export class CodingBackendService {
 
   /** Resolve backend config by id, falling back to defaults and presets. */
   resolveBackend(backendId?: string): CodingBackendConfig | null {
+    if (!this.config.enabled) {
+      return null;
+    }
     const id = backendId || this.config.defaultBackend;
     if (!id) {
-      // Use first enabled backend
+      // Use first enabled configured backend.
       const first = this.config.backends.find((b) => b.enabled);
       if (first) return this.mergeWithPreset(first);
       return null;
     }
     const configured = this.config.backends.find((b) => b.id === id);
     if (configured) return this.mergeWithPreset(configured);
-    // Check presets
-    const preset = CODING_BACKEND_PRESETS.find((p) => p.id === id);
-    if (preset) return { ...preset, enabled: true };
+    return null;
+  }
+
+  listEnabledBackendIds(): string[] {
+    if (!this.config.enabled) return [];
+    return this.config.backends
+      .filter((backend) => backend.enabled)
+      .map((backend) => backend.id);
+  }
+
+  getRunPrerequisiteError(params: {
+    backendId?: string;
+    codeSessionId?: string;
+    workspaceRoot?: string;
+  }): string | null {
+    if (!this.config.enabled) {
+      return 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.';
+    }
+
+    if (!params.codeSessionId?.trim()) {
+      return 'No active coding session. Create or attach to a coding session first.';
+    }
+
+    if (!params.workspaceRoot?.trim()) {
+      return 'Could not determine workspace root for the current coding session.';
+    }
+
+    const requestedBackendId = params.backendId?.trim();
+    if (!requestedBackendId) {
+      if (this.resolveBackend()) {
+        return null;
+      }
+      return 'No enabled coding backends are configured. Enable Codex, Claude Code, Gemini CLI, or Aider in Configuration > Integrations > Coding Assistants.';
+    }
+
+    const configured = this.config.backends.find((backend) => backend.id === requestedBackendId);
+    if (!configured) {
+      const preset = CODING_BACKEND_PRESETS.find((candidate) => candidate.id === requestedBackendId);
+      if (preset) {
+        return `Coding backend '${preset.name}' is not enabled. Enable it in Configuration > Integrations > Coding Assistants.`;
+      }
+      const available = this.listEnabledBackendIds();
+      return `Coding backend '${requestedBackendId}' is not configured. Available: ${available.join(', ') || 'none'}. Add backends in Configuration > Integrations > Coding Assistants.`;
+    }
+
+    if (!configured.enabled) {
+      const merged = this.mergeWithPreset(configured);
+      return `Coding backend '${merged.name}' is disabled. Enable it in Configuration > Integrations > Coding Assistants.`;
+    }
+
     return null;
   }
 
@@ -305,9 +522,33 @@ export class CodingBackendService {
     workspaceRoot: string;
     requestId?: string;
   }): Promise<CodingBackendRunResult> {
+    const prerequisiteError = this.getRunPrerequisiteError(params);
+    if (prerequisiteError) {
+      const requestedBackendId = params.backendId?.trim();
+      const configured = requestedBackendId
+        ? this.config.backends.find((backend) => backend.id === requestedBackendId)
+        : undefined;
+      const preset = requestedBackendId
+        ? CODING_BACKEND_PRESETS.find((candidate) => candidate.id === requestedBackendId)
+        : undefined;
+      const backendName = configured
+        ? this.mergeWithPreset(configured).name
+        : preset?.name ?? requestedBackendId ?? 'Unknown';
+      return {
+        success: false,
+        backendId: requestedBackendId || 'unknown',
+        backendName,
+        task: params.task,
+        status: 'failed',
+        durationMs: 0,
+        output: prerequisiteError,
+        terminalTabId: '',
+      };
+    }
+
     const backend = this.resolveBackend(params.backendId);
     if (!backend) {
-      const available = this.config.backends.filter((b) => b.enabled).map((b) => b.id);
+      const available = this.listEnabledBackendIds();
       return {
         success: false,
         backendId: params.backendId || 'unknown',
@@ -350,9 +591,15 @@ export class CodingBackendService {
     }
 
     const sessionId = `cb-${++this.sessionCounter}-${Date.now()}`;
-    const command = buildCommand(backend, params.task, params.workspaceRoot);
     const timeoutMs = backend.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const shell = backend.shell || (process.platform === 'win32' ? 'wsl' : 'bash');
+    const assistantResponseCapture = backendSupportsAssistantResponseCapture(backend)
+      ? await createAssistantResponseCapture(shell)
+      : null;
+    const assistantResponseArgs = assistantResponseCapture
+      ? `--output-last-message ${shellQuote(assistantResponseCapture.shellPath)}`
+      : '';
+    const command = buildCommand(backend, params.task, params.workspaceRoot, { assistantResponseArgs });
     const requestId = params.requestId?.trim() || undefined;
     const runId = requestId || `code-session:${params.codeSessionId}:backend:${sessionId}`;
 
@@ -379,7 +626,7 @@ export class CodingBackendService {
     };
 
     return new Promise<CodingBackendRunResult>((resolve) => {
-      const complete = (status: 'succeeded' | 'failed' | 'timed_out', exitCode?: number) => {
+      const complete = async (status: 'succeeded' | 'failed' | 'timed_out', exitCode?: number) => {
         const entry = this.activeSessions.get(sessionId);
         if (!entry) return; // already completed
         if (entry.timeoutHandle) clearTimeout(entry.timeoutHandle);
@@ -400,6 +647,15 @@ export class CodingBackendService {
         const truncated = cleaned.length > MAX_TOOL_OUTPUT_CHARS
           ? cleaned.slice(-MAX_TOOL_OUTPUT_CHARS) + '\n[output truncated]'
           : cleaned;
+        let assistantResponse: string | undefined;
+        try {
+          assistantResponse = await readAssistantResponseCapture(entry.assistantResponseCapture);
+        } finally {
+          await cleanupAssistantResponseCapture(entry.assistantResponseCapture);
+        }
+        if (!assistantResponse) {
+          assistantResponse = extractAssistantResponseFromOutput(backend.id, cleaned);
+        }
 
         log.info({ backendId: backend.id, sessionId, status, exitCode, durationMs }, 'Coding backend completed');
 
@@ -416,6 +672,7 @@ export class CodingBackendService {
           status,
           exitCode,
           durationMs,
+          ...(assistantResponse ? { assistantResponse } : {}),
           output: truncated || `(no output captured)`,
           terminalTabId: terminalId,
         });
@@ -433,13 +690,13 @@ export class CodingBackendService {
       });
 
       const unsubscribeExit = this.terminalControl.onTerminalExit(terminalId, (exitCode) => {
-        complete(exitCode === 0 ? 'succeeded' : 'failed', exitCode);
+        void complete(exitCode === 0 ? 'succeeded' : 'failed', exitCode);
       });
 
       const timeoutHandle = setTimeout(() => {
         log.warn({ backendId: backend.id, sessionId, timeoutMs }, 'Coding backend timed out');
         this.terminalControl.closeTerminal(terminalId);
-        complete('timed_out');
+        void complete('timed_out');
       }, timeoutMs);
 
       this.activeSessions.set(sessionId, {
@@ -448,6 +705,7 @@ export class CodingBackendService {
         ...(requestId ? { requestId } : {}),
         command,
         outputBuffer: '',
+        assistantResponseCapture,
         progressSequence: 0,
         unsubscribeOutput,
         unsubscribeExit,

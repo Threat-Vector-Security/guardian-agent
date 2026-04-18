@@ -28,3 +28,38 @@ export function isResponseDegraded(content: string | undefined): boolean {
 
   return false;
 }
+
+/**
+ * Detect conversational progress updates that narrate future work instead of
+ * delivering the requested result. These responses are fluent enough to avoid
+ * the degraded-response fallback, but they are still not valid terminal
+ * answers for delegated execution.
+ */
+export function isIntermediateStatusResponse(content: string | undefined): boolean {
+  if (!content?.trim()) return false;
+  if (isResponseDegraded(content)) return false;
+
+  const normalized = content.trim();
+  const lower = normalized.toLowerCase();
+  const lineCount = normalized.split(/\r?\n/).length;
+  if (normalized.length > 320 || lineCount > 5) {
+    return false;
+  }
+
+  const continuationMarkers = [
+    /^(?:ok(?:ay)?|sure|alright|all right|right)[,:\s-]*(?:i['’]ll|i will|let me)\b/i,
+    /^(?:i['’]ll|i will|let me)\b/i,
+    /\b(?:now|next|first)\s+(?:i['’]ll|i will|let me)\b/i,
+    /\b(?:let me|i['’]ll|i will)\s+(?:inspect|check|review|look|find|apply|restart|resume|write|create|read|use|try|run|continue|proceed)\b/i,
+  ];
+  const terminalMarkers = [
+    /\b(?:done|completed|created|wrote|written|saved|updated|ready|waiting for approval|approval required|blocked|failed|unable|cannot|can't|will not|won't|do not|don't|exact stdout|file content|what changed|results?:|summary:|report created)\b/i,
+    /^(?:#{1,6}\s|\d+\.\s|- )/m,
+  ];
+
+  const looksOngoing = continuationMarkers.some((pattern) => pattern.test(normalized))
+    || (/\b(?:before|then)\b/.test(lower) && /\b(?:i['’]ll|i will|let me)\b/.test(lower));
+  if (!looksOngoing) return false;
+  if (terminalMarkers.some((pattern) => pattern.test(normalized))) return false;
+  return true;
+}

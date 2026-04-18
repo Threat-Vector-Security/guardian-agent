@@ -1415,6 +1415,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const limit = Number.parseInt(url.searchParams.get('limit') || '20', 10);
     const status = trimOptionalString(url.searchParams.get('status')) as import('../runtime/run-timeline.js').DashboardRunStatus | undefined;
     const kind = trimOptionalString(url.searchParams.get('kind')) as import('../runtime/run-timeline.js').DashboardRunKind | undefined;
+    const parentRunId = trimOptionalString(url.searchParams.get('parentRunId'));
     const channel = trimOptionalString(url.searchParams.get('channel'));
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
     const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
@@ -1424,6 +1425,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       limit: Number.isFinite(limit) ? limit : 20,
       ...(status ? { status } : {}),
       ...(kind ? { kind } : {}),
+      ...(parentRunId ? { parentRunId } : {}),
       ...(channel ? { channel } : {}),
       ...(agentId ? { agentId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),

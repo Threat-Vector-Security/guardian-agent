@@ -12,6 +12,13 @@ describe('coding-backend-presets', () => {
     const codex = getCodingBackendPreset('codex');
     expect(codex).toBeDefined();
     expect(codex?.command).toBe('codex');
-    expect(codex?.args).toEqual(['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{task}}']);
+    expect(codex?.args).toEqual([
+      'exec',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'workspace-write',
+      '{{assistant_response_args}}',
+      '{{task}}',
+    ]);
   });
 });

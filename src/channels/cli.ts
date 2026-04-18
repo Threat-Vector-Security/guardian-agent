@@ -255,7 +255,10 @@ function extractCliLiveProgressSnapshot(event: SSEEvent, requestId: string): Cli
   if (event.type !== 'run.timeline' || !isDashboardRunDetail(event.data)) return null;
   const detail = event.data;
   const normalizedRequestId = typeof requestId === 'string' ? requestId.trim() : '';
-  if (normalizedRequestId && detail.summary.runId !== normalizedRequestId) return null;
+  const parentRunId = typeof detail.summary.parentRunId === 'string'
+    ? detail.summary.parentRunId.trim()
+    : '';
+  if (normalizedRequestId && detail.summary.runId !== normalizedRequestId && parentRunId !== normalizedRequestId) return null;
   if (!normalizedRequestId) return null;
 
   const liveSummaryItem = detail.liveSummary?.items[detail.liveSummary.items.length - 1];
@@ -303,12 +306,13 @@ function extractCliApprovalProgressSnapshot(
   const requestId = typeof progressState.requestId === 'string' ? progressState.requestId.trim() : '';
   const codeSessionId = typeof progressState.codeSessionId === 'string' ? progressState.codeSessionId.trim() : '';
   const runId = typeof detail.summary.runId === 'string' ? detail.summary.runId.trim() : '';
+  const parentRunId = typeof detail.summary.parentRunId === 'string' ? detail.summary.parentRunId.trim() : '';
   const eventCodeSessionId = typeof detail.summary.codeSessionId === 'string'
     ? detail.summary.codeSessionId.trim()
     : '';
 
   if (requestId) {
-    if (runId !== requestId) return null;
+    if (runId !== requestId && parentRunId !== requestId) return null;
     if (codeSessionId && eventCodeSessionId && eventCodeSessionId !== codeSessionId) return null;
     return extractCliLiveProgressSnapshot(event, requestId);
   }

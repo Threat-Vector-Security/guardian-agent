@@ -21,7 +21,9 @@ import {
   normalizeFilesystemResumePrincipalRole,
   readFilesystemSaveOutputResumePayload,
   readSecondBrainMutationResumePayload,
+  readCodingBackendRunResumePayload,
   type SecondBrainMutationResumePayload,
+  type CodingBackendRunResumePayload,
 } from './direct-route-resume.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
@@ -249,9 +251,23 @@ export async function resumeStoredDirectRoutePendingAction(input: {
     resume: SecondBrainMutationResumePayload,
     approvalResult?: ToolApprovalDecisionResult,
   ) => Promise<DirectRouteRuntimeResponse>;
+  executeStoredCodingBackendRun?: (
+    pendingAction: PendingActionRecord,
+    resume: CodingBackendRunResumePayload,
+    approvalResult?: ToolApprovalDecisionResult,
+  ) => Promise<DirectRouteRuntimeResponse>;
 }): Promise<DirectRouteRuntimeResponse | null> {
   if (!input.options?.pendingActionAlreadyCleared) {
     input.completePendingAction(input.pendingAction.id);
+  }
+
+  const codingBackendResume = readCodingBackendRunResumePayload(input.pendingAction.resume?.payload);
+  if (codingBackendResume && input.executeStoredCodingBackendRun) {
+    return input.executeStoredCodingBackendRun(
+      input.pendingAction,
+      codingBackendResume,
+      input.options?.approvalResult,
+    );
   }
 
   const filesystemResume = readFilesystemSaveOutputResumePayload(input.pendingAction.resume?.payload);

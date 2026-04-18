@@ -426,6 +426,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'System now includes `Runtime Execution`, which is the operator-facing timeline for assistant dispatches, routine and scheduled-task runs, and code-session execution.',
                   'Use `Runtime Execution` when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed outside normal automation workflows.',
                   'Runtime Execution also shows live delegated-worker handoff entries so you can see when Guardian sent work to another agent, whether that agent is still working, and whether it finished or blocked.',
+                  'Delegated tasks also appear as their own child runs linked back to the parent request, so you can inspect the worker activity directly without losing the original conversation context.',
+                  'Those delegated child runs show whether the handoff is still running, waiting on approval, completed, or failed, which is the fastest way to tell whether delegated work actually finished.',
                   'Routing Trace gives you a quick explanation of how Guardian interpreted a request, where it sent the work, and when brokered worker dispatch actually started, ran, completed, or failed.',
                   'System shows the global pending-approval queue alongside runtime state. Configuration > Tools is where you manage tool routing and recent jobs. Security is where you review alerts, posture, and security activity.',
                 ],

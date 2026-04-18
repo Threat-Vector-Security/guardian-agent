@@ -569,9 +569,10 @@ export async function initChatPanel(container) {
     history.scrollTop = history.scrollHeight;
 
     const onRunTimeline = (data) => {
-      const matches = sessionId
-        ? matchesRunTimelineRequest(data, { codeSessionId: sessionId })
-        : matchesRunTimelineRequest(data, { requestId });
+      const matches = matchesRunTimelineRequest(data, {
+        ...(requestId ? { requestId } : {}),
+        ...(sessionId ? { codeSessionId: sessionId } : {}),
+      });
       if (!matches) return;
       updateActiveChatIndicatorTimeline(data);
       history.scrollTop = history.scrollHeight;

@@ -143,7 +143,14 @@ export class BrokerClient {
     actor: string,
     actorRole?: import('../tools/types.js').PrincipalRole,
     reason?: string,
-  ): Promise<{ success: boolean; message: string; status?: string; jobId?: string }> {
+  ): Promise<{
+    success: boolean;
+    approved?: boolean;
+    executionSucceeded?: boolean;
+    message: string;
+    status?: string;
+    jobId?: string;
+  }> {
     return this.sendRequest('approval.decide', { approvalId, decision, actor, actorRole, reason });
   }
 

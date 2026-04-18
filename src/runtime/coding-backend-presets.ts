@@ -21,7 +21,7 @@ export const CODING_BACKEND_PRESETS: CodingBackendPreset[] = [
     id: 'codex',
     name: 'OpenAI Codex CLI',
     command: 'codex',
-    args: ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{task}}'],
+    args: ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{{assistant_response_args}}', '{{task}}'],
     versionCommand: 'codex --version',
     updateCommand: 'npm update -g @openai/codex',
     timeoutMs: 300_000,

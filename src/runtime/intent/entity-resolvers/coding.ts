@@ -61,19 +61,46 @@ export function inferExplicitCodingBackendRequest(
 
 export function inferRequestedCodingBackend(normalized: string): string | undefined {
   if (!normalized) return undefined;
+  if (
+    isNegatedCodingBackendMention(normalized, '(?:openai\\s+)?codex(?:\\s+(?:cli|coding assistant|assistant))?')
+  ) {
+    return undefined;
+  }
   if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?(?:openai\s+)?codex(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
     return 'codex';
+  }
+  if (
+    isNegatedCodingBackendMention(normalized, 'claude(?:\\s+code)?(?:\\s+(?:cli|coding assistant|assistant))?')
+  ) {
+    return undefined;
   }
   if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?claude(?:\s+code)?(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
     return 'claude-code';
   }
+  if (
+    isNegatedCodingBackendMention(normalized, 'gemini(?:\\s+cli)?(?:\\s+(?:coding assistant|assistant))?')
+  ) {
+    return undefined;
+  }
   if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?gemini(?:\s+cli)?(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
     return 'gemini-cli';
+  }
+  if (
+    isNegatedCodingBackendMention(normalized, 'aider(?:\\s+(?:coding assistant|assistant))?')
+  ) {
+    return undefined;
   }
   if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?aider(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
     return 'aider';
   }
   return undefined;
+}
+
+function isNegatedCodingBackendMention(normalized: string, backendPattern: string): boolean {
+  const pattern = new RegExp(
+    `\\b(?:do\\s+not|don't|dont|without|instead\\s+of|avoid)\\s+(?:using\\s+|use\\s+)?(?:the\\s+)?${backendPattern}\\b`,
+  );
+  return pattern.test(normalized);
 }
 
 export function inferExplicitCodingBackendOperation(
@@ -163,15 +190,28 @@ export function cleanInferredSessionTarget(value: string | undefined): string | 
     .replace(/[.,!?;:]+$/g, '')
     .trim();
   if (!cleaned) return undefined;
-  const semanticTokens = cleaned
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .filter(Boolean)
-    .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
+  const tokenCount = cleaned.split(/\s+/g).filter(Boolean).length;
+  if (tokenCount > 6) return undefined;
+  if (/[,;:]/.test(cleaned)) return undefined;
+  if (/^(?:what|which|who|whom|whose|where|when|why|how)\b/i.test(cleaned)) return undefined;
+  const semanticTokens = extractSessionTargetSemanticTokens(cleaned);
   if (semanticTokens.length === 0) {
     return undefined;
   }
   return cleaned;
+}
+
+export function normalizeSessionTargetSemanticKey(value: string | undefined): string | undefined {
+  const cleaned = cleanInferredSessionTarget(value);
+  if (!cleaned) return undefined;
+  const semanticTokens = extractSessionTargetSemanticTokens(cleaned);
+  return semanticTokens.length > 0 ? semanticTokens.join(' ') : undefined;
+}
+
+export function areEquivalentSessionTargets(left: string | undefined, right: string | undefined): boolean {
+  const leftKey = normalizeSessionTargetSemanticKey(left);
+  const rightKey = normalizeSessionTargetSemanticKey(right);
+  return !!leftKey && leftKey === rightKey;
 }
 
 export function inferExplicitCodingTaskOperation(
@@ -215,6 +255,14 @@ export function inferExplicitCodingTaskOperation(
     return 'read';
   }
   return null;
+}
+
+function extractSessionTargetSemanticTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean)
+    .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
 }
 
 export function inferExplicitFilesystemTaskOperation(

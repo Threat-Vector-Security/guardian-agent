@@ -588,10 +588,53 @@ export interface ToolPolicyUpdate {
 }
 
 export interface ToolApprovalDecisionResult {
+  /** Whether the approval decision itself was processed successfully. */
   success: boolean;
+  /** Whether the approval ultimately ended up in the approved state. */
+  approved: boolean;
+  /**
+   * Post-approval execution outcome when an approved decision triggered tool execution.
+   * Undefined when no execution was attempted (for example, denied approvals).
+   */
+  executionSucceeded?: boolean;
   message: string;
   job?: ToolJobRecord;
   result?: ToolRunResponse;
+}
+
+function buildApprovalExecutionFailureMessage(toolName: string, reason: string): string {
+  const normalizedToolName = toolName.trim() || 'tool';
+  const normalizedReason = reason.trim() || 'Execution failed.';
+  return `Approval received for '${normalizedToolName}', but execution failed: ${normalizedReason}`;
+}
+
+function extractApprovalExecutionFailureReason(
+  toolName: string,
+  result?: ToolRunResponse,
+  fallback = 'Execution failed.',
+): string {
+  const output = result?.output;
+  if (toolName === 'coding_backend_run' && isRecord(output)) {
+    const assistantResponse = asString(output.assistantResponse).trim();
+    const backendOutput = asString(output.output).trim();
+    const outputMessage = asString(output.message).trim();
+    if (assistantResponse) return assistantResponse;
+    if (backendOutput) return backendOutput;
+    if (outputMessage) return outputMessage;
+  }
+
+  const outputMessage = extractOutputMessage(output);
+  if (outputMessage) return outputMessage;
+
+  const explicitError = result?.error?.trim();
+  if (explicitError) return explicitError;
+
+  const explicitMessage = result?.message?.trim();
+  if (explicitMessage && !/^tool failed\.?$/i.test(explicitMessage)) {
+    return explicitMessage;
+  }
+
+  return fallback;
 }
 
 interface PendingApprovalContext {
@@ -829,6 +872,23 @@ export class ToolExecutor {
 
   setCodingBackendService(codingBackendService: CodingBackendService | undefined): void {
     this.options.codingBackendService = codingBackendService;
+  }
+
+  listEnabledCodingBackends(): string[] {
+    const codingBackendService = this.options.codingBackendService as (CodingBackendService & {
+      listEnabledBackendIds?: () => string[];
+      listBackends?: () => Array<{ id: string; enabled: boolean }>;
+    }) | undefined;
+    if (!codingBackendService) return [];
+    if (typeof codingBackendService.listEnabledBackendIds === 'function') {
+      return codingBackendService.listEnabledBackendIds();
+    }
+    if (typeof codingBackendService.listBackends === 'function') {
+      return codingBackendService.listBackends()
+        .filter((backend) => backend.enabled)
+        .map((backend) => backend.id);
+    }
+    return [];
   }
 
   private syncHybridBrowserTools(): void {
@@ -3683,15 +3743,23 @@ export class ToolExecutor {
     const wasAlreadySettled = existingApprovalStatus === 'approved' || existingApprovalStatus === 'denied';
     const approval = this.approvals.decide(approvalId, decision, actor, actorRole, reason, this.now);
     if (!approval) {
-      return { success: false, message: `Approval '${approvalId}' not found.` };
+      return { success: false, approved: false, message: `Approval '${approvalId}' not found.` };
     }
     if (approval.status === 'pending') {
-      return { success: false, message: approval.reason ?? `Approval '${approvalId}' is not authorized for actor '${actor}'.` };
+      return {
+        success: false,
+        approved: false,
+        message: approval.reason ?? `Approval '${approvalId}' is not authorized for actor '${actor}'.`,
+      };
     }
 
     const job = this.jobsById.get(approval.jobId);
     if (!job) {
-      return { success: false, message: `Job '${approval.jobId}' for approval '${approvalId}' was not found.` };
+      return {
+        success: false,
+        approved: approval.status === 'approved',
+        message: `Job '${approval.jobId}' for approval '${approvalId}' was not found.`,
+      };
     }
 
     if (wasAlreadySettled) {
@@ -3699,32 +3767,46 @@ export class ToolExecutor {
         if (job.status === 'succeeded') {
           return {
             success: true,
+            approved: true,
+            executionSucceeded: true,
             message: job.resultPreview || `Approval '${approvalId}' was already approved and executed successfully.`,
             job,
           };
         }
         if (job.status === 'failed') {
           return {
-            success: false,
-            message: job.error || `Approval '${approvalId}' was already approved, but execution failed.`,
+            success: true,
+            approved: true,
+            executionSucceeded: false,
+            message: buildApprovalExecutionFailureMessage(
+              job.toolName,
+              job.error || `Approval '${approvalId}' was already approved, but execution failed.`,
+            ),
             job,
           };
         }
         if (job.status === 'denied') {
           return {
-            success: false,
+            success: true,
+            approved: false,
             message: job.error || `Approval '${approvalId}' was already denied.`,
             job,
           };
         }
         return {
-          success: false,
-          message: `Approval '${approvalId}' was already approved, but its execution context is no longer available.`,
+          success: true,
+          approved: true,
+          executionSucceeded: false,
+          message: buildApprovalExecutionFailureMessage(
+            job.toolName,
+            `Approval '${approvalId}' was already approved, but its execution context is no longer available.`,
+          ),
           job,
         };
       }
       return {
-        success: false,
+        success: true,
+        approved: false,
         message: `Approval '${approvalId}' was already denied.`,
         job,
       };
@@ -3738,6 +3820,7 @@ export class ToolExecutor {
       this.pendingApprovalContexts.delete(approvalId);
       const deniedResult: ToolApprovalDecisionResult = {
         success: true,
+        approved: false,
         message: `Denied approval '${approvalId}'.`,
         job,
       };
@@ -3751,7 +3834,16 @@ export class ToolExecutor {
 
     const pending = this.pendingApprovalContexts.get(approvalId);
     if (!pending) {
-      return { success: false, message: `No pending context found for approval '${approvalId}'.` };
+      return {
+        success: true,
+        approved: true,
+        executionSucceeded: false,
+        message: buildApprovalExecutionFailureMessage(
+          job.toolName,
+          `No pending context found for approval '${approvalId}'.`,
+        ),
+        job,
+      };
     }
     this.pendingApprovalContexts.delete(approvalId);
 
@@ -3760,13 +3852,26 @@ export class ToolExecutor {
       job.status = 'failed';
       job.error = `Tool '${job.toolName}' no longer exists.`;
       job.completedAt = this.now();
-      return { success: false, message: job.error, job };
+      return {
+        success: true,
+        approved: true,
+        executionSucceeded: false,
+        message: buildApprovalExecutionFailureMessage(job.toolName, job.error),
+        job,
+      };
     }
 
     const result = await this.execute(job, pending.request, pending.args, entry.handler);
     const approvalResult: ToolApprovalDecisionResult = {
-      success: result.success,
-      message: result.message,
+      success: true,
+      approved: true,
+      executionSucceeded: result.success,
+      message: result.success
+        ? result.message
+        : buildApprovalExecutionFailureMessage(
+          job.toolName,
+          extractApprovalExecutionFailureReason(job.toolName, result),
+        ),
       job,
       result,
     };
@@ -4373,6 +4478,32 @@ export class ToolExecutor {
       }
       const plannedInstall = parseManagedPackageInstallCommand(command);
       return plannedInstall.success ? null : (plannedInstall.error ?? 'Managed package install planning failed.');
+    }
+
+    if (toolName === 'coding_backend_run') {
+      const codingBackendService = this.options.codingBackendService as (CodingBackendService & {
+        getRunPrerequisiteError?: (params: {
+          backendId?: string;
+          codeSessionId?: string;
+          workspaceRoot?: string;
+        }) => string | null;
+      }) | undefined;
+      if (!codingBackendService) {
+        return 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.';
+      }
+      if (typeof codingBackendService.getRunPrerequisiteError === 'function') {
+        return codingBackendService.getRunPrerequisiteError({
+          backendId: typeof args.backend === 'string' && args.backend.trim() ? args.backend.trim() : undefined,
+          codeSessionId: request?.codeContext?.sessionId,
+          workspaceRoot: request?.codeContext?.workspaceRoot,
+        });
+      }
+      if (!request?.codeContext?.sessionId?.trim()) {
+        return 'No active coding session. Create or attach to a coding session first.';
+      }
+      if (!request.codeContext.workspaceRoot?.trim()) {
+        return 'Could not determine workspace root for the current coding session.';
+      }
     }
 
     if (toolName === 'fs_read' || toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete' || toolName === 'doc_create') {
@@ -5126,7 +5257,12 @@ export class ToolExecutor {
     try {
       const result = await handler(args, request);
       if (!result.success) {
-        const fullError = result.error ?? 'Tool failed.';
+        const fullError = extractToolFailureMessage(
+          job.toolName,
+          result.output,
+          result.error,
+          result.message,
+        );
         job.status = 'failed';
         job.error = sanitizePreview(fullError);
         job.remoteExecution = extractRemoteExecutionInfo(result.output);
@@ -5144,6 +5280,8 @@ export class ToolExecutor {
           status: job.status,
           jobId: job.id,
           message: fullError,
+          error: fullError,
+          output: result.output,
         };
       }
 
@@ -7660,6 +7798,37 @@ function extractToolSuccessMessage(
   return message || `Tool '${toolName}' completed.`;
 }
 
+function extractToolFailureMessage(
+  toolName: string,
+  output: unknown,
+  explicitError?: string,
+  explicitMessage?: string,
+): string {
+  const normalizedError = explicitError?.trim() ?? '';
+  if (normalizedError && !/^tool failed\.?$/i.test(normalizedError)) {
+    return normalizedError;
+  }
+
+  if (toolName === 'coding_backend_run' && isRecord(output)) {
+    const assistantResponse = asString(output.assistantResponse).trim();
+    const backendOutput = asString(output.output).trim();
+    const outputMessage = asString(output.message).trim();
+    if (assistantResponse) return assistantResponse;
+    if (backendOutput) return backendOutput;
+    if (outputMessage) return outputMessage;
+  }
+
+  const outputMessage = extractOutputMessage(output);
+  if (outputMessage) return outputMessage;
+
+  const normalizedMessage = explicitMessage?.trim() ?? '';
+  if (normalizedMessage && !/^tool failed\.?$/i.test(normalizedMessage)) {
+    return normalizedMessage;
+  }
+
+  return normalizedError || normalizedMessage || 'Tool failed.';
+}
+
 function extractAutomationSuccessMessage(toolName: string, output: unknown): string {
   if (!isRecord(output)) return '';
 
@@ -7678,11 +7847,7 @@ function extractAutomationSuccessMessage(toolName: string, output: unknown): str
 function extractCodingBackendSuccessMessage(toolName: string, output: unknown): string {
   if (toolName !== 'coding_backend_run' || !isRecord(output)) return '';
   const backendName = asString(output.backendName).trim() || 'Coding backend';
-  const rawOutput = asString(output.output).trim();
-  if (!rawOutput || rawOutput === '(no output captured)') {
-    return `${backendName} completed.`;
-  }
-  return `${backendName} completed.\n\n${rawOutput}`;
+  return `${backendName} completed.`;
 }
 
 function extractOutputMessage(output: unknown): string {

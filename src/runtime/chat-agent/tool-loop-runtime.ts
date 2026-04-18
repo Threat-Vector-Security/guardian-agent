@@ -17,6 +17,7 @@ import type {
   ToolRisk,
 } from '../../tools/types.js';
 import { recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
+import { isIntermediateStatusResponse } from '../../util/response-quality.js';
 import { withTaintedContentSystemPrompt } from '../../util/tainted-content.js';
 import { getProviderLocalityFromName } from '../model-routing-ux.js';
 import { buildPendingApprovalMetadata, formatPendingApprovalMessage } from '../pending-approval-copy.js';
@@ -116,6 +117,7 @@ export async function recoverDirectAnswerAfterTools(input: {
   currentContextTrustLevel: ContentTrustLevel;
   currentTaintReasons: ReadonlySet<string>;
   isResponseDegraded: (content: string | undefined) => boolean;
+  isIntermediateStatusResponse: (content: string | undefined) => boolean;
 }): Promise<string> {
   const recoveryMessages: ChatMessage[] = [
     ...input.llmMessages,
@@ -139,7 +141,7 @@ export async function recoverDirectAnswerAfterTools(input: {
       { tools: [] },
     );
     const content = recovery.content?.trim() ?? '';
-    return content && !input.isResponseDegraded(content) ? content : '';
+    return content && !input.isResponseDegraded(content) && !input.isIntermediateStatusResponse(content) ? content : '';
   } catch {
     return '';
   }
@@ -494,16 +496,17 @@ export async function resumeStoredToolLoopPendingAction(input: {
     rounds += 1;
   }
 
-  if (!finalContent && lastToolRoundResults.length > 0) {
+  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
     finalContent = await recoverDirectAnswerAfterTools({
       llmMessages,
       chatFn: chatRunner.chatFn,
       currentContextTrustLevel,
       currentTaintReasons,
       isResponseDegraded: input.isResponseDegraded,
+      isIntermediateStatusResponse,
     });
   }
-  if (!finalContent && lastToolRoundResults.length > 0) {
+  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
     finalContent = summarizeToolRoundFallback(lastToolRoundResults);
   }
   if (!finalContent) {
