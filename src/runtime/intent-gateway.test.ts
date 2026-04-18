@@ -1293,6 +1293,33 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('follow up');
   });
 
+  it('does not misclassify repo-scoped implementation planning as a Second Brain routine request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Write an implementation plan for adding archived routines to this app.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'low',
+          operation: 'create',
+          summary: 'Creates a new routine.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          personalItemType: 'routine',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.personalItemType).toBeUndefined();
+  });
+
   it('preserves explicit automation creation requests as automation authoring', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -1949,8 +1976,11 @@ describe('IntentGateway', () => {
     );
 
     expect(capturedUser).toContain('Continuity thread context:');
-    expect(capturedUser).toContain('focus summary: Continue the active coding task.');
-    expect(capturedUser).toContain('last actionable request: Use Codex to create the smoke test file.');
+    expect(capturedUser).toContain('continuity key: shared-tier:owner');
+    expect(capturedUser).toContain('surface list: web:chat-main, cli:owner');
+    expect(capturedUser).toContain('active execution refs: code_session:Test Tactical Game App');
+    expect(capturedUser).not.toContain('focus summary:');
+    expect(capturedUser).not.toContain('last actionable request:');
   });
 
   it('preserves coding run status check metadata', async () => {
@@ -2218,29 +2248,14 @@ describe('IntentGateway', () => {
       },
       async (messages, options) => {
         callCount += 1;
-        if (callCount === 1) {
-          expect(options?.tools?.[0]?.name).toBe('route_intent');
-          return {
-            content: JSON.stringify({
-              route: 'automation_control',
-              confidence: 'high',
-              operation: 'update',
-              summary: 'Renames the previously created automation.',
-              newAutomationName: 'WHM Social Check Disk Quota',
-              turnRelation: 'follow_up',
-            }),
-            model: 'test-model',
-            finishReason: 'stop',
-          } satisfies ChatResponse;
-        }
-
-        expect(options?.tools?.[0]?.name).toBe('resolve_automation_name');
-        const userPrompt = messages[messages.length - 1]?.content || '';
-        expect(userPrompt).toContain('It Should Check Account');
-        expect(userPrompt).toContain('Last actionable request');
         return {
           content: JSON.stringify({
-            automationName: 'It Should Check Account',
+            route: 'automation_control',
+            confidence: 'high',
+            operation: 'update',
+            summary: 'Renames the previously created automation.',
+            newAutomationName: 'WHM Social Check Disk Quota',
+            turnRelation: 'follow_up',
           }),
           model: 'test-model',
           finishReason: 'stop',
@@ -2253,10 +2268,10 @@ describe('IntentGateway', () => {
     expect(result.decision.turnRelation).toBe('follow_up');
     expect(result.decision.entities.automationName).toBe('It Should Check Account');
     expect(result.decision.entities.newAutomationName).toBe('WHM Social Check Disk Quota');
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(1);
   });
 
-  it('repairs short coding-backend follow-ups into standalone resolved content using continuity context', async () => {
+  it('does not synthesize standalone resolved content for short coding-backend follow-ups inside the gateway', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
@@ -2278,30 +2293,15 @@ describe('IntentGateway', () => {
       },
       async (messages, options) => {
         callCount += 1;
-        if (callCount === 1) {
-          expect(options?.tools?.[0]?.name).toBe('route_intent');
-          return {
-            content: JSON.stringify({
-              route: 'coding_task',
-              confidence: 'high',
-              operation: 'inspect',
-              summary: 'Runs the same repo-inspection task with Claude Code.',
-              turnRelation: 'new_request',
-              resolution: 'ready',
-              codingBackend: 'claude-code',
-            }),
-            model: 'test-model',
-            finishReason: 'stop',
-          } satisfies ChatResponse;
-        }
-
-        expect(options?.tools?.[0]?.name).toBe('resolve_historical_reference');
-        const userPrompt = messages[messages.length - 1]?.content || '';
-        expect(userPrompt).toContain('Last actionable request');
-        expect(userPrompt).toContain('Coding backend: claude-code');
         return {
           content: JSON.stringify({
-            resolvedContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.',
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Runs the same repo-inspection task with Claude Code.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            codingBackend: 'claude-code',
           }),
           model: 'test-model',
           finishReason: 'stop',
@@ -2312,9 +2312,51 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.operation).toBe('inspect');
     expect(result.decision.entities.codingBackend).toBe('claude-code');
-    expect(result.decision.resolvedContent).toBe('Use Claude Code in this coding workspace to inspect README.md and package.json, then reply with a short summary of what this repo does. Do not change any files.');
-    expect(result.decision.provenance?.resolvedContent).toBe('repair.historical_reference');
-    expect(callCount).toBe(2);
+    expect(result.decision.resolvedContent).toBeUndefined();
+    expect(callCount).toBe(1);
+  });
+
+  it('does not run hidden historical-reference repair for ambiguous non-coding follow-ups', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Break this down before editing anything.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Write an implementation plan for adding archived routines to this app.' },
+          { role: 'assistant', content: 'I can help with that.' },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          focusSummary: 'Archived routines implementation planning',
+          lastActionableRequest: 'Write an implementation plan for adding archived routines to this app.',
+          continuationStateKind: 'planning',
+        },
+      },
+      async (messages, options) => {
+        callCount += 1;
+        return {
+          content: JSON.stringify({
+            route: 'workspace_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Breaks the archived-routines implementation plan into phases before any edits.',
+            turnRelation: 'follow_up',
+            resolution: 'ready',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('workspace_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.resolvedContent).toBeUndefined();
+    expect(callCount).toBe(1);
   });
 
   it('classifies session listing as coding_session_control with navigate operation', async () => {
@@ -2505,6 +2547,33 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.codingRemoteExecRequested).toBe(true);
     expect(result.decision.entities.sessionTarget).toBe('Guardian');
     expect(result.decision.preferredTier).toBe('external');
+  });
+
+  it('repairs explicit remote sandbox execution requests that were misclassified as filesystem work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'In the Guardian workspace, using the existing Daytona sandbox for this coding session, create tmp/daytona-sequence-test.txt containing exactly "daytona resumed ok", then read it back and report the exact contents. Reuse the current managed sandbox if it exists; if it is stopped, restart that same sandbox instead of creating a new one.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'filesystem_task',
+          confidence: 'low',
+          operation: 'create',
+          summary: 'Creates a tmp file and reads it back.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          path: 'tmp/daytona-sequence-test.txt',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.sessionTarget).toBe('Guardian');
   });
 
   it('recovers explicit remote sandbox runs from unavailable gateway output', async () => {

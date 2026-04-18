@@ -21,7 +21,7 @@ export interface ContinuityThreadSurfaceLink {
 }
 
 export interface ContinuityThreadExecutionRef {
-  kind: 'code_session' | 'pending_action' | 'automation' | 'auth_flow';
+  kind: 'code_session' | 'pending_action' | 'automation' | 'auth_flow' | 'execution';
   id: string;
   label?: string;
 }
@@ -147,7 +147,13 @@ function normalizeExecutionRef(value: unknown): ContinuityThreadExecutionRef | n
   const kind = value.kind;
   const id = typeof value.id === 'string' ? value.id.trim() : '';
   if (
-    (kind !== 'code_session' && kind !== 'pending_action' && kind !== 'automation' && kind !== 'auth_flow')
+    (
+      kind !== 'code_session'
+      && kind !== 'pending_action'
+      && kind !== 'automation'
+      && kind !== 'auth_flow'
+      && kind !== 'execution'
+    )
     || !id
   ) {
     return null;
@@ -232,6 +238,7 @@ export function summarizeContinuityThreadForGateway(
   focusSummary?: string;
   lastActionableRequest?: string;
   activeExecutionRefs?: string[];
+  continuationStateKind?: string;
 } | null {
   if (!record) return null;
   return {
@@ -247,6 +254,9 @@ export function summarizeContinuityThreadForGateway(
           activeExecutionRefs: record.activeExecutionRefs.map((ref) =>
             ref.label ? `${ref.kind}:${ref.label}` : `${ref.kind}:${ref.id}`),
         }
+      : {}),
+    ...(record.continuationState?.kind
+      ? { continuationStateKind: record.continuationState.kind }
       : {}),
   };
 }
@@ -264,6 +274,9 @@ export function toContinuityThreadClientMetadata(
     ...(record.lastActionableRequest ? { lastActionableRequest: record.lastActionableRequest } : {}),
     ...(record.activeExecutionRefs?.length
       ? { activeExecutionRefs: record.activeExecutionRefs.map((ref) => ({ ...ref })) }
+      : {}),
+    ...(record.continuationState?.kind
+      ? { continuationStateKind: record.continuationState.kind }
       : {}),
     ...(record.safeSummary ? { safeSummary: record.safeSummary } : {}),
     updatedAt: record.updatedAt,

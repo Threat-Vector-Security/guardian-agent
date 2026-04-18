@@ -127,6 +127,63 @@ describe('IntentRoutingTraceLog', () => {
     }
   });
 
+  it('lists recent entries with execution identity filters applied', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'guardian-intent-trace-'));
+    try {
+      const trace = new IntentRoutingTraceLog({
+        directory: dir,
+        maxFileSizeBytes: 10_000,
+      });
+      await trace.init();
+      trace.record({
+        stage: 'delegated_worker_started',
+        requestId: 'req-1',
+        userId: 'user-1',
+        channel: 'web',
+        agentId: 'agent-1',
+        contentPreview: 'Inspect the repo.',
+        details: {
+          executionId: 'execution-123',
+          taskExecutionId: 'task-456',
+          codeSessionId: 'code-session-789',
+          pendingActionId: 'approval-999',
+        },
+      });
+      trace.record({
+        stage: 'delegated_worker_completed',
+        requestId: 'req-2',
+        userId: 'user-1',
+        channel: 'web',
+        agentId: 'agent-1',
+        contentPreview: 'Inspect the repo.',
+        details: {
+          executionId: 'execution-other',
+          taskExecutionId: 'task-other',
+          codeSessionId: 'code-session-other',
+        },
+      });
+      await trace.flush();
+
+      const executionFiltered = await trace.listRecent({ limit: 10, executionId: 'execution-123' });
+      expect(executionFiltered).toHaveLength(1);
+      expect(executionFiltered[0]?.requestId).toBe('req-1');
+
+      const taskFiltered = await trace.listRecent({ limit: 10, taskExecutionId: 'task-456' });
+      expect(taskFiltered).toHaveLength(1);
+      expect(taskFiltered[0]?.requestId).toBe('req-1');
+
+      const codeSessionFiltered = await trace.listRecent({ limit: 10, codeSessionId: 'session-789' });
+      expect(codeSessionFiltered).toHaveLength(1);
+      expect(codeSessionFiltered[0]?.requestId).toBe('req-1');
+
+      const pendingActionFiltered = await trace.listRecent({ limit: 10, pendingActionId: 'approval-999' });
+      expect(pendingActionFiltered).toHaveLength(1);
+      expect(pendingActionFiltered[0]?.requestId).toBe('req-1');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts delegated worker stages for filtered reads', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'guardian-intent-trace-'));
     try {

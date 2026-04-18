@@ -18,7 +18,10 @@ The pending-action system is shared across:
 
 ## Core Model
 
-**Primary files:** `src/runtime/pending-actions.ts`, `src/index.ts`, `src/runtime/intent-gateway.ts`
+**Primary files:** `src/runtime/pending-actions.ts`, `src/runtime/executions.ts`, `src/index.ts`, `src/runtime/intent-gateway.ts`, `src/runtime/chat-agent/intent-gateway-orchestration.ts`
+
+Related execution contract:
+- `docs/specs/EXECUTION-STATE-SPEC.md`
 
 Each pending action record stores:
 - scope: logical assistant id, canonical user id, channel, and surface id
@@ -28,6 +31,14 @@ Each pending action record stores:
 - optional resume payload
 - optional code session id
 - timestamps and expiry
+
+Pending actions are the operator-facing blocker view.
+
+Execution state is the durable request-state view.
+
+Current as-built rule:
+- blocked work should be recoverable from the pending action and its paired execution record
+- Guardian should not need to rediscover blocked intent from transcript heuristics
 
 Only one active pending action is allowed per logical surface:
 - same assistant
@@ -165,6 +176,12 @@ When a blocker is satisfied and the original request is still valid, Guardian re
 
 The canonical design is direct resume from the stored pending action rather than trying to reconstruct blocked work from transcript heuristics.
 
+Current continuation priority:
+1. active pending action
+2. active execution intent
+3. continuity-thread fallback such as `lastActionableRequest`
+4. clarification if the reference is still ambiguous
+
 For brokered worker approvals, the resume handoff should use structured continuation metadata rather than a synthetic user-like message such as `[User approved ...]`. Approval-backed resume should replay the suspended execution state directly.
 
 Approval-backed execution must not depend only on transient in-memory executor context. The supervisor/runtime must retain a durable or reconstructable execution envelope until the approved action finishes, is denied, or expires; otherwise stale approval controls devolve into misleading missing-context errors.
@@ -173,6 +190,10 @@ Clarification-backed resume follows the same rule:
 - if Guardian asks a targeted clarification and offers a concrete stored fallback such as `save it inside the current workspace instead`, that fallback must be represented as pending-action state
 - a generic continuation reply such as `yes` or `okay` must resume the stored clarified request directly
 - Guardian must not force the Intent Gateway to rebuild the clarified action from bounded transcript history alone
+
+Correction-backed follow-up also follows the same rule:
+- if the user is clearly correcting the blocked request, Guardian may use gateway `resolvedContent` or execution-backed prior intent
+- if the new turn is classified as `new_request`, Guardian must not silently rewrite it into the blocked task just because it is short
 
 For direct filesystem export/save flows, the runtime must capture the exact assistant output snapshot that is being written. Approval or clarification continuation must reuse that stored snapshot rather than re-reading truncated conversation context after the blocked turn has already changed the transcript.
 
@@ -234,4 +255,4 @@ This means:
 
 ## Design Rule
 
-When a bug is about blocked execution, prerequisites, approvals, clarifications, workspace switching, or cross-turn resume, fix it by extending the shared pending-action system rather than adding a bespoke per-tool flow.
+When a bug is about blocked execution, prerequisites, approvals, clarifications, workspace switching, or cross-turn resume, fix it by extending the shared pending-action system together with execution-state orchestration rather than adding a bespoke per-tool flow.

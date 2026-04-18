@@ -63,6 +63,8 @@ export interface DelegatedWorkerMetadata {
   agentId?: string;
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
+  executionId?: string;
+  rootExecutionId?: string;
   originChannel?: string;
   continuityKey?: string;
   codeSessionId?: string;
@@ -340,6 +342,8 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
     ...(typeof delegated.agentId === 'string' ? { agentId: delegated.agentId } : {}),
     ...(typeof delegated.agentName === 'string' ? { agentName: delegated.agentName } : {}),
     ...(orchestration ? { orchestration } : {}),
+    ...(typeof delegated.executionId === 'string' ? { executionId: delegated.executionId } : {}),
+    ...(typeof delegated.rootExecutionId === 'string' ? { rootExecutionId: delegated.rootExecutionId } : {}),
     ...(typeof delegated.originChannel === 'string' ? { originChannel: delegated.originChannel } : {}),
     ...(typeof delegated.continuityKey === 'string' ? { continuityKey: delegated.continuityKey } : {}),
     ...(typeof delegated.codeSessionId === 'string' ? { codeSessionId: delegated.codeSessionId } : {}),

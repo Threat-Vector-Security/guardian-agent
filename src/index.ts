@@ -226,8 +226,10 @@ import {
   ContinuityThreadStore,
   summarizeContinuityThreadForGateway,
 } from './runtime/continuity-threads.js';
+import { ExecutionStore } from './runtime/executions.js';
 import { resolveTelegramDeliveryChatIds } from './runtime/telegram-delivery.js';
 import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
+import type { SQLiteSecurityEvent } from './runtime/sqlite-security.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
@@ -3086,13 +3088,7 @@ async function main(): Promise<void> {
   };
   const identity = new IdentityService(config.assistant.identity);
   let analytics: AnalyticsService | null = null;
-  const onSQLiteSecurityEvent = (event: {
-    service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'second_brain';
-    severity: 'info' | 'warn';
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  }) => {
+  const onSQLiteSecurityEvent = (event: SQLiteSecurityEvent) => {
     if (event.code === 'integrity_ok' || event.code === 'integrity_checkpoint_written') {
       return;
     }
@@ -3170,6 +3166,7 @@ async function main(): Promise<void> {
   const codeSessionDbPath = resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite');
   const pendingActionDbPath = resolveAssistantDbPath(undefined, 'assistant-pending-actions.sqlite');
   const continuityThreadDbPath = resolveAssistantDbPath(undefined, 'assistant-continuity-threads.sqlite');
+  const executionDbPath = resolveAssistantDbPath(undefined, 'assistant-executions.sqlite');
   const secondBrainDbPath = resolveAssistantDbPath(undefined, 'assistant-second-brain.sqlite');
   const conversations = new ConversationService({
     enabled: config.assistant.memory.enabled,
@@ -3401,6 +3398,11 @@ async function main(): Promise<void> {
     enabled: true,
     sqlitePath: continuityThreadDbPath,
     retentionDays: config.assistant.memory.retentionDays,
+    onSecurityEvent: onSQLiteSecurityEvent,
+  });
+  const executionStore = new ExecutionStore({
+    enabled: true,
+    sqlitePath: executionDbPath,
     onSecurityEvent: onSQLiteSecurityEvent,
   });
   const secondBrainStore = new SecondBrainStore({
@@ -5751,8 +5753,10 @@ async function main(): Promise<void> {
         intentRoutingTrace,
         pendingActionStore,
         continuityThreadStore,
+        executionStore,
         routingIntentGateway,
         () => configRef.current.assistant.responseStyle,
+        () => configRef.current,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -5801,8 +5805,10 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      executionStore,
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
+      () => configRef.current,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5842,8 +5848,10 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      executionStore,
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
+      () => configRef.current,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5909,8 +5917,10 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      executionStore,
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
+      () => configRef.current,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5952,6 +5962,7 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      executionStore,
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
     );

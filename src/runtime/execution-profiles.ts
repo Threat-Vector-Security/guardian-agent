@@ -14,9 +14,11 @@ import {
 import type {
   IntentGatewayDecision,
   IntentGatewayExpectedContextPressure,
+  IntentGatewayOperation,
   IntentGatewayPreferredAnswerPath,
 } from './intent-gateway.js';
 import type { RouteDecision } from './message-router.js';
+import type { OrchestrationRoleDescriptor } from './orchestration-role-descriptors.js';
 
 export type ExecutionProfileId =
   | 'local_direct'
@@ -26,6 +28,7 @@ export type ExecutionProfileId =
   | 'frontier_deep';
 
 export type ExecutionProfileToolContextMode = 'tight' | 'standard';
+export type ExecutionProfileSelectionSource = 'auto' | 'request_override' | 'delegated_role';
 
 export interface SelectedExecutionProfile {
   id: ExecutionProfileId;
@@ -43,6 +46,8 @@ export interface SelectedExecutionProfile {
   maxRuntimeNotices: number;
   fallbackProviderOrder: string[];
   reason: string;
+  routingMode?: RoutingTierMode;
+  selectionSource?: ExecutionProfileSelectionSource;
 }
 
 export const EXECUTION_PROFILE_METADATA_KEY = '__guardian_execution_profile';
@@ -57,6 +62,12 @@ const DEFAULT_MODEL_SELECTION_POLICY: AssistantModelSelectionConfig = {
     roleBindings: {},
   },
 };
+
+const READ_LIKE_OPERATIONS = new Set<IntentGatewayOperation>([
+  'inspect',
+  'read',
+  'search',
+]);
 
 function normalizeModelSelectionPolicy(
   config: GuardianAgentConfig,
@@ -81,6 +92,14 @@ function isExecutionProfileToolContextMode(value: unknown): value is ExecutionPr
 
 function isProviderTier(value: unknown): value is ProviderTier {
   return value === 'local' || value === 'managed_cloud' || value === 'frontier';
+}
+
+function isExecutionProfileSelectionSource(value: unknown): value is ExecutionProfileSelectionSource {
+  return value === 'auto' || value === 'request_override' || value === 'delegated_role';
+}
+
+function isReadLikeOperation(value: IntentGatewayOperation | undefined): boolean {
+  return value ? READ_LIKE_OPERATIONS.has(value) : false;
 }
 
 export function providerMatchesTier(
@@ -498,6 +517,7 @@ function buildForcedProviderExecutionProfile(input: {
   providerName: string;
   gatewayDecision: IntentGatewayDecision | null | undefined;
   policy: AssistantModelSelectionConfig;
+  mode: RoutingTierMode;
 }): SelectedExecutionProfile | null {
   const providerConfig = input.config.llm[input.providerName];
   if (!providerConfig || providerConfig.enabled === false) return null;
@@ -546,7 +566,180 @@ function buildForcedProviderExecutionProfile(input: {
       input.policy,
     ),
     reason: `request-scoped provider override selected provider '${input.providerName}'`,
+    routingMode: input.mode,
+    selectionSource: 'request_override',
   };
+}
+
+function deriveDelegatedExecutionDecision(input: {
+  gatewayDecision: IntentGatewayDecision | null | undefined;
+  orchestration: OrchestrationRoleDescriptor | null | undefined;
+  parentProfile: SelectedExecutionProfile | null | undefined;
+}): IntentGatewayDecision | null {
+  const descriptor = input.orchestration;
+  if (!descriptor) {
+    return input.gatewayDecision ?? null;
+  }
+
+  const base = input.gatewayDecision ?? {
+    route: 'general_assistant',
+    confidence: 'high' as const,
+    operation: 'inspect' as const,
+    summary: 'Delegated workload.',
+    turnRelation: 'follow_up' as const,
+    resolution: 'ready' as const,
+    missingFields: [],
+    executionClass: 'tool_orchestration' as const,
+    preferredTier: input.parentProfile?.requestedTier ?? 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'medium' as const,
+    preferredAnswerPath: 'tool_loop' as const,
+    entities: {},
+  };
+
+  const descriptorLabel = descriptor.label?.trim() || descriptor.role;
+  const lenses = new Set(descriptor.lenses ?? []);
+  const readOperation = isReadLikeOperation(base.operation) ? base.operation : 'inspect';
+  const mutateOperation = !isReadLikeOperation(base.operation) && base.operation !== 'unknown'
+    ? base.operation
+    : (lenses.has('provider-admin') ? 'update' : 'run');
+  const preferredDirectTier = base.preferredTier
+    ?? input.parentProfile?.requestedTier
+    ?? 'local';
+  const withDerivedWorkload = (
+    overrides: Partial<IntentGatewayDecision>,
+  ): IntentGatewayDecision => ({
+    ...base,
+    confidence: 'high',
+    summary: `${descriptorLabel} delegated workload.`,
+    turnRelation: base.turnRelation === 'correction' ? 'correction' : 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    ...overrides,
+    entities: {
+      ...base.entities,
+      ...(overrides.entities ?? {}),
+    },
+    provenance: {
+      ...(base.provenance ?? {}),
+      route: 'derived.workload',
+      operation: 'derived.workload',
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresRepoGrounding: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+      ...(overrides.provenance ?? {}),
+    },
+  });
+
+  if (lenses.has('security')) {
+    return withDerivedWorkload({
+      route: 'security_task',
+      operation: readOperation,
+      executionClass: 'security_analysis',
+      preferredTier: 'external',
+      requiresRepoGrounding: base.requiresRepoGrounding || lenses.has('coding-workspace'),
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+    });
+  }
+
+  if (lenses.has('coding-workspace')) {
+    return withDerivedWorkload({
+      route: base.route === 'filesystem_task' || base.route === 'coding_session_control'
+        ? base.route
+        : 'coding_task',
+      operation: descriptor.role === 'implementer' ? mutateOperation : readOperation,
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: descriptor.role === 'explorer' ? 'medium' : 'high',
+      preferredAnswerPath: descriptor.role === 'verifier' ? 'chat_synthesis' : 'tool_loop',
+    });
+  }
+
+  if (lenses.has('provider-admin')) {
+    return withDerivedWorkload({
+      route: base.route === 'email_task' ? 'email_task' : 'workspace_task',
+      operation: descriptor.role === 'implementer' ? mutateOperation : readOperation,
+      executionClass: 'provider_crud',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: descriptor.role === 'explorer' ? 'low' : 'medium',
+      preferredAnswerPath: 'tool_loop',
+    });
+  }
+
+  if (lenses.has('research')) {
+    return withDerivedWorkload({
+      route: base.route === 'browser_task' ? 'browser_task' : 'search_task',
+      operation: base.route === 'browser_task' ? 'navigate' : 'search',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+    });
+  }
+
+  if (lenses.has('personal-assistant') || lenses.has('second-brain')) {
+    return withDerivedWorkload({
+      route: 'personal_assistant_task',
+      operation: descriptor.role === 'implementer' ? mutateOperation : readOperation,
+      executionClass: 'direct_assistant',
+      preferredTier: preferredDirectTier,
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: descriptor.role !== 'coordinator',
+      expectedContextPressure: descriptor.role === 'coordinator' ? 'low' : 'medium',
+      preferredAnswerPath: descriptor.role === 'coordinator' ? 'direct' : 'tool_loop',
+    });
+  }
+
+  switch (descriptor.role) {
+    case 'explorer':
+      return withDerivedWorkload({
+        route: 'general_assistant',
+        operation: readOperation,
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      });
+    case 'implementer':
+      return withDerivedWorkload({
+        route: 'general_assistant',
+        operation: mutateOperation,
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      });
+    case 'verifier':
+      return withDerivedWorkload({
+        route: 'general_assistant',
+        operation: readOperation,
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      });
+    case 'coordinator':
+    default:
+      return base;
+  }
 }
 
 function buildProfileShape(input: {
@@ -595,6 +788,7 @@ export function selectExecutionProfile(input: {
       providerName: forcedProviderName,
       gatewayDecision: input.gatewayDecision,
       policy,
+      mode: input.mode,
     });
     if (forcedProfile) {
       return forcedProfile;
@@ -662,6 +856,51 @@ export function selectExecutionProfile(input: {
     reason: providerSelection?.reasonSuffix
       ? `${tierSelection.reason}; ${providerSelection.reasonSuffix}`
       : tierSelection.reason,
+    routingMode: input.mode,
+    selectionSource: 'auto',
+  };
+}
+
+export function selectDelegatedExecutionProfile(input: {
+  config: GuardianAgentConfig;
+  parentProfile?: SelectedExecutionProfile | null;
+  gatewayDecision?: IntentGatewayDecision | null;
+  orchestration?: OrchestrationRoleDescriptor | null;
+  mode?: RoutingTierMode;
+}): SelectedExecutionProfile | null {
+  const parentProfile = input.parentProfile ?? null;
+  if (parentProfile?.selectionSource === 'request_override') {
+    return parentProfile;
+  }
+
+  const delegatedDecision = deriveDelegatedExecutionDecision({
+    gatewayDecision: input.gatewayDecision,
+    orchestration: input.orchestration,
+    parentProfile,
+  });
+  if (!delegatedDecision) {
+    return parentProfile;
+  }
+
+  const routingMode = parentProfile?.routingMode ?? input.mode ?? 'auto';
+  const selected = selectExecutionProfile({
+    config: input.config,
+    routeDecision: { tier: delegatedDecision.preferredTier },
+    gatewayDecision: delegatedDecision,
+    mode: routingMode,
+  });
+  if (!selected) {
+    return parentProfile;
+  }
+
+  const delegatedLabel = input.orchestration?.label?.trim()
+    || input.orchestration?.role
+    || 'delegated task';
+  return {
+    ...selected,
+    routingMode,
+    selectionSource: 'delegated_role',
+    reason: `${selected.reason}; delegated workload derived for ${delegatedLabel}`,
   };
 }
 
@@ -684,6 +923,8 @@ export function serializeSelectedExecutionProfile(
     maxRuntimeNotices: profile.maxRuntimeNotices,
     fallbackProviderOrder: [...profile.fallbackProviderOrder],
     reason: profile.reason,
+    ...(profile.routingMode ? { routingMode: profile.routingMode } : {}),
+    ...(profile.selectionSource ? { selectionSource: profile.selectionSource } : {}),
   };
 }
 
@@ -760,6 +1001,15 @@ export function readSelectedExecutionProfileMetadata(
     reason: typeof record.reason === 'string' && record.reason.trim()
       ? record.reason.trim()
       : 'request-scoped execution profile',
+    ...(record.routingMode === 'auto'
+      || record.routingMode === 'local-only'
+      || record.routingMode === 'managed-cloud-only'
+      || record.routingMode === 'frontier-only'
+      ? { routingMode: record.routingMode }
+      : {}),
+    ...(isExecutionProfileSelectionSource(record.selectionSource)
+      ? { selectionSource: record.selectionSource }
+      : {}),
   };
 }
 

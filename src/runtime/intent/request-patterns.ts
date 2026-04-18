@@ -37,6 +37,16 @@ export function isExplicitComplexPlanningRequest(content: string | undefined): b
     || /\b(?:use|run|route|handle|take)\b[^.!?\n]{0,80}\b(?:dag planner|dag path|planner path)\b/.test(normalized);
 }
 
+export function isExplicitRepoPlanningRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  const hasPlanningIntent = /\b(?:implementation|migration|refactor|rollout|execution)\s+plan\b/.test(normalized)
+    || /\bwrite\s+an?\s+plan\b/.test(normalized)
+    || /\bplan\b/.test(normalized) && /\bbefore editing\b/.test(normalized);
+  if (!hasPlanningIntent) return false;
+  return /\b(?:this app|this repo|this repository|this workspace|the codebase|the repository|the app)\b/.test(normalized);
+}
+
 export function isExplicitCodingExecutionRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;

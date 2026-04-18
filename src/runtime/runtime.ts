@@ -32,7 +32,12 @@ import { createLogger } from '../util/logging.js';
 import type { WorkerManager } from '../supervisor/worker-manager.js';
 import { applyHandoffContract } from './handoffs.js';
 import { validateHandoffContract } from './handoff-policy.js';
-import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
+import {
+  attachSelectedExecutionProfileMetadata,
+  readSelectedExecutionProfileMetadata,
+  selectDelegatedExecutionProfile,
+} from './execution-profiles.js';
+import { readPreRoutedIntentGatewayMetadata } from './intent-gateway.js';
 
 const log = createLogger('runtime');
 const TRUSTED_SERVICE_EVENT_SOURCES = new Set([
@@ -840,6 +845,28 @@ export class Runtime {
               depth: options.lineage.depth + 1,
               path: [...options.lineage.path, targetAgentId],
             } : undefined;
+            const targetInstance = this.registry.get(targetAgentId);
+            if (!targetInstance) {
+              throw new Error(`Agent '${targetAgentId}' not found`);
+            }
+            const inheritedExecutionProfile = readSelectedExecutionProfileMetadata(nextMessage.metadata)
+              ?? selectedExecutionProfile;
+            const delegatedExecutionProfile = selectDelegatedExecutionProfile({
+              config: this.config,
+              parentProfile: inheritedExecutionProfile,
+              gatewayDecision: readPreRoutedIntentGatewayMetadata(nextMessage.metadata)?.decision,
+              orchestration: targetInstance.definition.orchestration,
+              mode: inheritedExecutionProfile?.routingMode,
+            });
+            if (delegatedExecutionProfile) {
+              nextMessage = {
+                ...nextMessage,
+                metadata: attachSelectedExecutionProfileMetadata(
+                  nextMessage.metadata,
+                  delegatedExecutionProfile,
+                ),
+              };
+            }
             return this.dispatchMessage(targetAgentId, nextMessage, nextLineage);
           }
         : undefined,

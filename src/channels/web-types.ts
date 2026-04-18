@@ -1296,6 +1296,11 @@ export interface DashboardCallbacks {
     limit?: number;
     continuityKey?: string;
     activeExecutionRef?: string;
+    executionId?: string;
+    rootExecutionId?: string;
+    taskExecutionId?: string;
+    pendingActionId?: string;
+    codeSessionId?: string;
     stage?: string;
     channel?: string;
     agentId?: string;

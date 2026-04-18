@@ -4990,7 +4990,7 @@ describe('WebChannel', () => {
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch(
-        'http://localhost:18980/api/routing/trace?limit=7&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
+        'http://localhost:18980/api/routing/trace?limit=7&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix&executionId=execution-123&taskExecutionId=task-456&codeSessionId=code-session-789',
         { headers: authHeaders },
       );
 
@@ -5001,6 +5001,9 @@ describe('WebChannel', () => {
         limit: 7,
         continuityKey: 'continuity-1',
         activeExecutionRef: 'code_session:Repo Fix',
+        executionId: 'execution-123',
+        taskExecutionId: 'task-456',
+        codeSessionId: 'code-session-789',
       });
     });
 

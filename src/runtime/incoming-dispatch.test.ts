@@ -471,6 +471,8 @@ describe('createIncomingDispatchPreparer', () => {
         providerType: 'anthropic',
         providerModel: 'claude-opus-4.6',
         providerTier: 'frontier',
+        selectionSource: 'auto',
+        routingMode: 'auto',
       }),
     }));
     expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({

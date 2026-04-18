@@ -571,6 +571,7 @@ export async function initChatPanel(container) {
     const onRunTimeline = (data) => {
       const matches = matchesRunTimelineRequest(data, {
         ...(requestId ? { requestId } : {}),
+        ...(requestId ? { executionId: requestId } : {}),
         ...(sessionId ? { codeSessionId: sessionId } : {}),
       });
       if (!matches) return;
@@ -921,7 +922,11 @@ export async function initChatPanel(container) {
       };
 
       const onRunTimeline = (data) => {
-        if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: requestedCodeSessionId })) {
+        if (!matchesRunTimelineRequest(data, {
+          requestId,
+          executionId: requestId,
+          codeSessionId: requestedCodeSessionId,
+        })) {
           return;
         }
         updateActiveChatIndicatorTimeline(data);

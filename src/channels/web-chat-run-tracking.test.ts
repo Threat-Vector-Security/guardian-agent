@@ -62,4 +62,24 @@ describe('matchesRunTimelineRequest', () => {
       },
     )).toBe(true);
   });
+
+  it('matches delegated child runs through execution lineage when run ids differ from the active request id', () => {
+    expect(matchesRunTimelineRequest(
+      {
+        summary: {
+          runId: 'delegated-task:job-1',
+          parentRunId: 'req-legacy',
+          executionId: 'delegated-task:job-1',
+          parentExecutionId: 'exec-2',
+          rootExecutionId: 'exec-2',
+          codeSessionId: 'session-1',
+        },
+      },
+      {
+        requestId: 'req-2',
+        executionId: 'exec-2',
+        codeSessionId: 'session-1',
+      },
+    )).toBe(true);
+  });
 });

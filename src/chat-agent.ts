@@ -73,7 +73,10 @@ import {
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
-import type { AssistantResponseStyleConfig } from './config/types.js';
+import type {
+  AssistantResponseStyleConfig,
+  GuardianAgentConfig,
+} from './config/types.js';
 import {
   buildCodeWorkspaceMapSync,
   buildCodeWorkspaceWorkingSetSync,
@@ -121,7 +124,6 @@ import {
 } from './runtime/intent-gateway.js';
 import {
   buildIntentGatewayHistoryQuery,
-  shouldRepairHistoricalCodingBackendTurn,
 } from './runtime/intent/history-context.js';
 import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
 import {
@@ -196,7 +198,6 @@ import {
   tryDirectMemorySave as tryDirectMemorySaveHelper,
 } from './runtime/chat-agent/direct-memory.js';
 import {
-  readLatestAssistantOutput as readLatestAssistantOutputHelper,
   resumeStoredDirectRoutePendingAction as resumeStoredDirectRoutePendingActionHelper,
   tryDirectFilesystemSave as tryDirectFilesystemSaveHelper,
   tryDirectFilesystemSearch as tryDirectFilesystemSearchHelper,
@@ -243,6 +244,10 @@ import {
   type ContinuityThreadRecord,
 } from './runtime/continuity-threads.js';
 import {
+  ExecutionStore,
+  type ExecutionRecord,
+} from './runtime/executions.js';
+import {
   buildChatMessagesFromHistory,
   buildContextCompactionDiagnostics,
   buildPromptAssemblyPreservedExecutionState,
@@ -256,9 +261,12 @@ import {
 } from './runtime/routed-tool-execution.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import {
+  attachSelectedExecutionProfileMetadata,
   readSelectedExecutionProfileMetadata,
+  selectDelegatedExecutionProfile,
   type SelectedExecutionProfile,
 } from './runtime/execution-profiles.js';
+import { readExecutionIdentityMetadata } from './runtime/execution-identity.js';
 import {
   constrainCapabilitiesToOrchestrationRole,
   inferDelegatedOrchestrationDescriptor,
@@ -1041,6 +1049,34 @@ function buildCodingBackendResponseSource(input: {
       ? { durationMs: Math.max(0, input.durationMs) }
       : {}),
   };
+}
+
+function shouldPreferCurrentCodingBackendTask(
+  currentTask: string,
+  resolvedTask: string,
+  backendId?: string,
+): boolean {
+  const normalizedCurrent = currentTask.trim();
+  if (!normalizedCurrent) return false;
+  if (!resolvedTask.trim()) return true;
+  const lowerCurrent = normalizedCurrent.toLowerCase();
+  const normalizedBackend = backendId?.trim().toLowerCase();
+  if (normalizedBackend && lowerCurrent.startsWith(`use ${normalizedBackend} for this request:`)) {
+    return true;
+  }
+  return lowerCurrent.startsWith('use ')
+    && lowerCurrent.includes(' for this request:');
+}
+
+function selectCodingBackendDelegatedTask(input: {
+  currentTask: string;
+  resolvedTask: string;
+  backendId?: string;
+}): string {
+  if (shouldPreferCurrentCodingBackendTask(input.currentTask, input.resolvedTask, input.backendId)) {
+    return input.currentTask.trim();
+  }
+  return input.resolvedTask.trim() || input.currentTask.trim();
 }
 
 function extractQuotedText(text: string): string {
@@ -1848,8 +1884,10 @@ export interface ChatAgentConstructor {
     intentRoutingTrace?: IntentRoutingTraceLog,
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
+    executionStore?: ExecutionStore,
     intentGateway?: IntentGateway,
     resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
+    readConfig?: () => GuardianAgentConfig | undefined,
   ): ChatAgentPublicApi;
 }
 
@@ -1938,6 +1976,12 @@ type DirectIntentShadowCandidate =
   set continuityThreadStore(value: ContinuityThreadStore | undefined) {
     this.orchestrationState.setContinuityThreadStore(value);
   }
+  get executionStore(): ExecutionStore | undefined {
+    return this.orchestrationState.getExecutionStore();
+  }
+  set executionStore(value: ExecutionStore | undefined) {
+    this.orchestrationState.setExecutionStore(value);
+  }
   /** Durable trace for intent gateway, tier routing, and direct execution decisions. */
   private intentRoutingTrace?: IntentRoutingTraceLog;
   /** Optional model fallback chain for retrying failed LLM calls. */
@@ -1966,6 +2010,8 @@ type DirectIntentShadowCandidate =
   private resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined;
   /** Shadow-mode structured classifier for top-level request routing. */
   private readonly intentGateway: IntentGateway;
+  /** Hot config accessor for delegated execution-profile selection. */
+  private readConfig?: () => GuardianAgentConfig | undefined;
 
   private buildPromptAdditionalSections(
     skillPromptMaterial: SkillPromptMaterialResult | undefined,
@@ -2050,8 +2096,10 @@ type DirectIntentShadowCandidate =
     intentRoutingTrace?: IntentRoutingTraceLog,
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
+    executionStore?: ExecutionStore,
     intentGateway?: IntentGateway,
     resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
+    readConfig?: () => GuardianAgentConfig | undefined,
   ) {
     super(id, name, { handleMessages: true });
     this.customSystemPrompt = systemPrompt;
@@ -2094,9 +2142,11 @@ type DirectIntentShadowCandidate =
       stateAgentId: this.stateAgentId,
       pendingActionStore,
       continuityThreadStore,
+      executionStore,
       tools,
     });
     this.intentGateway = intentGateway ?? new IntentGateway();
+    this.readConfig = readConfig;
   }
 
   private recordIntentRoutingTrace(
@@ -2115,6 +2165,7 @@ type DirectIntentShadowCandidate =
       ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
       ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
       ...(typeof continuity?.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: continuity.linkedSurfaceCount } : {}),
+      ...(continuity?.continuationStateKind ? { continuationStateKind: continuity.continuationStateKind } : {}),
       ...(input.details ?? {}),
     };
     this.intentRoutingTrace?.record({
@@ -2534,6 +2585,10 @@ type DirectIntentShadowCandidate =
           },
         }
       : message;
+    const executionIdentity = readExecutionIdentityMetadata(effectiveMessage.metadata) ?? {
+      executionId: effectiveMessage.id,
+      rootExecutionId: effectiveMessage.id,
+    };
     const requestedCodeContext = readCodeRequestMetadata(effectiveMessage.metadata);
     let resolvedCodeSession = this.resolveCodeSessionContext(effectiveMessage);
     if (resolvedCodeSession) {
@@ -2594,6 +2649,16 @@ type DirectIntentShadowCandidate =
       pendingActionSurfaceId,
       effectiveCodeContext?.sessionId,
     );
+    this.registerExecutionTurn({
+      executionIdentity,
+      requestId: message.id,
+      userId: pendingActionUserId,
+      channel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+      continuityThread,
+      content: stripLeadingContextPrefix(effectiveMessage.content),
+      codeSessionId: effectiveCodeContext?.sessionId,
+    });
     const continuitySummaryForHistory = summarizeContinuityThreadForGateway(continuityThread);
     const priorHistory = this.conversationService?.getHistoryForContext({
       agentId: stateAgentId,
@@ -2724,6 +2789,14 @@ type DirectIntentShadowCandidate =
       ? preRoutedGateway
       : null;
     const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
+    let activeExecution = this.getActiveExecution({
+      userId: pendingActionUserId,
+      channel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+      continuityThread,
+      pendingAction,
+      excludeExecutionId: executionIdentity.executionId,
+    });
     const workspaceSwitchContinuation = await tryHandleWorkspaceSwitchContinuationHelper({
       message,
       ctx,
@@ -2757,7 +2830,7 @@ type DirectIntentShadowCandidate =
       : this.resolveRetryAfterFailureContinuationContent(
           groundedScopedMessage.content,
           continuityThread,
-          conversationKey,
+          activeExecution,
         );
     let routedScopedMessage = resolvedPendingActionContinuation
       ? {
@@ -2782,6 +2855,26 @@ type DirectIntentShadowCandidate =
         continuityThread,
         priorActiveSkills: preResolvedSkills,
       }));
+      activeExecution = this.updateExecutionFromIntent({
+        executionIdentity,
+        userId: pendingActionUserId,
+        channel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+        continuityThread,
+        gateway: earlyGateway,
+        routingContent: routedScopedMessage.content,
+        codeSessionId: effectiveCodeContext?.sessionId,
+      }) ?? activeExecution;
+      continuityThread = this.updateContinuityThreadFromIntent({
+        executionIdentity,
+        userId: pendingActionUserId,
+        channel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+        continuityThread,
+        gateway: earlyGateway,
+        routingContent: routedScopedMessage.content,
+        codeSessionId: effectiveCodeContext?.sessionId,
+      });
       const pendingActionSwitchDecision = await tryHandlePendingActionSwitchDecisionHelper({
         message,
         pendingAction,
@@ -2904,6 +2997,7 @@ type DirectIntentShadowCandidate =
         pendingAction,
         priorHistory,
         continuityThread,
+        activeExecution,
       });
       if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
         routedScopedMessage = {
@@ -2911,7 +3005,18 @@ type DirectIntentShadowCandidate =
           content: resolvedGatewayContent,
         };
       }
+      activeExecution = this.updateExecutionFromIntent({
+        executionIdentity,
+        userId: pendingActionUserId,
+        channel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+        continuityThread,
+        gateway: earlyGateway,
+        routingContent: routedScopedMessage.content,
+        codeSessionId: effectiveCodeContext?.sessionId,
+      }) ?? activeExecution;
       continuityThread = this.updateContinuityThreadFromIntent({
+        executionIdentity,
         userId: pendingActionUserId,
         channel: pendingActionChannel,
         surfaceId: pendingActionSurfaceId,
@@ -3584,20 +3689,37 @@ type DirectIntentShadowCandidate =
         if (!skillPromptMaterial && workerSkillPromptMaterial) {
           this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, workerSkillPromptMaterial);
         }
+        const delegatedOrchestration = inferDelegatedOrchestrationDescriptor(
+          earlyGateway?.decision,
+          { hasCodeSession: !!resolvedCodeSession?.session.id },
+        );
+        const currentConfig = this.readConfig?.();
+        const workerExecutionProfile = currentConfig
+          ? (
+            selectDelegatedExecutionProfile({
+              config: currentConfig,
+              parentProfile: selectedExecutionProfile,
+              gatewayDecision: earlyGateway?.decision,
+              orchestration: delegatedOrchestration,
+              mode: selectedExecutionProfile?.routingMode,
+            })
+              ?? selectedExecutionProfile
+          )
+          : selectedExecutionProfile;
         const workerToolContext = this.tools?.getToolContext({
           userId: conversationUserId,
           principalId: message.principalId ?? conversationUserId,
           channel: conversationChannel,
           codeContext: effectiveCodeContext,
           requestText: routedScopedMessage.content,
-          ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
+          ...(workerExecutionProfile ? { toolContextMode: workerExecutionProfile.toolContextMode } : {}),
         }) ?? '';
         const workerRuntimeNotices = (this.tools?.getRuntimeNotices() ?? [])
-          .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
+          .slice(0, Math.max(0, workerExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
         const workerAdditionalSections = this.buildPromptAdditionalSections(
           workerSkillPromptMaterial,
           earlyGateway?.decision,
-          selectedExecutionProfile,
+          workerExecutionProfile,
           referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
         );
         const workerContextAssemblyMeta = buildContextDiagnostics({
@@ -3610,24 +3732,24 @@ type DirectIntentShadowCandidate =
           codeSessionId: resolvedCodeSession?.session.id,
           additionalSections: workerAdditionalSections,
           compaction: latestContextCompaction,
-          executionProfile: selectedExecutionProfile,
+          executionProfile: workerExecutionProfile,
         });
         const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
         // Attach codeContext to the message metadata so the worker can forward it
         // through the broker to the tool executor for auto-approve decisions.
         const workerMetadata = attachPreRoutedIntentGatewayMetadata(
-          effectiveCodeContext
-            ? { ...routedScopedMessage.metadata, codeContext: effectiveCodeContext }
-            : routedScopedMessage.metadata,
+          attachSelectedExecutionProfileMetadata(
+            effectiveCodeContext
+              ? { ...routedScopedMessage.metadata, codeContext: effectiveCodeContext }
+              : routedScopedMessage.metadata,
+            workerExecutionProfile,
+          ),
           shouldReusePreRoutedIntentGateway(earlyGateway) ? earlyGateway : null,
         );
         const workerMessage = workerMetadata
           ? { ...routedScopedMessage, metadata: workerMetadata }
           : routedScopedMessage;
-        const delegatedOrchestration = inferDelegatedOrchestrationDescriptor(
-          earlyGateway?.decision,
-          { hasCodeSession: !!resolvedCodeSession?.session.id },
-        );
+        const executionIdentity = readExecutionIdentityMetadata(message.metadata);
         const workerCapabilities = constrainCapabilitiesToOrchestrationRole(
           [...ctx.capabilities],
           delegatedOrchestration,
@@ -3645,12 +3767,14 @@ type DirectIntentShadowCandidate =
           additionalSections: workerAdditionalSections,
           toolContext: workerToolContext,
           runtimeNotices: workerRuntimeNotices,
-          executionProfile: selectedExecutionProfile ?? undefined,
+          executionProfile: workerExecutionProfile ?? undefined,
           continuity: continuitySummary,
           pendingAction: this.buildPendingActionPromptContext(pendingAction),
           pendingApprovalNotice,
           delegation: {
             requestId: message.id,
+            ...(executionIdentity?.executionId ? { executionId: executionIdentity.executionId } : {}),
+            ...(executionIdentity?.rootExecutionId ? { rootExecutionId: executionIdentity.rootExecutionId } : {}),
             originChannel: message.channel,
             ...(message.surfaceId ? { originSurfaceId: message.surfaceId } : {}),
             ...(continuitySummary?.continuityKey ? { continuityKey: continuitySummary.continuityKey } : {}),
@@ -3664,15 +3788,15 @@ type DirectIntentShadowCandidate =
         // Ensure responseSource is present — if the worker didn't provide one,
         // derive it from the primary provider context.
         if (!workerMeta.responseSource) {
-          const primaryName = selectedExecutionProfile?.providerType || ctx.llm?.name || 'unknown';
+          const primaryName = workerExecutionProfile?.providerType || ctx.llm?.name || 'unknown';
           workerMeta.responseSource = {
-            locality: selectedExecutionProfile?.providerLocality ?? getProviderLocalityFromName(primaryName),
+            locality: workerExecutionProfile?.providerLocality ?? getProviderLocalityFromName(primaryName),
             providerName: primaryName,
-            ...(selectedExecutionProfile?.providerName && selectedExecutionProfile.providerName !== primaryName
-              ? { providerProfileName: selectedExecutionProfile.providerName }
+            ...(workerExecutionProfile?.providerName && workerExecutionProfile.providerName !== primaryName
+              ? { providerProfileName: workerExecutionProfile.providerName }
               : {}),
-            ...(selectedExecutionProfile?.providerTier
-              ? { providerTier: selectedExecutionProfile.providerTier }
+            ...(workerExecutionProfile?.providerTier
+              ? { providerTier: workerExecutionProfile.providerTier }
               : {}),
           };
         }
@@ -6046,13 +6170,18 @@ type DirectIntentShadowCandidate =
 
     const currentTask = stripLeadingContextPrefix(message.content).trim();
     const resolvedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || '').trim();
-    const delegatedTask = resolvedTask
-      && (!currentTask || shouldRepairHistoricalCodingBackendTurn({
-        content: currentTask,
-        lastActionableRequest: resolvedTask,
-      }))
-      ? resolvedTask
-      : currentTask || resolvedTask;
+    const delegatedTask = selectCodingBackendDelegatedTask({
+      currentTask,
+      resolvedTask,
+      backendId,
+    });
+    if (!delegatedTask) {
+      const content = 'I need the coding task details before I can run that coding backend request.';
+      return {
+        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
+        metadata: switchResponseMetadata,
+      };
+    }
     this.recordIntentRoutingTrace('direct_tool_call_started', {
       message,
       contentPreview: delegatedTask,
@@ -6515,6 +6644,7 @@ type DirectIntentShadowCandidate =
   }
 
   private updateContinuityThreadFromIntent(input: {
+    executionIdentity: NonNullable<ReturnType<typeof readExecutionIdentityMetadata>>;
     userId: string;
     channel: string;
     surfaceId?: string;
@@ -6524,6 +6654,45 @@ type DirectIntentShadowCandidate =
     codeSessionId?: string;
   }): ContinuityThreadRecord | null {
     return this.orchestrationState.updateContinuityThreadFromIntent(input);
+  }
+
+  private registerExecutionTurn(input: {
+    executionIdentity: NonNullable<ReturnType<typeof readExecutionIdentityMetadata>>;
+    requestId: string;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    content: string;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): ExecutionRecord | null {
+    return this.orchestrationState.registerExecutionTurn(input);
+  }
+
+  private updateExecutionFromIntent(input: {
+    executionIdentity: NonNullable<ReturnType<typeof readExecutionIdentityMetadata>>;
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    gateway: IntentGatewayRecord | null;
+    routingContent: string;
+    codeSessionId?: string;
+    nowMs?: number;
+  }): ExecutionRecord | null {
+    return this.orchestrationState.updateExecutionFromIntent(input);
+  }
+
+  private getActiveExecution(input: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    pendingAction?: PendingActionRecord | null;
+    excludeExecutionId?: string;
+  }): ExecutionRecord | null {
+    return this.orchestrationState.getActiveExecution(input);
   }
 
   private updateDirectContinuationState(
@@ -6628,6 +6797,8 @@ type DirectIntentShadowCandidate =
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
@@ -6660,6 +6831,8 @@ type DirectIntentShadowCandidate =
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
@@ -6693,6 +6866,8 @@ type DirectIntentShadowCandidate =
       targetSessionLabel?: string;
       metadata?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      executionId?: string;
+      rootExecutionId?: string;
     },
     nowMs: number = Date.now(),
   ) {
@@ -8549,20 +8724,12 @@ type DirectIntentShadowCandidate =
   private resolveRetryAfterFailureContinuationContent(
     content: string,
     continuityThread: ContinuityThreadRecord | null | undefined,
-    conversationKey: ConversationKey,
+    activeExecution: ExecutionRecord | null | undefined,
   ): string | null {
     return resolveRetryAfterFailureContinuationContentHelper({
       content,
       continuityThread,
-      conversationKey,
-      readLatestAssistantOutput: (nextConversationKey) => this.readLatestAssistantOutput(nextConversationKey),
-    });
-  }
-
-  private readLatestAssistantOutput(conversationKey: ConversationKey): string {
-    return readLatestAssistantOutputHelper({
-      conversationService: this.conversationService,
-      conversationKey,
+      activeExecution,
     });
   }
 

@@ -136,6 +136,9 @@ export interface DashboardRunLiveSummary {
 export interface DashboardRunSummary {
   runId: string;
   parentRunId?: string;
+  executionId?: string;
+  parentExecutionId?: string;
+  rootExecutionId?: string;
   groupId: string;
   kind: DashboardRunKind;
   status: DashboardRunStatus;
@@ -198,11 +201,18 @@ export interface DelegatedWorkerProgressEvent {
   requestId?: string;
   parentRunId?: string;
   runId?: string;
+  executionId?: string;
+  parentExecutionId?: string;
+  rootExecutionId?: string;
   taskRunId?: string;
+  taskExecutionId?: string;
   codeSessionId?: string;
   agentId: string;
   agentName?: string;
   orchestrationLabel?: string;
+  executionProfileName?: string;
+  executionProfileModel?: string;
+  executionProfileTier?: string;
   originChannel?: string;
   runClass?: string;
   unresolvedBlockerKind?: string;
@@ -420,6 +430,13 @@ export class RunTimelineStore {
       ?? nonEmptyText(event.requestId)
       ?? (event.codeSessionId ? resolveRunId(event.codeSessionId, undefined) : undefined);
     if (!parentRunId) return;
+    const parentExecutionId = nonEmptyText(event.executionId)
+      ?? nonEmptyText(event.parentExecutionId)
+      ?? nonEmptyText(event.rootExecutionId)
+      ?? nonEmptyText(event.requestId)
+      ?? parentRunId;
+    const rootExecutionId = nonEmptyText(event.rootExecutionId)
+      ?? parentExecutionId;
     const existing = this.runs.get(parentRunId);
     const shouldSetBaseStatus = shouldUseCodeSessionBaseStatus(existing);
     const summary = existing?.detail.summary;
@@ -429,6 +446,8 @@ export class RunTimelineStore {
         ? { baseStatus: mapDelegatedWorkerProgressStatus(event) }
         : {}),
       summary: {
+        ...(parentExecutionId ? { executionId: parentExecutionId } : {}),
+        ...(rootExecutionId ? { rootExecutionId } : {}),
         ...(event.codeSessionId ? { codeSessionId: event.codeSessionId } : {}),
         groupId: summary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : parentRunId),
         kind: summary?.kind ?? (event.codeSessionId ? 'code_session' : 'assistant_dispatch'),
@@ -452,10 +471,20 @@ export class RunTimelineStore {
 
     const parentSummary = this.runs.get(parentRunId)?.detail.summary;
     const delegatedTask = this.runs.get(taskRunId);
+    const taskExecutionId = nonEmptyText(event.taskExecutionId)
+      ?? taskRunId;
+    const delegatedParentExecutionId = parentSummary?.executionId
+      ?? parentExecutionId;
+    const delegatedRootExecutionId = parentSummary?.rootExecutionId
+      ?? rootExecutionId
+      ?? delegatedParentExecutionId;
     this.commitRun(taskRunId, {
       baseStatus: mapDelegatedWorkerProgressStatus(event),
       summary: {
         parentRunId,
+        ...(taskExecutionId ? { executionId: taskExecutionId } : {}),
+        ...(delegatedParentExecutionId ? { parentExecutionId: delegatedParentExecutionId } : {}),
+        ...(delegatedRootExecutionId ? { rootExecutionId: delegatedRootExecutionId } : {}),
         ...(event.codeSessionId ? { codeSessionId: event.codeSessionId } : {}),
         groupId: parentSummary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : parentRunId),
         kind: 'delegated_task',
@@ -1033,6 +1062,7 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
 function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerProgressEvent): DashboardRunTimelineItem {
   const targetName = describeDelegatedWorkerTarget(event);
   const contextAssembly = buildDelegatedWorkerContextAssembly(event);
+  const detail = buildDelegatedWorkerProgressDetail(event);
   switch (event.kind) {
     case 'started':
       return {
@@ -1043,7 +1073,7 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         status: 'running',
         source: 'system',
         title: `Delegated to ${targetName}`,
-        detail: nonEmptyText(event.detail),
+        detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
     case 'running':
@@ -1055,7 +1085,7 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         status: 'running',
         source: 'system',
         title: `${targetName} is working`,
-        detail: nonEmptyText(event.detail),
+        detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
     case 'blocked':
@@ -1067,7 +1097,7 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         status: 'blocked',
         source: 'system',
         title: `${targetName} is waiting`,
-        detail: nonEmptyText(event.detail),
+        detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
     case 'completed':
@@ -1079,7 +1109,7 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         status: 'succeeded',
         source: 'system',
         title: `${targetName} completed`,
-        detail: nonEmptyText(event.detail),
+        detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
     case 'failed':
@@ -1092,7 +1122,7 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         status: 'failed',
         source: 'system',
         title: `${targetName} failed`,
-        detail: nonEmptyText(event.detail),
+        detail,
         ...(contextAssembly ? { contextAssembly } : {}),
       };
   }
@@ -1717,20 +1747,58 @@ function nonEmptyText(value: string | null | undefined): string | undefined {
 }
 
 function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): string {
-  return nonEmptyText(event.agentName)
-    ?? nonEmptyText(event.orchestrationLabel)
+  return nonEmptyText(event.orchestrationLabel)
+    ?? nonEmptyText(event.agentName)
     ?? nonEmptyText(event.agentId)
     ?? 'Delegated worker';
+}
+
+function normalizeDelegatedWorkerProfileTier(value: string | null | undefined): string | undefined {
+  const normalized = nonEmptyText(value);
+  return normalized ? normalized.replaceAll('_', '-') : undefined;
+}
+
+function describeDelegatedWorkerExecutionProfile(event: DelegatedWorkerProgressEvent): string | undefined {
+  const profileName = nonEmptyText(event.executionProfileName);
+  const profileModel = nonEmptyText(event.executionProfileModel);
+  const profileTier = normalizeDelegatedWorkerProfileTier(event.executionProfileTier);
+  if (!profileName && !profileModel) return undefined;
+  if (!profileName) {
+    return profileModel ? `model ${profileModel}` : undefined;
+  }
+  const base = profileTier ? `${profileTier} profile ${profileName}` : `profile ${profileName}`;
+  return profileModel && profileModel !== profileName ? `${base} (${profileModel})` : base;
+}
+
+function buildDelegatedWorkerExecutionProfileSentence(event: DelegatedWorkerProgressEvent): string | undefined {
+  const label = describeDelegatedWorkerExecutionProfile(event);
+  return label ? `Execution profile: ${label}.` : undefined;
+}
+
+function buildDelegatedWorkerProgressDetail(event: DelegatedWorkerProgressEvent): string | undefined {
+  const detail = nonEmptyText(event.detail);
+  const profileSentence = buildDelegatedWorkerExecutionProfileSentence(event);
+  if (!profileSentence) return detail;
+  if (!detail) return profileSentence;
+  const profileName = nonEmptyText(event.executionProfileName)?.toLowerCase();
+  const profileModel = nonEmptyText(event.executionProfileModel)?.toLowerCase();
+  const normalizedDetail = detail.toLowerCase();
+  if ((profileName && normalizedDetail.includes(profileName)) || (profileModel && normalizedDetail.includes(profileModel))) {
+    return detail;
+  }
+  return `${detail}\n${profileSentence}`;
 }
 
 function buildDelegatedWorkerTaskSubtitle(
   event: DelegatedWorkerProgressEvent,
   parentRunId: string,
 ): string | undefined {
+  const base = nonEmptyText(event.requestPreview)
+    ?? nonEmptyText(event.detail)
+    ?? `Parent run ${parentRunId}`;
+  const profileLabel = describeDelegatedWorkerExecutionProfile(event);
   return truncateText(
-    nonEmptyText(event.requestPreview)
-      ?? nonEmptyText(event.detail)
-      ?? `Parent run ${parentRunId}`,
+    profileLabel ? `${base} Uses ${profileLabel}.` : base,
     160,
   );
 }

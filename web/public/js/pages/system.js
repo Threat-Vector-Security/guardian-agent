@@ -22,6 +22,9 @@ const systemUiState = {
   routingTraceFilters: {
     continuityKey: '',
     activeExecutionRef: '',
+    executionId: '',
+    taskExecutionId: '',
+    codeSessionId: '',
   },
   runtimeTimelineFilters: {
     continuityKey: '',
@@ -37,10 +40,16 @@ function normalizeRoutingTraceFilterValue(value) {
 function buildRoutingTraceQueryParams(limit = 8) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.activeExecutionRef);
+  const executionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.executionId);
+  const taskExecutionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.taskExecutionId);
+  const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.codeSessionId);
   return {
     limit,
     ...(continuityKey ? { continuityKey } : {}),
     ...(activeExecutionRef ? { activeExecutionRef } : {}),
+    ...(executionId ? { executionId } : {}),
+    ...(taskExecutionId ? { taskExecutionId } : {}),
+    ...(codeSessionId ? { codeSessionId } : {}),
   };
 }
 
@@ -1202,7 +1211,10 @@ function renderAssistantJobFollowUpResult() {
 function createRoutingTraceSection({ traceStatus, entries }) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.activeExecutionRef);
-  const filtersActive = Boolean(continuityKey || activeExecutionRef);
+  const executionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.executionId);
+  const taskExecutionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.taskExecutionId);
+  const codeSessionId = normalizeRoutingTraceFilterValue(systemUiState.routingTraceFilters?.codeSessionId);
+  const filtersActive = Boolean(continuityKey || activeExecutionRef || executionId || taskExecutionId || codeSessionId);
   const section = document.createElement('div');
   section.className = 'table-container';
   section.innerHTML = `
@@ -1218,6 +1230,18 @@ function createRoutingTraceSection({ traceStatus, entries }) {
       <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
         <label for="system-routing-active-exec-ref">Active Execution Ref</label>
         <input id="system-routing-active-exec-ref" type="text" placeholder="code_session:Repo Fix" value="${escAttr(activeExecutionRef)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+        <label for="system-routing-execution-id">Execution Id</label>
+        <input id="system-routing-execution-id" type="text" placeholder="execution-123" value="${escAttr(executionId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+        <label for="system-routing-task-execution-id">Task Execution Id</label>
+        <input id="system-routing-task-execution-id" type="text" placeholder="task-123" value="${escAttr(taskExecutionId)}">
+      </div>
+      <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+        <label for="system-routing-code-session-id">Code Session Id</label>
+        <input id="system-routing-code-session-id" type="text" placeholder="session-123" value="${escAttr(codeSessionId)}">
       </div>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
@@ -1295,8 +1319,14 @@ function formatRoutingTraceDetail(entry) {
       : '',
     typeof details.route === 'string' ? `route ${details.route}` : '',
     typeof details.tier === 'string' ? `tier ${details.tier}` : '',
+    typeof details.executionId === 'string' ? `execution ${details.executionId}` : '',
+    typeof details.taskExecutionId === 'string' ? `task ${details.taskExecutionId}` : '',
+    typeof details.codeSessionId === 'string' ? `code ${details.codeSessionId}` : '',
     typeof details.agentName === 'string' ? `worker ${details.agentName}` : '',
     typeof details.orchestrationLabel === 'string' ? `role ${details.orchestrationLabel}` : '',
+    typeof details.executionProfileName === 'string'
+      ? `profile ${details.executionProfileName}${typeof details.executionProfileModel === 'string' ? ` (${details.executionProfileModel})` : ''}`
+      : '',
     typeof details.lifecycle === 'string' ? `lifecycle ${details.lifecycle}` : '',
     typeof details.reportingMode === 'string' ? `handoff ${details.reportingMode}` : '',
     typeof details.unresolvedBlockerKind === 'string' ? `blocker ${details.unresolvedBlockerKind}` : '',
@@ -1408,6 +1438,9 @@ function bindSystemEvents(container) {
     systemUiState.routingTraceFilters = {
       continuityKey: normalizeRoutingTraceFilterValue(container.querySelector('#system-routing-continuity-key')?.value),
       activeExecutionRef: normalizeRoutingTraceFilterValue(container.querySelector('#system-routing-active-exec-ref')?.value),
+      executionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-routing-execution-id')?.value),
+      taskExecutionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-routing-task-execution-id')?.value),
+      codeSessionId: normalizeRoutingTraceFilterValue(container.querySelector('#system-routing-code-session-id')?.value),
     };
     void renderSystemPreserveScroll(container);
   });
@@ -1416,11 +1449,20 @@ function bindSystemEvents(container) {
     systemUiState.routingTraceFilters = {
       continuityKey: '',
       activeExecutionRef: '',
+      executionId: '',
+      taskExecutionId: '',
+      codeSessionId: '',
     };
     const continuityInput = container.querySelector('#system-routing-continuity-key');
     const activeExecutionInput = container.querySelector('#system-routing-active-exec-ref');
+    const executionInput = container.querySelector('#system-routing-execution-id');
+    const taskExecutionInput = container.querySelector('#system-routing-task-execution-id');
+    const codeSessionInput = container.querySelector('#system-routing-code-session-id');
     if (continuityInput) continuityInput.value = '';
     if (activeExecutionInput) activeExecutionInput.value = '';
+    if (executionInput) executionInput.value = '';
+    if (taskExecutionInput) taskExecutionInput.value = '';
+    if (codeSessionInput) codeSessionInput.value = '';
     void renderSystemPreserveScroll(container);
   });
 }

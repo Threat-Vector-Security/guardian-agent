@@ -36,15 +36,18 @@ Key rules:
 - direct capability lanes only run from explicit structured gateway decisions
 - gateway-unavailable and low-confidence `general_assistant` / `unknown` results fall back to normal assistant or bounded degraded handling instead of heuristic capability capture
 
-## 2. Pending Action Orchestration
+## 2. Execution State And Pending Action Orchestration
 
-**Primary files:** `src/runtime/pending-actions.ts`, `src/index.ts`, `src/runtime/intent-gateway.ts`
+**Primary files:** `src/runtime/executions.ts`, `src/runtime/pending-actions.ts`, `src/runtime/chat-agent/intent-gateway-orchestration.ts`, `src/index.ts`, `src/runtime/intent-gateway.ts`
 
-This layer owns blocked-work state across channels and routes.
+This layer owns durable request identity, blocked-work state, resume behavior, and cross-turn continuation correctness across channels and routes.
 
-Dedicated implementation spec: `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`
+Dedicated implementation specs:
+- `docs/specs/EXECUTION-STATE-SPEC.md`
+- `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`
 
 It provides one canonical model for:
+- request identity and lineage
 - approval required
 - clarification required
 - workspace switch required
@@ -53,9 +56,10 @@ It provides one canonical model for:
 - other recoverable missing-context blockers
 
 Key rules:
+- every meaningful user request should have a durable execution record
 - one active pending action per logical surface, with explicit transfer policy deciding whether the blocked work may also resolve from linked surfaces for the same assistant and user
-- pending actions are durable and scoped by logical assistant, canonical user, channel, and surface
-- follow-up turns should resolve against the stored pending action before trying to reconstruct intent from bounded history
+- pending actions are the operator-facing blocker projection over that execution state and are scoped by logical assistant, canonical user, channel, and surface
+- follow-up turns should resolve against the stored pending action and active execution before trying any continuity fallback
 - unrelated turns do not clear the active pending slot
 - a colliding new blocked request requires explicit switch confirmation before it replaces the current slot
 - approvals and policy mutations remain origin-surface only even when other blocker kinds are portable
@@ -74,13 +78,14 @@ Authoritative shared prompt/context contract:
 
 It provides:
 - one continuity thread per logical assistant and canonical user
-- linked-surface summaries, focus summaries, last actionable request, and active execution refs
+- linked-surface summaries and active execution refs
 - shared prompt/context packing for main chat, coding-session chat, and brokered workers
 - incremental structured conversation flush into durable memory when prompt history is compacted
 - signal-aware prompt-time memory selection with traceable selection metadata and compact match reasons
 
 Key rules:
 - continuity is bounded state, not an unbounded shared transcript bus
+- continuity is a projection of the active task, not the primary semantic authority for continuation
 - portability decisions use explicit blocker transfer policy plus continuity linkage, not raw channel guessing
 - prompt assembly is shared and structured; new orchestration context should be added there rather than appended ad hoc in one caller
 - approvals, auth, workspace trust, and code-session execution boundaries remain explicit even when continuity links multiple surfaces
@@ -136,6 +141,9 @@ It:
 
 Current as-built delegation foundations:
 - brokered worker dispatch records delegated lineage into assistant job state rather than leaving it as ad hoc log-only state
+- delegated child runs preserve execution lineage through `executionId`, `parentExecutionId`, and `rootExecutionId` correlation where available
+- delegated child work now receives a server-selected execution profile derived from the parent execution profile, the routed workload shape when present, and the target orchestration role descriptor
+- explicit request-scoped provider overrides stay sticky across delegated handoff, while auto-selected turns may specialize different child roles onto different configured providers concurrently
 - operator-facing assistant job views now merge primary assistant jobs with delegated-worker jobs
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
 - delegated worker setup can attach structured orchestration role descriptors such as coordinator, explorer, implementer, and verifier, and known capabilities narrow against runtime-owned contracts before the worker runs
@@ -146,6 +154,10 @@ Current as-built delegation foundations:
 - operator-held delegated results can be replayed, kept held, or dismissed through bounded operator controls instead of forcing a fresh worker run
 - delegated follow-up state is projected into both assistant-job views and assistant-dispatch trace/timeline nodes instead of being implicit in raw worker prose
 - delegated-worker lifecycle breadcrumbs are also recorded in audit
+
+Current limitation:
+- delegated worker completion is still normalized around bounded handoff metadata plus result content
+- the stronger split into distinct user-facing summary, evidence bundle, and machine-readable next-action channels is still follow-on work
 
 ## 5a. System-Owned Background Maintenance
 
@@ -233,6 +245,8 @@ Brokered worker delegation is not a second user-facing orchestration system.
 
 It should continue to follow these rules:
 - preserve lineage back to the originating request, continuity thread, and code session when present
+- keep delegated model-profile selection server-owned and deterministic instead of letting workers self-select providers or infer them from prose
+- allow child tasks to use different configured providers when the request is in auto-selection mode and the structured child workload meaningfully differs from the parent
 - keep completion handoff state bounded and structured instead of treating delegated outcome as arbitrary prose
 - surface delegated status through the same operator views that already expose assistant jobs, traces, and timeline state
 - normalize delegated follow-up policy on the server so clarification/workspace blockers can downgrade to status-only operator messaging while approval blockers stay approval-held
@@ -245,6 +259,7 @@ It should continue to follow these rules:
 ```text
 User message / scheduled trigger / manual automation trigger
   -> IntentGateway
+  -> Execution record create/update
   -> PendingAction prerequisite resolution / resume
   -> Optional tier selection from structured intent result
   -> Optional automation authoring or automation control layer

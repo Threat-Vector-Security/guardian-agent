@@ -104,6 +104,8 @@ export interface PendingActionRecord {
   blocker: PendingActionBlocker;
   intent: PendingActionIntent;
   resume?: PendingActionResume;
+  executionId?: string;
+  rootExecutionId?: string;
   codeSessionId?: string;
   createdAt: number;
   updatedAt: number;
@@ -159,6 +161,8 @@ function cloneRecord(record: PendingActionRecord): PendingActionRecord {
           },
         }
       : {}),
+    ...(record.executionId ? { executionId: record.executionId } : {}),
+    ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
   };
 }
 
@@ -402,6 +406,8 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
           },
         }
       : {}),
+    ...(typeof value.executionId === 'string' && value.executionId.trim() ? { executionId: value.executionId.trim() } : {}),
+    ...(typeof value.rootExecutionId === 'string' && value.rootExecutionId.trim() ? { rootExecutionId: value.rootExecutionId.trim() } : {}),
     ...(typeof value.codeSessionId === 'string' && value.codeSessionId.trim() ? { codeSessionId: value.codeSessionId.trim() } : {}),
     createdAt: typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : Date.now(),
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
@@ -426,6 +432,8 @@ export function summarizePendingActionForGateway(
   provenance?: IntentGatewayDecisionProvenance;
   entities?: Record<string, unknown>;
   field?: string;
+  executionId?: string;
+  rootExecutionId?: string;
 } | null {
   if (!record || !isPendingActionActive(record.status)) return null;
   const prompt = sanitizePendingActionPrompt(record.blocker.prompt, record.blocker.kind);
@@ -445,6 +453,8 @@ export function summarizePendingActionForGateway(
     ...(record.intent.provenance ? { provenance: cloneIntent(record.intent).provenance } : {}),
     ...(record.intent.entities ? { entities: { ...record.intent.entities } } : {}),
     ...(record.blocker.field ? { field: record.blocker.field } : {}),
+    ...(record.executionId ? { executionId: record.executionId } : {}),
+    ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
   };
 }
 
@@ -463,6 +473,8 @@ export function toPendingActionClientMetadata(
       channel: record.scope.channel,
       surfaceId: record.scope.surfaceId,
     },
+    ...(record.executionId ? { executionId: record.executionId } : {}),
+    ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
     ...(record.codeSessionId ? { codeSessionId: record.codeSessionId } : {}),
     blocker: {
       kind: record.blocker.kind,
@@ -812,6 +824,12 @@ export class PendingActionStore {
     if (input.resume) {
       record.resume = { kind: input.resume.kind, payload: { ...input.resume.payload } };
     }
+    if (input.executionId?.trim()) {
+      record.executionId = input.executionId.trim();
+    }
+    if (input.rootExecutionId?.trim()) {
+      record.rootExecutionId = input.rootExecutionId.trim();
+    }
     if (input.codeSessionId?.trim()) {
       record.codeSessionId = input.codeSessionId.trim();
     }
@@ -838,6 +856,12 @@ export class PendingActionStore {
               ? { resume: { kind: patch.resume.kind, payload: { ...patch.resume.payload } } }
               : { resume: undefined })
           }
+        : {}),
+      ...(patch.executionId !== undefined
+        ? (patch.executionId ? { executionId: patch.executionId } : { executionId: undefined })
+        : {}),
+      ...(patch.rootExecutionId !== undefined
+        ? (patch.rootExecutionId ? { rootExecutionId: patch.rootExecutionId } : { rootExecutionId: undefined })
         : {}),
       ...(patch.codeSessionId !== undefined
         ? (patch.codeSessionId ? { codeSessionId: patch.codeSessionId } : { codeSessionId: undefined })
@@ -1033,6 +1057,8 @@ export function reconcilePendingApprovalAction(
             },
           }
         : {}),
+      ...(pendingAction?.executionId ? { executionId: pendingAction.executionId } : {}),
+      ...(pendingAction?.rootExecutionId ? { rootExecutionId: pendingAction.rootExecutionId } : {}),
       ...(pendingAction?.codeSessionId ? { codeSessionId: pendingAction.codeSessionId } : {}),
       expiresAt: nowMs + 30 * 60_000,
     }, nowMs);

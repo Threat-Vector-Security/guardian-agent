@@ -106,4 +106,89 @@ describe('approval-orchestration', () => {
 
     expect(setPendingApprovals).not.toHaveBeenCalled();
   });
+
+  it('preserves execution binding when partial approval resolution rebuilds the pending approval action', async () => {
+    const pendingAction = {
+      id: 'pending-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the remaining actions',
+        approvalIds: ['approval-1', 'approval-2'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'update',
+        originalUserContent: 'Refactor the orchestration stack.',
+      },
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-root',
+      codeSessionId: 'session-1',
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    } as const;
+
+    const setPendingApprovalAction = vi.fn(() => ({ action: pendingAction }));
+
+    const result = await handleApprovalMessage({
+      message: {
+        id: 'msg-2',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'approve the first one',
+        timestamp: Date.now(),
+      },
+      ctx: {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      tools: {
+        decideApproval: vi.fn(async () => ({
+          success: true,
+          message: 'Approved and executed.',
+        })),
+        getApprovalSummaries: vi.fn(() => new Map()),
+        listPendingApprovalIdsForUser: vi.fn(() => ['approval-2']),
+      },
+      getPendingApprovalAction: vi.fn(() => pendingAction as never),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction,
+      completePendingAction: vi.fn(),
+      takeApprovalFollowUp: vi.fn(() => null),
+      clearApprovalFollowUp: vi.fn(),
+      getAutomationApprovalContinuation: vi.fn(() => null),
+      setAutomationApprovalContinuation: vi.fn(),
+      clearAutomationApprovalContinuation: vi.fn(),
+      tryDirectAutomationAuthoring: vi.fn(async () => null),
+      resumeStoredToolLoopPendingAction: vi.fn(async () => null),
+      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatPendingApprovalPrompt: vi.fn(() => 'Approve the remaining action'),
+      resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-1'], errors: [] })),
+    });
+
+    expect(result?.content).toContain('Approve the remaining action');
+    expect(setPendingApprovalAction).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      'owner',
+      expect.objectContaining({
+        executionId: 'exec-1',
+        rootExecutionId: 'exec-root',
+        codeSessionId: 'session-1',
+      }),
+    );
+  });
 });

@@ -19,6 +19,8 @@ The correct target model is:
 
 This plan therefore favors shared runtime integration over new bespoke stores, bespoke event wakeups, or many persistent specialist personas.
 
+Phase 1 of this plan depends on the execution-backed foundation defined in [INTENT-GATEWAY-EXECUTION-CONTINUATION-REMEDIATION-PLAN.md](./INTENT-GATEWAY-EXECUTION-CONTINUATION-REMEDIATION-PLAN.md), because delegated specialist work must bind to shared execution identity and blocker state rather than transcript heuristics or ad hoc recovery flows.
+
 ## 1. Interaction Model: One Lead, Bounded Specialists
 
 ### 1.1 Main Guardian as coordinator
@@ -58,6 +60,7 @@ This keeps Guardian aligned with the current architecture, where the gateway dec
 - Per-session foreground turns remain serialized by the shared assistant orchestrator, which is desirable for correctness.
 - To keep the main assistant responsive, long-running work should be converted into delegated runs with bounded follow-up policy rather than keeping the foreground turn occupied.
 - When compute slots are full, delegated work should stay queued in shared assistant-job state and the UI should surface "Waiting for compute resources" from that shared state rather than from a separate queue subsystem.
+- When multiple suitable provider profiles are configured, the coordinator may assign different child tasks to different providers concurrently, but that choice must stay server-owned and deterministic.
 
 ### 1.5 Asynchronous handoff model
 
@@ -216,7 +219,7 @@ This keeps overlap low while still allowing Guardian to specialize when context,
 ## 6. Implementation Phasing
 
 1. **Phase 1: Shared runtime integration**
-   Extend delegated run metadata, role descriptors, and bounded handoff contracts in the existing assistant-job, trace, and reporting surfaces. Do not create a parallel queueing subsystem.
+   Extend delegated run metadata, role descriptors, child execution-profile selection, and bounded handoff contracts in the existing assistant-job, trace, and reporting surfaces. Do not create a parallel queueing subsystem.
 2. **Phase 2: Core role library**
    Land `Coordinator`, `Explorer`, `Implementer`, and `Verifier` with frozen capability mappings and lightweight domain lenses.
 3. **Phase 3: Operator visibility**
@@ -231,6 +234,7 @@ This keeps overlap low while still allowing Guardian to specialize when context,
 - The main Guardian assistant remains the single front door across web, CLI, and Telegram.
 - Delegation improves latency, verification quality, or long-running responsiveness rather than adding ceremony to simple turns.
 - Shared runtime ledgers remain the canonical truth for delegated state, approvals, traces, and follow-up.
+- Explicit provider overrides stay sticky through delegated handoff, while auto-selected child work can specialize onto different configured providers by role and workload.
 - Specialist roles differ because of capability, context, or output contract, not because of prompt-only branding.
 - `Second Brain` remains the bounded executive-assistant and personal-context lane instead of becoming a competing orchestration manager.
 - No new delegation behavior bypasses the security guarantees in `SECURITY.md`.

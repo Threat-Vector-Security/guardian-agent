@@ -81,7 +81,6 @@ export type IntentGatewayProvenanceSource =
   | 'resolver.clarification'
   | 'repair.unstructured'
   | 'repair.automation_name'
-  | 'repair.historical_reference'
   | 'derived.workload';
 
 export type IntentGatewayPreferredTier =
@@ -186,6 +185,7 @@ export interface IntentGatewayInput {
     focusSummary?: string;
     lastActionableRequest?: string;
     activeExecutionRefs?: string[];
+    continuationStateKind?: string;
   } | null;
   enabledManagedProviders?: string[];
   availableCodingBackends?: string[];

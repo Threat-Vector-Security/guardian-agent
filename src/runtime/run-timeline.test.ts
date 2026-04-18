@@ -467,45 +467,60 @@ describe('RunTimelineStore', () => {
       kind: 'started',
       requestId: 'req-delegated-worker',
       parentRunId: 'req-delegated-worker',
+      executionId: 'exec-delegated-worker',
+      rootExecutionId: 'exec-delegated-worker',
       taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
       orchestrationLabel: 'Coding Workspace',
+      executionProfileName: 'ollama-cloud-coding',
+      executionProfileModel: 'qwen3-coder-next',
+      executionProfileTier: 'managed_cloud',
       originChannel: 'web',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
       activeExecutionRefs: ['code_session:Repo Fix'],
       timestamp: 120,
-      detail: 'Brokered worker dispatch started.',
+      detail: 'Delegated to Coding Workspace in code session code-1.',
     });
     store.ingestDelegatedWorkerProgress({
       id: 'delegated-2',
       kind: 'running',
       requestId: 'req-delegated-worker',
       parentRunId: 'req-delegated-worker',
+      executionId: 'exec-delegated-worker',
+      rootExecutionId: 'exec-delegated-worker',
       taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
       orchestrationLabel: 'Coding Workspace',
+      executionProfileName: 'ollama-cloud-coding',
+      executionProfileModel: 'qwen3-coder-next',
+      executionProfileTier: 'managed_cloud',
       originChannel: 'web',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
       activeExecutionRefs: ['code_session:Repo Fix'],
       timestamp: 130,
-      detail: 'Worker worker-1 is processing the delegated request in code session code-1.',
+      detail: 'Coding Workspace is working in code session code-1.',
     });
     store.ingestDelegatedWorkerProgress({
       id: 'delegated-3',
       kind: 'blocked',
       requestId: 'req-delegated-worker',
       parentRunId: 'req-delegated-worker',
+      executionId: 'exec-delegated-worker',
+      rootExecutionId: 'exec-delegated-worker',
       taskRunId: 'delegated-task:job-1',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
       orchestrationLabel: 'Coding Workspace',
+      executionProfileName: 'ollama-cloud-coding',
+      executionProfileModel: 'qwen3-coder-next',
+      executionProfileTier: 'managed_cloud',
       originChannel: 'web',
       requestPreview: 'Create the fix and verify the result.',
       continuityKey: 'continuity-1',
@@ -522,14 +537,14 @@ describe('RunTimelineStore', () => {
     expect(run?.summary.status).toBe('running');
     expect(run?.items.some((item) =>
       item.type === 'handoff_started'
-      && item.title === 'Delegated to Workspace Implementer'
+      && item.title === 'Delegated to Coding Workspace'
     )).toBe(true);
     const progressItem = run?.items.find((item) => item.id === 'delegated-2');
     expect(progressItem).toMatchObject({
       type: 'note',
       status: 'running',
-      title: 'Workspace Implementer is working',
-      detail: 'Worker worker-1 is processing the delegated request in code session code-1.',
+      title: 'Coding Workspace is working',
+      detail: 'Coding Workspace is working in code session code-1.\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
       contextAssembly: {
         continuityKey: 'continuity-1',
         activeExecutionRefs: ['code_session:Repo Fix'],
@@ -538,25 +553,33 @@ describe('RunTimelineStore', () => {
     expect(run?.items.some((item) =>
       item.type === 'handoff_completed'
       && item.status === 'blocked'
-      && item.title === 'Workspace Implementer is waiting'
+      && item.title === 'Coding Workspace is waiting'
     )).toBe(true);
     expect(run?.items.find((item) => item.id === 'delegated-3')).toMatchObject({
       type: 'handoff_completed',
       status: 'blocked',
-      title: 'Workspace Implementer is waiting',
-      detail: 'Resolve the pending approval(s) to continue the delegated run.',
+      title: 'Coding Workspace is waiting',
+      detail: 'Resolve the pending approval(s) to continue the delegated run.\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
       contextAssembly: {
         continuityKey: 'continuity-1',
         activeExecutionRefs: ['code_session:Repo Fix'],
       },
     });
+    expect(run?.summary).toMatchObject({
+      executionId: 'exec-delegated-worker',
+      rootExecutionId: 'exec-delegated-worker',
+    });
     const delegatedTaskRun = store.getRun('delegated-task:job-1');
     expect(delegatedTaskRun?.summary).toMatchObject({
       runId: 'delegated-task:job-1',
       parentRunId: 'req-delegated-worker',
+      executionId: 'delegated-task:job-1',
+      parentExecutionId: 'exec-delegated-worker',
+      rootExecutionId: 'exec-delegated-worker',
       kind: 'delegated_task',
       status: 'awaiting_approval',
-      title: 'Delegated task: Workspace Implementer',
+      title: 'Delegated task: Coding Workspace',
+      subtitle: 'Create the fix and verify the result. Uses managed-cloud profile ollama-cloud-coding (qwen3-coder-next).',
       codeSessionId: 'code-1',
       pendingApprovalCount: 1,
       verificationPendingCount: 0,
@@ -565,7 +588,7 @@ describe('RunTimelineStore', () => {
       runId: 'delegated-task:job-1',
       type: 'note',
       status: 'running',
-      title: 'Workspace Implementer is working',
+      title: 'Coding Workspace is working',
     });
     expect(store.listRuns({ parentRunId: 'req-delegated-worker' }).map((entry) => entry.summary.runId)).toEqual([
       'delegated-task:job-1',
@@ -620,25 +643,35 @@ describe('RunTimelineStore', () => {
       id: 'delegated-live-1',
       kind: 'started',
       requestId: 'req-live-summary',
+      executionId: 'exec-live-summary',
+      rootExecutionId: 'exec-live-summary',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
       orchestrationLabel: 'Coding Workspace',
+      executionProfileName: 'ollama-cloud-coding',
+      executionProfileModel: 'qwen3-coder-next',
+      executionProfileTier: 'managed_cloud',
       originChannel: 'web',
       requestPreview: 'Inspect the repo and produce the review.',
       continuityKey: 'continuity-live',
       activeExecutionRefs: ['code_session:Repo Fix'],
       timestamp: 130,
-      detail: 'Brokered worker dispatch started.',
+      detail: 'Delegated to Coding Workspace in code session code-1.',
     });
     store.ingestDelegatedWorkerProgress({
       id: 'delegated-live-2',
       kind: 'running',
       requestId: 'req-live-summary',
+      executionId: 'exec-live-summary',
+      rootExecutionId: 'exec-live-summary',
       codeSessionId: 'code-1',
       agentId: 'agent-1',
       agentName: 'Workspace Implementer',
       orchestrationLabel: 'Coding Workspace',
+      executionProfileName: 'ollama-cloud-coding',
+      executionProfileModel: 'qwen3-coder-next',
+      executionProfileTier: 'managed_cloud',
       originChannel: 'web',
       requestPreview: 'Inspect the repo and produce the review.',
       continuityKey: 'continuity-live',
@@ -648,9 +681,12 @@ describe('RunTimelineStore', () => {
     });
 
     const run = store.getRun('req-live-summary');
-    expect(run?.liveSummary.label).toBe('Workspace Implementer is working');
-    expect(run?.liveSummary.items.some((item) => item.title === 'Delegated to Workspace Implementer')).toBe(true);
-    expect(run?.liveSummary.items.some((item) => item.title === 'Workspace Implementer is working' && item.detail === 'Reviewing source files and approvals.')).toBe(true);
+    expect(run?.liveSummary.label).toBe('Coding Workspace is working');
+    expect(run?.liveSummary.items.some((item) => item.title === 'Delegated to Coding Workspace')).toBe(true);
+    expect(run?.liveSummary.items.some((item) => (
+      item.title === 'Coding Workspace is working'
+      && item.detail === 'Reviewing source files and approvals.\nExecution profile: managed-cloud profile ollama-cloud-coding (qwen3-coder-next).'
+    ))).toBe(true);
     expect(run?.liveSummary.items.some((item) => item.title === 'Prepared request')).toBe(false);
     expect(run?.liveSummary.items.some((item) => item.title === 'Assembled context')).toBe(false);
     expect(run?.liveSummary.items.some((item) => item.title.startsWith('Model response'))).toBe(false);

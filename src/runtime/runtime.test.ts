@@ -4,8 +4,12 @@ import { BaseAgent, createAgentDefinition } from '../agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from '../agent/types.js';
 import { AgentState } from '../agent/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
-import { DEFAULT_CONFIG } from '../config/types.js';
-import { attachSelectedExecutionProfileMetadata } from './execution-profiles.js';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import {
+  attachSelectedExecutionProfileMetadata,
+  readSelectedExecutionProfileMetadata,
+  selectExecutionProfile,
+} from './execution-profiles.js';
 
 class EchoAgent extends BaseAgent {
   receivedMessages: UserMessage[] = [];
@@ -66,13 +70,15 @@ class CaptureAgent extends BaseAgent {
 
 class ProviderCaptureAgent extends BaseAgent {
   providerNames: string[] = [];
+  profileNames: string[] = [];
 
   constructor(id: string = 'provider-capture') {
     super(id, 'Provider Capture Agent', { handleMessages: true });
   }
 
-  async onMessage(_message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
+  async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
     this.providerNames.push(ctx.llm?.name ?? 'missing');
+    this.profileNames.push(readSelectedExecutionProfileMetadata(message.metadata)?.providerName ?? 'missing');
     return { content: `Provider: ${ctx.llm?.name ?? 'missing'}` };
   }
 }
@@ -112,6 +118,78 @@ class RelayAgent extends BaseAgent {
       },
     );
   }
+}
+
+class MetadataRelayAgent extends BaseAgent {
+  constructor(
+    private readonly targetAgentId: string,
+  ) {
+    super('metadata-relay', 'Metadata Relay Agent', { handleMessages: true });
+  }
+
+  async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
+    if (!ctx.dispatch) {
+      return { content: 'dispatch missing' };
+    }
+    return ctx.dispatch(
+      this.targetAgentId,
+      {
+        ...message,
+        content: `${message.content} delegated`,
+      },
+    );
+  }
+}
+
+function createMultiProviderConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm['ollama-cloud-general'] = {
+    provider: 'ollama_cloud',
+    model: 'gpt-oss:120b',
+    apiKey: 'test-ollama-cloud-key',
+  };
+  config.llm['ollama-cloud-tools'] = {
+    provider: 'ollama_cloud',
+    model: 'qwen3:32b',
+    apiKey: 'test-ollama-cloud-key',
+  };
+  config.llm['ollama-cloud-direct'] = {
+    provider: 'ollama_cloud',
+    model: 'minimax-m2.1',
+    apiKey: 'test-ollama-cloud-key',
+  };
+  config.llm['ollama-cloud-coding'] = {
+    provider: 'ollama_cloud',
+    model: 'qwen3-coder-next',
+    apiKey: 'test-ollama-cloud-key',
+  };
+  config.llm.anthropic = {
+    provider: 'anthropic',
+    model: 'claude-opus-4.6',
+    apiKey: 'test-key',
+  };
+  config.assistant.tools.preferredProviders = {
+    local: 'ollama',
+    managedCloud: 'ollama-cloud-general',
+    frontier: 'anthropic',
+  };
+  config.assistant.tools.modelSelection = {
+    ...(config.assistant.tools.modelSelection || {}),
+    autoPolicy: 'balanced',
+    preferManagedCloudForLowPressureExternal: true,
+    preferFrontierForRepoGrounded: true,
+    preferFrontierForSecurity: true,
+    managedCloudRouting: {
+      enabled: true,
+      roleBindings: {
+        general: 'ollama-cloud-general',
+        direct: 'ollama-cloud-direct',
+        toolLoop: 'ollama-cloud-tools',
+        coding: 'ollama-cloud-coding',
+      },
+    },
+  };
+  return config;
 }
 
 describe('Runtime', () => {
@@ -295,6 +373,62 @@ describe('Runtime', () => {
 
       expect(response.content).toBe('Provider: anthropic');
       expect(agent.providerNames).toEqual(['anthropic']);
+    });
+
+    it('selects a delegated execution profile from the target orchestration role during agent dispatch', async () => {
+      const config = createMultiProviderConfig();
+      const configuredRuntime = new Runtime(config);
+      const relay = new MetadataRelayAgent('provider-capture');
+      const agent = new ProviderCaptureAgent();
+      configuredRuntime.registerAgent(createAgentDefinition({ agent: relay, grantedCapabilities: ['agent.dispatch'] }));
+      configuredRuntime.registerAgent(createAgentDefinition({
+        agent,
+        providerName: 'anthropic',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      }));
+
+      const parentProfile = selectExecutionProfile({
+        config,
+        routeDecision: { tier: 'external' },
+        gatewayDecision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect the repo change.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          entities: {},
+        },
+        mode: 'auto',
+      });
+
+      const response = await configuredRuntime.dispatchMessage('metadata-relay', {
+        id: 'delegated-profile-1',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Inspect this repo and tell me what changed.',
+        metadata: attachSelectedExecutionProfileMetadata({}, parentProfile),
+        timestamp: Date.now(),
+      });
+
+      expect(parentProfile).toMatchObject({
+        providerName: 'anthropic',
+        providerTier: 'frontier',
+      });
+      expect(response.content).toBe('Provider: ollama_cloud');
+      expect(agent.providerNames).toEqual(['ollama_cloud']);
+      expect(agent.profileNames).toEqual(['ollama-cloud-coding']);
     });
   });
 

@@ -2,13 +2,14 @@
 
 **Status:** Implemented current architecture
 
-This spec defines how Guardian interprets each incoming user turn, resolves clarification and correction turns, chooses the local or external chat tier in Auto mode, and hands the result to the deterministic execution-profile selector.
+This spec defines how Guardian interprets each incoming user turn, resolves clarification and correction turns, chooses the local or external chat tier in Auto mode, and hands the result to execution-backed orchestration plus deterministic execution-profile selection.
 
 It is the authoritative spec for:
 - top-level turn interpretation
 - clarification and correction handling
 - Auto-mode local vs external chat routing
 - workload metadata emitted by the gateway for downstream deterministic selection
+- execution-state-aware correction and continuation interpretation
 - deterministic execution-profile selection after gateway routing
 - pre-routed intent metadata reuse across channel dispatch
 
@@ -16,6 +17,9 @@ This spec does **not** define per-tool provider routing. Tool provider routing i
 
 Shared prompt-footprint and compact-inventory rules live in:
 - `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
+Related execution-state contract:
+- `docs/specs/EXECUTION-STATE-SPEC.md`
 
 ## Primary Files
 
@@ -30,7 +34,9 @@ Shared prompt-footprint and compact-inventory rules live in:
 - `src/runtime/intent/entity-resolvers/personal-assistant.ts`
 - `src/runtime/intent/entity-resolvers/provider-config.ts`
 - `src/runtime/message-router.ts`
+- `src/runtime/executions.ts`
 - `src/runtime/pending-actions.ts`
+- `src/runtime/chat-agent/intent-gateway-orchestration.ts`
 - `src/index.ts`
 - `src/runtime/direct-intent-routing.ts`
 - `src/runtime/structured-output-recovery.ts`
@@ -109,7 +115,7 @@ Current internal ownership:
 - `src/runtime/intent/normalization.ts` owns shared enum/value normalization for routed intent state
 - `src/runtime/intent/structured-recovery.ts` owns structured parsing and final decision assembly from staged routing outputs
 - `src/runtime/intent/route-entity-resolution.ts` owns cross-route entity assembly on top of the scoped resolver helpers
-- `src/runtime/intent/clarification-resolver.ts` owns clarification, correction, and continuity-aware route/operation repair
+- `src/runtime/intent/clarification-resolver.ts` owns clarification, correction, and pending-action-aware route/operation repair
 - `src/runtime/intent/unstructured-recovery.ts` owns bounded recovery when classifier output is missing or malformed
 - `src/runtime/intent/workload-derivation.ts` owns deterministic workload metadata derivation
 - `src/runtime/intent/capability-resolver.ts` owns direct capability-lane candidate mapping after routing
@@ -259,7 +265,7 @@ Pending-action blocker kinds currently include:
 
 Gateway behavior:
 - if the runtime creates a pending action, the next gateway call sees the blocker summary and original request
-- short answers like `Use Outlook`, `Codex`, `switch to Test Tactical Game App`, or `okay, now do that` are interpreted against that active pending action before ordinary bounded-history repair logic
+- short answers like `Use Outlook`, `Codex`, `switch to Test Tactical Game App`, or `okay, now do that` are interpreted against that active pending action before the turn is treated as a standalone new request
 - an active pending action does not automatically make the next turn a follow-up; a clearly different request such as `Check my email.` must still classify as a fresh `new_request`
 - clarification and correction repair run through the shared clarification resolver stage instead of bespoke per-route follow-up handling
 - pending-action summaries now also carry the prior intent provenance so clarification and correction turns can retain source attribution across blocked-work boundaries
@@ -271,14 +277,16 @@ Current implementation details:
 - if a later turn fully resolves the blocker, the pending action is completed or cancelled
 - if a new blocked request collides with the active slot, Guardian asks whether to switch the slot instead of silently replacing it
 
-Continuity summary currently includes:
+Continuity context currently includes:
 - continuity key
 - linked-surface count
-- optional focus summary
-- optional last actionable request
+- optional continuation-state kind
 - optional active execution refs
 
-This continuity summary is bounded context for the classifier. It is not a second transcript.
+Classifier rule:
+- structured continuity projection is allowed
+- continuity free text is not allowed to become a shadow classifier
+- human-facing continuity fields such as `focusSummary` and `lastActionableRequest` remain continuity artifacts, not primary semantic routing input
 
 ## Conversation Context Window
 
@@ -296,12 +304,12 @@ Intent Gateway prompt inputs:
 - the current user message
 - the last 6 recent conversation entries, if available
 - any summarized active pending action
-- any summarized active continuity thread
+- any structured active continuity projection
 - enabled provider / coding-backend context
 
 Implications:
 - Guardian usually understands recent pivots and short repairs when the relevant request is still inside the bounded history window
-- older requests outside that bounded window are not guaranteed to be reconstructable from ordinary conversation history alone
+- older requests outside that bounded history window should resolve through active execution state or pending-action state, not chat-history guesswork
 - dropped history can be summarized into the knowledge base, but that summary is not a byte-for-byte replacement for the recent-turn window
 
 ## Compact Availability Inventories
@@ -347,6 +355,9 @@ Rules:
 - direct-assistant routes such as `personal_assistant_task`, `memory_task`, `ui_control`, and `coding_session_control` should prefer the managed-cloud `direct` role when they must leave the local tier instead of inheriting a tools profile solely from `preferredAnswerPath=tool_loop`
 - low-confidence `unknown` or `general_assistant` gateway outcomes should avoid over-specialized managed-cloud role selection and prefer the managed-cloud `general` profile when available
 - request-scoped execution-profile metadata is attached to the routed message and reused by runtime dispatch and brokered workers
+- child dispatch and brokered worker handoff may derive a delegated execution profile from the parent profile, pre-routed gateway metadata, and the target orchestration role descriptor without reclassifying the user turn
+- explicit request-scoped provider overrides remain sticky across delegated profile selection
+- when the request is in normal auto-selection mode, different delegated child roles may run on different enabled provider profiles at the same time if their structured workloads differ
 - request-scoped explicit-provider turns still use the shared orchestration path, gateway trace, execution-profile metadata, and fallback-order machinery instead of bypassing dispatch
 - explicit-agent web chat dispatch still prepares and carries that execution-profile metadata so direct-handler replies can show the exact routed managed-cloud profile and model instead of collapsing to only the provider family
 
@@ -373,11 +384,14 @@ The gateway can return:
 
 If `resolvedContent` is present, downstream routing and execution use that repaired request content.
 
-Guardian also uses the latest actionable prior user request from bounded recent history when reconstructing corrections such as:
+Downstream orchestration may also use active execution intent when reconstructing corrections such as:
 - `No, Codex the CLI coding assistant`
 - `Use Gmail`
 
-This means short correction turns work best when the original actionable request is still present in recent history.
+Current rule:
+- execution-backed correction beats transcript reconstruction
+- a short `new_request` follow-up is not silently rewritten into the previous task
+- if neither pending-action state nor active execution state can safely resolve the reference, Guardian should ask for clarification instead of guessing
 
 ## Auto-Mode Tier Routing
 

@@ -54,6 +54,8 @@ function createRecord(overrides?: Partial<PendingActionRecord>): Omit<PendingAct
       ...(overrides.blocker ? { blocker: overrides.blocker } : {}),
       ...(overrides.intent ? { intent: overrides.intent } : {}),
       ...(overrides.resume ? { resume: overrides.resume } : {}),
+      ...(overrides.executionId ? { executionId: overrides.executionId } : {}),
+      ...(overrides.rootExecutionId ? { rootExecutionId: overrides.rootExecutionId } : {}),
       ...(overrides.codeSessionId ? { codeSessionId: overrides.codeSessionId } : {}),
       ...(overrides.expiresAt ? { expiresAt: overrides.expiresAt } : {}),
     } : {}),
@@ -72,6 +74,25 @@ describe('PendingActionStore', () => {
     expect(active?.id).toBe(created.id);
     expect(active?.blocker.kind).toBe('clarification');
     expect(active?.intent.originalUserContent).toBe('Check my email.');
+  });
+
+  it('preserves execution identity metadata on stored pending actions', () => {
+    const store = createStore();
+    const scope = createScope();
+
+    const created = store.replaceActive(scope, createRecord({
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-root-1',
+    }));
+
+    expect(store.get(created.id)).toMatchObject({
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-root-1',
+    });
+    expect(toPendingActionClientMetadata(created)).toMatchObject({
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-root-1',
+    });
   });
 
   it('replaces the active pending action and cancels the older one', () => {
