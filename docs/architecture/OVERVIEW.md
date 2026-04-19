@@ -268,7 +268,7 @@ const router = new ConditionalAgent('route', 'Intent Router', {
 
 Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. When the target is a built-in chat agent, that dispatch then crosses into the brokered worker path. Orchestration does not create a bypass path.
 
-See [Orchestration Spec](../specs/ORCHESTRATION-SPEC.md) for full details.
+See [Orchestration Spec](../design/ORCHESTRATION-DESIGN.md) for full details.
 
 ### MCP Client
 
@@ -290,7 +290,7 @@ await manager.addServer({
 const result = await manager.callTool('mcp-filesystem-read_file', { path: '/a.txt' });
 ```
 
-Third-party MCP servers are conservative by default: startup is blocked until explicitly approved, server metadata is treated as untrusted, parent environment inheritance is off, and network access is off unless the operator opts in. Managed browser MCP remains available through the browser tool path. See [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md).
+Third-party MCP servers are conservative by default: startup is blocked until explicitly approved, server metadata is treated as untrusted, parent environment inheritance is off, and network access is off unless the operator opts in. Managed browser MCP remains available through the browser tool path. See [MCP Client Spec](../design/MCP-CLIENT-DESIGN.md).
 
 ## Native Skills Layer
 
@@ -320,7 +320,7 @@ Not yet implemented:
 
 - reviewed install flows for third-party skills
 
-See [Native Skills Spec](../specs/SKILLS-SPEC.md).
+See [Native Skills Spec](../design/SKILLS-DESIGN.md).
 
 ## Managed Providers
 
@@ -349,7 +349,7 @@ Both modes:
 - workflow guidance via native Google skills
 - Google Workspace tools mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
 
-See [Native Google Integration Spec](../specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md) and [Google Workspace CLI Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
+See [Native Google Integration Spec](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md) and [Google Workspace CLI Spec](../design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md).
 
 ## Brokered Execution Boundary
 
@@ -375,14 +375,14 @@ Worker responsibilities:
 - context budget compaction
 - quality-based fallback (requests via broker with `useFallback` flag)
 
-Shared prompt/context rules are specified in [Context Assembly Spec](../specs/CONTEXT-ASSEMBLY-SPEC.md).
+Shared prompt/context rules are specified in [Context Assembly Spec](../design/CONTEXT-ASSEMBLY-DESIGN.md).
 
 What this does not mean:
 
 - orchestration agents are not moved into the worker
 - every arbitrary developer-authored code path is not automatically sandboxed
 
-See [Brokered Agent Isolation Spec](../specs/BROKERED-AGENT-ISOLATION-SPEC.md).
+See [Brokered Agent Isolation Spec](../design/BROKERED-AGENT-ISOLATION-DESIGN.md).
 
 ## Sandbox Availability
 
@@ -412,7 +412,7 @@ const result = await runner.runSuite(suite.name, suite.tests);
 console.log(formatEvalReport(result));
 ```
 
-Supports content matchers, tool trajectory validation, metadata checks, and 4 independent safety metrics. See [Evaluation Framework Spec](../specs/EVAL-FRAMEWORK-SPEC.md).
+Supports content matchers, tool trajectory validation, metadata checks, and 4 independent safety metrics. See [Evaluation Framework Spec](../design/EVAL-FRAMEWORK-DESIGN.md).
 
 ### Shared State
 
@@ -422,7 +422,7 @@ Supports content matchers, tool trajectory validation, metadata checks, and 4 in
 - **Scoped to invocation** — fresh state per `onMessage()` call, no persistence
 - **Temp key convention** — `temp:` prefixed keys cleaned up via `clearTemp()`
 
-See [Shared State Spec](../specs/SHARED-STATE-SPEC.md).
+See [Shared State Spec](../design/SHARED-STATE-DESIGN.md).
 
 ## Message Flow with Security
 
@@ -543,7 +543,7 @@ SequentialAgent.onMessage()
 
 See [SECURITY.md](../../SECURITY.md) for comprehensive security documentation.
 
-See [GUARDIAN-API.md](./GUARDIAN-API.md) for API reference.
+See [GUARDIAN-API.md](../reference/GUARDIAN-API.md) for API reference.
 
 ## Agent Lifecycle
 

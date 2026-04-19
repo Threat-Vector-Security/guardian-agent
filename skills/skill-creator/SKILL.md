@@ -55,7 +55,7 @@ When the workflow is still vague, capture 2-3 realistic user prompts before writ
 - Prefer qualitative review for tone, design, or open-ended writing.
 - Name evals by the behavior they test.
 - Keep assertions specific enough that a weak answer cannot pass by accident.
-- When the change affects runtime skill behavior, update `docs/specs/SKILLS-SPEC.md` in the same pass.
+- When the change affects runtime skill behavior, update `docs/design/SKILLS-DESIGN.md` in the same pass.
 
 ## Gotchas
 

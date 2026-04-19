@@ -6,7 +6,7 @@
 **Status:** In progress  
 **Origin:** Long-running and delegated orchestration review  
 **Key files:** `src/agent/orchestration.ts`, `src/agent/recipes.ts`, `src/runtime/shared-state.ts`, `src/runtime/workflows.ts`, `src/worker/worker-session.ts`, `src/index.ts`  
-**Primary specs impacted:** `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/AGENT-ORCHESTRATION-RECIPES-SPEC.md`, `docs/specs/MULTI-AGENT-WORKFLOW-HARDENING-SPEC.md`, `docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md`, `docs/specs/AUDIT-PERSISTENCE-SPEC.md`
+**Primary specs impacted:** `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md`, `docs/design/MULTI-AGENT-WORKFLOW-HARDENING-DESIGN.md`, `docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md`, `docs/design/AUDIT-PERSISTENCE-DESIGN.md`
 
 ---
 

@@ -4,7 +4,7 @@
 **Type:** Research / Architecture, Capability, Tool, and Skill Comparison  
 **External codebase reviewed:** `/mnt/s/development/hermes-agent`  
 **Cloned from:** `https://github.com/nousresearch/hermes-agent`  
-**Guardian references:** `README.md`, `SECURITY.md`, `docs/architecture/OVERVIEW.md`, `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/SKILLS-SPEC.md`, `docs/guides/MEMORY-SYSTEM.md`, `docs/specs/MCP-CLIENT-SPEC.md`, `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`
+**Guardian references:** `README.md`, `SECURITY.md`, `docs/architecture/OVERVIEW.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/SKILLS-DESIGN.md`, `docs/design/MEMORY-SYSTEM-DESIGN.md`, `docs/design/MCP-CLIENT-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`
 
 ## Executive Summary
 
@@ -69,11 +69,11 @@ I compared those against Guardian's current architecture and shipped capability 
 - `README.md`
 - `SECURITY.md`
 - `docs/architecture/OVERVIEW.md`
-- `docs/specs/ORCHESTRATION-SPEC.md`
-- `docs/specs/SKILLS-SPEC.md`
-- `docs/guides/MEMORY-SYSTEM.md`
-- `docs/specs/MCP-CLIENT-SPEC.md`
-- `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/SKILLS-DESIGN.md`
+- `docs/design/MEMORY-SYSTEM-DESIGN.md`
+- `docs/design/MCP-CLIENT-DESIGN.md`
+- `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`
 - `src/runtime/intent-gateway.ts`
 - `src/tools/executor.ts`
 - `src/tools/registry.ts`
@@ -136,8 +136,8 @@ Hermes is a **generalist personal agent platform** with strong mobility and self
 | Area | GuardianAgent | Hermes Agent | Assessment |
 |---|---|---|---|
 | Top-level request routing | Intent Gateway with structured route classification and execution metadata in `src/runtime/intent-gateway.ts` | No equivalent route contract; generic tool-calling loop centered in `run_agent.py` | Guardian is materially stronger |
-| Pending-action / blocked-work semantics | Shared pending-action model across surfaces in `docs/specs/ORCHESTRATION-SPEC.md` | Approval and interruption logic exists, but not an equivalent shared blocker model | Guardian stronger |
-| Cross-surface continuity | Explicit continuity threads and shared context assembly per `docs/specs/ORCHESTRATION-SPEC.md` | Session continuity exists, but broader continuity semantics are lighter | Guardian stronger |
+| Pending-action / blocked-work semantics | Shared pending-action model across surfaces in `docs/design/ORCHESTRATION-DESIGN.md` | Approval and interruption logic exists, but not an equivalent shared blocker model | Guardian stronger |
+| Cross-surface continuity | Explicit continuity threads and shared context assembly per `docs/design/ORCHESTRATION-DESIGN.md` | Session continuity exists, but broader continuity semantics are lighter | Guardian stronger |
 | Core agent loop | Brokered worker path plus supervisor-owned orchestration | Very capable monolithic `AIAgent` loop in `run_agent.py` | Hermes is more flexible; Guardian is safer |
 | Security model | Four-layer defense plus brokered worker, output trust, taint-aware memory, strict MCP posture | Seven-layer security model centered on approvals, isolation, authorization, and context scanning | Guardian stronger overall, especially on reinjection trust and runtime chokepoints |
 | Tool architecture | Large curated built-in catalog plus MCP, approvals, policy, control plane | Smaller generic tool catalog plus toolsets, MCP, plugin tools | Different strengths; Guardian stronger on governance, Hermes on flexibility |
@@ -210,7 +210,7 @@ Guardian's “intelligence” is not one thing. It already distinguishes:
 - retrospective audit analysis
 - structured workflows and automation authoring
 
-This is reinforced in `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`, which explicitly models multiple intelligence rings rather than one undifferentiated “assistant provider.”
+This is reinforced in `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`, which explicitly models multiple intelligence rings rather than one undifferentiated “assistant provider.”
 
 ### Hermes' intelligence model
 
@@ -320,7 +320,7 @@ Hermes' subagent model is genuinely useful. Guardian should add its own version 
 - approval and trust propagation
 - operator-visible delegated status
 
-Guardian already has the right foundations in `docs/specs/ORCHESTRATION-SPEC.md`. This is a strong fit.
+Guardian already has the right foundations in `docs/design/ORCHESTRATION-DESIGN.md`. This is a strong fit.
 
 #### B. Governed `execute_code`
 

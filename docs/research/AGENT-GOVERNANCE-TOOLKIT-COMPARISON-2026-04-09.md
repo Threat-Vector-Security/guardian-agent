@@ -3,7 +3,7 @@
 **Date:** 2026-04-09  
 **Type:** Research / Security Governance Comparison  
 **External codebase reviewed:** `/mnt/s/Development/agent-governance-toolkit`  
-**Guardian references:** `SECURITY.md`, `docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md`
+**Guardian references:** `SECURITY.md`, `docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md`
 
 ## Executive Summary
 
@@ -67,7 +67,7 @@ I reviewed AGT at the repository, docs, and representative implementation level:
 I compared those against Guardian's current shipped security and defensive suite:
 
 - `SECURITY.md`
-- `docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md`
+- `docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md`
 - `src/guardian/input-sanitizer.ts`
 - `src/guardian/output-guardian.ts`
 - `src/guardian/ssrf-protection.ts`
@@ -304,7 +304,7 @@ Guardian's approach is better aligned with real conversational agent continuatio
 AGT is mostly about governance around agents. Guardian extends into host defense and local operator security:
 
 - Windows Defender integration in `src/runtime/windows-defender-provider.ts`
-- host/network/gateway monitoring per `docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md`
+- host/network/gateway monitoring per `docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md`
 - event-driven `security-triage` agent in `src/runtime/security-triage-agent.ts`
 
 AGT's reviewed scope does not offer an equivalent workstation-defense and operator-security layer.

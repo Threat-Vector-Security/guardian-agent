@@ -3,7 +3,7 @@
 **Status:** Proposed  
 **Date:** 2026-04-04  
 **Origin:** Post-uplift review of Guardian memory architecture compared against inspectable markdown-wiki knowledge-base patterns, with emphasis on preserving Guardian security layers and operator control  
-**Companion docs:** [Memory System Guide](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md), [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md), [Orchestration Specification](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [FORWARD-ARCHITECTURE](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
+**Companion docs:** [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md), [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [FORWARD-ARCHITECTURE](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
 
 ## Objective
 
@@ -498,7 +498,7 @@ Ship incrementally with clear safety and quality gates.
 
 - harness scripts under `scripts/`
 - `src/reference-guide.ts`
-- docs/specs/guides as needed
+- docs/design/guides as needed
 - test files across runtime/tools/web
 
 ### Exit criteria

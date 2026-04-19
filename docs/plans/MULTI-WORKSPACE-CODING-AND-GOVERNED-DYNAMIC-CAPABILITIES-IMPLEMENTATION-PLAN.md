@@ -312,7 +312,7 @@ Treat this as the first mandatory foundation slice. The rest of the routing upli
 
 ### Deliver
 
-- update [INTENT-GATEWAY-ROUTING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md) so the gateway contract explicitly covers:
+- update [INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md) so the gateway contract explicitly covers:
   - route classification
   - tier preference
   - execution/workload metadata
@@ -333,8 +333,8 @@ Treat this as the first mandatory foundation slice. The rest of the routing upli
 
 ### Likely implementation areas
 
-- [docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md)
-- [docs/specs/CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md)
+- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
 - [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
 - [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
 - [src/runtime/direct-intent-routing.ts](/mnt/s/Development/GuardianAgent/src/runtime/direct-intent-routing.ts)
@@ -420,7 +420,7 @@ Prevent smaller or cheaper profiles from failing simply because Guardian handed 
 
 ### Likely implementation areas
 
-- [docs/specs/CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
 - [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts)
 - [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts)
 - [src/chat-agent-helpers.ts](/mnt/s/Development/GuardianAgent/src/chat-agent-helpers.ts)
@@ -449,8 +449,8 @@ Tracks R, A, and B should not start landing new runtime behavior above the routi
 - align this plan with:
   - [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md)
   - [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
-  - [SKILLS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SKILLS-SPEC.md)
-  - [TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+  - [SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
+  - [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 - define draft types for:
   - `CodeSessionLink`
   - `CodeSessionPortfolio`
@@ -492,9 +492,9 @@ Tracks R, A, and B should not start landing new runtime behavior above the routi
 
 ### Likely implementation areas
 
-- [docs/specs/ORCHESTRATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md)
-- [docs/specs/SKILLS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SKILLS-SPEC.md)
-- [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
+- [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 - [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
 - [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
 - [src/supervisor/worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
@@ -972,13 +972,13 @@ The plan must explicitly protect against regressions where:
 
 ## Documentation Updates Required
 
-- [docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md)
-- [docs/specs/CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md)
-- [docs/specs/ORCHESTRATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md)
-- [docs/specs/SKILLS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SKILLS-SPEC.md)
-- [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
-- [docs/specs/CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md)
-- [docs/specs/WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md)
+- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
+- [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
+- [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
 - [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
 
 ## Recommended Delivery Order

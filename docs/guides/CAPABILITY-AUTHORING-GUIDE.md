@@ -87,7 +87,7 @@ When adding a tool:
 
 - default to deferred unless there is a strong architectural reason to make it always-loaded
 - do not promote tools to always-loaded just because a model failed to discover them
-- update [`docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md) if you intentionally change the model
+- update [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md) if you intentionally change the model
 
 ### 5. Durable memory writes must use the shared memory mutation path
 
@@ -309,7 +309,7 @@ Use explicit runtime-owned maintenance when the work is:
 
 Checklist:
 
-- read [`docs/specs/AUTOMATED-MAINTENANCE-SPEC.md`](/mnt/s/Development/GuardianAgent/docs/specs/AUTOMATED-MAINTENANCE-SPEC.md) before adding a new server-owned maintenance lane
+- read [`docs/design/AUTOMATED-MAINTENANCE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/AUTOMATED-MAINTENANCE-DESIGN.md) before adding a new server-owned maintenance lane
 - use `AssistantJobTracker`
 - surface maintenance metadata so the job view can explain it
 - record audit events if the work mutates durable state
@@ -366,8 +366,8 @@ At minimum, consider all of these:
 Key companion docs:
 
 - [`docs/architecture/FORWARD-ARCHITECTURE.md`](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
-- [`docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
-- [`docs/guides/MEMORY-SYSTEM.md`](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md)
+- [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [`docs/design/MEMORY-SYSTEM-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md)
 - [`docs/guides/INTEGRATION-TEST-HARNESS.md`](/mnt/s/Development/GuardianAgent/docs/guides/INTEGRATION-TEST-HARNESS.md)
 
 ## Verification Checklist

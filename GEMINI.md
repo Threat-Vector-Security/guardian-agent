@@ -14,7 +14,7 @@ GuardianAgent is an event-driven AI agent orchestration system with a four-layer
 - **Required Reading Before Major Changes:**
   - `docs/architecture/FORWARD-ARCHITECTURE.md` (for module boundaries and refactor convergence).
   - `docs/guides/CAPABILITY-AUTHORING-GUIDE.md` (the single source of truth for adding tools, skills, routes, and control planes).
-  - `docs/specs/WEBUI-DESIGN-SPEC.md` (before changing the web surface).
+  - `docs/design/WEBUI-DESIGN.md` (before changing the web surface).
 
 ## Debugging and Decision-Making Protocol
 - **Data Before Conclusions:** Run diagnostics, read logs, and verify locally before changing direction. Never guess a root cause from reasoning alone.

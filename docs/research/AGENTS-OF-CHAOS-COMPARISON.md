@@ -128,7 +128,7 @@ What is still missing:
 
 What exists:
 
-- hard size caps for tool args, reads, fetches, and CLI outputs (`src/tools/executor.ts`, `src/runtime/gws-service.ts`)
+- hard size caps for tool args, reads, fetches, and Google/native workspace outputs (`src/tools/executor.ts`, `src/google/google-service.ts`)
 - queue depth and per-agent token budgets (`src/runtime/runtime.ts`, `src/runtime/budget.ts`)
 - request body limits in the web channel (`src/channels/web.ts`)
 

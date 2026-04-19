@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-03-27  
 **Primary source proposal:** [General Chat As Canonical Coding Surface Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md)  
-**Related docs:** [CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md)
+**Related docs:** [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md)
 
 ## Objective
 

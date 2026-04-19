@@ -252,7 +252,7 @@ Suggested integration points:
 
 - `src/runtime/agent-memory-store.ts`
 - `src/search/`
-- `docs/guides/MEMORY-SYSTEM.md`
+- `docs/design/MEMORY-SYSTEM-DESIGN.md`
 
 ### 7. Repo Hygiene and Security Claim Defensibility
 

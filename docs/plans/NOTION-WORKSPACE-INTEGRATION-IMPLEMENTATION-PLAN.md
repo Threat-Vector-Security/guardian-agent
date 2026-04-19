@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Date:** 2026-03-29  
-**Primary context:** [docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md), [docs/specs/SKILLS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SKILLS-SPEC.md), [docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md), [skills/notion/skill.json](/mnt/s/Development/GuardianAgent/skills/notion/skill.json), [skills/notion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/notion/SKILL.md)
+**Primary context:** [docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md), [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md), [skills/notion/skill.json](/mnt/s/Development/GuardianAgent/skills/notion/skill.json), [skills/notion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/notion/SKILL.md)
 
 ## Objective
 
@@ -243,7 +243,7 @@ This workstream should also fix current drift in the workspace category metadata
 - `src/runtime/direct-intent-routing.ts`
 - `src/runtime/pending-clarification-store.ts`
 - `src/index.ts`
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
 
 **Deliverables**
 
@@ -277,7 +277,7 @@ Recommended v1 behavior:
 
 - `skills/notion/skill.json`
 - `skills/notion/SKILL.md`
-- `docs/specs/SKILLS-SPEC.md`
+- `docs/design/SKILLS-DESIGN.md`
 - `src/prompts/guardian-core.ts`
 - `src/reference-guide.ts`
 

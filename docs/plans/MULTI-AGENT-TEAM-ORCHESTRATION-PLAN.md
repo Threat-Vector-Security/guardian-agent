@@ -3,7 +3,7 @@
 **Status:** Draft
 **Date:** 2026-04-17
 **Source Research:** [multica-research/](/mnt/s/Development/GuardianAgent/multica-research)
-**Primary references:** [SECURITY.md](SECURITY.md), [Orchestration Specification](../specs/ORCHESTRATION-SPEC.md), [Brokered Agent Isolation Spec](../specs/BROKERED-AGENT-ISOLATION-SPEC.md), [Second Brain As-Built Specification](../specs/SECOND-BRAIN-AS-BUILT-SPEC.md), [Agent Platform Uplift Implementation Plan](./AGENT-PLATFORM-UPLIFT-IMPLEMENTATION-PLAN.md)
+**Primary references:** [SECURITY.md](SECURITY.md), [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md), [Brokered Agent Isolation Spec](../design/BROKERED-AGENT-ISOLATION-DESIGN.md), [Second Brain As-Built Specification](../design/SECOND-BRAIN-AS-BUILT.md), [Agent Platform Uplift Implementation Plan](./AGENT-PLATFORM-UPLIFT-IMPLEMENTATION-PLAN.md)
 
 ## Executive Summary
 

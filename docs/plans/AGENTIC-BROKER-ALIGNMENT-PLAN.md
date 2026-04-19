@@ -47,8 +47,8 @@ That alignment is now implemented.
 - `src/runtime/planner/orchestrator.ts`
 - `src/worker/worker-session.ts`
 - `src/worker/worker-session.test.ts`
-- `docs/specs/AGENTIC-DAG-PLANNER-SPEC.md`
-- `docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md`
+- `docs/design/AGENTIC-DAG-PLANNER-DESIGN.md`
+- `docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md`
 
 ## Verification
 

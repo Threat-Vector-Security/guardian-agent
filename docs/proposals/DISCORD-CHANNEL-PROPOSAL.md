@@ -447,7 +447,7 @@ Local code and docs:
 - `src/agent/types.ts`
 - `src/runtime/conversation.ts`
 - `src/config/types.ts`
-- `docs/specs/ORCHESTRATION-SPEC.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
 
 External sources:
 

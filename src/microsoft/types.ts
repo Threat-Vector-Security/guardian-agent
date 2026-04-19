@@ -3,7 +3,7 @@
  *
  * The native integration uses direct Graph REST API calls with OAuth 2.0 PKCE.
  *
- * Spec: docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md
+ * Spec: docs/design/MICROSOFT-365-INTEGRATION-DESIGN.md
  */
 
 /** OAuth token pair stored encrypted at rest. */

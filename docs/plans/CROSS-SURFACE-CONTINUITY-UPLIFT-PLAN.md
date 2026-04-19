@@ -4,7 +4,7 @@
 **Status:** Draft  
 **Origin:** Cross-channel continuity and orchestration review after manual testing  
 **Key files:** `src/runtime/intent-gateway.ts`, `src/runtime/message-router.ts`, `src/runtime/pending-actions.ts`, `src/runtime/conversation.ts`, `src/runtime/code-sessions.ts`, `src/index.ts`, `src/channels/web.ts`, `src/channels/cli.ts`, `src/channels/telegram.ts`, `web/public/js/chat-panel.js`  
-**Primary specs impacted:** `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`, `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`, `docs/specs/CODING-WORKSPACE-SPEC.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `docs/specs/AUDIT-PERSISTENCE-SPEC.md`, `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`
+**Primary specs impacted:** `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`, `docs/design/CODING-WORKSPACE-DESIGN.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `docs/design/AUDIT-PERSISTENCE-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`
 
 ---
 
@@ -174,18 +174,18 @@ Add continuity-thread language to the architecture before implementation so late
 
 ### Required spec deltas
 
-- `ORCHESTRATION-SPEC.md`
+- `ORCHESTRATION-DESIGN.md`
   - add a continuity layer between Intent Gateway and pending-action resume
   - define continuity thread vs surface vs execution context
-- `PENDING-ACTION-ORCHESTRATION-SPEC.md`
+- `PENDING-ACTION-ORCHESTRATION-DESIGN.md`
   - define portable vs origin-bound blocker classes
-- `INTENT-GATEWAY-ROUTING-SPEC.md`
+- `INTENT-GATEWAY-ROUTING-DESIGN.md`
   - define continuity summary as a gateway input
-- `CODING-WORKSPACE-SPEC.md`
+- `CODING-WORKSPACE-DESIGN.md`
   - clarify how code sessions participate in continuity without losing session isolation
-- `TOOLS-CONTROL-PLANE-SPEC.md`
+- `TOOLS-CONTROL-PLANE-DESIGN.md`
   - define approval transfer restrictions and origin-surface invariants
-- `AUDIT-PERSISTENCE-SPEC.md`
+- `AUDIT-PERSISTENCE-DESIGN.md`
   - add cross-surface handoff and resume events
 
 ---
@@ -403,7 +403,7 @@ Continuity state must be model-agnostic. The runtime model cannot assume that on
 
 ### Required spec delta
 
-`INTELLIGENCE-IN-DEPTH-SPEC.md` should explicitly name cross-surface continuity and blocked-work resolution as Layer 2 candidate workloads.
+`INTELLIGENCE-IN-DEPTH-DESIGN.md` should explicitly name cross-surface continuity and blocked-work resolution as Layer 2 candidate workloads.
 
 ---
 

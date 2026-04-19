@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-12  
 **Status:** Draft  
-**Primary references:** [Coding Workspace Spec](../specs/CODING-WORKSPACE-SPEC.md), [Coding Assistant Curated Uplifts Implementation Plan](./CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md), [Agent Orchestration Recipes Spec](../specs/AGENT-ORCHESTRATION-RECIPES-SPEC.md)
+**Primary references:** [Coding Workspace Spec](../design/CODING-WORKSPACE-DESIGN.md), [Coding Assistant Curated Uplifts Implementation Plan](./CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md), [Agent Orchestration Recipes Spec](../design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
 
 ---
 
@@ -25,7 +25,7 @@ The uplift is about workflow intelligence, not about replacing the current sessi
 
 ### 1. Product framing should be coding workflow, not a new workspace architecture
 
-`docs/specs/CODING-WORKSPACE-SPEC.md` remains the architectural substrate, but the user-facing uplift should emphasize:
+`docs/design/CODING-WORKSPACE-DESIGN.md` remains the architectural substrate, but the user-facing uplift should emphasize:
 
 - guided coding workflows
 - clearer step progression

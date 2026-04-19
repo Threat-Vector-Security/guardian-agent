@@ -5,7 +5,7 @@
 **Origin:** Follow-up implementation plan for the `Second Brain` proposal and subsequent design decisions on budgeting, scheduler execution, and intent boundaries  
 **Primary proposal:** [Second Brain Proposal](../proposals/SECOND-BRAIN-PROPOSAL.md)  
 **Key files:** `src/runtime/intent-gateway.ts`, `src/runtime/direct-intent-routing.ts`, `src/chat-agent.ts`, `src/index.ts`, `src/runtime/scheduled-tasks.ts`, `src/runtime/scheduler.ts`, `src/runtime/budget.ts`, `src/runtime/continuity-threads.ts`, `src/runtime/analytics.ts`, `src/google/google-service.ts`, `src/microsoft/microsoft-service.ts`, `src/search/search-service.ts`, `src/tools/executor.ts`, `src/tools/builtin/contacts-email-tools.ts`, `src/tools/marketing-store.ts`, `src/skills/prompt.ts`, `src/skills/resolver.ts`, `src/channels/web-types.ts`, `src/channels/web-runtime-routes.ts`, `web/public/index.html`, `web/public/js/app.js`, `web/public/js/pages/dashboard.js`  
-**Primary specs impacted:** `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`, `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`, `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`, `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`, `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`, `docs/specs/IDENTITY-MEMORY-SPEC.md`, `docs/specs/SKILLS-SPEC.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `docs/specs/WEBUI-DESIGN-SPEC.md`, `docs/specs/TRUST-PRESETS-SPEC.md`, `docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
+**Primary specs impacted:** `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`, `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`, `docs/design/IDENTITY-MEMORY-DESIGN.md`, `docs/design/SKILLS-DESIGN.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `docs/design/WEBUI-DESIGN.md`, `docs/design/TRUST-PRESETS-DESIGN.md`, `docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
 
 ---
 
@@ -490,7 +490,7 @@ Update:
 - `src/runtime/direct-intent-routing.ts`
 - `src/chat-agent.ts`
 - `src/index.ts`
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
 
 Recommended new direct candidate:
 
@@ -611,18 +611,18 @@ Do not use continuity to bypass approvals or surface-specific auth constraints.
 
 Deliver:
 
-- `SECOND-BRAIN-SPEC.md`
-- `SECOND-BRAIN-DATA-MODEL-SPEC.md`
-- `SECOND-BRAIN-ROUTING-SPEC.md` or equivalent spec deltas
-- updates to `INTENT-GATEWAY-ROUTING-SPEC.md`
-- updates to `ORCHESTRATION-SPEC.md`
-- updates to `PENDING-ACTION-ORCHESTRATION-SPEC.md`
-- updates to `CONTEXT-ASSEMBLY-SPEC.md`
-- updates to `INTELLIGENCE-IN-DEPTH-SPEC.md`
-- updates to `IDENTITY-MEMORY-SPEC.md`
-- updates to `SKILLS-SPEC.md`
-- updates to `WEBUI-DESIGN-SPEC.md`
-- updates to `TOOLS-CONTROL-PLANE-SPEC.md` for locality and usage reporting
+- `SECOND-BRAIN-DESIGN.md`
+- `SECOND-BRAIN-DATA-MODEL-DESIGN.md`
+- `SECOND-BRAIN-ROUTING-DESIGN.md` or equivalent design deltas
+- updates to `INTENT-GATEWAY-ROUTING-DESIGN.md`
+- updates to `ORCHESTRATION-DESIGN.md`
+- updates to `PENDING-ACTION-ORCHESTRATION-DESIGN.md`
+- updates to `CONTEXT-ASSEMBLY-DESIGN.md`
+- updates to `INTELLIGENCE-IN-DEPTH-DESIGN.md`
+- updates to `IDENTITY-MEMORY-DESIGN.md`
+- updates to `SKILLS-DESIGN.md`
+- updates to `WEBUI-DESIGN.md`
+- updates to `TOOLS-CONTROL-PLANE-DESIGN.md` for locality and usage reporting
 - updates to `CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`
 - updates to `MEMORY-SYSTEM-UPLIFT-PLAN.md`
 - updates to `MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`

@@ -32,9 +32,9 @@ GuardianAgent is an AI agent orchestration system where:
 
 For the shipped local defensive overlay on top of the runtime security model, see:
 
-- [Agentic Defensive Security Suite - As-Built Spec](docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
-- [Contextual Security Uplift Spec](docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
-- [Security Isolation Spec](docs/specs/SECURITY-ISOLATION-SPEC.md)
+- [Agentic Defensive Security Suite - As-Built Design](docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+- [Contextual Security Uplift Spec](docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md)
+- [Security Isolation Spec](docs/design/SECURITY-ISOLATION-DESIGN.md)
 
 The as-built spec is the canonical current-state document for the defensive suite. The earlier implementation plan has been retired.
 
@@ -467,7 +467,7 @@ Current enforced behaviors include:
 - bind approvals to the requesting principal/role
 - enforce bounded schedule authority via approval expiry, scope hash drift, and token/run budgets
 
-The longer-term declarative rule-engine work remains documented in [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md). That spec is now about consolidating these shipped contextual controls into a shared declarative engine, not about introducing contextual security for the first time.
+The longer-term declarative rule-engine work remains documented in [`docs/design/POLICY-AS-CODE-DESIGN.md`](docs/design/POLICY-AS-CODE-DESIGN.md). That spec is now about consolidating these shipped contextual controls into a shared declarative engine, not about introducing contextual security for the first time.
 
 ---
 
@@ -587,7 +587,7 @@ The same Layer 1.5 contract can host stronger virtualization-backed execution ba
 - These backends should expose honest backend identity, availability, and supported network modes rather than collapsing everything into one generic `strong` label
 - Provider choice is an adapter concern below this contract; Guardian should keep one shared routing, approval, audit, and memory model above it
 
-The canonical cross-backend contract is documented in [docs/specs/SECURITY-ISOLATION-SPEC.md](docs/specs/SECURITY-ISOLATION-SPEC.md).
+The canonical cross-backend contract is documented in [docs/design/SECURITY-ISOLATION-DESIGN.md](docs/design/SECURITY-ISOLATION-DESIGN.md).
 
 ### Configuration
 

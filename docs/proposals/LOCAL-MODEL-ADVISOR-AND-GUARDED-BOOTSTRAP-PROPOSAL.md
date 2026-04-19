@@ -6,7 +6,7 @@
 - [huggingface/hf-agents](https://github.com/huggingface/hf-agents)
 - [llmfit](https://github.com/AlexsJones/llmfit)
 - [llama.cpp](https://github.com/ggml-org/llama.cpp)
-- [Configuration Center Spec](../specs/CONFIG-CENTER-SPEC.md)
+- [Configuration Center Spec](../design/CONFIG-CENTER-DESIGN.md)
 - [Setup Status Runtime](../../src/runtime/setup.ts)
 - [Provider Registry](../../src/llm/provider-registry.ts)
 

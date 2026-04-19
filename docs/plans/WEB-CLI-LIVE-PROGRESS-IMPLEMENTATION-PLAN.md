@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-04-11  
 **Primary source proposal:** [Henchmen-Inspired Coding And Orchestration Uplifts Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/HENCHMEN-INSPIRED-CODING-AND-ORCHESTRATION-UPLIFTS-PROPOSAL.md)  
-**Related docs:** [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md), [CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md)
+**Related docs:** [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md)
 
 ## Objective
 
@@ -305,7 +305,7 @@ Keep Code as the richer workbench:
 
 ### Web design constraints
 
-Follow [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md):
+Follow [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md):
 
 - chat panel stays a shell surface, not a duplicate control plane
 - Code remains the canonical page for coding-session activity

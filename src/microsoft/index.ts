@@ -6,7 +6,7 @@
  *
  * The `m365` tool handler in ToolExecutor routes to MicrosoftService (native).
  *
- * Spec: docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md
+ * Spec: docs/design/MICROSOFT-365-INTEGRATION-DESIGN.md
  */
 
 export { MicrosoftAuth } from './microsoft-auth.js';

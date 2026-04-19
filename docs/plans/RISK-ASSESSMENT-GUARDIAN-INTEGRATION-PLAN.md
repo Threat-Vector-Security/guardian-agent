@@ -8,9 +8,9 @@
 Internal:
 
 - `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`
-- `docs/specs/WEBUI-DESIGN-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
-- `docs/specs/SKILLS-SPEC.md`
+- `docs/design/WEBUI-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
+- `docs/design/SKILLS-DESIGN.md`
 - `docs/architecture/OVERVIEW.md`
 - `src/search/document-parser.ts`
 - `src/tools/executor.ts`
@@ -244,7 +244,7 @@ Assessment of open-source “skills”:
 
 ## Acceptance Gates
 
-- A dedicated `Risk Assessments` page exists in the WebUI with its own ownership defined in `docs/specs/WEBUI-DESIGN-SPEC.md`.
+- A dedicated `Risk Assessments` page exists in the WebUI with its own ownership defined in `docs/design/WEBUI-DESIGN.md`.
 - Operators can create an assessment, add evidence, generate a register, review scoring, and export results without leaving Guardian.
 - The feature remains decoupled from Assistant Security, threat intel, alert queues, and security dashboard flows.
 - Assessments are isolated durable records with feature-local evidence stores and no implicit global memory writeback.
@@ -279,8 +279,8 @@ New checks to add:
 
 ## Files / Areas Affected
 
-- `docs/specs/WEBUI-DESIGN-SPEC.md`
-- new `docs/specs/RISK-ASSESSMENTS-SPEC.md`
+- `docs/design/WEBUI-DESIGN.md`
+- new `docs/design/RISK-ASSESSMENTS-DESIGN.md`
 - `web/public/index.html`
 - `web/public/js/app.js`
 - new `web/public/js/pages/risk-assessments.js`
@@ -303,8 +303,8 @@ New checks to add:
 ### Task 1: Define The Standalone Capability Boundary
 
 - files:
-  - `docs/specs/WEBUI-DESIGN-SPEC.md`
-  - new `docs/specs/RISK-ASSESSMENTS-SPEC.md`
+  - `docs/design/WEBUI-DESIGN.md`
+  - new `docs/design/RISK-ASSESSMENTS-DESIGN.md`
 - change:
   - define `Risk Assessments` as its own WebUI domain and route
   - define page ownership, intro/help patterns, and left-nav placement
@@ -313,7 +313,7 @@ New checks to add:
 - acceptance gates:
   - the product boundary is explicit enough that the implementation does not drift back into Security or ad hoc chat-only behavior
 - verification:
-  - spec review against `docs/guides/CAPABILITY-AUTHORING-GUIDE.md` and `docs/specs/WEBUI-DESIGN-SPEC.md`
+  - spec review against `docs/guides/CAPABILITY-AUTHORING-GUIDE.md` and `docs/design/WEBUI-DESIGN.md`
 
 ### Task 2: Build The Core Domain Model And Isolated Storage
 
@@ -483,7 +483,7 @@ New checks to add:
 
 ## Risks / Open Questions
 
-- Adding a new first-class WebUI page requires an explicit update to `docs/specs/WEBUI-DESIGN-SPEC.md`. Do that intentionally rather than sneaking in a new nav item.
+- Adding a new first-class WebUI page requires an explicit update to `docs/design/WEBUI-DESIGN.md`. Do that intentionally rather than sneaking in a new nav item.
 - Decide whether PDF export is worth v1 complexity or should remain a later additive adapter.
 - Decide how much matrix customization to expose in v1. A bounded schema editor is safer than arbitrary logic.
 - Uploaded source artifacts may contain secrets or sensitive personal data. The design should explicitly define storage, redaction expectations, and export behavior.

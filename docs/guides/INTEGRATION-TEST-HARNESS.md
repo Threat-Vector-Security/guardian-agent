@@ -1061,7 +1061,7 @@ When fixing one of these cases:
 
 ## Test Results
 
-Test run logs are recorded in [`docs/guides/test-results/`](test-results/).
+Test run logs are recorded in [`docs/test-results/`](../test-results/).
 ### Automation Built-In Tool Regression
 
 When testing web/scheduled automations that call built-in tools such as `net_arp_scan`, verify both of these cases:

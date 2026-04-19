@@ -111,7 +111,7 @@ describe('formatDirectFilesystemSearchResponse', () => {
           snippet: `Search the repo for "ollama_cloud" and tell me which files define its routing.`,
         },
         {
-          relativePath: 'docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md',
+          relativePath: 'docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md',
           matchType: 'content',
           snippet: `Search the repo for ollama_cloud and tell me which files define its routing.`,
         },
@@ -129,7 +129,7 @@ describe('formatDirectFilesystemSearchResponse', () => {
     expect(rendered).not.toContain('src/runtime/intent-gateway.ts');
     expect(rendered).not.toContain('src/reference-guide.ts');
     expect(rendered).not.toContain('src/runtime/intent-gateway.test.ts');
-    expect(rendered).not.toContain('docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md');
+    expect(rendered).not.toContain('docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md');
     expect(rendered).toContain('I left out 1 test match, 2 doc matches, 1 script match');
     expect(rendered).toContain('Search stopped at configured limits');
   });

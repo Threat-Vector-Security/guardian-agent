@@ -4,7 +4,7 @@
  * Calls Microsoft Graph via HTTPS with OAuth 2.0 PKCE.
  * Single base URL (graph.microsoft.com/v1.0), consistent OData patterns.
  *
- * Spec: docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md
+ * Spec: docs/design/MICROSOFT-365-INTEGRATION-DESIGN.md
  */
 
 import { createLogger } from '../util/logging.js';

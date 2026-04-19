@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-12  
 **Status:** Draft  
-**Primary references:** [Second Brain As-Built Specification](../specs/SECOND-BRAIN-AS-BUILT-SPEC.md), [Configuration Center Spec](../specs/CONFIG-CENTER-SPEC.md), [Memory System Guide](../guides/MEMORY-SYSTEM.md), [Memory Artifact / Wiki Uplift Plan](./MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md), [Second Brain Executive Assistant Uplift Plan](./SECOND-BRAIN-EXECUTIVE-ASSISTANT-UPLIFT-PLAN.md)
+**Primary references:** [Second Brain As-Built Design](../design/SECOND-BRAIN-AS-BUILT.md), [CONFIG-CENTER-DESIGN.md](../design/CONFIG-CENTER-DESIGN.md), [MEMORY-SYSTEM-DESIGN.md](../design/MEMORY-SYSTEM-DESIGN.md), [Memory Artifact / Wiki Uplift Plan](./MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md), [Second Brain Executive Assistant Uplift Plan](./SECOND-BRAIN-EXECUTIVE-ASSISTANT-UPLIFT-PLAN.md)
 
 ---
 
@@ -48,7 +48,7 @@ Manual YAML editing may still exist for advanced operators, but it is not the pr
 
 ### 3. One memory authority, not two
 
-`docs/guides/MEMORY-SYSTEM.md` already establishes the correct architecture:
+`docs/design/MEMORY-SYSTEM-DESIGN.md` already establishes the correct architecture:
 
 - Guardian has unified durable memory surfacing
 - canonical memory remains sidecar/index-backed and runtime-owned
@@ -322,8 +322,8 @@ Primary areas:
 - `src/runtime/second-brain/*`
 - `src/search/*`
 - `src/reference-guide.ts`
-- `docs/specs/CONFIG-CENTER-SPEC.md`
-- `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`
+- `docs/design/CONFIG-CENTER-DESIGN.md`
+- `docs/design/SECOND-BRAIN-AS-BUILT.md`
 
 ---
 

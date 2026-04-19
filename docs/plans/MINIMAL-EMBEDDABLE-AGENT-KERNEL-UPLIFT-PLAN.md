@@ -4,7 +4,7 @@
 **Status:** Draft  
 **Origin:** Review of modern minimal coding-agent kernel patterns and extensible agent runtimes  
 **Key files:** `src/index.ts`, `src/worker/worker-session.ts`, `src/supervisor/worker-manager.ts`, `src/runtime/context-assembly.ts`, `src/runtime/conversation.ts`, `src/runtime/continuity-threads.ts`, `src/runtime/pending-actions.ts`, `src/runtime/code-sessions.ts`, `src/skills/`, `src/prompts/`  
-**Primary specs impacted:** `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md`, `docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md`, `docs/specs/CODING-WORKSPACE-SPEC.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+**Primary specs impacted:** `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`, `docs/design/CODING-WORKSPACE-DESIGN.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 
 ---
 

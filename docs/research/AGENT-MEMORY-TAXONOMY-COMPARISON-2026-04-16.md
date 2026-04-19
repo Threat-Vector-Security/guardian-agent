@@ -67,7 +67,7 @@ Relevant references:
 
 - `src/runtime/agent-memory-store.ts:17`
 - `src/runtime/agent-memory-store.ts:33`
-- `docs/specs/IDENTITY-MEMORY-SPEC.md:27`
+- `docs/design/IDENTITY-MEMORY-DESIGN.md:27`
 
 ### 2. Conversation history
 
@@ -82,7 +82,7 @@ Relevant references:
 
 - `src/runtime/conversation.ts:930`
 - `src/runtime/conversation.ts:1120`
-- `docs/specs/IDENTITY-MEMORY-SPEC.md:15`
+- `docs/design/IDENTITY-MEMORY-DESIGN.md:15`
 
 ### 3. Prompt-time retrieval and packing
 
@@ -93,7 +93,7 @@ Relevant references:
 - `src/runtime/chat-agent/prompt-context.ts:238`
 - `src/runtime/chat-agent/prompt-context.ts:305`
 - `src/runtime/agent-memory-store.ts:1010`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md:102`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md:102`
 
 ### 4. Operator-curated wiki pages
 
@@ -117,7 +117,7 @@ Saved automation runs can persist full run output privately and write only a com
 Relevant references:
 
 - `src/runtime/automation-output-persistence.ts:62`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md:43`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md:43`
 
 ### 6. Separate semantic stores outside core memory
 
@@ -130,7 +130,7 @@ Relevant references:
 
 - `src/search/search-service.ts:74`
 - `src/tools/builtin/search-tools.ts:15`
-- `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md:109`
+- `docs/design/SECOND-BRAIN-AS-BUILT.md:109`
 
 ## Comparison Against The Taxonomy
 
@@ -200,7 +200,7 @@ Relevant references:
 
 - `src/index.ts:2219`
 - `src/runtime/memory-mutation-service.ts:320`
-- `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md:142`
+- `docs/design/SECOND-BRAIN-AS-BUILT.md:142`
 - `src/tools/builtin/search-tools.ts:15`
 
 ### Where Guardian matches
@@ -246,8 +246,8 @@ Guardian's procedural knowledge lives in:
 Relevant references:
 
 - `src/prompts/guardian-core.ts:8`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md:1`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md:1`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md:1`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md:1`
 
 ### Where Guardian matches
 
@@ -324,8 +324,8 @@ Guardian has a mature working-memory model:
 
 Relevant references:
 
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md:60`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md:132`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md:60`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md:132`
 - `src/runtime/chat-agent/prompt-context.ts:238`
 - `src/runtime/conversation.ts:930`
 
@@ -360,7 +360,7 @@ The taxonomy does not discuss any of that, but in a real agent system this matte
 Relevant references:
 
 - `src/runtime/agent-memory-store.ts:17`
-- `docs/specs/IDENTITY-MEMORY-SPEC.md:27`
+- `docs/design/IDENTITY-MEMORY-DESIGN.md:27`
 - `src/tools/builtin/memory-tools.ts:421`
 
 ### 2. Scope isolation
@@ -376,7 +376,7 @@ That is more operationally useful than one flat long-term memory bucket.
 
 Relevant references:
 
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md:45`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md:45`
 - `src/tools/builtin/memory-tools.ts:384`
 - `src/tools/builtin/memory-tools.ts:556`
 
@@ -471,7 +471,7 @@ If assessed as a production agent-memory architecture rather than a classroom ta
 - `src/tools/builtin/search-tools.ts`
 - `src/prompts/guardian-core.ts`
 - `src/index.ts`
-- `docs/specs/IDENTITY-MEMORY-SPEC.md`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
-- `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`
+- `docs/design/IDENTITY-MEMORY-DESIGN.md`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
+- `docs/design/SECOND-BRAIN-AS-BUILT.md`

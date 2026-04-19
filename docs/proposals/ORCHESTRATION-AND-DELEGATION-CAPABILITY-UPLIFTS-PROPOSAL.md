@@ -14,8 +14,8 @@
 - `src/skills/registry.ts`
 - `src/runtime/scheduled-tasks.ts`
 **Related docs:**
-- `docs/specs/ORCHESTRATION-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
 - `docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md`
 - `docs/implemented/AGENTIC-ORCHESTRATION-UPLIFT-PROPOSAL.md`
@@ -480,7 +480,7 @@ This should live behind tool execution and code-session context, not as an unaud
 - new `src/runtime/code-intelligence.ts`
 - new `src/tools/builtin/code-intelligence-tools.ts`
 - `src/runtime/code-sessions.ts`
-- `docs/specs/CODING-WORKSPACE-SPEC.md`
+- `docs/design/CODING-WORKSPACE-DESIGN.md`
 
 ### Outcome
 

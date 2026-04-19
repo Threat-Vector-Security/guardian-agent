@@ -3,7 +3,7 @@
 **Date:** 2026-04-04  
 **Type:** Research / Architecture Comparison  
 **Primary external source:** Google Developers Blog, "Developer's guide to building ADK agents with skills"  
-**Guardian references:** `docs/guides/MEMORY-SYSTEM.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/specs/SKILLS-SPEC.md`, `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
+**Guardian references:** `docs/design/MEMORY-SYSTEM-DESIGN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/design/SKILLS-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
 
 ## Abstract
 

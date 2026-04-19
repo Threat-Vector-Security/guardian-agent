@@ -3572,7 +3572,7 @@ Each trace includes valuable metadata such as:
 ## Additional Resources
 
 - [OpenTelemetry Documentation](https://opentelemetry.io/docs/)
-- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/)
+- [OTLP Specification](https://opentelemetry.io/docs/design/otlp/)
 - [Daytona SDK Documentation](https://www.daytona.io/docs/en/introduction.md)
 
 Daytona provides comprehensive file system operations through the `fs` module in sandboxes.

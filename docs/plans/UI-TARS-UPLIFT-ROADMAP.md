@@ -62,7 +62,7 @@ Guarded computer-use operator work should stay behind those foundations unless a
 
 ## Phase 1: Run Timeline And Event Viewer
 
-**Detailed spec:** [RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md)
+**Detailed spec:** [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
 
 ### Goal
 

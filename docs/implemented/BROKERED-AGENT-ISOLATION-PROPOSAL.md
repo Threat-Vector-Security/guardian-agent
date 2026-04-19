@@ -1,6 +1,6 @@
 # Brokered Agent Isolation Proposal
 
-**Status:** Proposed  
+**Status:** Historical proposal. The current implementation status lives in [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md).  
 **Date:** 2026-03-08  
 **Informed by:** `https://mrinal.com/articles/agent-sandboxes/`
 

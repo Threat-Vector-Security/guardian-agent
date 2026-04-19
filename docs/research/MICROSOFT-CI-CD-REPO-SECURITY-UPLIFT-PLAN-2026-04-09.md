@@ -3,7 +3,7 @@
 **Date:** 2026-04-09  
 **Type:** Implementation uplift plan  
 **Based on:** `docs/research/AGENT-GOVERNANCE-TOOLKIT-COMPARISON-2026-04-09.md`  
-**Primary Guardian references:** `SECURITY.md`, `docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+**Primary Guardian references:** `SECURITY.md`, `docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 
 ## Executive Direction
 
@@ -52,7 +52,7 @@ Relevant starting points in this repository:
 
 - `.github/workflows/ci.yml` exists, but today it is minimal and only runs on `workflow_dispatch`
 - `SECURITY.md` documents strong runtime controls and default-safe posture
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` already defines the guardrails around always-loaded vs deferred tools
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` already defines the guardrails around always-loaded vs deferred tools
 - `src/tools/mcp-client.ts` already sanitizes untrusted MCP metadata and enforces `startupApproved`
 - `src/config/types.ts` and `src/config/loader.ts` already validate MCP server config
 - `src/runtime/pending-actions.ts` already provides the right orchestration substrate for review/approval continuations
@@ -99,7 +99,7 @@ Turn security governance into required, machine-verifiable CI behavior rather th
 Suggested initial sensitive paths:
 
 - `SECURITY.md`
-- `docs/specs/**/*.md`
+- `docs/design/**/*.md`
 - `src/guardian/**`
 - `src/llm/guarded-provider.ts`
 - `src/worker/worker-session.ts`
@@ -156,7 +156,7 @@ Add formal release provenance so Guardian can prove what shipped and whether cri
 - new `scripts/verify-integrity.mjs`
 - Windows release scripts under `scripts/build-windows-*.ps1`
 - new `.github/workflows/release-provenance.yml`
-- new `docs/specs/RELEASE-PROVENANCE-SPEC.md`
+- new `docs/design/RELEASE-PROVENANCE-DESIGN.md`
 
 ### Implementation direction
 
@@ -228,8 +228,8 @@ This is the most important direct runtime-governance uplift from the AGT compari
 - `src/runtime/pending-actions.ts`
 - `src/runtime/control-plane/tools-dashboard-callbacks.ts`
 - `src/runtime/ai-security.ts`
-- `docs/specs/MCP-CLIENT-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+- `docs/design/MCP-CLIENT-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 - new `src/runtime/mcp-governance.ts`
 - new `src/runtime/mcp-governance.test.ts`
 
@@ -327,7 +327,7 @@ If Guardian keeps some surfaces first-party only, document that and do not overb
 
 ### Primary repository touchpoints
 
-- new `docs/specs/EXTENSION-MANIFEST-TRUST-SPEC.md`
+- new `docs/design/EXTENSION-MANIFEST-TRUST-DESIGN.md`
 - new `src/runtime/extension-manifests.ts`
 - new `src/runtime/extension-policy.ts`
 - install/control-plane paths for future third-party assets
@@ -382,7 +382,7 @@ Make Guardian's security and governance evidence easier to consume by external t
 - `src/runtime/security-alerts.ts`
 - `src/runtime/security-triage-agent.ts`
 - new `src/runtime/governance-events.ts`
-- new `docs/specs/GOVERNANCE-EVENT-SCHEMA.md`
+- new `docs/design/GOVERNANCE-EVENT-SCHEMA.md`
 
 ### Implementation slices
 
@@ -450,7 +450,7 @@ Produce a design document, not runtime code, covering:
 
 ### Primary repository touchpoints
 
-- new `docs/architecture/FEDERATED-IDENTITY-AND-DELEGATION-SPEC.md`
+- new `docs/architecture/FEDERATED-IDENTITY-AND-DELEGATION-DESIGN.md`
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
 
 ### Exit criteria for leaving design-only status

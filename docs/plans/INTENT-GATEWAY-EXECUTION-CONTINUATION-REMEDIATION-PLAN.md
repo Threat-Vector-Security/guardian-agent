@@ -4,7 +4,7 @@
 **Status:** Draft  
 **Origin:** Verified routing, continuation, delegation, and live-progress remediation review  
 **Primary code evidence:** `src/runtime/intent-gateway.ts`, `src/runtime/intent/structured-recovery.ts`, `src/runtime/intent/unstructured-recovery.ts`, `src/runtime/intent/clarification-resolver.ts`, `src/runtime/intent/route-entity-resolution.ts`, `src/runtime/intent/request-patterns.ts`, `src/runtime/intent/history-context.ts`, `src/runtime/chat-agent/intent-gateway-orchestration.ts`, `src/runtime/pending-actions.ts`, `src/runtime/pending-action-resume.ts`, `src/runtime/continuity-threads.ts`, `src/runtime/execution-profiles.ts`, `src/runtime/routed-tool-execution.ts`, `src/supervisor/worker-manager.ts`, `src/runtime/run-timeline.ts`, `web/public/js/chat-panel.js`, `web/public/js/chat-run-tracking.js`  
-**Primary docs impacted:** [FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](../architecture/OVERVIEW.md), [INTENT-GATEWAY-ROUTING-SPEC.md](../specs/INTENT-GATEWAY-ROUTING-SPEC.md), [RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md](../specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md), [TOOLS-CONTROL-PLANE-SPEC.md](../specs/TOOLS-CONTROL-PLANE-SPEC.md)  
+**Primary docs impacted:** [FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](../architecture/OVERVIEW.md), [INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md), [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](../design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)  
 **Related plans:** `docs/plans/INTENT-GATEWAY-CAPABILITY-PLANE-UPLIFT-PLAN.md`, `docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md`, `docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md`, `docs/plans/WEB-CLI-LIVE-PROGRESS-IMPLEMENTATION-PLAN.md`
 
 ---
@@ -451,12 +451,12 @@ Goal:
 
 Required updates:
 
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
-- `docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
-- `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`
-- `docs/specs/ORCHESTRATION-SPEC.md`
-- `docs/specs/CODING-WORKSPACE-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
+- `docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
+- `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/CODING-WORKSPACE-DESIGN.md`
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
 - `docs/architecture/OVERVIEW.md`
 

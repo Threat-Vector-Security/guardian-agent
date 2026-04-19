@@ -1,6 +1,7 @@
 # Stream B: Security Uplift Plan
 
 > Archived on 2026-04-03. Most code items in this stream have shipped. Remaining active work was rolled into [Agent Traps Security Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/AGENT-TRAPS-SECURITY-UPLIFT-PLAN.md).
+> Current implementation status is reflected primarily in [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md) and [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md).
 
 ## Context
 
@@ -122,8 +123,8 @@ guardian: {
 ```
 
 **Docs to update:**
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` — add PII redaction to Security + Audit section
-- `docs/guides/MEMORY-SYSTEM.md` — note that memory_search results are PII-scanned before LLM context
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` — add PII redaction to Security + Audit section
+- `docs/design/MEMORY-SYSTEM-DESIGN.md` — note that memory_search results are PII-scanned before LLM context
 - `CLAUDE.md` — add PiiScanController to Guardian Security System section
 - `README.md` — add `piiRedaction` to config reference
 
@@ -152,7 +153,7 @@ guardian: {
 **Integration:** The actual wrapping happens in `src/index.ts` at `formatToolResultForLLM()` — coordinate with Stream A or apply after merge.
 
 **Docs to update:**
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` — add tool result scanning to Security + Audit section
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` — add tool result scanning to Security + Audit section
 - `CLAUDE.md` — update OutputGuardian description
 
 ---
@@ -179,7 +180,7 @@ guardian: {
 - Since handlers are registered as closures in `registerBuiltinTools()`, adding calls inside the handler closures is safe and isolated
 
 **Docs to update:**
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` — add argument sanitization to Sandbox Boundaries section
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` — add argument sanitization to Sandbox Boundaries section
 
 ---
 
@@ -211,7 +212,7 @@ guardian: {
 
 **Docs to update:**
 - `docs/guides/MCP-TESTING-GUIDE.md` — document trust level configuration
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` — update MCP section with trust boundaries
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` — update MCP section with trust boundaries
 - `README.md` — add MCP trust config to reference
 
 ---
@@ -259,9 +260,9 @@ guardian: {
 
 | Document | Changes |
 |----------|---------|
-| `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` | PII redaction in Security+Audit, tool result scanning, argument sanitization in Sandbox Boundaries, MCP trust boundaries |
+| `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` | PII redaction in Security+Audit, tool result scanning, argument sanitization in Sandbox Boundaries, MCP trust boundaries |
 | `docs/guides/MCP-TESTING-GUIDE.md` | Trust level configuration for MCP servers |
-| `docs/guides/MEMORY-SYSTEM.md` | Note PII scanning on memory_search results |
+| `docs/design/MEMORY-SYSTEM-DESIGN.md` | Note PII scanning on memory_search results |
 | `CLAUDE.md` | Add PiiScanController to Guardian Security System, update OutputGuardian description |
 | `README.md` | Add `piiRedaction` config, MCP trust config to reference |
 

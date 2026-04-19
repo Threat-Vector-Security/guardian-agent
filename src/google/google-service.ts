@@ -3,7 +3,7 @@
  *
  * Calls Google APIs via HTTPS with OAuth 2.0 PKCE.
  *
- * Spec: docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md
+ * Spec: docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md
  */
 
 import { createLogger } from '../util/logging.js';
