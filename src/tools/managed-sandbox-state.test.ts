@@ -140,4 +140,73 @@ describe('ToolExecutor Managed Sandbox State', () => {
     expect(sandbox.state).toBe('running');
     expect(mockStore.updateSession).toHaveBeenCalled();
   });
+
+  it('does not silently promote a resumed sandbox with no reported lifecycle state to active', async () => {
+    const sandbox: any = {
+      leaseId: 'lease-1',
+      targetId: 'daytona:daytona-main',
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+      profileName: 'Daytona Main',
+      sandboxId: 'sandbox-1',
+      localWorkspaceRoot: root,
+      remoteWorkspaceRoot: '/remote/workspace',
+      status: 'stopped' as const,
+      state: 'stopped',
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      trackedRemotePaths: [],
+    };
+    const remoteExecutionService: RemoteExecutionServiceLike = {
+      runBoundedJob: vi.fn(),
+      stopLease: vi.fn().mockResolvedValue(undefined),
+      resumeLease: vi.fn().mockResolvedValue({
+        id: 'lease-1',
+        targetId: 'daytona:daytona-main',
+        backendKind: 'daytona_sandbox',
+        profileId: 'daytona-main',
+        profileName: 'Daytona Main',
+        sandboxId: 'sandbox-1',
+        localWorkspaceRoot: root,
+        remoteWorkspaceRoot: '/remote/workspace',
+        acquiredAt: 1,
+        state: undefined,
+        lastUsedAt: 123,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        trackedRemotePaths: [],
+        leaseMode: 'managed',
+      }),
+      inspectLease: vi.fn().mockResolvedValue({}),
+      getKnownTargetHealth: () => ({}),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedDomains: ['app.daytona.io'],
+      codeSessionStore: mockStore,
+      remoteExecutionService,
+      cloudConfig: createCloudConfig({
+        enabled: true,
+        daytonaProfiles: [{ id: 'daytona-main', name: 'Daytona Main', apiKey: 'secret', enabled: true }],
+      }),
+    });
+
+    vi.spyOn(executor as any, 'getCodeSessionRecord').mockReturnValue({
+      id: 'session-1',
+      ownerUserId: 'user-1',
+      resolvedRoot: root,
+      workState: { managedSandboxes: [sandbox] },
+    });
+
+    await executor.startManagedSandboxForCodeSession({
+      sessionId: 'session-1',
+      ownerUserId: 'user-1',
+      leaseId: 'lease-1',
+    });
+
+    expect(remoteExecutionService.resumeLease).toHaveBeenCalled();
+    expect(sandbox.status).toBe('stopped');
+    expect(sandbox.state).toBeUndefined();
+  });
 });

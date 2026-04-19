@@ -169,6 +169,86 @@ describe('runLlmLoop', () => {
     });
   });
 
+  it('normalizes malformed JSON-wrapped tool calls before invoking broker tools', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Find timeline rendering in the repo.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: '{"name":"fs_search","arguments":{"path":"src","pattern":"timeline"}}',
+          arguments: '{}',
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Found timeline-related files.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const seenRequests: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_search',
+          description: 'Search files.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              pattern: { type: 'string' },
+            },
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        seenRequests.push({
+          toolName: request.toolName,
+          args: request.args,
+        });
+        return {
+          success: true,
+          output: {
+            matches: [{ path: 'src/runtime/run-timeline.ts' }],
+          },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(seenRequests).toEqual([
+      {
+        toolName: 'fs_search',
+        args: { path: 'src', pattern: 'timeline' },
+      },
+    ]);
+    expect(result.finalContent).toBe('Found timeline-related files.');
+    expect(result.outcome).toMatchObject({
+      toolCallCount: 1,
+      toolResultCount: 1,
+      successfulToolResultCount: 1,
+    });
+  });
+
   it('tries one tool-free recovery round before falling back to a raw tool summary', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect the repo and give me an implementation plan.' }];
     const responses: ChatResponse[] = [
@@ -1193,6 +1273,142 @@ describe('runLlmLoop', () => {
     expect(searchQueries.length).toBeGreaterThan(0);
     expect(result.finalContent).toContain('Read complete.');
     expect(messages.some((message) => message.role === 'tool' && message.content.includes('<tool_result name="browser_read"'))).toBe(true);
+  });
+
+  it('repairs empty find_tools queries from the latest user request', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Run whoami in the remote sandbox for this workspace.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'find_tools', arguments: JSON.stringify({}) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Found the tool.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const searchQueries: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [];
+      },
+      async searchTools(query) {
+        searchQueries.push(query);
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        expect(request.toolName).toBe('find_tools');
+        expect(request.args).toMatchObject({
+          query: 'Run whoami in the remote sandbox for this workspace.',
+        });
+        return {
+          success: true,
+          output: { tools: [] },
+        };
+      },
+    };
+
+    await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(searchQueries).toContain('find tools');
+  });
+
+  it('continues past discovery-only rounds instead of stopping after find_tools', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Run whoami in the remote sandbox for this workspace.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'find_tools', arguments: JSON.stringify({ query: 'remote sandbox' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I found the code_remote_exec tool but have not run the command yet. Would you like me to proceed?',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'code_remote_exec', arguments: JSON.stringify({ command: 'whoami' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Remote sandbox user: daytona',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calledTools: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [];
+      },
+      async searchTools() {
+        return [{
+          name: 'code_remote_exec',
+          description: 'Run a command in the remote sandbox.',
+          parameters: { type: 'object', properties: { command: { type: 'string' } } },
+          risk: 'mutating',
+          category: 'coding',
+        }];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'find_tools') {
+          return {
+            success: true,
+            output: {
+              tools: [{
+                name: 'code_remote_exec',
+                description: 'Run a command in the remote sandbox.',
+                parameters: { type: 'object', properties: { command: { type: 'string' } } },
+                risk: 'mutating',
+                category: 'coding',
+              }],
+            },
+          };
+        }
+        expect(request.toolName).toBe('code_remote_exec');
+        expect(request.args).toMatchObject({ command: 'whoami' });
+        return {
+          success: true,
+          output: { stdout: 'daytona' },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      4,
+      32_000,
+      undefined,
+      {
+        toolExecutionCorrectionPrompt: 'System correction: this turn requires real execution evidence.',
+      },
+    );
+
+    expect(calledTools).toEqual(['find_tools', 'code_remote_exec']);
+    expect(result.finalContent).toBe('Remote sandbox user: daytona');
   });
 
   it('passes the model memory-mutation allowance through to the tool caller', async () => {

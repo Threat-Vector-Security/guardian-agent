@@ -54,9 +54,11 @@ describe('DaytonaRemoteExecutionProvider', () => {
       sandboxId: 'daytona_123',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'started',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
@@ -112,9 +114,11 @@ describe('DaytonaRemoteExecutionProvider', () => {
       sandboxId: 'daytona_456',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'started',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
@@ -160,9 +164,11 @@ describe('DaytonaRemoteExecutionProvider', () => {
       sandboxId: 'daytona_reused',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'started',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
@@ -230,9 +236,11 @@ describe('DaytonaRemoteExecutionProvider', () => {
       sandboxId: 'daytona_probe',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'started',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
@@ -260,7 +268,7 @@ describe('DaytonaRemoteExecutionProvider', () => {
         CI: 'true',
         GUARDIAN_REMOTE_SANDBOX: '1',
       },
-      30,
+      10,
     );
     expect(session.destroy).toHaveBeenCalled();
   });
@@ -270,9 +278,11 @@ describe('DaytonaRemoteExecutionProvider', () => {
       sandboxId: 'daytona_existing',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'stopped',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),
@@ -314,14 +324,199 @@ describe('DaytonaRemoteExecutionProvider', () => {
     expect(session.destroy).not.toHaveBeenCalled();
   });
 
+  it('requires a provider-confirmed running state before a stopped lease is considered resumed', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_resume',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: undefined,
+      refreshData: vi.fn(async function (this: DaytonaSandboxSession) {
+        if (this.state === undefined) {
+          this.state = 'stopped';
+          return;
+        }
+        if (this.state === 'starting') {
+          this.state = 'started';
+        }
+      }),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async function (this: DaytonaSandboxSession) {
+        this.state = 'started';
+      }),
+      start: vi.fn(async function (this: DaytonaSandboxSession) {
+        this.state = 'starting';
+      }),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => ({ exitCode: 0, result: '' })),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    const lease = await provider.resumeLease(TARGET, {
+      id: 'lease_existing',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: session.workspaceRoot,
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+      state: 'stopped',
+    });
+
+    expect(session.start).toHaveBeenCalledWith(60);
+    expect(session.refreshData).toHaveBeenCalled();
+    expect(lease.state).toBe(session);
+    expect(session.state).toBe('started');
+  });
+
+  it('marks a running managed sandbox unreachable when toolbox execution is not ready during inspection', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_inspect_502',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => {
+        throw new Error('Request failed with status code 502');
+      }),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.inspectLease(TARGET, {
+      id: 'lease_existing',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: session.workspaceRoot,
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+      state: 'started',
+    });
+
+    expect(result.healthState).toBe('unreachable');
+    expect(result.reason).toContain('toolbox command endpoint');
+    expect(result.reason).toContain('502');
+  });
+
+  it('fails resume when Daytona reports started but command execution is still unavailable', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_resume_502',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => {
+        throw new Error('Request failed with status code 502');
+      }),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxLookup: vi.fn(async () => session),
+      }),
+    });
+
+    await expect(provider.resumeLease(TARGET, {
+      id: 'lease_existing',
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      sandboxId: session.sandboxId,
+      localWorkspaceRoot: '/tmp/workspace',
+      remoteWorkspaceRoot: session.workspaceRoot,
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      trackedRemotePaths: [],
+      leaseMode: 'managed',
+      state: 'started',
+    })).rejects.toThrow(/toolbox command endpoint/);
+  });
+
+  it('throws transport errors from remote command execution instead of converting them into ordinary command failure', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_run_502',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => {
+        throw new Error('Request failed with status code 502');
+      }),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxFactory: vi.fn(async () => session),
+      }),
+    });
+    const lease = await provider.createLease({
+      target: TARGET,
+      localWorkspaceRoot: '/tmp/workspace',
+      leaseMode: 'managed',
+    });
+
+    await expect(provider.runWithLease(lease, buildRequest({
+      artifactPaths: [],
+    }))).rejects.toThrow(/toolbox command endpoint/);
+  });
+
   it('stops a managed lease by looking up the sandbox when only persisted lease data is available', async () => {
     const session: DaytonaSandboxSession = {
       sandboxId: 'daytona_stop_lookup',
       workspaceRoot: '/home/daytona/guardian-workspace',
       state: 'started',
+      refreshData: vi.fn(async () => undefined),
       createFolder: vi.fn(async () => undefined),
       uploadFiles: vi.fn(async () => undefined),
       setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
       refreshActivity: vi.fn(async () => undefined),

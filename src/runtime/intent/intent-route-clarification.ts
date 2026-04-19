@@ -189,7 +189,10 @@ function shouldUseConfidenceBackstop(
   confidence: IntentGatewayDecision['confidence'],
   mode: IntentGatewayRecord['mode'] | undefined,
 ): boolean {
-  return confidence !== 'high' || mode === 'json_fallback' || mode === 'route_only_fallback';
+  return confidence !== 'high'
+    || mode === 'json_fallback'
+    || mode === 'route_only_fallback'
+    || mode === 'confirmation';
 }
 
 function isStrongExplicitRepoWorkRequest(normalized: string): boolean {

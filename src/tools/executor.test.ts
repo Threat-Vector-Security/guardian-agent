@@ -16,6 +16,7 @@ import { CodeSessionStore } from '../runtime/code-sessions.js';
 import { AutomationOutputStore } from '../runtime/automation-output-store.js';
 import { SecondBrainStore } from '../runtime/second-brain/second-brain-store.js';
 import { SecondBrainService } from '../runtime/second-brain/second-brain-service.js';
+import { RemoteExecutionTargetUnavailableError } from '../runtime/remote-execution/remote-execution-service.js';
 import {
   WorkspaceDependencyLedger,
   captureJsDependencySnapshot,
@@ -814,6 +815,145 @@ describe('ToolExecutor', () => {
     }));
     expect(result.leaseMode).toBe('managed');
     expect(result.leaseReused).toBe(true);
+  });
+
+  it('fails closed on a managed sandbox target outage instead of silently falling through to another provider', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Sandbox Fail Closed Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'active',
+          state: 'started',
+          acquiredAt: 10,
+          lastUsedAt: 25,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+          healthState: 'healthy',
+          healthReason: 'Managed sandbox is reachable.',
+          healthCheckedAt: 25,
+        }],
+      },
+    });
+
+    const remoteExecutionService = {
+      getKnownTargetHealth: vi.fn(() => ({})),
+      listActiveLeases: vi.fn(() => []),
+      runBoundedJob: vi.fn(async (request) => {
+        if (request.target.backendKind === 'daytona_sandbox') {
+          throw new RemoteExecutionTargetUnavailableError(
+            'Remote execution target \'Daytona Main\' is not reachable.\n\nRequest failed with status code 502',
+            {
+              targetId: request.target.id,
+              profileId: request.target.profileId,
+              backendKind: request.target.backendKind,
+            },
+          );
+        }
+        return {
+          targetId: request.target.id,
+          backendKind: request.target.backendKind,
+          profileId: request.target.profileId,
+          profileName: request.target.profileName,
+          requestedCommand: request.command.requestedCommand,
+          status: 'succeeded' as const,
+          sandboxId: 'vercel-fallback-should-not-run',
+          exitCode: 0,
+          stdout: '/workspace\n',
+          stderr: '',
+          durationMs: 50,
+          startedAt: 10,
+          completedAt: 60,
+          networkMode: request.target.networkMode,
+          allowedDomains: [...request.target.allowedDomains],
+          allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+          stagedFiles: 0,
+          stagedBytes: 0,
+          workspaceRoot: request.workspace.workspaceRoot,
+          cwd: request.workspace.cwd,
+          artifactFiles: [],
+        };
+      }),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['pwd'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'daytona.io'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'automatic',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Production',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    await expect(executor.runRemoteExecutionJob({
+      command: {
+        requestedCommand: 'pwd',
+        includePaths: [],
+        artifactPaths: [],
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      request: {
+        origin: 'web',
+        channel: 'web',
+        codeContext: {
+          workspaceRoot: root,
+          sessionId: session.id,
+        },
+      },
+      leaseMode: 'ephemeral',
+    })).rejects.toThrow(/502/);
+
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledTimes(1);
+    const refreshed = codeSessionStore.getSession(session.id, 'tester');
+    expect(refreshed?.workState.managedSandboxes[0]?.status).toBe('unreachable');
+    expect(refreshed?.workState.managedSandboxes[0]?.healthReason).toContain('502');
   });
 
   it('allows the built-in Vercel remote sandbox control-plane host without widening allowedDomains', async () => {

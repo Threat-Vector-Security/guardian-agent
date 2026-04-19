@@ -8,7 +8,7 @@ import {
   toString,
 } from '../../chat-agent-helpers.js';
 import { resolveCodingBackendSessionTarget } from '../coding-backend-session-target.js';
-import type { CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
+import type { CodeSessionManagedSandbox, CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import { isWorkspaceSwitchPendingActionSatisfied } from '../pending-action-resume.js';
@@ -28,6 +28,11 @@ type CodeSessionToolExecutor = (
   message: UserMessage,
   ctx: AgentContext,
 ) => Promise<CodeSessionToolResult>;
+
+type CodeSessionManagedSandboxGetter = (
+  sessionId: string,
+  ownerUserId?: string,
+) => Promise<{ sandboxes: CodeSessionManagedSandbox[] }>;
 
 type CodingTaskResumer = (
   message: UserMessage,
@@ -289,12 +294,11 @@ async function handleCodeSessionCurrent(input: {
   message: UserMessage;
   ctx: AgentContext;
 }): Promise<CodeSessionResponse> {
-  const result = await input.executeDirectCodeSessionTool('code_session_current', {}, input.message, input.ctx);
-  if (!toBoolean(result.success)) {
-    const failure = toString(result.message) || 'I could not inspect the current coding workspace.';
-    return { content: failure };
+  const current = await loadCurrentCodeSession(input);
+  if (!current.success) {
+    return { content: current.failure };
   }
-  const session = isRecord(result.output) && isRecord(result.output.session) ? result.output.session : null;
+  const session = current.session;
   if (!session) {
     return { content: 'This chat is not currently attached to any coding workspace.' };
   }
@@ -307,6 +311,59 @@ async function handleCodeSessionCurrent(input: {
       codeSessionResolved: true,
       codeSessionId: toString(session.id),
     },
+  };
+}
+
+async function handleCodeSessionManagedSandboxes(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  getCodeSessionManagedSandboxes?: CodeSessionManagedSandboxGetter;
+  message: UserMessage;
+  ctx: AgentContext;
+}): Promise<CodeSessionResponse> {
+  const current = await loadCurrentCodeSession(input);
+  if (!current.success) {
+    return { content: current.failure };
+  }
+  const session = current.session;
+  if (!session) {
+    return { content: 'This chat is not currently attached to any coding workspace.' };
+  }
+
+  const sessionId = toString(session.id).trim();
+  const ownerUserId = toString(session.ownerUserId).trim() || input.message.userId?.trim();
+  let sandboxes = extractManagedSandboxesFromSession(session);
+
+  if (sessionId && input.getCodeSessionManagedSandboxes) {
+    try {
+      const refreshed = await input.getCodeSessionManagedSandboxes(sessionId, ownerUserId || undefined);
+      if (Array.isArray(refreshed.sandboxes)) {
+        sandboxes = refreshed.sandboxes;
+      }
+    } catch {
+      // Fall back to the current session snapshot when the live refresh fails.
+    }
+  }
+
+  const lines = [
+    'This chat is currently attached to:',
+    formatDirectCodeSessionLine(session, true),
+  ];
+  if (sandboxes.length === 0) {
+    lines.push('No managed sandboxes are currently attached to this coding session.');
+  } else {
+    lines.push('Managed sandboxes attached to this coding session:');
+    for (const sandbox of sandboxes) {
+      lines.push(formatManagedSandboxLine(sandbox));
+    }
+  }
+  return {
+    content: lines.join('\n'),
+    metadata: sessionId
+      ? {
+          codeSessionResolved: true,
+          codeSessionId: sessionId,
+        }
+      : undefined,
   };
 }
 
@@ -506,6 +563,7 @@ export async function handleCodeSessionAttach(input: {
 export async function tryDirectCodeSessionControlFromGateway(input: {
   toolsEnabled: boolean;
   executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  getCodeSessionManagedSandboxes?: CodeSessionManagedSandboxGetter;
   getActivePendingAction: (
     userId: string,
     channel: string,
@@ -522,11 +580,15 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
   if (!input.decision || input.decision.route !== 'coding_session_control') return null;
 
   const operation = input.decision.operation;
+  const resource = input.decision.entities.codeSessionResource;
 
   if (operation === 'navigate' || operation === 'search' || operation === 'read') {
     return handleCodeSessionList(input);
   }
   if (operation === 'inspect') {
+    if (resource === 'managed_sandboxes') {
+      return handleCodeSessionManagedSandboxes(input);
+    }
     return handleCodeSessionCurrent(input);
   }
   if (operation === 'delete') {
@@ -554,4 +616,40 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
   }
 
   return handleCodeSessionList(input);
+}
+
+async function loadCurrentCodeSession(input: {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  message: UserMessage;
+  ctx: AgentContext;
+}): Promise<{ success: true; session: Record<string, unknown> | null } | { success: false; failure: string }> {
+  const result = await input.executeDirectCodeSessionTool('code_session_current', {}, input.message, input.ctx);
+  if (!toBoolean(result.success)) {
+    return {
+      success: false,
+      failure: toString(result.message) || 'I could not inspect the current coding workspace.',
+    };
+  }
+  return {
+    success: true,
+    session: isRecord(result.output) && isRecord(result.output.session) ? result.output.session : null,
+  };
+}
+
+function extractManagedSandboxesFromSession(session: Record<string, unknown>): CodeSessionManagedSandbox[] {
+  const workState = isRecord(session.workState) ? session.workState : null;
+  const managedSandboxes = Array.isArray(workState?.managedSandboxes)
+    ? workState.managedSandboxes.filter((value): value is CodeSessionManagedSandbox => isRecord(value))
+    : [];
+  return managedSandboxes;
+}
+
+function formatManagedSandboxLine(sandbox: CodeSessionManagedSandbox): string {
+  const formatValue = (value: string | number | boolean | undefined | null): string => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return text || '(none)';
+  };
+  const lifecycleState = formatValue(sandbox.state || sandbox.status);
+  const canRestart = sandbox.backendKind === 'daytona_sandbox' && lifecycleState.toLowerCase() === 'stopped';
+  return `- ${formatValue(sandbox.profileName)} | backend=${sandbox.backendKind} | state=${lifecycleState} | status=${formatValue(sandbox.status)} | sandboxId=${formatValue(sandbox.sandboxId)} | workspace=${formatValue(sandbox.remoteWorkspaceRoot || sandbox.localWorkspaceRoot)} | canRestart=${canRestart ? 'yes' : 'no'}${sandbox.healthReason ? ` | note=${formatValue(sandbox.healthReason)}` : ''}`;
 }

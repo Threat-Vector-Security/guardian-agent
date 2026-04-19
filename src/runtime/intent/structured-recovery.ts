@@ -1,6 +1,10 @@
 import type { ChatResponse } from '../../llm/types.js';
 import { parseStructuredJsonObject } from '../../util/structured-json.js';
 import {
+  repairStructuredIntentGatewayOperation,
+  repairStructuredIntentGatewayRoute,
+} from './gateway-semantic-repair.js';
+import {
   repairIntentGatewayOperation,
   repairIntentGatewayRoute,
 } from './clarification-resolver.js';
@@ -19,6 +23,7 @@ import {
   normalizeSimpleVsComplex,
   normalizeTurnRelation,
 } from './normalization.js';
+import { requestNeedsExactFileReferences } from './request-patterns.js';
 import type {
   IntentGatewayDecision,
   IntentGatewayProvenanceSource,
@@ -32,7 +37,7 @@ export function parseIntentGatewayDecision(
   response: ChatResponse,
   repairContext?: IntentGatewayRepairContext,
   options?: { mode?: IntentGatewayRecord['mode'] },
-): { decision: IntentGatewayDecision; available: boolean } {
+): { decision: IntentGatewayDecision; available: boolean; rawStructuredDecision?: Record<string, unknown> } {
   const classifierSource = classifierProvenanceSourceForMode(options?.mode ?? 'primary');
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content)
@@ -91,6 +96,7 @@ export function parseIntentGatewayDecision(
   return {
     decision,
     available: decision.route !== 'unknown',
+    rawStructuredDecision: { ...parsed },
   };
 }
 
@@ -158,13 +164,30 @@ export function normalizeIntentGatewayDecision(
     ? parsed.summary.trim()
     : INTENT_GATEWAY_MISSING_SUMMARY;
   const turnRelation = normalizeTurnRelation(parsed.turnRelation);
-  const route = repairIntentGatewayRoute(
-    normalizeRoute(parsed.route),
+  const normalizedParsedRoute = normalizeRoute(parsed.route);
+  const semanticallyRepairedRoute = repairStructuredIntentGatewayRoute(
+    normalizedParsedRoute,
     parsedOperation,
     turnRelation,
     repairContext,
   );
-  const operation = repairIntentGatewayOperation(parsedOperation, route, turnRelation, repairContext);
+  const route = repairIntentGatewayRoute(
+    semanticallyRepairedRoute,
+    turnRelation,
+    repairContext,
+  );
+  const semanticallyRepairedOperation = repairStructuredIntentGatewayOperation(
+    parsedOperation,
+    route,
+    turnRelation,
+    repairContext,
+  );
+  const operation = repairIntentGatewayOperation(
+    semanticallyRepairedOperation,
+    route,
+    turnRelation,
+    repairContext,
+  );
   const resolution = normalizeResolution(parsed.resolution);
   const missingFields = Array.isArray(parsed.missingFields)
     ? parsed.missingFields
@@ -172,7 +195,6 @@ export function normalizeIntentGatewayDecision(
       .map((value) => value.trim())
       .filter(Boolean)
     : [];
-  const normalizedParsedRoute = normalizeRoute(parsed.route);
   const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
     ? parsed.resolvedContent.trim()
     : undefined;
@@ -199,20 +221,54 @@ export function normalizeIntentGatewayDecision(
   const requiresToolSynthesis = hasParsedRequiresToolSynthesis
     ? parsed.requiresToolSynthesis as boolean
     : derivedWorkload.requiresToolSynthesis;
+  const hasParsedRequireExactFileReferences = typeof parsed.requireExactFileReferences === 'boolean';
+  const requireExactFileReferences = hasParsedRequireExactFileReferences
+    ? parsed.requireExactFileReferences as boolean
+    : (
+      (requiresRepoGrounding || executionClass === 'repo_grounded' || executionClass === 'security_analysis')
+      && requestNeedsExactFileReferences(repairContext?.sourceContent)
+    );
   const expectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure)
     ?? derivedWorkload.expectedContextPressure;
   const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
     ?? derivedWorkload.preferredAnswerPath;
   const simpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex)
     ?? derivedWorkload.simpleVsComplex;
+  const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
+  const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
+  const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
+    && clarificationPendingRoute !== 'unknown'
+    && route === clarificationPendingRoute;
+  const clarificationOwnsOperation = clarificationOwnsRoute
+    && clarificationPendingOperation !== 'unknown'
+    && operation === clarificationPendingOperation;
   const provenance = {
-    route: route === normalizedParsedRoute ? classifierSource : 'resolver.clarification',
-    operation: operation === parsedOperation ? classifierSource : 'resolver.clarification',
+    route: route === normalizedParsedRoute
+      ? classifierSource
+      : clarificationOwnsRoute
+        ? 'resolver.clarification'
+        : route === semanticallyRepairedRoute
+        ? 'repair.structured'
+        : 'resolver.clarification',
+    operation: operation === parsedOperation
+      ? classifierSource
+      : clarificationOwnsOperation
+        ? 'resolver.clarification'
+        : operation === semanticallyRepairedOperation
+        ? 'repair.structured'
+        : 'resolver.clarification',
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
     executionClass: normalizedExecutionClass ? classifierSource : 'derived.workload',
     preferredTier: normalizedPreferredTier ? classifierSource : 'derived.workload',
     requiresRepoGrounding: hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
     requiresToolSynthesis: hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
+    ...(hasParsedRequireExactFileReferences || requireExactFileReferences
+      ? {
+          requireExactFileReferences: hasParsedRequireExactFileReferences
+            ? classifierSource
+            : 'derived.workload',
+        }
+      : {}),
     expectedContextPressure: normalizeExpectedContextPressure(parsed.expectedContextPressure)
       ? classifierSource
       : 'derived.workload',
@@ -237,6 +293,7 @@ export function normalizeIntentGatewayDecision(
     preferredTier,
     requiresRepoGrounding,
     requiresToolSynthesis,
+    requireExactFileReferences,
     expectedContextPressure,
     preferredAnswerPath,
     simpleVsComplex,

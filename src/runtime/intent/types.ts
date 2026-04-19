@@ -74,11 +74,14 @@ export type IntentGatewayProvenanceSource =
   | 'classifier.primary'
   | 'classifier.json_fallback'
   | 'classifier.route_only_fallback'
+  | 'classifier.confirmation'
   | 'resolver.email'
   | 'resolver.coding'
   | 'resolver.personal_assistant'
   | 'resolver.provider_config'
+  | 'resolver.tool_inventory'
   | 'resolver.clarification'
+  | 'repair.structured'
   | 'repair.unstructured'
   | 'repair.automation_name'
   | 'derived.workload';
@@ -98,6 +101,7 @@ export interface IntentGatewayEntities {
   query?: string;
   path?: string;
   sessionTarget?: string;
+  codeSessionResource?: 'session' | 'session_list' | 'managed_sandboxes';
   emailProvider?: 'gws' | 'm365';
   mailboxReadMode?: 'unread' | 'latest';
   calendarTarget?: 'local' | 'gws' | 'm365';
@@ -120,6 +124,7 @@ export interface IntentGatewayDecisionProvenance {
   preferredTier?: IntentGatewayProvenanceSource;
   requiresRepoGrounding?: IntentGatewayProvenanceSource;
   requiresToolSynthesis?: IntentGatewayProvenanceSource;
+  requireExactFileReferences?: IntentGatewayProvenanceSource;
   expectedContextPressure?: IntentGatewayProvenanceSource;
   preferredAnswerPath?: IntentGatewayProvenanceSource;
   simpleVsComplex?: IntentGatewayProvenanceSource;
@@ -139,6 +144,7 @@ export interface IntentGatewayDecision {
   preferredTier: IntentGatewayPreferredTier;
   requiresRepoGrounding: boolean;
   requiresToolSynthesis: boolean;
+  requireExactFileReferences?: boolean;
   expectedContextPressure: IntentGatewayExpectedContextPressure;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
   simpleVsComplex?: IntentGatewaySimpleVsComplex;
@@ -147,12 +153,13 @@ export interface IntentGatewayDecision {
 }
 
 export interface IntentGatewayRecord {
-  mode: 'primary' | 'json_fallback' | 'route_only_fallback';
+  mode: 'primary' | 'json_fallback' | 'route_only_fallback' | 'confirmation';
   available: boolean;
   model: string;
   latencyMs: number;
   promptProfile?: IntentGatewayPromptProfile;
   decision: IntentGatewayDecision;
+  rawStructuredDecision?: Record<string, unknown>;
   rawResponsePreview?: string;
 }
 

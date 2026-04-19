@@ -1,5 +1,7 @@
 # Intent Gateway And Execution Continuation Remediation Plan
 
+> Superseded for delegated execution, evidence verification, interruption handling, and orchestration cutover by [EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md](./EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md). Keep this document as historical context only.
+
 **Date:** 2026-04-18  
 **Status:** Draft  
 **Origin:** Verified routing, continuation, delegation, and live-progress remediation review  

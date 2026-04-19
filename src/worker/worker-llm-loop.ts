@@ -4,7 +4,7 @@ import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import { isIntermediateStatusResponse, isResponseDegraded } from '../util/response-quality.js';
-import { recoverToolCallsFromStructuredText } from '../util/structured-json.js';
+import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../util/structured-json.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 import type {
@@ -27,6 +27,8 @@ export interface LlmLoopOptions {
   answerFirstFallbackContent?: string;
   /** Optional system correction used when a repo/file task narrates instead of using tools. */
   toolExecutionCorrectionPrompt?: string;
+  /** Structured per-tool lifecycle callback for delegated execution receipts. */
+  onToolEvent?: (event: LlmLoopToolEvent) => void;
 }
 
 export interface LlmLoopOutcome {
@@ -37,6 +39,16 @@ export interface LlmLoopOutcome {
   toolResultCount: number;
   successfulToolResultCount: number;
   policyBlockedSamples?: Array<{ toolName: string; message: string }>;
+}
+
+export interface LlmLoopToolEvent {
+  phase: 'started' | 'completed';
+  toolCall: { id: string; name: string };
+  args: Record<string, unknown>;
+  startedAt: number;
+  endedAt?: number;
+  result?: Record<string, unknown>;
+  errorMessage?: string;
 }
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
@@ -60,6 +72,7 @@ export async function runLlmLoop(
   let forcedPolicyBlockedRetryUsed = false;
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
+  let forcedDiscoveryContinuationRetryUsed = false;
   let forcedIntermediateStatusRetryCount = 0;
   let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
   let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
@@ -108,6 +121,14 @@ export async function runLlmLoop(
   };
 
   const formatToolError = (message: string): string => formatToolResultForLLM('tool_error', { success: false, error: message }, []);
+  const latestUserRequest = (): string => (
+    [...messages]
+      .reverse()
+      .find((entry) => entry.role === 'user' && typeof entry.content === 'string' && entry.content.trim().length > 0)
+      ?.content
+      ?.trim()
+    ?? ''
+  );
 
   const recoverStructuredToolCalls = (response: ChatResponse): ChatResponse => {
     if (response.toolCalls?.length) {
@@ -218,6 +239,12 @@ export async function runLlmLoop(
 
     response = recoverStructuredToolCalls(response);
     finalContent = response.content ?? '';
+    if (response.toolCalls?.length) {
+      response = {
+        ...response,
+        toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+      };
+    }
 
     if (
       !forcedPolicyBlockedRetryUsed
@@ -298,6 +325,30 @@ export async function runLlmLoop(
       finalContent = response.content ?? '';
     }
 
+    if (
+      !forcedDiscoveryContinuationRetryUsed
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && shouldRetryDiscoveryContinuation(lastToolRoundResults, options?.toolExecutionCorrectionPrompt)
+    ) {
+      forcedDiscoveryContinuationRetryUsed = true;
+      response = await chatFn(
+        [
+          ...plannerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildDiscoveryContinuationCorrectionPrompt() },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
+      if (response.toolCalls?.length) {
+        response = {
+          ...response,
+          toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+        };
+      }
+    }
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       break;
     }
@@ -326,6 +377,16 @@ export async function runLlmLoop(
         if (tc.arguments?.trim()) {
           try { parsedArgs = JSON.parse(tc.arguments); } catch { /* empty */ }
         }
+        if (tc.name === 'find_tools') {
+          parsedArgs = normalizeFindToolsArgs(parsedArgs, latestUserRequest());
+        }
+        const startedAt = Date.now();
+        options?.onToolEvent?.({
+          phase: 'started',
+          toolCall: { id: tc.id, name: tc.name },
+          args: parsedArgs,
+          startedAt,
+        });
 
         if (isMemoryMutationToolName(tc.name) && options?.allowModelMemoryMutation !== true) {
           const denied: ToolRunResponse = {
@@ -337,26 +398,53 @@ export async function runLlmLoop(
           if (onToolCalled) {
             onToolCalled(tc, denied as unknown as Record<string, unknown>);
           }
+          options?.onToolEvent?.({
+            phase: 'completed',
+            toolCall: { id: tc.id, name: tc.name },
+            args: parsedArgs,
+            startedAt,
+            endedAt: Date.now(),
+            result: denied as unknown as Record<string, unknown>,
+          });
           return { toolCall: tc, result: denied };
         }
+        try {
+          const res = await toolCallerWithDiscovery(tc.name, parsedArgs, {
+            origin: 'assistant',
+            toolName: tc.name,
+            args: parsedArgs,
+            principalId: 'worker-session',
+            principalRole: 'owner',
+            contentTrustLevel: currentContextTrustLevel,
+            taintReasons: [...currentTaintReasons],
+            derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
+            allowModelMemoryMutation: options?.allowModelMemoryMutation === true,
+          });
 
-        const res = await toolCallerWithDiscovery(tc.name, parsedArgs, {
-          origin: 'assistant',
-          toolName: tc.name,
-          args: parsedArgs,
-          principalId: 'worker-session',
-          principalRole: 'owner',
-          contentTrustLevel: currentContextTrustLevel,
-          taintReasons: [...currentTaintReasons],
-          derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
-          allowModelMemoryMutation: options?.allowModelMemoryMutation === true,
-        });
+          if (onToolCalled) {
+            onToolCalled(tc, res as unknown as Record<string, unknown>);
+          }
+          options?.onToolEvent?.({
+            phase: 'completed',
+            toolCall: { id: tc.id, name: tc.name },
+            args: parsedArgs,
+            startedAt,
+            endedAt: Date.now(),
+            result: res as unknown as Record<string, unknown>,
+          });
 
-        if (onToolCalled) {
-          onToolCalled(tc, res as unknown as Record<string, unknown>);
+          return { toolCall: tc, result: res };
+        } catch (error) {
+          options?.onToolEvent?.({
+            phase: 'completed',
+            toolCall: { id: tc.id, name: tc.name },
+            args: parsedArgs,
+            startedAt,
+            endedAt: Date.now(),
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
         }
-
-        return { toolCall: tc, result: res };
       })
     );
     toolResultCount += toolResults.length;
@@ -635,6 +723,23 @@ function shouldRetryPolicyUpdateCorrection(
   return isPolicyScoped && (claimsToolMissing || pushesManualConfig || asksForPolicyConfirmation);
 }
 
+function normalizeFindToolsArgs(
+  args: Record<string, unknown>,
+  fallbackQuery: string,
+): Record<string, unknown> {
+  if (readString(args.query)) {
+    return args;
+  }
+  const normalizedFallback = fallbackQuery.trim();
+  if (!normalizedFallback) {
+    return args;
+  }
+  return {
+    ...args,
+    query: normalizedFallback,
+  };
+}
+
 function shouldRetryToolExecutionCorrection(
   responseContent: string,
   toolDefs: import('../llm/types.js').ToolDefinition[],
@@ -657,6 +762,18 @@ function shouldRetryIntermediateStatusCorrection(
     return false;
   }
   return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
+}
+
+function shouldRetryDiscoveryContinuation(
+  results: Array<{ toolName: string; result: Record<string, unknown> }>,
+  toolExecutionCorrectionPrompt?: string,
+): boolean {
+  if (!toolExecutionCorrectionPrompt?.trim()) return false;
+  if (results.length === 0) return false;
+  return results.every(({ toolName, result }) => (
+    toolName === 'find_tools'
+    && isSuccessfulToolResult(result)
+  ));
 }
 
 function shouldRetryPolicyBlockedToolRoundCorrection(
@@ -706,6 +823,15 @@ function buildIntermediateStatusCorrectionPrompt(): string {
     'If more tool calls are required, call them now instead of narrating what you will do next.',
     'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
     'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
+  ].join(' ');
+}
+
+function buildDiscoveryContinuationCorrectionPrompt(): string {
+  return [
+    'System correction: discovering a tool is not the requested outcome.',
+    'If the original request still needs inspection, execution, or verification, call the discovered tool now.',
+    'Do not stop after find_tools, and do not ask the user whether to proceed when the original request already told you to do the work.',
+    'Only pause if a real tool result returns pending_approval or another real blocker.',
   ].join(' ');
 }
 

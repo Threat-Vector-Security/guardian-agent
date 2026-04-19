@@ -1,8 +1,13 @@
 import {
+  extractExplicitProfileId,
+  findExplicitBuiltinToolName,
+} from './capability-inventory.js';
+import {
   areEquivalentSessionTargets,
   cleanInferredSessionTarget,
   extractCodingWorkspaceTarget,
   extractExplicitRemoteExecCommand,
+  inferCodeSessionResource,
   inferExplicitCodingBackendRequest,
   hasExplicitRemoteSandboxReference,
   resolveExplicitRemoteProfileId,
@@ -23,6 +28,7 @@ import {
   normalizeCalendarTarget,
   normalizeCalendarWindowDays,
   normalizeCodingBackend,
+  normalizeCodeSessionResource,
   normalizeEmailProvider,
   normalizeMailboxReadMode,
   normalizeUiSurface,
@@ -153,6 +159,18 @@ export function resolveIntentGatewayEntities(
       ? classifierSource
       : 'resolver.coding';
   }
+  const parsedCodeSessionResource = route === 'coding_session_control'
+    ? normalizeCodeSessionResource(parsed.codeSessionResource)
+    : undefined;
+  const codeSessionResource = parsedCodeSessionResource
+    ?? (route === 'coding_session_control'
+      ? inferCodeSessionResource(normalizedSourceContent)
+      : undefined);
+  if (codeSessionResource) {
+    provenance.codeSessionResource = parsedCodeSessionResource
+      ? classifierSource
+      : 'resolver.coding';
+  }
   const emailProvider = normalizeEmailProvider(parsed.emailProvider)
     ?? inferEmailProviderFromSource(rawSourceContent, route, personalItemType);
   if (emailProvider) {
@@ -218,19 +236,31 @@ export function resolveIntentGatewayEntities(
     ? parsed.codingRunStatusCheck
     : undefined;
   if (typeof codingRunStatusCheck === 'boolean') provenance.codingRunStatusCheck = classifierSource;
-  const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim()
+  const parsedToolName = typeof parsed.toolName === 'string' && parsed.toolName.trim()
     ? parsed.toolName.trim()
     : undefined;
-  if (toolName) provenance.toolName = classifierSource;
+  const inferredToolName = parsedToolName
+    ? undefined
+    : findExplicitBuiltinToolName(rawSourceContent);
+  const toolName = parsedToolName ?? inferredToolName;
+  if (toolName) {
+    provenance.toolName = parsedToolName
+      ? classifierSource
+      : 'resolver.tool_inventory';
+  }
   const profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
     ? parsed.profileId.trim()
     : rawSourceContent && route === 'coding_task'
       ? resolveExplicitRemoteProfileId(rawSourceContent)
+    : rawSourceContent && route === 'general_assistant'
+      ? extractExplicitProfileId(rawSourceContent)
     : undefined;
   if (profileId) {
     provenance.profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
       ? classifierSource
-      : 'resolver.coding';
+      : route === 'coding_task'
+        ? 'resolver.coding'
+        : 'resolver.tool_inventory';
   }
   const command = typeof parsed.command === 'string' && parsed.command.trim()
     ? parsed.command.trim()
@@ -252,6 +282,7 @@ export function resolveIntentGatewayEntities(
     ...(query ? { query } : {}),
     ...(path ? { path } : {}),
     ...(sessionTarget ? { sessionTarget } : {}),
+    ...(codeSessionResource ? { codeSessionResource } : {}),
     ...(emailProvider ? { emailProvider } : {}),
     ...(mailboxReadMode ? { mailboxReadMode } : {}),
     ...(calendarTarget ? { calendarTarget } : {}),

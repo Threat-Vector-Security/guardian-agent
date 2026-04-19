@@ -16,7 +16,7 @@ import type {
   ToolExecutionRequest,
   ToolRisk,
 } from '../../tools/types.js';
-import { recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
+import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
 import { isIntermediateStatusResponse } from '../../util/response-quality.js';
 import { withTaintedContentSystemPrompt } from '../../util/tainted-content.js';
 import { getProviderLocalityFromName } from '../model-routing-ux.js';
@@ -290,6 +290,12 @@ export async function resumeStoredToolLoopPendingAction(input: {
         finalContent = '';
       }
     }
+    if (response.toolCalls?.length) {
+      response = {
+        ...response,
+        toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+      };
+    }
     if (!response.toolCalls || response.toolCalls.length === 0) {
       break;
     }
@@ -509,8 +515,11 @@ export async function resumeStoredToolLoopPendingAction(input: {
   if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
     finalContent = summarizeToolRoundFallback(lastToolRoundResults);
   }
+  if (isIntermediateStatusResponse(finalContent)) {
+    finalContent = '';
+  }
   if (!finalContent) {
-    finalContent = 'I could not generate a final response for that request.';
+    finalContent = 'I could not resume the pending coding run after approval.';
   }
   return { content: finalContent };
 }

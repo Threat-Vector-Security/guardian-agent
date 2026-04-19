@@ -150,4 +150,21 @@ describe('orchestration role contracts', () => {
       lenses: ['personal-assistant', 'second-brain'],
     });
   });
+
+  it('keeps direct general-assistant turns on the coordinator role even when a code session is attached', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'general_assistant',
+      operation: 'read',
+      executionClass: 'direct_assistant',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    }), { hasCodeSession: true });
+
+    expect(descriptor).toEqual({
+      role: 'coordinator',
+      label: 'Guardian Coordinator',
+    });
+  });
 });

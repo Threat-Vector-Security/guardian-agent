@@ -18,6 +18,9 @@ import type {
 const REMOTE_WORKSPACE_ROOT = '/workspace';
 const DEFAULT_ARTIFACT_MAX_BYTES = 500_000;
 const DELETE_PATH_CHUNK_SIZE = 100;
+const DAYTONA_EXECUTION_READINESS_COMMAND = 'pwd';
+const DAYTONA_EXECUTION_READINESS_MAX_ATTEMPTS = 3;
+const DAYTONA_EXECUTION_READINESS_RETRY_DELAY_MS = 750;
 
 export interface DaytonaRemoteExecutionProviderOptions {
   client?: DaytonaSandboxClient;
@@ -67,6 +70,10 @@ function buildRemoteEnv(env: Record<string, string> | undefined): Record<string,
 
 function isTimeoutLikeError(error: string): boolean {
   return /\b(timeout|timed out|abort|aborted)\b/i.test(error);
+}
+
+function isDaytonaExecutionProxyError(error: string): boolean {
+  return /\b(50[234]|bad gateway|gateway timeout|service unavailable|econn(?:reset|refused)|proxy|toolbox|upstream|fetch failed|socket hang up)\b/i.test(error);
 }
 
 function encodeArtifact(pathValue: string, buffer: Buffer, maxBytes: number): RemoteExecutionArtifact {
@@ -132,6 +139,34 @@ function extractDaytonaSandboxState(state: unknown): string | undefined {
   return undefined;
 }
 
+function isDaytonaRunningState(state: string | undefined): boolean {
+  return !!state && /\b(started|running|ready)\b/i.test(state);
+}
+
+function isDaytonaStartingState(state: string | undefined): boolean {
+  return !!state && /\b(starting)\b/i.test(state);
+}
+
+function isDaytonaStoppedState(state: string | undefined): boolean {
+  return !!state && /\b(stopped|stopping)\b/i.test(state);
+}
+
+function buildDaytonaExecutionUnavailableError(input: {
+  sandboxId: string;
+  state?: string;
+  action: string;
+  reason: string;
+}): Error {
+  const normalizedState = input.state?.trim() || 'unknown';
+  return new Error(
+    `Daytona sandbox '${input.sandboxId}' reported lifecycle state '${normalizedState}' but ${input.action} could not reach the toolbox command endpoint. ${input.reason}`,
+  );
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function classifyDaytonaLeaseState(state: string | undefined): {
   healthState: RemoteExecutionLeaseInspectionResult['healthState'];
   reason: string;
@@ -139,8 +174,8 @@ function classifyDaytonaLeaseState(state: string | undefined): {
   const normalized = state?.trim().toLowerCase();
   if (!normalized) {
     return {
-      healthState: 'healthy',
-      reason: 'Managed Daytona sandbox is reachable.',
+      healthState: 'unknown',
+      reason: 'Managed Daytona sandbox did not report a lifecycle state.',
     };
   }
   if (/\b(started|running|ready|starting)\b/.test(normalized)) {
@@ -183,22 +218,18 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         timeoutMs: Math.min(target.defaultTimeoutMs ?? 30_000, 30_000),
       });
       const timeoutSec = Math.max(1, Math.ceil(Math.min(target.defaultTimeoutMs ?? 30_000, 30_000) / 1000));
-      const result = await session.executeCommand(
-        'pwd',
-        session.workspaceRoot,
-        buildRemoteEnv(undefined),
+      await this.ensureExecutionReady(session, {
         timeoutSec,
-      );
+        action: 'readiness probe',
+      });
       const checkedAt = Date.now();
       return {
         targetId: target.id,
         backendKind: target.backendKind,
         profileId: target.profileId,
         profileName: target.profileName,
-        healthState: result.exitCode === 0 ? 'healthy' : 'unreachable',
-        reason: result.exitCode === 0
-          ? 'Daytona sandbox probe succeeded.'
-          : result.result || 'Daytona sandbox probe failed.',
+        healthState: 'healthy',
+        reason: 'Daytona sandbox probe succeeded.',
         checkedAt,
         durationMs: checkedAt - startedAt,
         sandboxId: session.sandboxId,
@@ -238,13 +269,29 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       });
       const checkedAt = Date.now();
       const classification = classifyDaytonaLeaseState(session.state);
+      let healthState = classification.healthState;
+      let reason = classification.reason;
+      if (healthState === 'healthy' && isDaytonaRunningState(session.state)) {
+        const timeoutSec = Math.max(1, Math.ceil((target.defaultTimeoutMs ?? 60_000) / 1000));
+        try {
+          await this.ensureExecutionReady(session, {
+            timeoutSec,
+            action: 'lease inspection',
+            lifecycleStateHint: session.state,
+          });
+          reason = `Managed Daytona sandbox is execution-ready (state: ${session.state?.trim() ?? 'unknown'}).`;
+        } catch (error) {
+          healthState = 'unreachable';
+          reason = error instanceof Error ? error.message : String(error);
+        }
+      }
       return {
         targetId: target.id,
         backendKind: target.backendKind,
         profileId: target.profileId,
         profileName: target.profileName,
-        healthState: classification.healthState,
-        reason: classification.reason,
+        healthState,
+        reason,
         checkedAt,
         durationMs: checkedAt - startedAt,
         sandboxId: session.sandboxId,
@@ -311,9 +358,36 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       timeoutMs: target.defaultTimeoutMs,
       remoteWorkspaceRootHint: existingLease.remoteWorkspaceRoot,
     });
-    if (session.state && !/\b(started|running|ready|starting)\b/i.test(session.state)) {
-      await session.start(Math.max(1, Math.ceil((target.defaultTimeoutMs ?? 60_000) / 1000)));
+    await session.refreshData().catch(() => undefined);
+    let lifecycleState = extractDaytonaSandboxState(session.state)
+      ?? extractDaytonaSandboxState(existingLease.state);
+    const timeoutSec = Math.max(1, Math.ceil((target.defaultTimeoutMs ?? 60_000) / 1000));
+    if (!lifecycleState) {
+      throw new Error(`Daytona sandbox '${existingLease.sandboxId}' did not report a lifecycle state.`);
     }
+    if (isDaytonaStartingState(lifecycleState)) {
+      await session.waitUntilStarted(timeoutSec);
+      await session.refreshData().catch(() => undefined);
+      lifecycleState = extractDaytonaSandboxState(session.state) ?? lifecycleState;
+    } else if (isDaytonaStoppedState(lifecycleState)) {
+      await session.start(timeoutSec);
+      await session.refreshData().catch(() => undefined);
+      lifecycleState = extractDaytonaSandboxState(session.state) ?? lifecycleState;
+    } else if (!isDaytonaRunningState(lifecycleState)) {
+      throw new Error(
+        `Daytona sandbox '${existingLease.sandboxId}' is not reusable from state '${lifecycleState}'.`,
+      );
+    }
+    if (!isDaytonaRunningState(lifecycleState)) {
+      throw new Error(
+        `Daytona sandbox '${existingLease.sandboxId}' did not reach a running state after resume (state: ${lifecycleState}).`,
+      );
+    }
+    await this.ensureExecutionReady(session, {
+      timeoutSec,
+      action: 'sandbox resume',
+      lifecycleStateHint: lifecycleState,
+    });
     const acquiredAt = Date.now();
     return {
       ...existingLease,
@@ -347,56 +421,55 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
     let exitCode: number | undefined;
     let status: RemoteExecutionRunResult['status'] = 'failed';
     let artifactFiles: RemoteExecutionArtifact[] = [];
+    await session.refreshActivity().catch(() => undefined);
+    const actualRemoteCwd = mapToSessionPath(session.workspaceRoot, requestedRemoteCwd);
+    const timeoutSec = Math.max(1, Math.ceil((request.timeoutMs ?? target.defaultTimeoutMs ?? 300_000) / 1000));
+
+    if (removedRemotePaths.length > 0) {
+      request.onProgress?.(`Removing ${removedRemotePaths.length} stale files from remote sandbox...`);
+      await this.deleteTrackedFiles(
+        session,
+        removedRemotePaths.map((filePath) => mapToSessionPath(session.workspaceRoot, filePath)),
+        timeoutSec,
+      );
+    }
+
+    const stagedFiles = request.stagedFiles.map((file) => ({
+      ...file,
+      actualPath: mapToSessionPath(session.workspaceRoot, file.remotePath),
+    }));
+
+    request.onProgress?.(`Staging ${stagedFiles.length} files to remote sandbox...`);
+    await this.client.ensureDirectories(
+      session,
+      stagedFiles.map((file) => file.actualPath),
+    );
+    await session.uploadFiles(
+      stagedFiles.map((file) => ({
+        path: file.actualPath,
+        content: file.content,
+      })),
+    );
+    for (const file of stagedFiles) {
+      if (typeof file.mode === 'number') {
+        await session.setFileMode(file.actualPath, file.mode);
+      }
+    }
+
+    const runId = `guardian-${randomUUID()}`;
+    const stdoutPath = path.posix.join(session.workspaceRoot, `.${runId}.stdout`);
+    const stderrPath = path.posix.join(session.workspaceRoot, `.${runId}.stderr`);
+    const exitCodePath = path.posix.join(session.workspaceRoot, `.${runId}.exit`);
+    const commandString = buildCommandString(request);
+    const wrappedCommand = [
+      'set +e',
+      `${commandString} >${quoteShellArg(stdoutPath)} 2>${quoteShellArg(stderrPath)}`,
+      'code=$?',
+      `printf '%s' "$code" >${quoteShellArg(exitCodePath)}`,
+      'exit 0',
+    ].join('; ');
 
     try {
-      await session.refreshActivity().catch(() => undefined);
-      const actualRemoteCwd = mapToSessionPath(session.workspaceRoot, requestedRemoteCwd);
-      const timeoutSec = Math.max(1, Math.ceil((request.timeoutMs ?? target.defaultTimeoutMs ?? 300_000) / 1000));
-
-      if (removedRemotePaths.length > 0) {
-        request.onProgress?.(`Removing ${removedRemotePaths.length} stale files from remote sandbox...`);
-        await this.deleteTrackedFiles(
-          session,
-          removedRemotePaths.map((filePath) => mapToSessionPath(session.workspaceRoot, filePath)),
-          timeoutSec,
-        );
-      }
-
-      const stagedFiles = request.stagedFiles.map((file) => ({
-        ...file,
-        actualPath: mapToSessionPath(session.workspaceRoot, file.remotePath),
-      }));
-
-      request.onProgress?.(`Staging ${stagedFiles.length} files to remote sandbox...`);
-      await this.client.ensureDirectories(
-        session,
-        stagedFiles.map((file) => file.actualPath),
-      );
-      await session.uploadFiles(
-        stagedFiles.map((file) => ({
-          path: file.actualPath,
-          content: file.content,
-        })),
-      );
-      for (const file of stagedFiles) {
-        if (typeof file.mode === 'number') {
-          await session.setFileMode(file.actualPath, file.mode);
-        }
-      }
-
-      const runId = `guardian-${randomUUID()}`;
-      const stdoutPath = path.posix.join(session.workspaceRoot, `.${runId}.stdout`);
-      const stderrPath = path.posix.join(session.workspaceRoot, `.${runId}.stderr`);
-      const exitCodePath = path.posix.join(session.workspaceRoot, `.${runId}.exit`);
-      const commandString = buildCommandString(request);
-      const wrappedCommand = [
-        'set +e',
-        `${commandString} >${quoteShellArg(stdoutPath)} 2>${quoteShellArg(stderrPath)}`,
-        'code=$?',
-        `printf '%s' "$code" >${quoteShellArg(exitCodePath)}`,
-        'exit 0',
-      ].join('; ');
-
       request.onProgress?.(`Executing remote command: ${request.command.requestedCommand}`);
       const execution = await session.executeCommand(
         wrappedCommand,
@@ -411,27 +484,37 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
       const rawExit = (await session.readFileToBuffer(exitCodePath, timeoutSec))?.toString('utf8').trim();
       exitCode = rawExit && /^\d+$/.test(rawExit) ? Number.parseInt(rawExit, 10) : execution.exitCode;
       status = exitCode === 0 ? 'succeeded' : 'failed';
-
-      const artifactPaths = Array.isArray(request.artifactPaths) ? request.artifactPaths : [];
-      artifactFiles = [];
-      if (artifactPaths.length > 0) {
-        request.onProgress?.(`Downloading ${artifactPaths.length} artifacts from remote sandbox...`);
-      }
-      for (const artifactPath of artifactPaths) {
-        const trimmed = artifactPath.trim();
-        if (!trimmed) continue;
-        const buffer = await session.readFileToBuffer(
-          resolveArtifactPath(session.workspaceRoot, actualRemoteCwd, trimmed),
-          timeoutSec,
-        );
-        if (!buffer) continue;
-        artifactFiles.push(encodeArtifact(trimmed, buffer, DEFAULT_ARTIFACT_MAX_BYTES));
-      }
-      lease.trackedRemotePaths = [...currentRemotePaths];
     } catch (error) {
-      stderr = error instanceof Error ? error.message : String(error);
-      status = isTimeoutLikeError(stderr) ? 'timed_out' : 'failed';
+      const message = error instanceof Error ? error.message : String(error);
+      if (isTimeoutLikeError(message)) {
+        stderr = message;
+        status = 'timed_out';
+      } else {
+        throw buildDaytonaExecutionUnavailableError({
+          sandboxId: session.sandboxId,
+          state: extractDaytonaSandboxState(session.state),
+          action: `executing '${request.command.requestedCommand}'`,
+          reason: message,
+        });
+      }
     }
+
+    const artifactPaths = Array.isArray(request.artifactPaths) ? request.artifactPaths : [];
+    artifactFiles = [];
+    if (artifactPaths.length > 0) {
+      request.onProgress?.(`Downloading ${artifactPaths.length} artifacts from remote sandbox...`);
+    }
+    for (const artifactPath of artifactPaths) {
+      const trimmed = artifactPath.trim();
+      if (!trimmed) continue;
+      const buffer = await session.readFileToBuffer(
+        resolveArtifactPath(session.workspaceRoot, actualRemoteCwd, trimmed),
+        timeoutSec,
+      );
+      if (!buffer) continue;
+      artifactFiles.push(encodeArtifact(trimmed, buffer, DEFAULT_ARTIFACT_MAX_BYTES));
+    }
+    lease.trackedRemotePaths = [...currentRemotePaths];
 
     const completedAt = Date.now();
     return {
@@ -547,6 +630,62 @@ export class DaytonaRemoteExecutionProvider implements RemoteExecutionProvider {
         buildRemoteEnv(undefined),
         timeoutSec,
       );
+    }
+  }
+
+  private async ensureExecutionReady(
+    session: Awaited<ReturnType<DaytonaSandboxClient['createSandbox']>>,
+    input: {
+      timeoutSec: number;
+      action: string;
+      lifecycleStateHint?: string;
+    },
+  ): Promise<void> {
+    let lastReason = 'Unknown Daytona execution readiness failure.';
+    for (let attempt = 1; attempt <= DAYTONA_EXECUTION_READINESS_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await session.executeCommand(
+          DAYTONA_EXECUTION_READINESS_COMMAND,
+          session.workspaceRoot,
+          buildRemoteEnv(undefined),
+          Math.max(1, Math.min(input.timeoutSec, 10)),
+        );
+        if (result.exitCode === 0) {
+          return;
+        }
+        lastReason = result.result?.trim()
+          || `Readiness probe exited with code ${result.exitCode}.`;
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : String(error);
+      }
+
+      await session.refreshData().catch(() => undefined);
+      const lifecycleState = extractDaytonaSandboxState(session.state) ?? input.lifecycleStateHint;
+      if (attempt >= DAYTONA_EXECUTION_READINESS_MAX_ATTEMPTS) {
+        throw buildDaytonaExecutionUnavailableError({
+          sandboxId: session.sandboxId,
+          state: lifecycleState,
+          action: input.action,
+          reason: lastReason,
+        });
+      }
+      if (isDaytonaStartingState(lifecycleState)) {
+        try {
+          await session.waitUntilStarted(Math.max(1, Math.min(input.timeoutSec, 15)));
+        } catch (error) {
+          lastReason = error instanceof Error ? error.message : String(error);
+        }
+        await session.refreshData().catch(() => undefined);
+      }
+      if (!isDaytonaExecutionProxyError(lastReason) && !isDaytonaStartingState(lifecycleState)) {
+        throw buildDaytonaExecutionUnavailableError({
+          sandboxId: session.sandboxId,
+          state: lifecycleState,
+          action: input.action,
+          reason: lastReason,
+        });
+      }
+      await delay(DAYTONA_EXECUTION_READINESS_RETRY_DELAY_MS);
     }
   }
 }

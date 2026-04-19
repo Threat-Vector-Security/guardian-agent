@@ -4,6 +4,7 @@ import { prepareToolExecutionForIntent } from '../routed-tool-execution.js';
 import type { SecondBrainService } from '../second-brain/second-brain-service.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { ToolExecutionRequest } from '../../tools/types.js';
+import { normalizeToolCallsForExecution } from '../../util/structured-json.js';
 import {
   getMemoryMutationIntentDeniedMessage,
   isMemoryMutationToolName,
@@ -89,8 +90,9 @@ export function executeToolsConflictAware(
   const promises: Promise<{ toolCall: ConflictAwareToolCall; result: Record<string, unknown> }>[] = [];
   const locks = new Map<string, Promise<void>>();
   let remoteSandboxStepQueued = false;
+  const normalizedToolCalls = normalizeToolCallsForExecution(input.toolCalls);
 
-  for (const toolCall of input.toolCalls) {
+  for (const toolCall of normalizedToolCalls ?? []) {
     let parsedArgs: Record<string, unknown> = {};
     if (toolCall.arguments?.trim()) {
       try {

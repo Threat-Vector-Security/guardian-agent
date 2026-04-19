@@ -56,6 +56,8 @@ const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
 const INTENT_GATEWAY_MISSING_SUMMARY = 'No classification summary provided.';
+const CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS = 2;
+const CHAT_PERSISTED_ACTIVITY_VISIBLE_ITEMS = 2;
 let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
@@ -914,7 +916,7 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         clearActiveRequestIfCurrent();
-        const activitySummary = captureActiveChatActivitySummary();
+        const activitySummary = captureActiveChatActivitySummary({ forcePersist: true });
         clearActiveChatIndicator();
         restoreInput();
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
@@ -1019,7 +1021,7 @@ export async function initChatPanel(container) {
     } catch (err) {
       setActiveRequest(null);
       clearPersistedActiveRequest();
-      const activitySummary = captureActiveChatActivitySummary();
+      const activitySummary = captureActiveChatActivitySummary({ forcePersist: true });
       clearActiveChatIndicator();
       const errorMsg = err.message === 'AUTH_FAILED' ? 'Auth failed' : (err.message || 'Error');
       history.appendChild(createMessageEl('error', errorMsg, { activitySummary }));
@@ -1237,9 +1239,9 @@ function createThinkingEl(initialLabel = 'Starting…') {
   return el;
 }
 
-function createLiveActivityItemEl(item) {
+function createLiveActivityItemEl(item, options = {}) {
   const itemEl = document.createElement('div');
-  itemEl.className = 'chat-live-activity__item';
+  itemEl.className = `chat-live-activity__item ${options.trailing ? 'chat-live-activity__item--trail' : 'chat-live-activity__item--current'}`;
 
   const titleEl = document.createElement('div');
   titleEl.className = 'chat-live-activity__title';
@@ -1262,30 +1264,59 @@ function renderLiveActivityEl(activityEl, activitySummary) {
   const items = Array.isArray(activitySummary?.items)
     ? activitySummary.items.filter((item) => String(item?.title || '').trim())
     : [];
+  const visibleItems = items.slice(-CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS);
   activityEl.replaceChildren();
-  if (items.length === 0) {
+  if (visibleItems.length === 0) {
     activityEl.hidden = true;
     return;
   }
   activityEl.hidden = false;
-  for (const item of items) {
-    activityEl.appendChild(createLiveActivityItemEl(item));
+  visibleItems.forEach((item, index) => {
+    activityEl.appendChild(createLiveActivityItemEl(item, {
+      trailing: index < visibleItems.length - 1,
+    }));
+  });
+}
+
+function shouldPersistActivitySummaryForStatus(status) {
+  return status === 'awaiting_approval'
+    || status === 'verification_pending'
+    || status === 'blocked'
+    || status === 'failed'
+    || status === 'interrupted';
+}
+
+function normalizeActivitySummaryItems(items, maxItems) {
+  return Array.isArray(items)
+    ? items
+      .filter((item) => String(item?.title || '').trim())
+      .map((item) => ({
+        title: String(item.title || '').trim(),
+        detail: String(item.detail || '').trim(),
+      }))
+      .slice(-maxItems)
+    : [];
+}
+
+function buildPersistedActivitySummary(activitySummary) {
+  if (!activitySummary || activitySummary.persistent !== true) {
+    return null;
   }
+  const items = normalizeActivitySummaryItems(activitySummary.items, CHAT_PERSISTED_ACTIVITY_VISIBLE_ITEMS);
+  if (items.length === 0) return null;
+  return {
+    label: String(activitySummary.label || '').trim(),
+    items,
+  };
 }
 
 function createPersistedLiveActivityEl(activitySummary) {
-  const items = Array.isArray(activitySummary?.items)
-    ? activitySummary.items.filter((item) => String(item?.title || '').trim())
-    : [];
+  const persisted = buildPersistedActivitySummary(activitySummary);
+  const items = persisted?.items ?? [];
   if (items.length === 0) return null;
 
   const container = document.createElement('div');
   container.className = 'chat-live-activity chat-live-activity--persisted';
-
-  const labelEl = document.createElement('div');
-  labelEl.className = 'chat-live-activity__label';
-  labelEl.textContent = 'Recent activity';
-  container.appendChild(labelEl);
 
   for (const item of items) {
     container.appendChild(createLiveActivityItemEl(item));
@@ -1294,21 +1325,19 @@ function createPersistedLiveActivityEl(activitySummary) {
   return container;
 }
 
-function captureActiveChatActivitySummary() {
+function captureActiveChatActivitySummary(options = {}) {
   if (!activeChatIndicator?.timeline) return null;
-  const summary = summarizeTimelineRun(activeChatIndicator.timeline);
-  const items = Array.isArray(summary?.items)
-    ? summary.items
-      .filter((item) => String(item?.title || '').trim())
-      .map((item) => ({
-        title: String(item.title || '').trim(),
-        detail: String(item.detail || '').trim(),
-      }))
-    : [];
+  const run = activeChatIndicator.timeline;
+  const summary = summarizeTimelineRun(run);
+  const items = normalizeActivitySummaryItems(summary?.items, CHAT_PERSISTED_ACTIVITY_VISIBLE_ITEMS);
   if (items.length === 0) return null;
+  const status = String(run?.summary?.status || '').trim();
+  const persistent = options.forcePersist === true || shouldPersistActivitySummaryForStatus(status);
+  if (!persistent) return null;
   return {
     label: String(summary?.label || '').trim(),
     items,
+    persistent: true,
   };
 }
 
@@ -1408,14 +1437,7 @@ function updateThinkingEl(el, run) {
 
 function summarizeTimelineRun(run) {
   const liveSummary = run?.liveSummary;
-  const liveSummaryItems = Array.isArray(liveSummary?.items)
-    ? liveSummary.items
-      .filter((item) => String(item?.title || '').trim())
-      .map((item) => ({
-        title: String(item.title || '').trim(),
-        detail: String(item.detail || '').trim(),
-      }))
-    : [];
+  const liveSummaryItems = normalizeActivitySummaryItems(liveSummary?.items, CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS);
   const liveSummaryLabel = String(liveSummary?.label || '').trim();
   if (liveSummaryItems.length > 0 || liveSummaryLabel) {
     return {
@@ -1427,7 +1449,7 @@ function summarizeTimelineRun(run) {
   const items = Array.isArray(run?.items) ? run.items : [];
   const recentItems = [];
   let lastKey = '';
-  for (let index = items.length - 1; index >= 0 && recentItems.length < 6; index -= 1) {
+  for (let index = items.length - 1; index >= 0 && recentItems.length < CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS; index -= 1) {
     const item = items[index];
     if (!isMeaningfulLiveItem(item)) continue;
     const normalized = {

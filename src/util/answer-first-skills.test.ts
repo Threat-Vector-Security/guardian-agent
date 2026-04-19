@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAnswerFirstSkillFallbackResponse,
   isAnswerFirstSkillResponseSufficient,
+  shouldUseAnswerFirstForSkills,
 } from './answer-first-skills.js';
 
 const mixedSkills = [
@@ -27,5 +28,16 @@ describe('answer-first skill prioritization', () => {
     expect(fallback).toContain('# Implementation Plan');
     expect(fallback).toContain('Acceptance Gates');
     expect(fallback).toContain('Existing Checks To Reuse');
+  });
+
+  it('does not activate the code-review answer-first contract for plain repo inspection requests', () => {
+    const request = 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering.';
+    const skills = [
+      { id: 'coding-workspace' },
+      { id: 'code-review' },
+    ];
+
+    expect(shouldUseAnswerFirstForSkills(skills, request)).toBe(false);
+    expect(buildAnswerFirstSkillFallbackResponse(skills, request)).toBeUndefined();
   });
 });

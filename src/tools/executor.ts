@@ -1129,6 +1129,12 @@ export class ToolExecutor {
     if (input.state && /\b(stopped|stopping)\b/i.test(input.state)) {
       return 'stopped';
     }
+    if (input.state && /\b(running|ready|started|active|starting|pending|creating|provisioning)\b/i.test(input.state)) {
+      return 'active';
+    }
+    if (typeof input.fallback === 'string') {
+      return input.fallback;
+    }
     return 'active';
   }
 
@@ -1190,6 +1196,46 @@ export class ToolExecutor {
       };
     });
     this.options.codeSessionStore?.updateSession({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+      workState: {
+        managedSandboxes: nextRecords,
+      },
+    });
+  }
+
+  private markCodeSessionManagedSandboxUnavailable(input: {
+    sessionId: string;
+    ownerUserId?: string;
+    leaseId: string;
+    reason: string;
+    sandboxId?: string;
+  }): void {
+    if (!this.options.codeSessionStore) {
+      return;
+    }
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) {
+      return;
+    }
+    const nextRecords = session.workState.managedSandboxes.map((record) => {
+      if (record.leaseId !== input.leaseId) {
+        return record;
+      }
+      return {
+        ...record,
+        sandboxId: input.sandboxId ?? record.sandboxId,
+        status: this.resolveManagedSandboxStatus({
+          healthState: 'unreachable',
+          state: record.state,
+          fallback: record.status,
+        }),
+        healthState: 'unreachable' as const,
+        healthReason: input.reason,
+        healthCheckedAt: this.now(),
+      };
+    });
+    this.options.codeSessionStore.updateSession({
       sessionId: session.id,
       ownerUserId: session.ownerUserId,
       workState: {
@@ -1591,7 +1637,8 @@ export class ToolExecutor {
       runtime: record.runtime,
       leaseMode: 'managed',
     });
-    const resumedState = this.extractRemoteExecutionLeaseState(resumed.state) ?? 'started';
+    const resumedState = this.extractRemoteExecutionLeaseState(resumed.state);
+    const resumedHealthState: RemoteExecutionHealthState = resumedState ? 'healthy' : 'unknown';
     record.sandboxId = resumed.sandboxId;
     record.remoteWorkspaceRoot = resumed.remoteWorkspaceRoot;
     record.lastUsedAt = resumed.lastUsedAt;
@@ -1601,13 +1648,15 @@ export class ToolExecutor {
       ? [...resumed.trackedRemotePaths]
       : [];
     record.status = this.resolveManagedSandboxStatus({
-      healthState: 'healthy',
+      healthState: resumedHealthState,
       state: resumedState,
-      fallback: 'active',
+      fallback: record.status,
     });
     record.state = resumedState;
-    record.healthState = 'healthy';
-    record.healthReason = 'Managed sandbox is reachable.';
+    record.healthState = resumedHealthState;
+    record.healthReason = resumedState
+      ? 'Managed sandbox is reachable.'
+      : 'Managed sandbox did not report a lifecycle state after resume.';
     record.healthCheckedAt = this.now();
     this.options.codeSessionStore?.updateSession({
       sessionId: session.id,
@@ -1703,8 +1752,16 @@ export class ToolExecutor {
         return result;
       } catch (error) {
         if (error instanceof RemoteExecutionTargetUnavailableError) {
+          if (codeSessionId && preferredManagedSandbox) {
+            this.markCodeSessionManagedSandboxUnavailable({
+              sessionId: codeSessionId,
+              leaseId: preferredManagedSandbox.leaseId,
+              reason: error.message,
+              sandboxId: preferredManagedSandbox.sandboxId,
+            });
+          }
           lastUnavailableMessage = error.message;
-          if (input.profileId?.trim()) {
+          if (input.profileId?.trim() || preferredManagedSandbox) {
             throw error;
           }
           continue;

@@ -209,6 +209,32 @@ export function normalizeUiSurface(
   }
 }
 
+export function normalizeCodeSessionResource(
+  value: unknown,
+): IntentGatewayEntities['codeSessionResource'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'session':
+    case 'current_session':
+    case 'active_session':
+      return 'session';
+    case 'session_list':
+    case 'sessions':
+    case 'list':
+    case 'workspace_list':
+    case 'workspaces':
+      return 'session_list';
+    case 'managed_sandboxes':
+    case 'managed_sandboxes_list':
+    case 'sandboxes':
+    case 'sandbox_list':
+      return 'managed_sandboxes';
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeEmailProvider(
   value: unknown,
 ): IntentGatewayEntities['emailProvider'] | undefined {

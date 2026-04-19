@@ -12,9 +12,11 @@ export interface DaytonaSandboxSession {
   sandboxId: string;
   workspaceRoot: string;
   state?: string;
+  refreshData(): Promise<void>;
   createFolder(path: string, mode?: string): Promise<void>;
   uploadFiles(files: Array<{ path: string; content: string | Uint8Array }>, timeoutSec?: number): Promise<void>;
   setFileMode(path: string, mode: number): Promise<void>;
+  waitUntilStarted(timeoutSec?: number): Promise<void>;
   start(timeoutSec?: number): Promise<void>;
   stop(timeoutSec?: number, force?: boolean): Promise<void>;
   refreshActivity(): Promise<void>;
@@ -109,6 +111,12 @@ function buildWrappedDaytonaSandbox(
     sandboxId: sandbox.id,
     workspaceRoot,
     state: sandbox.state,
+    refreshData: async () => {
+      if (typeof sandbox.refreshData === 'function') {
+        await sandbox.refreshData();
+      }
+      session.state = sandbox.state;
+    },
     createFolder: async (folderPath, mode = '755') => {
       try {
         await sandbox.fs.createFolder(folderPath, mode);
@@ -130,13 +138,28 @@ function buildWrappedDaytonaSandbox(
     setFileMode: async (filePath, mode) => {
       await sandbox.fs.setFilePermissions(filePath, { mode: (mode & 0o777).toString(8) });
     },
+    waitUntilStarted: async (waitTimeoutSec = timeoutSec) => {
+      if (typeof sandbox.waitUntilStarted === 'function') {
+        await sandbox.waitUntilStarted(waitTimeoutSec);
+      }
+      if (typeof sandbox.refreshData === 'function') {
+        await sandbox.refreshData().catch(() => undefined);
+      }
+      session.state = sandbox.state;
+    },
     start: async (startTimeoutSec = timeoutSec) => {
       await sandbox.start(startTimeoutSec);
+      if (typeof sandbox.refreshData === 'function') {
+        await sandbox.refreshData().catch(() => undefined);
+      }
       session.state = sandbox.state;
     },
     stop: async (stopTimeoutSec = timeoutSec, force = false) => {
       if (typeof sandbox.stop === 'function') {
         await sandbox.stop(stopTimeoutSec, force);
+        if (typeof sandbox.refreshData === 'function') {
+          await sandbox.refreshData().catch(() => undefined);
+        }
         session.state = sandbox.state;
       }
     },
@@ -254,6 +277,9 @@ async function defaultSandboxLookup(input: DaytonaSandboxGetInput): Promise<Dayt
   const timeoutMs = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
   const timeoutSec = toTimeoutSec(timeoutMs);
   const sandbox = await client.get(input.sandboxId);
+  if (typeof sandbox.refreshData === 'function') {
+    await sandbox.refreshData().catch(() => undefined);
+  }
   const workspaceRoot = await resolveDaytonaWorkspaceRoot({
     sandbox,
     remoteWorkspaceRootHint: input.remoteWorkspaceRootHint,

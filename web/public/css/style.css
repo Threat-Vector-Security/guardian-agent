@@ -1594,14 +1594,14 @@ tr:hover td {
 .chat-live-activity {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  margin-top: 0.7rem;
-  padding-top: 0.7rem;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .chat-live-activity--persisted {
-  margin-top: 0.85rem;
+  margin-top: 0.75rem;
 }
 
 .chat-live-activity__label {
@@ -1615,6 +1615,17 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 0.18rem;
+  padding-left: 0.55rem;
+  border-left: 2px solid rgba(79, 172, 254, 0.16);
+}
+
+.chat-live-activity__item--trail {
+  opacity: 0.62;
+  border-left-color: rgba(255, 255, 255, 0.08);
+}
+
+.chat-live-activity__item--current {
+  opacity: 1;
 }
 
 .chat-live-activity__title {

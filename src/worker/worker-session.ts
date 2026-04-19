@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { UserMessage } from '../agent/types.js';
 import { getProviderTier } from '../llm/provider-metadata.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
@@ -50,7 +51,25 @@ import {
   buildWorkerExecutionMetadata,
   type WorkerExecutionSource,
 } from '../runtime/worker-execution-metadata.js';
-import { runLlmLoop, type LlmLoopOutcome } from './worker-llm-loop.js';
+import {
+  buildDelegatedExecutionMetadata,
+} from '../runtime/execution/metadata.js';
+import {
+  buildDelegatedTaskContract,
+} from '../runtime/execution/verifier.js';
+import type {
+  Claim,
+  DelegatedResultEnvelope,
+  EvidenceReceipt,
+  ExecutionEvent,
+  Interruption,
+  ProviderSelectionSnapshot,
+} from '../runtime/execution/types.js';
+import {
+  runLlmLoop,
+  type LlmLoopOutcome,
+  type LlmLoopToolEvent,
+} from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -269,6 +288,189 @@ function buildToolLoopExecutionMetadata(
   });
 }
 
+function buildDelegatedVerificationHints(
+  outcome: Pick<LlmLoopOutcome, 'completionReason' | 'responseQuality'>,
+  options?: {
+    phantomApproval?: boolean;
+    completionReason?: string;
+    responseQuality?: string;
+  },
+): NonNullable<DelegatedResultEnvelope['verificationHints']> {
+  return {
+    completionReason: options?.completionReason
+      ?? (options?.phantomApproval ? 'phantom_approval_response' : outcome.completionReason),
+    responseQuality: options?.responseQuality
+      ?? (options?.phantomApproval ? 'degraded' : outcome.responseQuality),
+  };
+}
+
+function buildDelegatedModelProvenance(
+  selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+  responseSource: ResponseSourceMetadata | undefined,
+): ProviderSelectionSnapshot | undefined {
+  if (!selectedExecutionProfile && !responseSource) return undefined;
+  return {
+    ...(selectedExecutionProfile?.providerName ? { requestedProviderName: selectedExecutionProfile.providerName } : {}),
+    ...(selectedExecutionProfile?.requestedTier ? { requestedTier: selectedExecutionProfile.requestedTier } : {}),
+    ...(responseSource?.providerName ? { resolvedProviderName: responseSource.providerName } : {}),
+    ...(responseSource?.providerName ? { resolvedProviderType: responseSource.providerName } : {}),
+    ...(responseSource?.model ? { resolvedProviderModel: responseSource.model } : {}),
+    ...(responseSource?.providerProfileName ? { resolvedProviderProfileName: responseSource.providerProfileName } : {}),
+    ...(responseSource?.providerTier ? { resolvedProviderTier: responseSource.providerTier } : {}),
+    ...(responseSource?.locality ? { resolvedProviderLocality: responseSource.locality } : {}),
+    ...(selectedExecutionProfile?.selectionSource ? { selectionSource: selectedExecutionProfile.selectionSource } : {}),
+  };
+}
+
+function normalizeEvidenceRef(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractRefsFromUnknown(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const normalized = normalizeEvidenceRef(value);
+    return normalized ? [normalized] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractRefsFromUnknown(entry));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'path' || key === 'file' || key === 'files' || key === 'paths' || key === 'workspaceRoot') {
+      refs.push(...extractRefsFromUnknown(entry));
+    }
+  }
+  return refs;
+}
+
+function buildEvidenceSummary(toolName: string, result: Record<string, unknown> | undefined, errorMessage?: string): string {
+  if (errorMessage?.trim()) {
+    return `${toolName} failed: ${errorMessage.trim()}`;
+  }
+  const message = typeof result?.message === 'string' && result.message.trim()
+    ? result.message.trim()
+    : typeof result?.error === 'string' && result.error.trim()
+      ? result.error.trim()
+      : typeof result?.status === 'string' && result.status.trim()
+        ? `${toolName} ${result.status.trim()}`
+        : `Completed ${toolName}.`;
+  return message.length > 220 ? `${message.slice(0, 217).trimEnd()}...` : message;
+}
+
+function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
+  if (errorMessage) return 'failed';
+  const status = typeof result?.status === 'string' ? result.status.trim().toLowerCase() : '';
+  if (status === 'pending_approval') return 'pending_approval';
+  if (status === 'denied' || status === 'failed' || status === 'error') return 'failed';
+  if (status === 'blocked') return 'blocked';
+  if (result?.success === false) return 'failed';
+  return 'succeeded';
+}
+
+function buildToolReceipt(event: LlmLoopToolEvent): EvidenceReceipt | null {
+  if (event.phase !== 'completed') return null;
+  return {
+    receiptId: `${event.toolCall.id}:receipt`,
+    sourceType: 'tool_call',
+    toolName: event.toolCall.name,
+    status: mapEvidenceStatus(event.result, event.errorMessage),
+    refs: [...new Set([
+      ...extractRefsFromUnknown(event.args),
+      ...extractRefsFromUnknown(event.result?.output),
+      ...extractRefsFromUnknown(event.result),
+    ])],
+    summary: buildEvidenceSummary(event.toolCall.name, event.result, event.errorMessage),
+    startedAt: event.startedAt,
+    endedAt: event.endedAt ?? event.startedAt,
+  };
+}
+
+function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
+  return {
+    eventId: `${event.toolCall.id}:${event.phase}`,
+    nodeId: event.toolCall.id,
+    type: event.phase === 'started' ? 'tool_call_started' : 'tool_call_completed',
+    timestamp: event.phase === 'started' ? event.startedAt : (event.endedAt ?? event.startedAt),
+    payload: {
+      toolCallId: event.toolCall.id,
+      toolName: event.toolCall.name,
+      args: event.args,
+      ...(event.result ? { resultStatus: event.result.status, resultMessage: event.result.message } : {}),
+      ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
+    },
+  };
+}
+
+function buildClaimsFromReceipts(
+  receipts: EvidenceReceipt[],
+  taskContract: ReturnType<typeof buildDelegatedTaskContract>,
+): Claim[] {
+  const claims: Claim[] = [];
+  for (const receipt of receipts) {
+    if (receipt.refs.length > 0) {
+      for (const ref of receipt.refs) {
+        claims.push({
+          claimId: `${receipt.receiptId}:file:${ref}`,
+          kind: 'file_reference',
+          subject: ref,
+          value: ref,
+          evidenceReceiptIds: [receipt.receiptId],
+          confidence: 0.8,
+        });
+      }
+    }
+    if (taskContract.kind === 'filesystem_mutation' && receipt.status === 'succeeded') {
+      claims.push({
+        claimId: `${receipt.receiptId}:mutation`,
+        kind: 'filesystem_mutation',
+        subject: receipt.toolName ?? 'filesystem',
+        value: receipt.summary,
+        evidenceReceiptIds: [receipt.receiptId],
+        confidence: 0.9,
+      });
+    }
+  }
+  return claims;
+}
+
+function buildDelegatedResultEnvelope(input: {
+  intentDecision: IntentGatewayDecision | undefined;
+  finalUserAnswer?: string;
+  operatorSummary: string;
+  events: ExecutionEvent[];
+  receipts: EvidenceReceipt[];
+  interruptions?: Interruption[];
+  responseSource?: ResponseSourceMetadata;
+  selectedExecutionProfile?: SelectedExecutionProfile | null;
+  verificationHints?: DelegatedResultEnvelope['verificationHints'];
+}): DelegatedResultEnvelope {
+  const taskContract = buildDelegatedTaskContract(input.intentDecision);
+  return {
+    taskContract,
+    ...(input.finalUserAnswer?.trim() ? { finalUserAnswer: input.finalUserAnswer.trim() } : {}),
+    operatorSummary: input.operatorSummary,
+    claims: buildClaimsFromReceipts(input.receipts, taskContract),
+    evidenceReceipts: input.receipts,
+    interruptions: input.interruptions ?? [],
+    artifacts: [],
+    ...(input.verificationHints ? { verificationHints: input.verificationHints } : {}),
+    ...(buildDelegatedModelProvenance(input.selectedExecutionProfile ?? null, input.responseSource)
+      ? {
+          modelProvenance: buildDelegatedModelProvenance(
+            input.selectedExecutionProfile ?? null,
+            input.responseSource,
+          ),
+        }
+      : {}),
+    events: input.events,
+  };
+}
+
 function buildExecutionProfileResponseSource(
   executionProfile: SelectedExecutionProfile | null | undefined,
 ): ResponseSourceMetadata | undefined {
@@ -325,12 +527,6 @@ function buildChatResponseSource(
     usedFallback: options.usedFallback,
     ...(options.notice ? { notice: options.notice } : {}),
   };
-}
-
-function isRetryableBrokeredChatFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.trim() : String(error ?? '').trim();
-  if (!message) return false;
-  return /\b(?:internal server error|service(?: temporarily)? unavailable|gateway timeout|bad gateway|rate limit|quota|too many requests|could not reach|network error|model not found|model\b.+\bnot available|api error\s+(?:5\d{2}|429))\b/i.test(message);
 }
 
 function createPlannerPauseControl(result: unknown): PlanExecutionPauseControl {
@@ -456,11 +652,112 @@ function buildPlannerWorkerExecutionMetadata(
   });
 }
 
+function buildPlannerReceiptStatus(
+  status: PlanNode['status'] | undefined,
+): EvidenceReceipt['status'] | null {
+  const normalized = normalizePlannerNodeStatus(status);
+  if (normalized === 'success') return 'succeeded';
+  if (normalized === 'failed') return 'failed';
+  return null;
+}
+
+function buildPlannerEvidenceReceipts(
+  plan: ExecutionPlan,
+  timestamp: number,
+): EvidenceReceipt[] {
+  const receipts: EvidenceReceipt[] = [];
+  for (const node of Object.values(plan.nodes ?? {})) {
+    const receiptStatus = buildPlannerReceiptStatus(node.status);
+    if (!receiptStatus) continue;
+    const toolName = node.actionType === 'execute_code'
+      ? 'code_remote_exec'
+      : node.target;
+    const detail = readPlannerNodeResultDetail(node.result);
+    receipts.push({
+      receiptId: `planner:${plan.id}:${node.id}`,
+      sourceType: 'tool_call',
+      ...(toolName?.trim() ? { toolName: toolName.trim() } : {}),
+      status: receiptStatus,
+      refs: [...new Set(extractRefsFromUnknown(node.result))],
+      summary: detail ?? `${toolName || node.actionType} ${receiptStatus}`,
+      startedAt: timestamp,
+      endedAt: timestamp,
+    });
+  }
+  return receipts;
+}
+
+function buildPlannerExecutionEvents(
+  plan: ExecutionPlan,
+  timestamp: number,
+): ExecutionEvent[] {
+  return Object.values(plan.nodes ?? {})
+    .filter((node) => buildPlannerReceiptStatus(node.status) !== null)
+    .map((node) => ({
+      eventId: `planner:${plan.id}:${node.id}:completed`,
+      nodeId: node.id,
+      type: 'tool_call_completed' as const,
+      timestamp,
+      payload: {
+        toolName: node.actionType === 'execute_code' ? 'code_remote_exec' : node.target,
+        resultStatus: normalizePlannerNodeStatus(node.status),
+        ...(readPlannerNodeResultDetail(node.result)
+          ? { resultMessage: readPlannerNodeResultDetail(node.result) }
+          : {}),
+      },
+    }));
+}
+
+function buildPlannerCompletionEvent(
+  content: string,
+  timestamp: number,
+): ExecutionEvent {
+  return {
+    eventId: randomUUID(),
+    type: 'claim_emitted',
+    timestamp,
+    payload: {
+      kind: 'answer',
+      content,
+    },
+  };
+}
+
+function buildPlannerDelegatedEnvelope(input: {
+  content: string;
+  status: 'completed' | 'failed' | 'unsupported_actions' | 'planner_generation_failed';
+  plan?: ExecutionPlan;
+  intentDecision?: IntentGatewayDecision | null;
+  responseSource?: ResponseSourceMetadata;
+  selectedExecutionProfile?: SelectedExecutionProfile | null;
+}): DelegatedResultEnvelope {
+  const timestamp = Date.now();
+  const receipts = input.plan ? buildPlannerEvidenceReceipts(input.plan, timestamp) : [];
+  const events = input.plan
+    ? [...buildPlannerExecutionEvents(input.plan, timestamp), buildPlannerCompletionEvent(input.content, timestamp)]
+    : [buildPlannerCompletionEvent(input.content, timestamp)];
+  return buildDelegatedResultEnvelope({
+    intentDecision: input.intentDecision ?? undefined,
+    finalUserAnswer: input.content,
+    operatorSummary: input.content,
+    events,
+    receipts,
+    responseSource: input.responseSource,
+    selectedExecutionProfile: input.selectedExecutionProfile,
+    verificationHints: {
+      completionReason: input.status,
+      responseQuality: 'final',
+    },
+  });
+}
+
 function buildPlannerExecutionResponse(
   plan: ExecutionPlan,
   status: 'completed' | 'failed' | 'unsupported_actions',
   options?: { unsupportedActions?: string[] },
   responseSource?: ResponseSourceMetadata,
+  intentDecision?: IntentGatewayDecision | null,
+  selectedExecutionProfile?: SelectedExecutionProfile | null,
 ): { content: string; metadata?: Record<string, unknown> } {
   const nodes = Object.values(plan.nodes ?? {});
   const completed = nodes.filter((node) => normalizePlannerNodeStatus(node.status) === 'success');
@@ -502,11 +799,20 @@ function buildPlannerExecutionResponse(
     lines.push(`Pending nodes: ${pendingSummary}.`);
   }
 
+  const content = lines.join('\n');
   return {
-    content: lines.join('\n'),
+    content,
     metadata: {
       ...buildPlannerExecutionMetadata(plan, status, options),
       ...buildPlannerWorkerExecutionMetadata(status),
+      ...buildDelegatedExecutionMetadata(buildPlannerDelegatedEnvelope({
+        content,
+        status,
+        plan,
+        intentDecision,
+        responseSource,
+        selectedExecutionProfile,
+      })),
       ...(responseSource ? { responseSource } : {}),
     },
   };
@@ -515,6 +821,8 @@ function buildPlannerExecutionResponse(
 function buildPlannerFailureResponse(
   content: string,
   responseSource?: ResponseSourceMetadata,
+  intentDecision?: IntentGatewayDecision | null,
+  selectedExecutionProfile?: SelectedExecutionProfile | null,
 ): { content: string; metadata?: Record<string, unknown> } {
   return {
     content,
@@ -525,6 +833,13 @@ function buildPlannerFailureResponse(
         completionReason: 'planner_generation_failed',
         responseQuality: 'final',
       }),
+      ...buildDelegatedExecutionMetadata(buildPlannerDelegatedEnvelope({
+        content,
+        status: 'planner_generation_failed',
+        intentDecision,
+        responseSource,
+        selectedExecutionProfile,
+      })),
       ...(responseSource ? { responseSource } : {}),
     },
   };
@@ -885,6 +1200,8 @@ export class BrokeredWorkerSession {
       return buildPlannerFailureResponse(
         'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.',
         responseSource,
+        decision,
+        executionProfile,
       );
     }
 
@@ -895,7 +1212,14 @@ export class BrokeredWorkerSession {
     )];
     if (unsupportedActions.length > 0) {
       plan.status = 'failed';
-      return buildPlannerExecutionResponse(plan, 'unsupported_actions', { unsupportedActions }, responseSource);
+      return buildPlannerExecutionResponse(
+        plan,
+        'unsupported_actions',
+        { unsupportedActions },
+        responseSource,
+        decision,
+        executionProfile,
+      );
     }
 
     const execution = await this.executePlannerPlan({
@@ -940,6 +1264,8 @@ export class BrokeredWorkerSession {
       execution.outcome.status === 'failed' ? 'failed' : 'completed',
       undefined,
       responseSource,
+      decision,
+      executionProfile,
     );
   }
 
@@ -1400,6 +1726,8 @@ export class BrokeredWorkerSession {
       execution.outcome.status === 'failed' ? 'failed' : 'completed',
       undefined,
       responseSource,
+      readPreRoutedIntentGatewayMetadata(suspended.originalMessage.metadata)?.decision,
+      suspended.executionProfile,
     );
   }
 
@@ -1593,52 +1921,23 @@ export class BrokeredWorkerSession {
     intentDecision?: IntentGatewayDecision,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const pendingTools: SuspendedToolCall[] = [];
+    const delegatedEvents: ExecutionEvent[] = [];
+    const evidenceReceipts = new Map<string, EvidenceReceipt>();
     let responseSource: ResponseSourceMetadata | undefined;
     const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
     const selectedExecutionProfile = params.executionProfile
       ?? readSelectedExecutionProfileMetadata(params.message.metadata);
 
-    // Fallback chat function: proxied through the broker with useFallback flag
-    let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<BrokeredChatResponse>) | undefined;
-    if (params.hasFallbackProvider || selectedExecutionProfile?.fallbackProviderOrder?.length) {
-      fallbackChatFn = async (msgs, opts) => {
-        const fallbackResponse = await this.client.llmChat(
-          msgs,
-          opts,
-          selectedExecutionProfile
-            ? {
-                providerName: selectedExecutionProfile.providerName,
-                fallbackProviderOrder: selectedExecutionProfile.fallbackProviderOrder,
-                useFallback: true,
-              }
-            : { useFallback: true },
-        );
-        responseSource = buildChatResponseSource(fallbackResponse, selectedExecutionProfile, {
-          usedFallback: true,
-          notice: 'Retried with an alternate model.',
-        }) ?? responseSource;
-        return fallbackResponse;
-      };
-    }
-
-    const runFallbackChat = async (
-      messages: ChatMessage[],
-      options: ChatOptions | undefined,
-      notice: string,
-    ): Promise<BrokeredChatResponse> => {
-      if (!fallbackChatFn) {
-        throw new Error('Fallback chat requested without an available fallback provider.');
-      }
-      const fallbackResponse = await fallbackChatFn(messages, options);
-      responseSource = buildChatResponseSource(fallbackResponse, selectedExecutionProfile, {
-        usedFallback: true,
-        notice,
-      }) ?? responseSource;
-      return fallbackResponse;
-    };
-
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
     const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision);
+    const answerFirstOriginalRequest = stripLeadingContextPrefix(message.content);
+    const recordDelegatedToolEvent = (event: LlmLoopToolEvent): void => {
+      delegatedEvents.push(buildToolExecutionEvent(event));
+      const receipt = buildToolReceipt(event);
+      if (receipt) {
+        evidenceReceipts.set(receipt.receiptId, receipt);
+      }
+    };
 
     const result = await runLlmLoop(
       llmMessages,
@@ -1653,21 +1952,7 @@ export class BrokeredWorkerSession {
             if (shouldBypassLocalModelComplexityGuard()) {
               throw error;
             }
-            if (fallbackChatFn) {
-              return runFallbackChat(
-                messages,
-                options,
-                'Retried with an alternate model after the local model failed to format a tool call.',
-              );
-            }
             throw new Error(buildLocalModelTooComplicatedMessage());
-          }
-          if (fallbackChatFn && isRetryableBrokeredChatFailure(error)) {
-            return runFallbackChat(
-              messages,
-              options,
-              'Retried with an alternate model after the selected model failed to complete the request.',
-            );
           }
           throw error;
         }
@@ -1710,16 +1995,16 @@ export class BrokeredWorkerSession {
       },
       {
         allowModelMemoryMutation,
-        fallbackChatFn,
-        preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills),
-        answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, stripLeadingContextPrefix(message.content)),
-        answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, stripLeadingContextPrefix(message.content)),
+        preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest),
+        answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),
+        answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, answerFirstOriginalRequest),
         answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(
           params.activeSkills,
           content,
-          stripLeadingContextPrefix(message.content),
+          answerFirstOriginalRequest,
         ),
         toolExecutionCorrectionPrompt,
+        onToolEvent: recordDelegatedToolEvent,
       },
     );
 
@@ -1742,11 +2027,51 @@ export class BrokeredWorkerSession {
       };
 
       const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
-      return {
-        content: pendingApprovalMeta.length > 0
+      const interruptions: Interruption[] = [{
+        interruptionId: `approval:${ids.join(',')}`,
+        kind: 'approval',
+        prompt: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource),
+        approvalSummaries: pendingApprovalMeta.map((approval) => ({
+          id: approval.id,
+          toolName: approval.toolName,
+          ...(approval.argsPreview ? { argsPreview: approval.argsPreview } : {}),
+        })),
+        resumeToken: ids.join(','),
+      }];
+      const interruptionEvents: ExecutionEvent[] = interruptions.map((interruption) => ({
+        eventId: `${interruption.interruptionId}:requested`,
+        type: 'interruption_requested',
+        timestamp: Date.now(),
+        payload: {
+          kind: interruption.kind,
+          prompt: interruption.prompt,
+          ...(interruption.approvalSummaries ? { approvalIds: interruption.approvalSummaries.map((summary) => summary.id) } : {}),
+        },
+      }));
+      const pendingContent = pendingApprovalMeta.length > 0
+        ? formatPendingApprovalMessage(pendingApprovalMeta)
+        : 'This action needs approval before I can continue.';
+      const envelope = buildDelegatedResultEnvelope({
+        intentDecision,
+        operatorSummary: pendingContent,
+        events: [...delegatedEvents, ...interruptionEvents],
+        receipts: [...evidenceReceipts.values()],
+        interruptions,
+        responseSource,
+        selectedExecutionProfile,
+        verificationHints: buildDelegatedVerificationHints(result.outcome, {
+          completionReason: 'approval_pending',
+          responseQuality: 'final',
+        }),
+      });
+      return {
+        content: pendingContent,
+        metadata: {
+          ...buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource),
+          ...buildDelegatedExecutionMetadata(envelope),
+        },
       };
     }
 
@@ -1763,18 +2088,68 @@ export class BrokeredWorkerSession {
       && policyBlockedSamples.length > 0
     ) {
       const prompt = buildPolicyBlockedClarificationPrompt(policyBlockedSamples);
+      const interruptions: Interruption[] = [{
+        interruptionId: randomUUID(),
+        kind: 'policy_blocked',
+        prompt,
+      }];
+      const envelope = buildDelegatedResultEnvelope({
+        intentDecision,
+        operatorSummary: prompt,
+        events: [
+          ...delegatedEvents,
+          {
+            eventId: `${interruptions[0].interruptionId}:requested`,
+            type: 'interruption_requested',
+            timestamp: Date.now(),
+            payload: {
+              kind: 'policy_blocked',
+              prompt,
+            },
+          },
+        ],
+        receipts: [...evidenceReceipts.values()],
+        interruptions,
+        responseSource,
+        selectedExecutionProfile,
+        verificationHints: buildDelegatedVerificationHints(result.outcome),
+      });
       return {
         content: prompt,
-        metadata: buildClarificationPendingActionMetadata(prompt, responseSource),
+        metadata: {
+          ...buildClarificationPendingActionMetadata(prompt, responseSource),
+          ...buildDelegatedExecutionMetadata(envelope),
+        },
       };
     }
 
+    const finalContent = phantomApproval
+      ? 'I did not create a real approval request for that action. Please try again.'
+      : result.finalContent;
+    const completionEvent: ExecutionEvent = {
+      eventId: randomUUID(),
+      type: 'claim_emitted',
+      timestamp: Date.now(),
+      payload: {
+        kind: 'answer',
+        content: finalContent,
+      },
+    };
+    const envelope = buildDelegatedResultEnvelope({
+      intentDecision,
+      finalUserAnswer: phantomApproval ? undefined : finalContent,
+      operatorSummary: finalContent,
+      events: [...delegatedEvents, completionEvent],
+      receipts: [...evidenceReceipts.values()],
+      responseSource,
+      selectedExecutionProfile,
+      verificationHints: buildDelegatedVerificationHints(result.outcome, { phantomApproval }),
+    });
     return {
-      content: phantomApproval
-        ? 'I did not create a real approval request for that action. Please try again.'
-        : result.finalContent,
+      content: finalContent,
       metadata: {
         ...buildToolLoopExecutionMetadata(result.outcome, { phantomApproval }),
+        ...buildDelegatedExecutionMetadata(envelope),
         ...(responseSource ? { responseSource } : {}),
       },
     };

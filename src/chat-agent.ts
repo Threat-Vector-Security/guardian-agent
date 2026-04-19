@@ -115,9 +115,11 @@ import {
 } from './runtime/direct-intent-routing.js';
 import {
   attachPreRoutedIntentGatewayMetadata,
+  detachPreRoutedIntentGatewayMetadata,
   IntentGateway,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
+  shouldReusePreRoutedIntentGatewayForContent,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRoute,
@@ -301,7 +303,7 @@ import {
   selectSuspendedOriginalMessage,
   type ApprovalContinuationScope,
 } from './runtime/approval-continuations.js';
-import { recoverToolCallsFromStructuredText } from './util/structured-json.js';
+import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
 const ROUTINE_QUERY_STOP_WORDS = new Set([
@@ -2409,8 +2411,11 @@ type DirectIntentShadowCandidate =
     return contexts;
   }
 
-  private shouldPreferAnswerFirstForSkills(skills: readonly ResolvedSkill[]): boolean {
-    return shouldUseAnswerFirstForSkills(skills);
+  private shouldPreferAnswerFirstForSkills(
+    skills: readonly ResolvedSkill[],
+    originalRequest?: string,
+  ): boolean {
+    return shouldUseAnswerFirstForSkills(skills, originalRequest);
   }
 
   private isAnswerFirstSkillResponseSufficient(
@@ -2593,7 +2598,7 @@ type DirectIntentShadowCandidate =
     const requestedCodeContext = readCodeRequestMetadata(effectiveMessage.metadata);
     let resolvedCodeSession = this.resolveCodeSessionContext(effectiveMessage);
     if (resolvedCodeSession) {
-      resolvedCodeSession = this.refreshCodeSessionWorkspaceAwareness(
+      resolvedCodeSession = await this.refreshCodeSessionWorkspaceAwareness(
         resolvedCodeSession,
         buildCodeSessionWorkspaceAwarenessQuery(
           stripLeadingContextPrefix(effectiveMessage.content),
@@ -2844,6 +2849,18 @@ type DirectIntentShadowCandidate =
             content: resolvedRetryAfterFailureContinuation,
           }
         : groundedScopedMessage;
+    const shouldReuseRoutedPreRoutedGateway = shouldReusePreRoutedIntentGatewayForContent(
+      preRoutedGateway,
+      groundedScopedMessage.content,
+      routedScopedMessage.content,
+    );
+    if (!shouldReuseRoutedPreRoutedGateway) {
+      routedScopedMessage = {
+        ...routedScopedMessage,
+        metadata: detachPreRoutedIntentGatewayMetadata(routedScopedMessage.metadata),
+      };
+      earlyGateway = null;
+    }
     if (ctx.llm || earlyGateway) {
       earlyGateway = earlyGateway ?? await this.classifyIntentGateway(routedScopedMessage, ctx, {
         recentHistory: priorHistory,
@@ -3977,14 +3994,14 @@ type DirectIntentShadowCandidate =
       let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
       const currentTaintReasons = new Set<string>();
       let seededAnswerFirstResponse: import('./llm/types.js').ChatResponse | null = null;
-      const answerFirstCorrectionPrompt = this.shouldPreferAnswerFirstForSkills(activeSkills)
+      const answerFirstOriginalRequest = stripLeadingContextPrefix(requestIntentContent);
+      const answerFirstCorrectionPrompt = this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
         ? buildAnswerFirstSkillCorrectionPrompt(activeSkills, stripLeadingContextPrefix(requestIntentContent))
         : undefined;
-      const answerFirstFallbackResponse = this.shouldPreferAnswerFirstForSkills(activeSkills)
+      const answerFirstFallbackResponse = this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
         ? buildAnswerFirstSkillFallbackResponse(activeSkills, stripLeadingContextPrefix(requestIntentContent))
         : undefined;
-      const answerFirstOriginalRequest = stripLeadingContextPrefix(requestIntentContent);
-      if (this.shouldPreferAnswerFirstForSkills(activeSkills)) {
+      if (this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)) {
         try {
           let answerFirstResponse = await chatFn(
             withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
@@ -4106,13 +4123,13 @@ type DirectIntentShadowCandidate =
         if (
           !forcedSkillGroundingUsed
           && (!response.toolCalls || response.toolCalls.length === 0)
-          && this.shouldPreferAnswerFirstForSkills(activeSkills)
+          && this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
           && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '', answerFirstOriginalRequest)
           && llmToolDefs.some((definition) => definition.name === 'fs_read')
         ) {
           const skillSourcePaths = [...new Set(
             activeSkills
-              .filter((skill) => shouldUseAnswerFirstForSkills([skill]))
+              .filter((skill) => shouldUseAnswerFirstForSkills([skill], answerFirstOriginalRequest))
               .map((skill) => skill.sourcePath?.trim() ?? '')
               .filter((value) => value.length > 0),
           )].slice(0, 2);
@@ -4215,6 +4232,12 @@ type DirectIntentShadowCandidate =
               finalContent = '';
             }
           }
+        }
+        if (response.toolCalls?.length) {
+          response = {
+            ...response,
+            toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+          };
         }
         if (!response.toolCalls || response.toolCalls.length === 0) {
           // Safety net for local models: if finishReason is 'stop' (no tool calls)
@@ -4579,10 +4602,14 @@ type DirectIntentShadowCandidate =
           });
 
           // If the fallback LLM returned tool calls, execute them (single round)
-          if (fallbackResult.response.toolCalls?.length && this.tools) {
-            log.info({ agent: this.id, provider: fbProvider, toolCount: fallbackResult.response.toolCalls.length },
+          const normalizedFallbackToolCalls = normalizeToolCallsForExecution(
+            fallbackResult.response.toolCalls,
+            llmToolDefs,
+          );
+          if (normalizedFallbackToolCalls?.length && this.tools) {
+            log.info({ agent: this.id, provider: fbProvider, toolCount: normalizedFallbackToolCalls.length },
               'Fallback provider requested tool calls, executing');
-            fbMessages.push({ role: 'assistant' as const, content: fallbackResult.response.content ?? '', toolCalls: fallbackResult.response.toolCalls });
+            fbMessages.push({ role: 'assistant' as const, content: fallbackResult.response.content ?? '', toolCalls: normalizedFallbackToolCalls });
             const fbToolOrigin = {
               origin: 'assistant' as const,
               agentId: this.id,
@@ -4599,7 +4626,7 @@ type DirectIntentShadowCandidate =
             };
             const fbToolResults = await Promise.allSettled(
               executeToolsConflictAware({
-                toolCalls: fallbackResult.response.toolCalls,
+                toolCalls: normalizedFallbackToolCalls,
                 toolExecOrigin: fbToolOrigin,
                 referenceTime: message.timestamp,
                 intentDecision: directIntent?.decision,
@@ -4669,7 +4696,7 @@ type DirectIntentShadowCandidate =
                   }
                 }
               } else {
-                const failedTc = fallbackResult.response.toolCalls[fbToolResults.indexOf(settled)];
+                const failedTc = normalizedFallbackToolCalls[fbToolResults.indexOf(settled)];
                 fbMessages.push({
                   role: 'tool' as const,
                   toolCallId: failedTc?.id ?? '',
@@ -5350,10 +5377,10 @@ type DirectIntentShadowCandidate =
     return resolved;
   }
 
-  private refreshCodeSessionWorkspaceAwareness(
+  private async refreshCodeSessionWorkspaceAwareness(
     resolved: ResolvedCodeSessionContext,
     messageContent?: string,
-  ): ResolvedCodeSessionContext {
+  ): Promise<ResolvedCodeSessionContext> {
     if (!this.codeSessionStore) return resolved;
     const workState = resolved.session.workState;
     const updates: Partial<typeof workState> = {};
@@ -5396,7 +5423,7 @@ type DirectIntentShadowCandidate =
         updates.workingSet = nextWorkingSet;
       }
     }
-    const nextResolved = Object.keys(updates).length === 0
+    let nextResolved = Object.keys(updates).length === 0
       ? resolved
       : (() => {
         const updated = this.codeSessionStore!.updateSession({
@@ -5410,6 +5437,23 @@ type DirectIntentShadowCandidate =
           session: updated,
         };
       })();
+
+    if (nextResolved.session.workState.managedSandboxes.length > 0 && this.tools?.getCodeSessionManagedSandboxStatus) {
+      await this.tools.getCodeSessionManagedSandboxStatus({
+        sessionId: nextResolved.session.id,
+        ownerUserId: nextResolved.session.ownerUserId,
+      }).catch(() => undefined);
+      const refreshedSession = this.codeSessionStore.getSession(
+        nextResolved.session.id,
+        nextResolved.session.ownerUserId,
+      );
+      if (refreshedSession) {
+        nextResolved = {
+          ...nextResolved,
+          session: refreshedSession,
+        };
+      }
+    }
 
     if (!this.codeWorkspaceTrustService) return nextResolved;
     const enrichedSession = this.codeWorkspaceTrustService.maybeSchedule(nextResolved.session);
@@ -6440,6 +6484,9 @@ type DirectIntentShadowCandidate =
         message,
         ctx,
       ),
+      getCodeSessionManagedSandboxes: this.tools?.getCodeSessionManagedSandboxStatus
+        ? (sessionId, ownerUserId) => this.tools!.getCodeSessionManagedSandboxStatus({ sessionId, ownerUserId })
+        : undefined,
       getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
       completePendingAction: (actionId) => this.completePendingAction(actionId),
       resumeCodingTask: (message, ctx, userKey, decision, codeContext) => this.tryDirectCodingBackendDelegation(

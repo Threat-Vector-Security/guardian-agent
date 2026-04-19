@@ -319,6 +319,101 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
+  it('reconciles managed sandbox state before building code-session prompt context', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const root = process.cwd();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-managed-sandbox-prompt-refresh.test.sqlite',
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Managed Sandbox Prompt Refresh',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'lease-daytona',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'stopped',
+          state: 'stopped',
+          acquiredAt: 1,
+          lastUsedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          trackedRemotePaths: [],
+          healthState: 'healthy',
+          healthReason: 'Managed sandbox is stopped.',
+          healthCheckedAt: 1,
+        }],
+      },
+    });
+
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).codeSessionStore = codeSessionStore;
+    (agent as any).tools = {
+      getCodeSessionManagedSandboxStatus: vi.fn(async ({ sessionId, ownerUserId }: { sessionId: string; ownerUserId?: string }) => {
+        codeSessionStore.updateSession({
+          sessionId,
+          ownerUserId,
+          workState: {
+            managedSandboxes: [{
+              leaseId: 'lease-daytona',
+              targetId: 'daytona:daytona-main',
+              backendKind: 'daytona_sandbox',
+              profileId: 'daytona-main',
+              profileName: 'Daytona Main',
+              sandboxId: 'sandbox-1',
+              localWorkspaceRoot: root,
+              remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+              status: 'active',
+              state: 'started',
+              acquiredAt: 1,
+              lastUsedAt: 2,
+              expiresAt: Number.MAX_SAFE_INTEGER,
+              trackedRemotePaths: [],
+              healthState: 'healthy',
+              healthReason: 'Managed sandbox is execution-ready.',
+              healthCheckedAt: 2,
+            }],
+          },
+        });
+        return {
+          codeSessionId: sessionId,
+          defaultTargetId: null,
+          targets: [],
+          sandboxes: [],
+        };
+      }),
+    };
+
+    const refreshed = await (agent as any).refreshCodeSessionWorkspaceAwareness({
+      session: codeSessionStore.getSession(session.id, 'owner')!,
+    }, 'Run pwd in the remote sandbox for this workspace.');
+
+    expect((agent as any).tools.getCodeSessionManagedSandboxStatus).toHaveBeenCalledWith({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+    });
+    expect(refreshed.session.workState.managedSandboxes[0]?.state).toBe('started');
+    expect(refreshed.session.workState.managedSandboxes[0]?.status).toBe('active');
+  });
+
   it('prefers routed execution-profile metadata for direct intent response source labels', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -7239,5 +7334,143 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(result).toBe('List my Google Calendar entries for the next 7 days.');
+  });
+
+  it('reclassifies retry continuations instead of reusing stale pre-routed session-control metadata', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = 1_710_000_000_000;
+    const retryRequest = 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.';
+    const agent = new ChatAgent('chat', 'Chat');
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-retry-reroute.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      lastActionableRequest: retryRequest,
+      focusSummary: 'Remote sandbox retry',
+    }, nowMs);
+    (agent as any).continuityThreadStore = continuityThreadStore;
+    (agent as any).getActiveExecution = vi.fn(() => ({
+      executionId: 'exec-1',
+      requestId: 'request-1',
+      rootExecutionId: 'exec-1',
+      scope: {
+        assistantId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'running',
+      intent: {
+        route: 'coding_task',
+        operation: 'run',
+        originalUserContent: retryRequest,
+      },
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    }));
+
+    const classify = vi.fn(async (input: { content: string }) => {
+      expect(input.content).toBe(retryRequest);
+      return {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'medium',
+          operation: 'run',
+          summary: 'Retry the restored sandbox request.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {},
+        },
+      };
+    });
+    (agent as any).intentGateway = { classify };
+    (agent as any).chatWithFallback = vi.fn(async () => ({
+      content: 'Reclassified retry request.',
+      toolCalls: [],
+      model: 'test-model',
+      finishReason: 'stop',
+    }));
+    (agent as any).tryDirectCodeSessionControlFromGateway = vi.fn(() => 'Available coding workspaces:\n- CURRENT: Guardian Agent');
+
+    const response = await agent.onMessage!({
+      id: 'msg-retry-reroute',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: "I've started that Daytona sandbox so try again with the same request.",
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        mode: 'route_only_fallback',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_session_control',
+          confidence: 'medium',
+          operation: 'run',
+          summary: 'User wants to re-run the currently active coding session.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'control_plane',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {
+            sessionTarget: 'current',
+          },
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: vi.fn(async () => ({
+          content: 'Reclassified retry request.',
+          toolCalls: [],
+          model: 'test-model',
+          finishReason: 'stop',
+        })),
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect((agent as any).tryDirectCodeSessionControlFromGateway).not.toHaveBeenCalled();
+    expect(response.content).toBe('Reclassified retry request.');
   });
 });

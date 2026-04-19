@@ -33,6 +33,28 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+function renderTerminalOutput(text: string): string {
+  const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const lines: string[] = [];
+  let currentLine = '';
+  for (const char of plain) {
+    if (char === '\r') {
+      currentLine = '';
+      continue;
+    }
+    if (char === '\n') {
+      lines.push(currentLine);
+      currentLine = '';
+      continue;
+    }
+    currentLine += char;
+  }
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+  return lines.join('\n');
+}
+
 describe('CLIChannel', () => {
   it('should start and stop without errors', async () => {
     const input = new PassThrough();
@@ -508,7 +530,7 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
-  it('keeps live progress as durable commentary lines in TTY mode', async () => {
+  it('renders live progress as a transient rolling line in TTY mode', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
     Object.assign(output, { isTTY: true });
@@ -565,11 +587,12 @@ describe('CLIChannel', () => {
     input.write('inspect repo\n');
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    const text = stripAnsi(output.read()?.toString() ?? '');
-    const normalized = text.replace(/\r\n/g, '\n');
-    expect(normalized).toContain('\n[progress] Inspecting workspace — fs_list\n');
-    expect(normalized).toContain('[progress] Waiting for approval — fs_write\n');
-    expect(normalized).toContain('guardian-agent> Completed.');
+    const raw = output.read()?.toString() ?? '';
+    expect(raw).toContain('\r');
+    const rendered = renderTerminalOutput(raw).replace(/\r\n/g, '\n');
+    expect(rendered).not.toContain('[progress] Inspecting workspace — fs_list');
+    expect(rendered).not.toContain('[progress] Waiting for approval — fs_write');
+    expect(rendered).toContain('guardian-agent> Completed.');
 
     await cli.stop();
   });

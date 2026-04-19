@@ -100,21 +100,6 @@ function dedupeCapabilities(values: readonly Capability[]): Capability[] {
   return [...new Set(values)];
 }
 
-function withDescriptor(
-  descriptor: OrchestrationRoleDescriptor,
-  label: string,
-  lenses: readonly string[],
-): OrchestrationRoleDescriptor {
-  return {
-    role: descriptor.role,
-    label,
-    lenses: dedupeLenses([
-      ...(descriptor.lenses ?? []),
-      ...lenses,
-    ]),
-  };
-}
-
 function dedupeLenses(values: readonly string[]): string[] {
   return [...new Set(values.filter((value) => typeof value === 'string' && value.trim().length > 0))];
 }
@@ -194,8 +179,7 @@ export function inferDelegatedOrchestrationDescriptor(
 
   const readLike = isReadLikeOperation(decision.operation);
   const hasCodeSession = options.hasCodeSession === true;
-  const isRepoGrounded = hasCodeSession
-    || decision.requiresRepoGrounding
+  const isRepoGrounded = decision.requiresRepoGrounding
     || decision.executionClass === 'repo_grounded';
   const isProviderCrud = decision.executionClass === 'provider_crud';
   const isSecurityAnalysis = decision.executionClass === 'security_analysis';
@@ -233,14 +217,10 @@ export function inferDelegatedOrchestrationDescriptor(
   }
 
   if (decision.route === 'general_assistant') {
-    const role = buildRoleDescriptor('coordinator', 'Guardian Coordinator');
-    if (hasCodeSession) {
-      return withDescriptor(role, 'Guardian Coordinator', ['coding-workspace']);
-    }
-    return role;
+    return buildRoleDescriptor('coordinator', 'Guardian Coordinator');
   }
 
   return hasCodeSession
-    ? buildRoleDescriptor('explorer', 'Workspace Explorer', ['coding-workspace'])
+    ? buildRoleDescriptor('coordinator', 'Guardian Coordinator')
     : undefined;
 }

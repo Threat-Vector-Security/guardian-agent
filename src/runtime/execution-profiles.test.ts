@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import {
   attachSelectedExecutionProfileMetadata,
   readSelectedExecutionProfileMetadata,
+  resolveDelegatedExecutionDecision,
   selectEscalatedDelegatedExecutionProfile,
   selectDelegatedExecutionProfile,
   selectExecutionProfile,
@@ -398,7 +399,7 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain("request-scoped provider override selected provider 'ollama-cloud-direct'");
   });
 
-  it('selects a managed-cloud coding profile for delegated workspace exploration even when the parent used frontier', () => {
+  it('re-selects a role-specific managed-cloud coding profile for delegated workspace exploration', () => {
     const config = createConfig();
     const parentProfile = selectExecutionProfile({
       config,
@@ -430,6 +431,45 @@ describe('execution profiles', () => {
       routingMode: 'auto',
     });
     expect(profile?.reason).toContain('Workspace Explorer');
+  });
+
+  it('derives a role-specific delegated workload instead of reusing the parent repo-inspection shape verbatim', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'inspect',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      }),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(delegatedDecision?.provenance).toMatchObject({
+      route: 'derived.workload',
+      operation: 'derived.workload',
+      executionClass: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+    });
   });
 
   it('keeps security verification on frontier when delegating to a security verifier', () => {
@@ -479,7 +519,7 @@ describe('execution profiles', () => {
     });
   });
 
-  it('can escalate a delegated coding-workspace workload from managed cloud to frontier', () => {
+  it('escalates delegated coding-workspace retries from the managed-cloud coding profile to frontier', () => {
     const config = createConfig();
     const parentProfile = selectExecutionProfile({
       config,
@@ -519,11 +559,39 @@ describe('execution profiles', () => {
     expect(escalated).toMatchObject({
       providerName: 'anthropic',
       providerTier: 'frontier',
-      id: 'frontier_deep',
       selectionSource: 'delegated_role',
-      routingMode: 'auto',
     });
-    expect(escalated?.reason).toContain('escalated delegated workload for Workspace Explorer');
+  });
+
+  it('keeps delegated direct general-assistant turns non-repo-grounded', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'general_assistant',
+        operation: 'read',
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      }),
+      orchestration: {
+        role: 'coordinator',
+        label: 'Guardian Coordinator',
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'general_assistant',
+      operation: 'read',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    });
   });
 
   it('preserves explicit provider overrides across delegated profile selection', () => {

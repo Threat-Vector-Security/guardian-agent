@@ -406,7 +406,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian chat works against one primary coding session at a time, while still keeping other saved workspaces available for reference. In the web UI, use the session cards in `#/code` to choose the current coding session and manage referenced workspaces. In CLI, use `/code current`, `/code attach <sessionId-or-match>`, `/code detach`, and `/code create <workspaceRoot> [| title]`.',
                   'You can also ask Guardian to switch, attach, or detach a coding session in normal chat. The web chat surface stays lightweight by default; session management belongs to the Code Sessions panel.',
                 ],
-                note: 'Web chat and CLI show live request progress while the assistant is working. Recent activity stays visible beside the final reply so operators can reconstruct what happened without leaving the current surface.',
+                note: 'Web chat and CLI show live request progress while the assistant is working. The running feed now rolls forward instead of stacking every step, while blocked or otherwise important milestones remain visible with the final reply when you still need them.',
               },
             ],
           },

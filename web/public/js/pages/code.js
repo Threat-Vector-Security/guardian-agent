@@ -5765,6 +5765,31 @@ function applyStructureViewUpdate(session, structureView, { refreshInspector = t
   }
 }
 
+function markStructureViewRefreshing(session, selectedFilePath = '') {
+  if (!session) return;
+  const workspaceRoot = session.resolvedRoot || session.workspaceRoot || '';
+  const relativePath = toRelativePath(selectedFilePath || session.selectedFilePath || '', workspaceRoot);
+  session.structureView = normalizeStructureView({
+    path: relativePath,
+    language: session.structureView?.language || '',
+    supported: false,
+    summary: relativePath ? 'Refreshing structure analysis…' : '',
+    provenance: session.structureView?.provenance || 'deterministic_ast',
+    analyzedAt: 0,
+    importSources: [],
+    exports: [],
+    symbols: [],
+    analysisMode: 'full',
+    fileBytes: 0,
+    totalLines: 0,
+    sections: [],
+    selectedSectionId: null,
+    selectedLine: null,
+    unsupportedReason: '',
+    error: '',
+  }, session.structureView);
+}
+
 // ─── Git panel rendering ───────────────────────────────────
 
 function renderGitPanel(session) {
@@ -6463,6 +6488,7 @@ async function refreshVisibleTreeDirs(session) {
 async function refreshFileView(session) {
   const selectedFilePath = ensureSessionSelectedFilePath(session) || '';
   invalidateStructurePreviewState(session.id, selectedFilePath);
+  markStructureViewRefreshing(session, selectedFilePath);
   const [fileView, structureView] = await Promise.all([
     loadFileView(session),
     loadStructureView(session),

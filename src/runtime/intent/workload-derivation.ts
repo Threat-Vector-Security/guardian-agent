@@ -1,4 +1,5 @@
 import { normalizePersonalItemType } from './entity-resolvers/personal-assistant.js';
+import { getBuiltinToolCategory } from './capability-inventory.js';
 import { normalizeUiSurface } from './normalization.js';
 import type {
   IntentGatewayExecutionClass,
@@ -27,6 +28,10 @@ export function deriveWorkloadMetadata(
   const uiSurface = normalizeUiSurface(parsed.uiSurface);
   const codingBackendRequested = parsed.codingBackendRequested === true;
   const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
+  const explicitToolName = typeof parsed.toolName === 'string' && parsed.toolName.trim()
+    ? parsed.toolName.trim()
+    : '';
+  const explicitToolCategory = getBuiltinToolCategory(explicitToolName);
 
   switch (route) {
     case 'channel_delivery':
@@ -195,6 +200,39 @@ export function deriveWorkloadMetadata(
         simpleVsComplex: ['inspect', 'read', 'navigate', 'search'].includes(operation) ? 'simple' : 'complex',
       };
     case 'general_assistant':
+      if (explicitToolName) {
+        if (explicitToolName.startsWith('llm_provider_') || uiSurface === 'config') {
+          return {
+            executionClass: 'provider_crud',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            simpleVsComplex: 'complex',
+          };
+        }
+        if (explicitToolCategory === 'security' || explicitToolCategory === 'intel') {
+          return {
+            executionClass: 'security_analysis',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'chat_synthesis',
+            simpleVsComplex: 'complex',
+          };
+        }
+        return {
+          executionClass: 'tool_orchestration',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          simpleVsComplex: 'complex',
+        };
+      }
       if (uiSurface === 'config') {
         return {
           executionClass: 'provider_crud',
