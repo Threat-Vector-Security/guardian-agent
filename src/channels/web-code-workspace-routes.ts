@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import type { PrincipalRole } from '../tools/types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
+import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 
 interface RequestPrincipal {
   principalId: string;
@@ -48,7 +49,7 @@ export async function handleWebCodeWorkspaceRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         historyLimit: 1,
       });
       if (!snapshot) {
@@ -98,7 +99,7 @@ export async function handleWebCodeWorkspaceRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         historyLimit: 1,
       });
       if (!snapshot) {
@@ -148,7 +149,7 @@ export async function handleWebCodeWorkspaceRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         historyLimit: 1,
       });
       if (!snapshot) {
@@ -192,7 +193,7 @@ export async function handleWebCodeWorkspaceRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         historyLimit: 1,
       });
       if (!snapshot) {
@@ -247,7 +248,7 @@ export async function handleWebCodeWorkspaceRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: context.readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(context.readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });
     if (!snapshot) {
@@ -313,7 +314,7 @@ export async function handleWebCodeWorkspaceRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       historyLimit: 1,
     });
     if (!snapshot) {
@@ -387,7 +388,7 @@ export async function handleWebCodeWorkspaceRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: context.readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(context.readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });
     if (!snapshot) {

@@ -859,20 +859,45 @@ describe('validateConfig', () => {
     expect(loaded.assistant.threatIntel.moltbook.baseUrl).toBe('https://moltbook.com');
   });
 
-  it('loadConfigFromFile preserves an explicit defaultProvider even when default preferredProviders point elsewhere', () => {
+  it('loadConfigFromFile aligns the implicit local preferred provider with an explicit local defaultProvider', () => {
     const configPath = join(TEST_DIR, 'explicit-default-provider.yaml');
-    const rawConfig: GuardianAgentConfig = {
-      ...DEFAULT_CONFIG,
+    const rawConfig = {
       defaultProvider: 'local',
       llm: {
-        ...DEFAULT_CONFIG.llm,
         local: {
           provider: 'ollama',
           model: 'brokered-harness-model',
           baseUrl: 'http://127.0.0.1:44729',
         },
       },
-    };
+    } as Partial<GuardianAgentConfig>;
+
+    writeFileSync(configPath, JSON.stringify(rawConfig, null, 2));
+    const loaded = loadConfigFromFile(configPath);
+
+    expect(loaded.defaultProvider).toBe('local');
+    expect(loaded.assistant.tools.preferredProviders?.local).toBe('local');
+  });
+
+  it('loadConfigFromFile preserves an explicit local preferred provider override', () => {
+    const configPath = join(TEST_DIR, 'explicit-local-preferred-provider.yaml');
+    const rawConfig = {
+      defaultProvider: 'local',
+      llm: {
+        local: {
+          provider: 'ollama',
+          model: 'brokered-harness-model',
+          baseUrl: 'http://127.0.0.1:44729',
+        },
+      },
+      assistant: {
+        tools: {
+          preferredProviders: {
+            local: 'ollama',
+          },
+        },
+      },
+    } as Partial<GuardianAgentConfig>;
 
     writeFileSync(configPath, JSON.stringify(rawConfig, null, 2));
     const loaded = loadConfigFromFile(configPath);

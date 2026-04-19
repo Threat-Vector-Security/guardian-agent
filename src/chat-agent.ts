@@ -58,6 +58,7 @@ import {
   deriveCodeSessionWorkflowState,
   type CodeSessionWorkflowType,
 } from './runtime/coding-workflows.js';
+import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import {
   buildToolLoopResumePayload,
   type StoredToolLoopPendingTool,
@@ -136,7 +137,7 @@ import {
   resolvePagedListWindow,
 } from './runtime/list-continuation.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
-import type { PrincipalRole } from './tools/types.js';
+import type { PrincipalRole, ToolJobRecord } from './tools/types.js';
 import { buildToolResultPayloadFromJob } from './tools/job-results.js';
 import {
   ChatAgentApprovalState,
@@ -3114,7 +3115,7 @@ type DirectIntentShadowCandidate =
       }
 
       const directToolReport = allowGeneralShortcut
-        ? this.tryDirectRecentToolReport(routedScopedMessage)
+        ? this.tryDirectRecentToolReport(routedScopedMessage, resolvedCodeSession)
         : null;
       if (directToolReport) {
         if (this.conversationService) {
@@ -4906,7 +4907,11 @@ type DirectIntentShadowCandidate =
   }
 
   private getCodeSessionSurfaceId(message: UserMessage): string {
-    return message.surfaceId?.trim() || message.userId?.trim() || 'default-surface';
+    return resolveConversationSurfaceId({
+      channel: message.channel,
+      surfaceId: message.surfaceId,
+      userId: message.userId,
+    });
   }
 
   private resolveDirectSecondBrainItemType(
@@ -6005,15 +6010,58 @@ type DirectIntentShadowCandidate =
     };
   }
 
-  private tryDirectRecentToolReport(message: UserMessage): string | null {
+  private tryDirectRecentToolReport(
+    message: UserMessage,
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+  ): string | null {
     if (!this.tools?.isEnabled()) return null;
     if (!_isToolReportQuery(message.content)) return null;
 
-    const jobs = this.tools.listJobs(50)
-      .filter((job) => job.userId === message.userId && job.channel === message.channel);
+    const jobs = this.selectMostRecentToolReportJobs(
+      this.listScopedRecentToolReportJobs(message, resolvedCodeSession),
+    );
 
     const report = _formatToolReport(jobs);
     return report || null;
+  }
+
+  private listScopedRecentToolReportJobs(
+    message: UserMessage,
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+  ): ToolJobRecord[] {
+    const codeSessionId = resolvedCodeSession?.session.id?.trim();
+    if (codeSessionId) {
+      return this.tools?.listJobsForCodeSession(codeSessionId, 50) ?? [];
+    }
+    return (this.tools?.listJobs(50) ?? [])
+      .filter((job) => job.userId === message.userId && job.channel === message.channel);
+  }
+
+  private selectMostRecentToolReportJobs(jobs: ToolJobRecord[]): ToolJobRecord[] {
+    if (!Array.isArray(jobs) || jobs.length === 0) {
+      return [];
+    }
+    const latestRequestId = this.normalizeToolReportRequestId(jobs[0]?.requestId);
+    if (latestRequestId) {
+      const requestScopedJobs = jobs.filter((job) =>
+        this.normalizeToolReportRequestId(job.requestId) === latestRequestId);
+      if (requestScopedJobs.length > 0) {
+        return requestScopedJobs;
+      }
+    }
+    const leadingUnscopedJobs: ToolJobRecord[] = [];
+    for (const job of jobs) {
+      if (this.normalizeToolReportRequestId(job.requestId)) {
+        break;
+      }
+      leadingUnscopedJobs.push(job);
+    }
+    return leadingUnscopedJobs.length > 0 ? leadingUnscopedJobs : jobs;
+  }
+
+  private normalizeToolReportRequestId(requestId: string | undefined): string | null {
+    const normalized = typeof requestId === 'string' ? requestId.trim() : '';
+    return normalized.length > 0 ? normalized : null;
   }
 
   private async executeDirectCodeSessionTool(

@@ -36,6 +36,7 @@ export interface LlmLoopOutcome {
   toolCallCount: number;
   toolResultCount: number;
   successfulToolResultCount: number;
+  policyBlockedSamples?: Array<{ toolName: string; message: string }>;
 }
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
@@ -56,6 +57,7 @@ export async function runLlmLoop(
   let toolResultCount = 0;
   let successfulToolResultCount = 0;
   let forcedPolicyRetryUsed = false;
+  let forcedPolicyBlockedRetryUsed = false;
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
   let forcedIntermediateStatusRetryCount = 0;
@@ -216,6 +218,24 @@ export async function runLlmLoop(
 
     response = recoverStructuredToolCalls(response);
     finalContent = response.content ?? '';
+
+    if (
+      !forcedPolicyBlockedRetryUsed
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && shouldRetryPolicyBlockedToolRoundCorrection(lastToolRoundResults, llmToolDefs)
+    ) {
+      forcedPolicyBlockedRetryUsed = true;
+      response = await chatFn(
+        [
+          ...plannerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildPolicyBlockedToolRoundCorrectionPrompt() },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
+    }
 
     if (
       forcedSkillShapeRetryCount < 2
@@ -416,6 +436,10 @@ export async function runLlmLoop(
       // Some tools succeeded — continue so LLM can use their results
     }
 
+    if (lastToolRoundResults.some(({ result }) => isFixablePolicyBlockedToolResult(result))) {
+      await searchIfToolMissing('update_tool_policy');
+    }
+
     rounds += 1;
   }
 
@@ -433,6 +457,9 @@ export async function runLlmLoop(
     }
   }
 
+  const allRoundResultsPolicyBlocked = lastToolRoundResults.length > 0
+    && lastToolRoundResults.every(({ result }) => isFixablePolicyBlockedToolResult(result));
+
   if (
     (
       !finalContent
@@ -444,6 +471,7 @@ export async function runLlmLoop(
       )
     )
     && lastToolRoundResults.length > 0
+    && !allRoundResultsPolicyBlocked
   ) {
     const recovered = await tryRecoverDirectAnswer(messages, chatFn, options?.fallbackChatFn);
     if (recovered) {
@@ -486,6 +514,14 @@ export async function runLlmLoop(
     }
   }
 
+  const policyBlockedSamples: Array<{ toolName: string; message: string }> = [];
+  for (const { toolName, result } of lastToolRoundResults) {
+    if (!isFixablePolicyBlockedToolResult(result)) continue;
+    const message = readString((result as Record<string, unknown>).message)
+      || extractToolOutputMessage(result as Record<string, unknown>);
+    policyBlockedSamples.push({ toolName, message: message.slice(0, 400) });
+  }
+
   return {
     finalContent,
     messages,
@@ -497,6 +533,7 @@ export async function runLlmLoop(
       toolCallCount,
       toolResultCount,
       successfulToolResultCount,
+      ...(policyBlockedSamples.length > 0 ? { policyBlockedSamples } : {}),
     },
   };
 }
@@ -622,6 +659,46 @@ function shouldRetryIntermediateStatusCorrection(
   return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
 }
 
+function shouldRetryPolicyBlockedToolRoundCorrection(
+  results: Array<{ toolName: string; result: Record<string, unknown> }>,
+  toolDefs: import('../llm/types.js').ToolDefinition[],
+): boolean {
+  if (results.length === 0) return false;
+  if (!toolDefs.some((tool) => tool.name === 'update_tool_policy')) return false;
+  if (results.some(({ result }) => isPendingApprovalToolResult(result))) return false;
+  if (results.some(({ result }) => isSuccessfulToolResult(result))) return false;
+  return results.some(({ result }) => isFixablePolicyBlockedToolResult(result));
+}
+
+function isPendingApprovalToolResult(result: Record<string, unknown>): boolean {
+  return readString(result.status).toLowerCase() === 'pending_approval';
+}
+
+function isFixablePolicyBlockedToolResult(result: Record<string, unknown>): boolean {
+  if (isSuccessfulToolResult(result) || isPendingApprovalToolResult(result)) {
+    return false;
+  }
+  const lower = collectToolResultText(result).toLowerCase();
+  if (!lower) return false;
+  return /(update_tool_policy|allowed paths|allowedpaths|allowed domains|alloweddomains|allowed commands|outside allowed paths|outside the allowed paths|not in allowedpaths|not in the allowed paths|blocked by policy|tools policy)/.test(lower);
+}
+
+function collectToolResultText(result: Record<string, unknown>): string {
+  const output = result.output;
+  const outputRecord = output && typeof output === 'object' && !Array.isArray(output)
+    ? output as Record<string, unknown>
+    : null;
+  return [
+    readString(result.message),
+    readString(result.error),
+    readString(result.reason),
+    extractToolOutputMessage(result),
+    readString(outputRecord?.error),
+    readString(outputRecord?.reason),
+    readString(outputRecord?.description),
+  ].filter(Boolean).join('\n');
+}
+
 function buildIntermediateStatusCorrectionPrompt(): string {
   return [
     'System correction: your previous reply was an intermediate progress update, not a completed response.',
@@ -643,22 +720,43 @@ function buildPolicyUpdateCorrectionPrompt(): string {
   ].join(' ');
 }
 
+function buildPolicyBlockedToolRoundCorrectionPrompt(): string {
+  return [
+    'System correction: your previous tool call did not complete because tool policy blocked it.',
+    'Do not claim the requested action succeeded without a successful tool result.',
+    'Use update_tool_policy now if policy is the blocker.',
+    'If the block is a filesystem path, call update_tool_policy with action "add_path".',
+    'If the block is a hostname/domain, call update_tool_policy with action "add_domain" using the normalized hostname only.',
+    'If the block is a command prefix, call update_tool_policy with action "add_command".',
+  ].join(' ');
+}
+
 function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
+  const anySucceeded = results.some(({ result }) => isSuccessfulToolResult(result));
   const summaries = results
     .map(({ toolName, result }) => summarizeSingleToolFallback(toolName, result))
     .filter((summary): summary is string => !!summary);
   if (summaries.length === 0) return '';
   if (summaries.length === 1) return summaries[0];
-  return `Completed the requested actions:\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
+  const header = anySucceeded
+    ? 'Completed the requested actions:'
+    : 'The requested action did not complete. Tool results:';
+  return `${header}\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
 }
 
 function summarizeSingleToolFallback(toolName: string, result: Record<string, unknown>): string {
-  const message = readString(result.message) || extractToolOutputMessage(result);
-  if (message) return message;
-
   const status = readString(result.status).toLowerCase();
   if (status === 'pending_approval') return `${toolName} is awaiting approval.`;
-  if (result.success === true || status === 'succeeded' || status === 'completed') return `Completed ${toolName}.`;
+
+  const message = readString(result.message) || extractToolOutputMessage(result);
+  const succeeded = result.success === true || status === 'succeeded' || status === 'completed';
+  if (succeeded) {
+    return message || `Completed ${toolName}.`;
+  }
+
+  if (message) {
+    return `${toolName} did not complete: ${message}`;
+  }
   return `Attempted ${toolName}, but it did not complete successfully.`;
 }
 

@@ -1701,6 +1701,303 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('retries delegated repo inspections that answer code-path requests with an ungrounded "not found" summary', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: [
+            'Delegated worker progress is rendered in `web/public/js/chat-panel.js`.',
+            'The run timeline client-side updates are normalized in `web/public/js/chat-run-tracking.js`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 4,
+              toolResultCount: 4,
+              successfulToolResultCount: 4,
+            },
+          },
+        };
+      }
+      return {
+        content: '**No client-side code paths found** rendering delegated worker progress in the web UI.',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'model_response',
+            responseQuality: 'final',
+            toolCallCount: 4,
+            toolResultCount: 4,
+            successfulToolResultCount: 4,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 777_100,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-code-paths',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect the repo and summarize where delegated worker progress is rendered in the web UI. Name the client-side code paths only.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'minimax-m2.7',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-code-paths',
+        executionId: 'exec-retry-code-paths',
+        rootExecutionId: 'exec-retry-code-paths-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(result.content).toContain('web/public/js/chat-run-tracking.js');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_completed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('retries delegated repo inspections that claim they cannot identify the requested files and functions', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: [
+            'Delegated local model selection is aligned in `src/runtime/execution-profiles.ts`.',
+            'The explicit local default provider resolution is applied in `resolveDelegatedExecutionDecision` and `selectEscalatedDelegatedExecutionProfile`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 3,
+              toolResultCount: 3,
+              successfulToolResultCount: 3,
+            },
+          },
+        };
+      }
+      return {
+        content: 'Based on the tool results available in this conversation, I cannot identify any files or functions that keep delegated local model selection aligned with an explicit local default provider.',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'model_response',
+            responseQuality: 'final',
+            toolCallCount: 3,
+            toolResultCount: 3,
+            successfulToolResultCount: 3,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Provider Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 777_200,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-files-and-functions',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect the repo and tell me which files and functions now keep delegated local model selection aligned with an explicit local default provider. Cite exact file names and function names.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-tools',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-4.7',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-tools', 'openai-frontier'],
+        reason: 'delegated explorer selected managed-cloud tools profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-files-and-functions',
+        executionId: 'exec-retry-files-and-functions',
+        rootExecutionId: 'exec-retry-files-and-functions-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Provider Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-tools', 'openai-frontier']);
+    expect(result.content).toContain('src/runtime/execution-profiles.ts');
+    expect(result.content).toContain('resolveDelegatedExecutionDecision');
+    expect(result.content).toContain('selectEscalatedDelegatedExecutionProfile');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_completed',
+    ]);
+
+    manager.shutdown();
+  });
+
   it('retries non-terminal delegated workspace progress updates on a stronger frontier profile', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 

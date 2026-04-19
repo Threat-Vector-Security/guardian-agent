@@ -78,6 +78,7 @@ export function createDashboardMessageDispatcher(args: {
   codeSessionStore: Pick<CodeSessionStore, 'resolveForRequest'>;
   intentRoutingTrace: Pick<IntentRoutingTraceLog, 'record'>;
   getCodeSessionSurfaceId: (args: {
+    channel?: string;
     surfaceId?: string;
     userId?: string;
     principalId?: string;
@@ -104,6 +105,7 @@ export function createDashboardMessageDispatcher(args: {
     const requestType = options?.requestType?.trim() || 'chat';
     const requestedCodeContext = args.readCodeRequestMetadata(msg.metadata);
     const surfaceId = args.getCodeSessionSurfaceId({
+      channel,
       surfaceId: msg.surfaceId,
       userId: canonicalUserId,
       principalId: msg.principalId,

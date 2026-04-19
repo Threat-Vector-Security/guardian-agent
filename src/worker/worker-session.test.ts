@@ -905,7 +905,211 @@ describe('BrokeredWorkerSession automation control', () => {
         route: 'general_assistant',
       },
     });
-    expect(listJobs).toHaveBeenCalledWith('owner', undefined, 50);
+    expect(listJobs).toHaveBeenCalledWith('owner', 'web', 50, {
+      requestId: undefined,
+      codeSessionId: undefined,
+    });
+    expect(llmChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('scopes tool-report follow-ups to the most recent tool-bearing request for the same surface', async () => {
+    let assistantCallCount = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        const userMessage = messages.findLast((message) => message.role === 'user');
+        const content = String(userMessage?.content ?? '');
+        if (content.includes('What exact tools did you use')) {
+          return {
+            content: JSON.stringify({
+              route: 'general_assistant',
+              confidence: 'high',
+              operation: 'read',
+              summary: 'Answer the tool report follow-up.',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the requested file.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+
+      assistantCallCount += 1;
+      if (assistantCallCount === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'README.md' }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      }
+
+      return {
+        content: 'Inspected README.md.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+    const callTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-read-1',
+      message: 'Read README.md.',
+      output: {
+        content: '# README',
+      },
+    }));
+    const listJobs = vi.fn(async () => [{
+      toolName: 'fs_read',
+      status: 'succeeded',
+      argsRedacted: { path: 'README.md' },
+      completedAt: Date.now(),
+      requestId: 'msg-tooling-turn',
+      codeSessionId: 'code-1',
+    }]);
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_read',
+        description: 'Read a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+        risk: 'read_only',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs,
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const initial = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-tooling-turn',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect README.md.',
+        timestamp: Date.now(),
+        metadata: {
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+      },
+    });
+
+    expect(initial.content).toContain('Inspected README.md.');
+    expect(callTool).toHaveBeenCalledTimes(1);
+
+    const report = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-tool-report-follow-up',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'What exact tools did you use for that?',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(report.content).toContain('fs_read');
+    expect(listJobs).toHaveBeenCalledWith('owner', 'web', 50, {
+      requestId: 'msg-tooling-turn',
+      codeSessionId: 'code-1',
+    });
+  });
+
+  it('returns clarification-blocked metadata instead of entering the tool loop when the gateway needs more detail', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'execute',
+            summary: 'Which external directory should I use for that file?',
+            turnRelation: 'new_request',
+            resolution: 'needs_clarification',
+            missingFields: ['target_path'],
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error('The brokered worker should not enter the tool loop when clarification is required.');
+    });
+    const callTool = vi.fn();
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-clarification-needed',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create brokered-test.txt in the requested external directory.',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.content).toContain('Which external directory should I use for that file?');
+    expect(result.metadata).toMatchObject({
+      pendingAction: {
+        status: 'pending',
+        blocker: {
+          kind: 'clarification',
+          prompt: 'Which external directory should I use for that file?',
+        },
+      },
+      workerExecution: {
+        lifecycle: 'blocked',
+        source: 'tool_loop',
+        completionReason: 'model_response',
+        responseQuality: 'final',
+        blockerKind: 'clarification',
+      },
+      intentGateway: {
+        route: 'coding_task',
+        resolution: 'needs_clarification',
+      },
+    });
+    expect(callTool).not.toHaveBeenCalled();
     expect(llmChat).toHaveBeenCalledTimes(1);
   });
 

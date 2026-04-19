@@ -49,6 +49,11 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
 }
 
 async function startFakeProvider(testDir, scenarioLog) {
+  const targetFilePath = path.join(testDir, 'brokered-test.txt');
+  const targetFilePathCandidates = [targetFilePath, targetFilePath.replace(/\\/g, '/')];
+  const recoveryDir = path.join(path.dirname(testDir), 'recovery-after-approval');
+  const recoveryTargetFilePath = path.join(recoveryDir, 'brokered-test.txt');
+  const recoveryTargetFilePathCandidates = [recoveryTargetFilePath, recoveryTargetFilePath.replace(/\\/g, '/')];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
@@ -67,7 +72,19 @@ async function startFakeProvider(testDir, scenarioLog) {
         ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const latestUser = String([...messages].reverse().find((m) => m.role === 'user')?.content ?? '');
-      scenarioLog.push({ latestUser, tools });
+      const conversationText = messages
+        .map((message) => (typeof message?.content === 'string' ? message.content : ''))
+        .filter(Boolean)
+        .join('\n');
+      const isRecoveryConversation = recoveryTargetFilePathCandidates.some((candidate) => conversationText.includes(candidate))
+        || conversationText.includes(recoveryDir)
+        || conversationText.includes(recoveryDir.replace(/\\/g, '/'));
+      scenarioLog.push({
+        endpoint: url.pathname,
+        latestUser,
+        tools,
+        model: String(parsed.model ?? ''),
+      });
       const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(
@@ -87,8 +104,68 @@ async function startFakeProvider(testDir, scenarioLog) {
         ));
       };
 
-      // Step 1: user asks to create a file → model calls update_tool_policy
-      if (latestUser.includes('create an empty file called brokered-test.txt')) {
+      if (latestUser.includes('requested external directory')) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+        });
+        return;
+      }
+
+      // Recovery scenario: model wrongly tries fs_write first, then must self-correct.
+      if (
+        latestUser.includes('previous tool call did not complete because tool policy blocked it')
+        && isRecoveryConversation
+      ) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'bk-recovery-tc-2',
+            name: 'update_tool_policy',
+            arguments: JSON.stringify({ action: 'add_path', value: recoveryDir }),
+          }],
+        });
+        return;
+      }
+
+      if (
+        latestUser.includes('create an empty file')
+        && recoveryTargetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        && conversationText.includes('outside allowed paths')
+      ) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          content: `Created empty file: ${recoveryTargetFilePath}`,
+        });
+        return;
+      }
+
+      if (
+        latestUser.includes('create an empty file')
+        && recoveryTargetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+      ) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'bk-recovery-tc-1',
+            name: 'fs_write',
+            arguments: JSON.stringify({
+              path: recoveryTargetFilePath,
+              content: '',
+              append: false,
+            }),
+          }],
+        });
+        return;
+      }
+
+      // Step 1: user asks to create a file at a specific external path → model calls update_tool_policy
+      if (
+        latestUser.includes('create an empty file')
+        && targetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+      ) {
         sendResponse({
           model: 'brokered-harness-model',
           finishReason: 'tool_calls',
@@ -103,14 +180,15 @@ async function startFakeProvider(testDir, scenarioLog) {
 
       // Step 2: after update_tool_policy approved → model calls fs_write
       if (latestUser.includes('Result: ✓ update_tool_policy: Approved and executed')) {
+        const approvedTargetPath = isRecoveryConversation ? recoveryTargetFilePath : targetFilePath;
         sendResponse({
           model: 'brokered-harness-model',
           finishReason: 'tool_calls',
           toolCalls: [{
-            id: 'bk-tc-2',
+            id: isRecoveryConversation ? 'bk-recovery-tc-3' : 'bk-tc-2',
             name: 'fs_write',
             arguments: JSON.stringify({
-              path: path.join(testDir, 'brokered-test.txt'),
+              path: approvedTargetPath,
               content: '',
               append: false,
             }),
@@ -121,9 +199,10 @@ async function startFakeProvider(testDir, scenarioLog) {
 
       // Step 3: after fs_write approved → model returns final text
       if (latestUser.includes('Result: ✓ fs_write: Approved and executed')) {
+        const completedTargetPath = isRecoveryConversation ? recoveryTargetFilePath : targetFilePath;
         sendResponse({
           model: 'brokered-harness-model',
-          content: `Done - created ${path.join(testDir, 'brokered-test.txt')} as an empty file.`,
+          content: `Done - created ${completedTargetPath} as an empty file.`,
         });
         return;
       }
@@ -211,6 +290,15 @@ async function waitForHealth(baseUrl) {
   throw new Error('GuardianAgent did not become healthy within 90 seconds.');
 }
 
+function readJsonLines(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, 'utf8')
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 async function runBrokeredApprovalHarness() {
   const preserveArtifacts = process.env.HARNESS_KEEP_TMP === '1';
   const harnessPort = await getFreePort();
@@ -220,6 +308,9 @@ async function runBrokeredApprovalHarness() {
   const configPath = path.join(tmpDir, 'config.yaml');
   const logPath = path.join(tmpDir, 'guardian.log');
   const testDir = path.join(tmpDir, 'allowed-after-approval');
+  const targetFilePath = path.join(testDir, 'brokered-test.txt');
+  const recoveryDir = path.join(tmpDir, 'recovery-after-approval');
+  const recoveryTargetFilePath = path.join(recoveryDir, 'brokered-test.txt');
   const scenarioLog = [];
   const provider = await startFakeProvider(testDir, scenarioLog);
 
@@ -296,10 +387,29 @@ guardian:
 
     await waitForHealth(baseUrl);
 
+    // --- Test 0: ambiguous external path should clarify instead of entering approvals ---
+    console.log('Test 0: Ambiguous external path clarifies...');
+    const clarification = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Please create an empty file called brokered-test.txt in the requested external directory.',
+      userId: 'harness',
+      channel: 'web',
+    });
+    assert.equal(
+      getPendingApprovalSummaries(clarification).length,
+      0,
+      `Expected clarification without approvals for an ambiguous external path: ${JSON.stringify(clarification)}`,
+    );
+    assert.match(
+      String(clarification.content ?? ''),
+      /(exact external path|which directory|full file path)/i,
+      `Expected clarification text for ambiguous external path: ${JSON.stringify(clarification)}`,
+    );
+    console.log('  PASS: Ambiguous external request produced a clarification.');
+
     // --- Test 1: Multi-step approval flow ---
     console.log('Test 1: Multi-step approval flow (brokered)...');
     const first = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: 'Please create an empty file called brokered-test.txt in the requested external directory.',
+      content: `Please create an empty file at ${targetFilePath}.`,
       userId: 'harness',
       channel: 'web',
     });
@@ -371,10 +481,98 @@ guardian:
     assert.equal(clearedCurrent?.pendingAction ?? null, null, `Expected pending action to clear after completion: ${JSON.stringify(clearedCurrent)}`);
 
     // Verify file was actually created
-    const filePath = path.join(testDir, 'brokered-test.txt');
-    assert.equal(fs.existsSync(filePath), true, `Expected ${filePath} to exist`);
-    assert.equal(fs.statSync(filePath).size, 0, 'Expected empty file');
+    assert.equal(fs.existsSync(targetFilePath), true, `Expected ${targetFilePath} to exist`);
+    assert.equal(fs.statSync(targetFilePath).size, 0, 'Expected empty file');
     console.log('  PASS: Multi-step approval flow completed successfully.');
+
+    // --- Test 1b: policy-blocked fs_write should self-correct into update_tool_policy ---
+    console.log('Test 1b: Policy-blocked fs_write self-corrects into approval...');
+    // The default agent burst limit is 5/10s. Clear that window before the 1b batch.
+    await new Promise((resolve) => setTimeout(resolve, 11_000));
+    const recoveryFirst = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: `Please create an empty file at ${recoveryTargetFilePath}.`,
+      userId: 'harness-recovery',
+      channel: 'web',
+    });
+    const recoveryFirstPending = getPendingApprovalSummaries(recoveryFirst);
+    assert.ok(
+      recoveryFirstPending.length > 0,
+      `Expected pending approval after fs_write recovery: ${JSON.stringify(recoveryFirst)}`,
+    );
+    assert.equal(
+      recoveryFirst.metadata?.pendingAction?.blocker?.kind,
+      'approval',
+      `Expected canonical pendingAction metadata on recovery response: ${JSON.stringify(recoveryFirst)}`,
+    );
+    assert.equal(recoveryFirstPending[0].toolName, 'update_tool_policy');
+    const recoveryCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
+    assert.equal(recoveryCurrent?.pendingAction?.blocker?.kind, 'approval');
+    assert.equal(recoveryCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, recoveryFirstPending[0].id);
+
+    const recoveryFirstDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
+      approvalId: recoveryFirstPending[0].id,
+      decision: 'approved',
+      actor: 'brokered-user',
+    });
+    assert.equal(recoveryFirstDecision.success, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 11_000));
+    const recoverySecond = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ update_tool_policy: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+      userId: 'harness-recovery',
+      channel: 'web',
+    });
+    const recoverySecondPending = getPendingApprovalSummaries(recoverySecond);
+    assert.ok(
+      recoverySecondPending.length > 0,
+      `Expected pending fs_write approval after policy recovery: ${JSON.stringify(recoverySecond)}`,
+    );
+    assert.equal(
+      recoverySecond.metadata?.pendingAction?.blocker?.kind,
+      'approval',
+      `Expected canonical pendingAction metadata on recovery fs_write response: ${JSON.stringify(recoverySecond)}`,
+    );
+    assert.equal(recoverySecondPending[0].toolName, 'fs_write');
+    const recoverySecondCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
+    assert.equal(recoverySecondCurrent?.pendingAction?.blocker?.kind, 'approval');
+    assert.equal(recoverySecondCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, recoverySecondPending[0].id);
+
+    const recoverySecondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
+      approvalId: recoverySecondPending[0].id,
+      decision: 'approved',
+      actor: 'brokered-user',
+    });
+    assert.equal(recoverySecondDecision.success, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 11_000));
+    const recoveryThird = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+      userId: 'harness-recovery',
+      channel: 'web',
+    });
+    assert.ok(typeof recoveryThird.content === 'string' && recoveryThird.content.length > 0, `Expected final recovery response text: ${JSON.stringify(recoveryThird)}`);
+    assert.equal(getPendingApprovalSummaries(recoveryThird).length, 0, 'No more pending approvals expected after recovery flow');
+    assert.match(recoveryThird.content, /created .*brokered-test\.txt/i);
+    const recoveryClearedCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
+    assert.equal(recoveryClearedCurrent?.pendingAction ?? null, null, `Expected pending action to clear after recovery completion: ${JSON.stringify(recoveryClearedCurrent)}`);
+    assert.equal(fs.existsSync(recoveryTargetFilePath), true, `Expected ${recoveryTargetFilePath} to exist`);
+    assert.equal(fs.statSync(recoveryTargetFilePath).size, 0, 'Expected empty recovery file');
+    console.log('  PASS: Policy-blocked fs_write recovered into the approval flow.');
+
+    const tracePath = path.join(tmpDir, '.guardianagent', 'routing', 'intent-routing.jsonl');
+    const routingTrace = readJsonLines(tracePath);
+    const delegatedStarts = routingTrace.filter((entry) => entry?.stage === 'delegated_worker_started');
+    assert.ok(
+      delegatedStarts.some((entry) =>
+        entry?.details?.executionProfileName === 'local'
+        && entry?.details?.executionProfileModel === 'brokered-harness-model'),
+      `Expected delegated worker to stay on the harness local profile. Trace: ${JSON.stringify(delegatedStarts)}`,
+    );
+    assert.ok(
+      !delegatedStarts.some((entry) => entry?.details?.executionProfileName === 'ollama'),
+      `Delegated worker should not drift to the default ollama profile. Trace: ${JSON.stringify(delegatedStarts)}`,
+    );
+    console.log('  PASS: Delegated worker used the harness local execution profile.');
 
     // --- Test 2: memory_save suppression ---
     console.log('Test 2: memory_save suppression...');

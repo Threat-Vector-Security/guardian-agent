@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PrincipalRole } from '../tools/types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readJsonBody, readOptionalJsonBody, sendJSON } from './web-json.js';
+import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 
 interface RequestPrincipal {
   principalId: string;
@@ -335,7 +336,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
     const principal = context.resolveRequestPrincipal(req);
     const userId = url.searchParams.get('userId') ?? 'web-user';
     const channel = url.searchParams.get('channel') ?? 'web';
-    const surfaceId = trimOptionalString(url.searchParams.get('surfaceId')) ?? 'web-guardian-chat';
+    const surfaceId = resolveWebSurfaceId(trimOptionalString(url.searchParams.get('surfaceId')));
     sendJSON(res, 200, dashboard.onPendingActionCurrent({
       userId,
       principalId: principal.principalId,
@@ -362,7 +363,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
         principalId: principal.principalId,
         principalRole: principal.principalRole,
         channel: trimOptionalString(parsed.channel) ?? 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? 'web-guardian-chat',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['dashboard', 'tools'], 'chat.pending-action.reset', url.pathname);
@@ -395,7 +396,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
       const principal = context.resolveRequestPrincipal(req);
       const userId = trimOptionalString(parsed.userId) ?? 'web-user';
       const channel = trimOptionalString(parsed.channel) ?? 'web';
-      const surfaceId = trimOptionalString(parsed.surfaceId) ?? userId;
+      const surfaceId = resolveWebSurfaceId(trimOptionalString(parsed.surfaceId));
       const result = await dashboard.onToolsApprovalDecision({
         approvalId: parsed.approvalId,
         decision: parsed.decision,

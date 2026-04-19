@@ -18,7 +18,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       } as never,
     });
     const agent = new ChatAgent('chat', 'Chat');
-    const nowMs = 1_710_000_000_000;
+    const nowMs = Date.now();
     const pendingActionStore = new PendingActionStore({
       enabled: false,
       sqlitePath: '/tmp/guardianagent-intent-gateway-context-filter.test.sqlite',
@@ -879,6 +879,198 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
       }),
     );
+  });
+
+  it('scopes direct tool-report answers to the newest request in the attached code session', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = 1_710_000_000_000;
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-tool-report-code-session.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: '/tmp/guardian-agent',
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listJobs: vi.fn(() => []),
+      listJobsForCodeSession: vi.fn(() => [
+        {
+          id: 'job-external-write',
+          toolName: 'fs_write',
+          risk: 'medium',
+          origin: 'assistant',
+          codeSessionId: guardianSession.id,
+          userId: 'owner',
+          channel: 'web',
+          requestId: 'request-external-file',
+          argsPreview: '{"path":"C:\\\\Users\\\\kenle\\\\AppData\\\\Local\\\\Temp\\\\guardian-manual-approval-test\\\\brokered-test.txt"}',
+          argsRedacted: {
+            path: 'C:\\Users\\kenle\\AppData\\Local\\Temp\\guardian-manual-approval-test\\brokered-test.txt',
+            content: '',
+          },
+          status: 'succeeded',
+          createdAt: nowMs - 2_000,
+          completedAt: nowMs - 1_500,
+          requiresApproval: false,
+        },
+        {
+          id: 'job-external-allow',
+          toolName: 'update_tool_policy',
+          risk: 'medium',
+          origin: 'assistant',
+          codeSessionId: guardianSession.id,
+          userId: 'owner',
+          channel: 'web',
+          requestId: 'request-external-file',
+          argsPreview: '{"action":"add_path","value":"C:\\\\Users\\\\kenle\\\\AppData\\\\Local\\\\Temp\\\\guardian-manual-approval-test"}',
+          argsRedacted: {
+            action: 'add_path',
+            value: 'C:\\Users\\kenle\\AppData\\Local\\Temp\\guardian-manual-approval-test',
+          },
+          status: 'succeeded',
+          createdAt: nowMs - 3_000,
+          completedAt: nowMs - 2_500,
+          requiresApproval: false,
+        },
+        {
+          id: 'job-workspace-write',
+          toolName: 'fs_write',
+          risk: 'medium',
+          origin: 'assistant',
+          codeSessionId: guardianSession.id,
+          userId: 'owner',
+          channel: 'web',
+          requestId: 'request-workspace-file',
+          argsPreview: '{"path":"S:\\\\Development\\\\GuardianAgent\\\\brokered-test.txt"}',
+          argsRedacted: {
+            path: 'S:\\Development\\GuardianAgent\\brokered-test.txt',
+            content: '',
+          },
+          status: 'succeeded',
+          createdAt: nowMs - 20_000,
+          completedAt: nowMs - 19_500,
+          requiresApproval: false,
+        },
+      ]),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const report = (agent as any).tryDirectRecentToolReport({
+      id: 'msg-tool-report-code-session',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'What exact tools did you use for that last file task?',
+      timestamp: nowMs,
+    } as UserMessage, {
+      session: guardianSession,
+    });
+    nowSpy.mockRestore();
+
+    expect(tools.listJobsForCodeSession).toHaveBeenCalledWith(guardianSession.id, 50);
+    expect(tools.listJobs).not.toHaveBeenCalled();
+    expect(report).toContain('update_tool_policy');
+    expect(report).toContain('guardian-manual-approval-test');
+    expect(report).toContain('fs_write');
+    expect(report).not.toContain('S:\\Development\\GuardianAgent\\brokered-test.txt');
+  });
+
+  it('scopes direct tool-report answers to the newest request outside code sessions', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listJobs: vi.fn(() => [
+        {
+          id: 'job-latest',
+          toolName: 'gmail_messages_list',
+          risk: 'low',
+          origin: 'assistant',
+          userId: 'owner',
+          channel: 'web',
+          requestId: 'request-latest',
+          argsPreview: '{"maxResults":10}',
+          argsRedacted: { maxResults: 10 },
+          status: 'succeeded',
+          createdAt: nowMs - 2_000,
+          completedAt: nowMs - 1_000,
+          requiresApproval: false,
+        },
+        {
+          id: 'job-older',
+          toolName: 'outlook_send',
+          risk: 'medium',
+          origin: 'assistant',
+          userId: 'owner',
+          channel: 'web',
+          requestId: 'request-older',
+          argsPreview: '{"to":"alex@example.com"}',
+          argsRedacted: { to: 'alex@example.com' },
+          status: 'succeeded',
+          createdAt: nowMs - 30_000,
+          completedAt: nowMs - 29_000,
+          requiresApproval: false,
+        },
+      ]),
+      listJobsForCodeSession: vi.fn(() => []),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const report = (agent as any).tryDirectRecentToolReport({
+      id: 'msg-tool-report-general',
+      userId: 'owner',
+      channel: 'web',
+      content: 'What exact tools did you use for that last task?',
+      timestamp: nowMs,
+    } as UserMessage, null);
+    nowSpy.mockRestore();
+
+    expect(tools.listJobs).toHaveBeenCalledWith(50);
+    expect(report).toContain('gmail_messages_list');
+    expect(report).not.toContain('outlook_send');
   });
 
   it('uses the rewritten routed coding task instead of stale gateway resolvedContent for backend-switch follow-ups', async () => {

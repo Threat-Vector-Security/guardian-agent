@@ -82,7 +82,7 @@ interface WorkspaceDashboardCallbackOptions {
     session: CodeSessionRecord;
     canonicalUserId: string;
   }) => Promise<void>;
-  getCodeSessionSurfaceId: (args: { surfaceId?: string; userId?: string; principalId?: string }) => string;
+  getCodeSessionSurfaceId: (args: { channel?: string; surfaceId?: string; userId?: string; principalId?: string }) => string;
   resetCodeSessionWorkspacePolicy: () => void;
   reconcileConfiguredAllowedPaths: () => void;
   approvalBelongsToCodeSession: (approvalId: string, sessionId: string) => boolean;

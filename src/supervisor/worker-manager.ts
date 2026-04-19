@@ -51,12 +51,16 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const WORKER_WORKSPACE_CLEANUP_MAX_RETRIES = 10;
 const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
-const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
-const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|render|rendering|path|paths)\b/i;
+const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
+const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
 const FILE_REFERENCE_PATTERN = /\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b|\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b/i;
 const INSUFFICIENT_RESULT_PATTERNS = [
   /\btruncated\b/i,
   /\b(?:cannot|can't)\s+(?:give|cite|identify|provide)\b.*\b(?:exact\s+files?|file\s+paths?)\b/i,
+  /\b(?:cannot|can't)\s+identify\b.*\b(?:files?|functions?|code\s+paths?)\b/i,
+  /\bbased\s+on\s+the\s+tool\s+results\s+available\s+in\s+this\s+conversation\b/i,
+  /\bno\s+(?:client-side\s+)?code\s+paths?\s+found\b/i,
+  /\bno\s+files?\s+or\s+functions?\s+were\s+found\b/i,
   /\bsearch(?:es)?\s+came\s+back\s+empty\b/i,
   /\bneed(?:ed)?\s+to\b.*\b(?:targeted|narrower|broader)\s+search/i,
   /\bwould\s+you\s+like\s+me\s+to\s+run\b/i,
@@ -1853,7 +1857,7 @@ function assessDelegatedResultSufficiency(
   return {
     kind: 'exact_file_references',
     failureSummary: 'Delegated worker did not return the exact file references requested after repo inspection.',
-    retryReason: 'the previous answer admitted truncation or uncertainty instead of naming the exact files',
+    retryReason: 'the previous answer did not name the exact files or code paths that were requested',
   };
 }
 

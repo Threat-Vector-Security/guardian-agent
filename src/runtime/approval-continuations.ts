@@ -1,3 +1,5 @@
+import { resolveConversationSurfaceId } from './channel-surface-ids.js';
+
 export interface ApprovalContinuationScope {
   userId: string;
   channel: string;
@@ -25,7 +27,11 @@ function normalizeScopeValue(value: string | undefined): string {
 export function normalizeApprovalContinuationScope(scope: ApprovalContinuationScope): Required<ApprovalContinuationScope> {
   const userId = normalizeScopeValue(scope.userId);
   const channel = normalizeScopeValue(scope.channel) || 'web';
-  const surfaceId = normalizeScopeValue(scope.surfaceId) || userId || 'default-surface';
+  const surfaceId = resolveConversationSurfaceId({
+    channel,
+    surfaceId: normalizeScopeValue(scope.surfaceId) || undefined,
+    userId,
+  });
   return {
     userId,
     channel,

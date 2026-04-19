@@ -251,18 +251,7 @@ import { SkillResolver } from './skills/resolver.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
-
-function getCodeSessionSurfaceId(args: { surfaceId?: string; userId?: string; principalId?: string }): string {
-  const surfaceId = typeof args.surfaceId === 'string' && args.surfaceId.trim()
-    ? args.surfaceId.trim()
-    : '';
-  if (surfaceId) return surfaceId;
-  const userId = typeof args.userId === 'string' && args.userId.trim()
-    ? args.userId.trim()
-    : '';
-  if (userId) return userId;
-  return 'default-surface';
-}
+import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 
@@ -270,6 +259,14 @@ import { getGuardianBaseDir } from './util/env.js';
 
 const log = createLogger('main');
 let sharedCodeWorkspaceTrustService: CodeWorkspaceTrustService | undefined;
+
+function getCodeSessionSurfaceId(args: { channel?: string; surfaceId?: string; userId?: string; principalId?: string }): string {
+  return resolveConversationSurfaceId({
+    channel: args.channel,
+    surfaceId: args.surfaceId,
+    userId: args.userId,
+  });
+}
 
 function normalizeTierModeForRouter(
   router: MessageRouter,
@@ -1290,6 +1287,7 @@ function buildDashboardCallbacks(
     const channelUserId = args.userId?.trim() || `${resolvedChannel}-user`;
     const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
     const resolvedSurfaceId = args.surfaceId?.trim() || getCodeSessionSurfaceId({
+      channel: resolvedChannel,
       userId: canonicalUserId,
       principalId: args.principalId,
     });
@@ -1415,7 +1413,11 @@ function buildDashboardCallbacks(
     );
     const channel = options?.channel?.trim() || 'web';
     const ownerUserId = options?.ownerUserId ?? hydratedSession.ownerUserId;
-    const surfaceId = options?.surfaceId ?? getCodeSessionSurfaceId({ userId: ownerUserId, principalId: options?.principalId });
+    const surfaceId = options?.surfaceId ?? getCodeSessionSurfaceId({
+      channel,
+      userId: ownerUserId,
+      principalId: options?.principalId,
+    });
     const currentAttachment = codeSessionStore.resolveForRequest({
       userId: ownerUserId,
       principalId: options?.principalId,

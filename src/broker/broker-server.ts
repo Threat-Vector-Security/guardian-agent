@@ -335,9 +335,16 @@ export class BrokerServer {
         case 'job.list': {
           const userId = typeof request.params.userId === 'string' ? request.params.userId : undefined;
           const channel = typeof request.params.channel === 'string' ? request.params.channel : undefined;
+          const requestId = typeof request.params.requestId === 'string' ? request.params.requestId : undefined;
+          const codeSessionId = typeof request.params.codeSessionId === 'string' ? request.params.codeSessionId : undefined;
           const limit = typeof request.params.limit === 'number' ? request.params.limit : 50;
           const jobs = this.tools.listJobs(limit)
-            .filter(job => (!userId || job.userId === userId) && (!channel || job.channel === channel));
+            .filter((job) => (
+              (!userId || job.userId === userId)
+              && (!channel || job.channel === channel)
+              && (!requestId || job.requestId === requestId)
+              && (!codeSessionId || job.codeSessionId === codeSessionId)
+            ));
           result = {
             jobs: jobs.map(j => ({
               toolName: j.toolName,
@@ -345,6 +352,8 @@ export class BrokerServer {
               argsRedacted: j.argsRedacted,
               completedAt: j.completedAt,
               createdAt: j.createdAt,
+              requestId: j.requestId,
+              codeSessionId: j.codeSessionId,
             })),
           };
           break;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runLlmLoop } from './worker-llm-loop.js';
-import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
+import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
 import type { ToolCaller, ToolResult } from '../broker/types.js';
 
 describe('runLlmLoop', () => {
@@ -811,6 +811,114 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toContain('Waiting for approval');
   });
 
+  it('re-prompts after a policy-blocked tool round instead of accepting a claimed filesystem success', async () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'Please create an empty file called brokered-test.txt in C:\\Sensitive.' },
+    ];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_write', arguments: JSON.stringify({ path: 'C:\\Sensitive\\brokered-test.txt', content: '' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Created empty file: C:\\Sensitive\\brokered-test.txt',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'update_tool_policy', arguments: JSON.stringify({ action: 'add_path', value: 'C:\\Sensitive' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Waiting for approval to add C:\\Sensitive to allowed paths.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+              },
+              required: ['path', 'content'],
+            },
+          },
+          {
+            name: 'update_tool_policy',
+            description: 'Update tool sandbox policy.',
+            parameters: {
+              type: 'object',
+              properties: {
+                action: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['action', 'value'],
+            },
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'fs_write') {
+          return {
+            success: false,
+            status: 'failed',
+            message: "Path 'C:\\Sensitive\\brokered-test.txt' is outside allowed paths. Use the update_tool_policy tool to add the path, or update manually via Tools policy > Allowed Paths (web) / /tools policy paths (CLI).",
+          };
+        }
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-1',
+          jobId: 'job-1',
+          message: 'Waiting for approval to add C:\\Sensitive to allowed paths.',
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      5,
+      32_000,
+    );
+
+    expect(calledTools).toEqual(['fs_write', 'update_tool_policy']);
+    expect(chatCalls).toHaveLength(4);
+    expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('previous tool call did not complete because tool policy blocked it'),
+    });
+    expect(result.hasPendingApprovals).toBe(true);
+    expect(result.outcome.completionReason).toBe('approval_pending');
+    expect(result.finalContent).toContain('Waiting for approval to add C:\\Sensitive to allowed paths.');
+  });
+
   it('continues the tool loop when a post-tool reply is only an intermediate progress update', async () => {
     const messages: ChatMessage[] = [
       { role: 'user', content: 'Write a two-line report to D:\\GuardianApprovalSmokeRound4\\round4.txt and continue once approval is granted.' },
@@ -1147,5 +1255,188 @@ describe('runLlmLoop', () => {
 
     expect(allowances).toEqual([true]);
     expect(result.finalContent).toContain('Saved it.');
+  });
+
+  it('auto-loads deferred update_tool_policy after a policy-blocked round and forces the correction retry', async () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'Please create an empty file called brokered-test.txt in C:\\Sensitive.' },
+    ];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_write', arguments: JSON.stringify({ path: 'C:\\Sensitive\\brokered-test.txt', content: '' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Done — brokered-test.txt has been created.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'update_tool_policy', arguments: JSON.stringify({ action: 'add_path', value: 'C:\\Sensitive' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Waiting for approval to add C:\\Sensitive to allowed paths.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calledTools: string[] = [];
+    const searchQueries: string[] = [];
+    const chatCalls: Array<{ tools?: unknown }> = [];
+
+    const updatePolicyDef: ToolDefinition = {
+      name: 'update_tool_policy',
+      description: 'Update tool sandbox policy.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string' },
+          value: { type: 'string' },
+        },
+        required: ['action', 'value'],
+      },
+    };
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        }];
+      },
+      searchTools(query: string) {
+        searchQueries.push(query);
+        if (query.toLowerCase().includes('update_tool_policy') || query.toLowerCase().includes('update tool policy')) {
+          return [updatePolicyDef];
+        }
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'fs_write') {
+          return {
+            success: false,
+            status: 'failed',
+            message: "Path 'C:\\Sensitive\\brokered-test.txt' is outside allowed paths. Use the update_tool_policy tool to add the path.",
+          };
+        }
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-1',
+          jobId: 'job-1',
+          message: 'Waiting for approval to add C:\\Sensitive to allowed paths.',
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (_msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ tools: opts?.tools });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      5,
+      32_000,
+    );
+
+    expect(calledTools).toEqual(['fs_write', 'update_tool_policy']);
+    expect(searchQueries.some((q) => q.toLowerCase().includes('update'))).toBe(true);
+    const toolsOnThirdCall = (chatCalls[2]?.tools ?? []) as Array<{ name: string }>;
+    expect(toolsOnThirdCall.some((tool) => tool.name === 'update_tool_policy')).toBe(true);
+    expect(result.hasPendingApprovals).toBe(true);
+    expect(result.finalContent).not.toMatch(/Done — brokered-test\.txt has been created/);
+  });
+
+  it('does not fabricate a recovery answer when every tool result in the round was policy-blocked', async () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'Please create an empty file called brokered-test.txt in C:\\Sensitive.' },
+    ];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_write', arguments: JSON.stringify({ path: 'C:\\Sensitive\\brokered-test.txt', content: '' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Let me inspect the repository first.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'Let me inspect the repository first.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'Let me inspect the repository first.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(): Promise<ToolResult> {
+        return {
+          success: false,
+          status: 'failed',
+          message: "Path 'C:\\Sensitive\\brokered-test.txt' is outside allowed paths. Use update_tool_policy.",
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(result.outcome.successfulToolResultCount).toBe(0);
+    expect(result.outcome.completionReason).not.toBe('tool_result_recovery');
+    expect(result.finalContent).not.toMatch(/Created|Done|Successfully/i);
   });
 });
