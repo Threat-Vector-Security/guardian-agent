@@ -1,7 +1,7 @@
 # Proposal: Native Google Integration + LLM Instruction Steps
 
 **Date:** 2026-03-14
-**Status:** Draft
+**Status:** Historical proposal. The current implementation lives in [NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md).
 
 ---
 

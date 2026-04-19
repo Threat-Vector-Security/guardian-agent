@@ -6,7 +6,7 @@
  *
  * The `gws` tool handler in ToolExecutor routes to GoogleService (native).
  *
- * Spec: docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md
+ * Spec: docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md
  */
 
 export { GoogleAuth } from './google-auth.js';

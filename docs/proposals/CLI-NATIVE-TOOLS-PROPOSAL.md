@@ -3,7 +3,7 @@
 **Date:** 2026-03-09
 **Status:** Proposal
 **Scope:** Tool architecture direction, GitHub CLI integration, MCP positioning
-**Current as-built references:** [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [Google Workspace Integration Specification (CLI Mode)](/mnt/s/Development/GuardianAgent/docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md)
+**Current as-built references:** [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md)
 
 This proposal is still forward-looking. Guardian already ships some direct CLI/native tool patterns, but the proposal's main GitHub CLI adapter direction is not implemented as a dedicated built-in tool surface yet.
 
@@ -27,12 +27,10 @@ GuardianAgent's MCP client (`src/tools/mcp-client.ts`) implements a full JSON-RP
 
 GuardianAgent already has a proven CLI-native pattern that avoids all of the above:
 
-**GWSService** (`src/runtime/gws-service.ts`, 240 lines) wraps the `gws` CLI as a direct subprocess:
-- Two registered tools: `gws` (execute) + `gws_schema` (discover API schema)
-- Platform-aware execution: `execFile` on Linux/macOS, `exec` with shell quoting on Windows
-- JSON output parsing with raw text fallback
-- Custom per-operation approval logic in `decideGwsTool()` (Gmail sends always gated, writes gated in non-autonomous mode)
-- No persistent process, no protocol layer, no handshake
+GuardianAgent already ships several direct native/CLI-style patterns that avoid MCP overhead:
+- native Google and Microsoft services exposed through curated first-party tools
+- direct subprocess-backed network/system tooling where Guardian remains the approval and audit boundary
+- `shell_safe` for tightly allowlisted CLI access without a separate JSON-RPC transport
 
 **Network tools** (`net_ping`, `net_arp_scan`, etc.) follow the same pattern — detect platform, build command, run via `sandboxExec()`, parse output.
 

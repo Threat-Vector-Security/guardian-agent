@@ -3,7 +3,7 @@
 **Status:** Published  
 **Date:** 2026-04-03  
 **Origin:** Guardian repo architecture review plus comparative analysis of external agent-runtime patterns for prompt weight, memory hygiene, and orchestration structure  
-**Companion specs:** [Context Assembly Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md), [Memory System Guide](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md), [Orchestration Specification](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+**Companion designs:** [CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md), [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ## Objective
 
@@ -164,7 +164,7 @@ Shrink the heavy default operational sections that do not need to be fully expan
 ### Likely files
 
 - `src/tools/executor.ts`
-- future `src/tools/helpers/tool-context.ts`
+- future extraction around `src/tools/tool-context.ts`
 - provider control-plane helpers
 - relevant tool-context tests
 

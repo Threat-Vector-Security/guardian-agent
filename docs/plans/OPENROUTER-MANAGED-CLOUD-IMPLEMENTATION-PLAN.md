@@ -394,7 +394,7 @@ The model-selection policy must talk about managed-cloud behavior, not Ollama Cl
 - `web/public/js/pages/config.js`
 - web API payload types in `src/channels/web-types.ts`
 - any setup dashboard callbacks that assume Ollama Cloud is the only managed-cloud provider
-- `docs/specs/WEBUI-DESIGN-SPEC.md` if the implementation requires spec wording updates
+- `docs/design/WEBUI-DESIGN.md` if the implementation requires spec wording updates
 - `src/reference-guide.ts`
 
 ## Phase 5: Managed-Cloud Auto-Selection Policy Generalization

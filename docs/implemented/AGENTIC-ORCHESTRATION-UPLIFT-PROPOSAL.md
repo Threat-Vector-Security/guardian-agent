@@ -2,6 +2,7 @@
 
 **Status:** Implemented
 **Date:** 2026-03-16
+**Associated designs:** [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [AUTOMATION-FRAMEWORK-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/AUTOMATION-FRAMEWORK-DESIGN.md)
 **Informed by:**
 - GuardianAgent automation, orchestration, scheduling, and control-plane runtime
 - internal orchestration research across public agent and workflow frameworks
@@ -533,10 +534,10 @@ Exit criteria:
 - `README.md`
 - `SECURITY.md`
 - `docs/architecture/OVERVIEW.md`
-- `docs/architecture/AUTOMATION-AUTHORING-COMPILER.md`
-- `docs/specs/AUTOMATION-FRAMEWORK-SPEC.md`
-- `docs/specs/ORCHESTRATION-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+- `docs/design/AUTOMATION-AUTHORING-COMPILER-DESIGN.md`
+- `docs/design/AUTOMATION-FRAMEWORK-DESIGN.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 - `docs/guides/INTEGRATION-TEST-HARNESS.md`
 
 ---

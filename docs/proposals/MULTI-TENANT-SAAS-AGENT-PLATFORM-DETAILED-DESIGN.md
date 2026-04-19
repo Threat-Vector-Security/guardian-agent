@@ -9,8 +9,8 @@
 - [AWS Bedrock Provider - Implementation Plan](/mnt/s/Development/GuardianAgent/docs/plans/AWS-BEDROCK-PROVIDER-IMPLEMENTATION-PLAN.md)
 - [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
 - [ZeroTrustAgent-Inspired Uplifts for GuardianAgent](/mnt/s/Development/GuardianAgent/docs/proposals/ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md)
-- [Identity & Memory Spec](/mnt/s/Development/GuardianAgent/docs/specs/IDENTITY-MEMORY-SPEC.md)
-- [Web Auth Configuration Spec](/mnt/s/Development/GuardianAgent/docs/specs/WEB-AUTH-CONFIG-SPEC.md)
+- [Identity & Memory Spec](/mnt/s/Development/GuardianAgent/docs/design/IDENTITY-MEMORY-DESIGN.md)
+- [Web Auth Configuration Spec](/mnt/s/Development/GuardianAgent/docs/design/WEB-AUTH-CONFIG-DESIGN.md)
 
 ## Executive Summary
 

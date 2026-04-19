@@ -2,14 +2,14 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-29  
-**Detailed design target:** [Intelligence In Depth Specification](/mnt/s/Development/GuardianAgent/docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md)  
+**Detailed design target:** [Intelligence In Depth Specification](/mnt/s/Development/GuardianAgent/docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md)  
 **Supersedes:**
 - `BitNet CPU Decision Lane Proposal` (removed)
 - `Built-in BitNet Model Proposal` (removed)
 
 **Informed by:**
-- [Agentic Defensive Security Suite - As-Built Spec](../specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
-- [Orchestration Specification](../specs/ORCHESTRATION-SPEC.md)
+- [Agentic Defensive Security Suite - As-Built Spec](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+- [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md)
 - [Intent Gateway](../../src/runtime/intent-gateway.ts)
 - [Provider Registry](../../src/llm/provider-registry.ts)
 - [LLM Types](../../src/llm/types.ts)

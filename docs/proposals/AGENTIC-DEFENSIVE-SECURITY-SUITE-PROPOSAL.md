@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-19
 **Status:** Draft
-**Cross-references:** [Security Detection And Threat Sharing Uplift Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md), [As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
+**Cross-references:** [Security Detection And Threat Sharing Uplift Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md), [As-Built Spec](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
 
 ---
 

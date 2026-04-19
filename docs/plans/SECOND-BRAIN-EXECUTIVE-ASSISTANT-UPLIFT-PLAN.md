@@ -4,9 +4,9 @@
 **Status:** Draft  
 **Origin:** Follow-up plan after the current `Second Brain` implementation pass, routine lifecycle testing, and UX review of the `Routines` surface  
 **Primary related plans:** [Second Brain Implementation Plan](./SECOND-BRAIN-IMPLEMENTATION-PLAN.md), [Cross-Surface Continuity Uplift Plan](./CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md), [Background Delegation Uplift Plan](./BACKGROUND-DELEGATION-UPLIFT-PLAN.md)  
-**Primary as-built reference:** [Second Brain As-Built Specification](../specs/SECOND-BRAIN-AS-BUILT-SPEC.md)  
+**Primary as-built reference:** [Second Brain As-Built Specification](../design/SECOND-BRAIN-AS-BUILT.md)  
 **Key files:** `src/runtime/second-brain/second-brain-service.ts`, `src/runtime/second-brain/briefing-service.ts`, `src/runtime/second-brain/horizon-scanner.ts`, `src/runtime/second-brain/sync-service.ts`, `src/runtime/second-brain/types.ts`, `src/runtime/assistant-jobs.ts`, `src/runtime/notifications.ts`, `src/tools/builtin/second-brain-tools.ts`, `src/chat-agent.ts`, `src/channels/web-types.ts`, `src/channels/web.ts`, `web/public/js/pages/second-brain.js`, `src/reference-guide.ts`  
-**Primary specs impacted:** `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`, `docs/specs/WEBUI-DESIGN-SPEC.md`, `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md`
+**Primary specs impacted:** `docs/design/SECOND-BRAIN-AS-BUILT.md`, `docs/design/WEBUI-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`
 
 ---
 

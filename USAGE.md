@@ -43,7 +43,7 @@ The web `Code` page is the dedicated client for backend-owned coding sessions ra
 - broader Guardian actions such as research, automation creation, and other assistant tasks can still be performed from the Coding Assistant without replacing the session's repo anchor
 - main chat, CLI, and Telegram can attach to the same backend coding session and continue its transcript, but they remain their own chat surfaces rather than the full Code-page workspace UI
 
-Current implementation details are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md).
+Current implementation details are documented in [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md).
 
 ## Operator Surfaces
 

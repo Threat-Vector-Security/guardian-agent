@@ -3,7 +3,7 @@
 **Date:** 2026-04-07
 **Status:** Draft
 **Inspired by:** MemPalace (conceptually, not as a direct implementation dependency)
-**Cross-references:** [Memory System Guide](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md), [Second Brain Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECOND-BRAIN-PROPOSAL.md), [Backend-Owned Coding Sessions Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [src/runtime/agent-memory-store.ts](/mnt/s/Development/GuardianAgent/src/runtime/agent-memory-store.ts), [src/search/search-service.ts](/mnt/s/Development/GuardianAgent/src/search/search-service.ts)
+**Cross-references:** [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [Second Brain Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECOND-BRAIN-PROPOSAL.md), [Backend-Owned Coding Sessions Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [src/runtime/agent-memory-store.ts](/mnt/s/Development/GuardianAgent/src/runtime/agent-memory-store.ts), [src/search/search-service.ts](/mnt/s/Development/GuardianAgent/src/search/search-service.ts)
 
 ---
 
@@ -537,7 +537,7 @@ Likely touched modules:
 - `src/runtime/dashboard-dispatch.ts`
 - `src/runtime/run-timeline.ts`
 - `web/public/js/pages/memory.js`
-- `docs/guides/MEMORY-SYSTEM.md`
+- `docs/design/MEMORY-SYSTEM-DESIGN.md`
 
 Likely search reuse points:
 

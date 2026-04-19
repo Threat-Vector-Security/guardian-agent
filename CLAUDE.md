@@ -43,7 +43,7 @@ Before making large structural changes, also read `docs/architecture/FORWARD-ARC
 
 Before adding any new capability, read `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`. It is the single source of truth for adding tools, skills, integrations, routes, maintenance jobs, and control-plane surfaces.
 
-Before changing the web surface, read `docs/specs/WEBUI-DESIGN-SPEC.md`. It is the source of truth for left-nav structure, canonical page ownership, guidance/help patterns, and current visual/interaction standards. Do not add or reshuffle pages, tabs, or duplicate control planes without aligning the implementation to that spec or updating the spec in the same change.
+Before changing the web surface, read `docs/design/WEBUI-DESIGN.md`. It is the source of truth for left-nav structure, canonical page ownership, guidance/help patterns, and current visual/interaction standards. Do not add or reshuffle pages, tabs, or duplicate control planes without aligning the implementation to that spec or updating the spec in the same change.
 
 ### Runtime Bootstrap (`src/index.ts`)
 
@@ -66,7 +66,7 @@ Not acceptable by default:
 - bypassing control-plane services with direct config writes
 - adding pre-gateway keyword/regex routing because a path is flaky
 
-If the correct fix genuinely requires changing the architecture, make that explicit and update the relevant docs/specs in the same change. Read `docs/architecture/FORWARD-ARCHITECTURE.md` for ownership and module boundaries, and read `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` before changing deferred tool loading, always-loaded tool sets, tool discovery, approval UX, or tool control-plane behavior.
+If the correct fix genuinely requires changing the architecture, make that explicit and update the relevant docs/specs in the same change. Read `docs/architecture/FORWARD-ARCHITECTURE.md` for ownership and module boundaries, and read `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` before changing deferred tool loading, always-loaded tool sets, tool discovery, approval UX, or tool control-plane behavior.
 
 ### Event-Driven Runtime
 - **Runtime** (`src/runtime/runtime.ts`) — central orchestrator, every message/event/response passes through it
@@ -117,7 +117,7 @@ For web-only issues, pair the trace with server/channel inspection and `web/publ
 ### Tool Performance
 - **Deferred Loading**: 10 always-loaded tools sent to LLM (`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`). All other 60+ tools discovered via `find_tools` meta-tool.
 - **Compact Deferred Inventory**: Both local and external providers also receive a compact deferred-tool manifest in `<tool-context>` listing deferred tool names by category. This is discovery guidance only — schemas remain deferred and the model must still use `find_tools` before calling a deferred tool that is not already loaded.
-- Treat the deferred-loading design as intentional architecture, not a tuning detail. If tool discoverability is failing, fix the discovery/planner path first. Only change the always-loaded set when that is a deliberate architecture/spec decision, and update `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` in the same change.
+- Treat the deferred-loading design as intentional architecture, not a tuning detail. If tool discoverability is failing, fix the discovery/planner path first. Only change the always-loaded set when that is a deliberate architecture/spec decision, and update `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` in the same change.
 - **Parallel Execution**: Multiple tool calls per LLM response executed concurrently via `Promise.allSettled()`
 - **Short Descriptions**: `ToolDefinition.shortDescription` field used for LLM context to reduce token usage
 - **Tool Examples**: `ToolDefinition.examples` field provides usage patterns for complex tools
@@ -158,17 +158,16 @@ For web-only issues, pair the trace with server/channel inspection and `web/publ
 - MCP tool risk is inferred from tool metadata (`read_only`, `mutating`, `external_post`) with optional per-server trust overrides and rate limits
 
 ### Google Workspace (`src/google/`)
-- **Native mode (default):** `GoogleAuth` (OAuth 2.0 PKCE, encrypted token storage) + `GoogleService` (direct googleapis SDK calls). Config: `assistant.tools.google` (enabled, mode: `native`, services, oauthCallbackPort, credentialsPath). 3-step setup.
-- **CLI mode (legacy):** `GWSService` (`src/runtime/gws-service.ts`) — subprocess wrapper for the `gws` CLI. Config: `assistant.tools.mcp.managedProviders.gws`.
-- Both backends share the same `gws` / `gws_schema` tool names. ToolExecutor routes to native first, CLI fallback.
-- Spec: `docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md`
+- **Current implementation:** `GoogleAuth` (OAuth 2.0 PKCE, encrypted token storage) + `GoogleService` (direct Google API calls). Config: `assistant.tools.google` (`enabled`, `services`, `oauthCallbackPort`, `credentialsPath`). Tools: `gws`, `gws_schema`, `gmail_draft`.
+- **Historical background:** the older CLI-backed design is retained only as documentation in `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`.
+- Design: `docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md`
 
 ### Microsoft 365 (`src/microsoft/`)
 - **Native mode:** `MicrosoftAuth` (OAuth 2.0 PKCE, encrypted token storage) + `MicrosoftService` (direct Graph REST API calls). Config: `assistant.tools.microsoft` (enabled, services, oauthCallbackPort, clientId, tenantId).
 - No MSAL, no Graph SDK, no `@azure/identity` — hand-rolled PKCE + direct `fetch()` to `graph.microsoft.com/v1.0`.
 - Tools: `m365` (generic Graph API), `m365_schema` (curated endpoint reference), `outlook_draft`, `outlook_send` (convenience email tools).
 - 3-step setup: register app in Entra → enter client ID → connect via OAuth.
-- Spec: `docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md`
+- Design: `docs/design/MICROSOFT-365-INTEGRATION-DESIGN.md`
 
 ### Browser Automation (MCP-based)
 - **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing the browser transport for Guardian's wrapper tools. Registered internally as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`
@@ -176,7 +175,7 @@ For web-only issues, pair the trace with server/channel inspection and `web/publ
 - Browser tooling runs as a stdio subprocess via MCPClientManager — no custom browser engine in-process
 - Policy rules in `policies/base/browser.json`: `browser_run_code` denied, `browser_evaluate` requires approval, `browser_file_upload` and `browser_storage_state` require approval
 - Start scripts auto-install Playwright Chromium binary on first run
-- Spec: `docs/specs/BROWSER-AUTOMATION-SPEC.md`
+- Design: `docs/design/BROWSER-AUTOMATION-DESIGN.md`
 
 ### Channel Adapters
 - **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc. Blocked work is surfaced through `response.metadata.pendingAction`; approval blockers use the inline `Approve (y) / Deny (n):` prompt.
@@ -194,7 +193,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Reference Guide** (`#/reference`) — wiki-style operator guide backed by `src/reference-guide.ts`; update it whenever user-facing capabilities, workflows, controls, output handling, or export behavior changes anywhere in the app
 - **Chat** — persistent right panel
 
-When this section drifts from `docs/specs/WEBUI-DESIGN-SPEC.md`, the spec wins. Treat the list above as descriptive of the codebase, not as permission to diverge from the spec.
+When this section drifts from `docs/design/WEBUI-DESIGN.md`, the spec wins. Treat the list above as descriptive of the codebase, not as permission to diverge from the spec.
 
 ### Memory System
 - **FTS5 Search**: Full-text search index on conversation_messages with BM25 ranking, porter stemming, content-sync triggers
@@ -202,7 +201,7 @@ When this section drifts from `docs/specs/WEBUI-DESIGN-SPEC.md`, the spec wins. 
 - **Memory Flush**: Automatic extraction of dropped context to knowledge base when sliding window trims history
 - **Memory Tools**: `memory_search` (FTS5 query), `memory_get` (read knowledge base), `memory_save` (persist facts) — all Guardian-gated, with tool-result scanning before memory content re-enters LLM context
 - **Config**: `assistant.memory.knowledgeBase` — enable/disable, maxContextChars, autoFlush
-- See `docs/guides/MEMORY-SYSTEM.md` for full documentation
+- See `docs/design/MEMORY-SYSTEM-DESIGN.md` for full documentation
 
 ### Document Search
 - **SearchService** (`src/search/search-service.ts`) — native TypeScript hybrid search pipeline
@@ -285,7 +284,7 @@ See README.md for the full config reference.
 - Keep `src/reference-guide.ts` in sync with the app. Any change to user-facing behavior, workflows, controls, tool output, exports, automation behavior, or navigation should include a Reference Guide update in the same change.
 - If a feature is exposed in multiple channels, document the shared behavior once in the Reference Guide and keep channel-specific notes aligned in the relevant docs.
 - Keep `docs/architecture/FORWARD-ARCHITECTURE.md` aligned with the intended target structure as modularization work lands, and keep `docs/architecture/OVERVIEW.md` aligned with what currently ships.
-- Keep `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` aligned with any intentional changes to tool discovery, deferred-loading, always-loaded tools, approval UX, or tool control-plane behavior. Do not let code silently drift from the spec.
+- Keep `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` aligned with any intentional changes to tool discovery, deferred-loading, always-loaded tools, approval UX, or tool control-plane behavior. Do not let code silently drift from the spec.
 
 ## Testing
 

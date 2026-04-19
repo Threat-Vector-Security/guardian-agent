@@ -3,8 +3,8 @@
 **Status:** Proposed
 **Date:** 2026-03-19
 **Informed by:**
-- [Microsoft 365 Integration Spec](../specs/MICROSOFT-365-INTEGRATION-SPEC.md)
-- [Cloud & Hosting Integration Spec](../specs/CLOUD-HOSTING-INTEGRATION-SPEC.md)
+- [Microsoft 365 Integration Spec](../design/MICROSOFT-365-INTEGRATION-DESIGN.md)
+- [Cloud & Hosting Integration Spec](../design/CLOUD-HOSTING-INTEGRATION-DESIGN.md)
 - [LLM Provider Types](../../src/llm/types.ts)
 - [Microsoft 365 Copilot APIs overview](https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/copilot-apis-overview)
 - [Microsoft 365 Copilot Chat API overview](https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/overview)
@@ -116,7 +116,7 @@ GuardianAgent already has a native Microsoft 365 integration:
 
 This path is explicitly Graph business-data integration, not Copilot:
 
-- [MICROSOFT-365-INTEGRATION-SPEC.md](../specs/MICROSOFT-365-INTEGRATION-SPEC.md) defines it as direct Graph integration for mail, calendar, OneDrive, contacts, and Teams
+- [MICROSOFT-365-INTEGRATION-DESIGN.md](../design/MICROSOFT-365-INTEGRATION-DESIGN.md) defines it as direct Graph integration for mail, calendar, OneDrive, contacts, and Teams
 - [src/microsoft/microsoft-service.ts](../../src/microsoft/microsoft-service.ts) targets `graph.microsoft.com/v1.0`
 - [src/microsoft/microsoft-auth.ts](../../src/microsoft/microsoft-auth.ts) implements PKCE using `clientId`, `tenantId`, and localhost callback
 

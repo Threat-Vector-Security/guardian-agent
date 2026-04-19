@@ -14,9 +14,9 @@
 - `src/skills/prompt.ts`
 **Related docs:**
 - `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`
-- `docs/specs/SKILLS-SPEC.md`
-- `docs/specs/ORCHESTRATION-SPEC.md`
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+- `docs/design/SKILLS-DESIGN.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 - `docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md`
 - `docs/proposals/ORCHESTRATION-AND-DELEGATION-CAPABILITY-UPLIFTS-PROPOSAL.md`
 - `docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md`
@@ -64,10 +64,10 @@ The gap is:
 
 The current docs impose hard constraints:
 
-- `docs/specs/SKILLS-SPEC.md` explicitly says a skill cannot bypass Guardian, cannot directly expand capabilities, and cannot create new tools at runtime
+- `docs/design/SKILLS-DESIGN.md` explicitly says a skill cannot bypass Guardian, cannot directly expand capabilities, and cannot create new tools at runtime
 - `docs/guides/CAPABILITY-AUTHORING-GUIDE.md` requires new capabilities to live in the owning runtime layer, use control-plane services for mutation, and preserve audit, approvals, and sandbox boundaries
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` requires tool discovery to stay curated and deferred-loaded rather than bypassing `find_tools`
-- `docs/specs/ORCHESTRATION-SPEC.md` requires blocked work and delegated follow-up to stay inside the shared orchestration model
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` requires tool discovery to stay curated and deferred-loaded rather than bypassing `find_tools`
+- `docs/design/ORCHESTRATION-DESIGN.md` requires blocked work and delegated follow-up to stay inside the shared orchestration model
 
 Any uplift that weakens those rules would be a regression.
 

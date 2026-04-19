@@ -4,7 +4,7 @@
  * Handles the full OAuth lifecycle: authorization URL generation, localhost
  * callback, token exchange, encrypted storage, and transparent refresh.
  *
- * Spec: docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md
+ * Spec: docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md
  */
 
 import { createServer, type Server } from 'node:http';

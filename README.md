@@ -32,7 +32,7 @@ Second Brain (`#/`) is the default web home.
 - `Notes` keeps searchable, pinnable, and archivable notes in one place
 - `Contacts`, `Library`, `Briefs`, and `Routines` round out the daily-use memory and upkeep workflow
 - Keep daily context separate from the operator and workstation consoles
-- Further reading: [Second Brain As-Built Spec](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md)
+- Further reading: [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md)
 
 <p align="center">
   <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134400.png">
@@ -81,10 +81,10 @@ Second Brain (`#/`) is the default web home.
 
 ### Power User Capabilities
 
-- `Performance` (`#/performance`) for workstation health, editable profiles, live processes, and reviewed cleanup. See [Performance Management Spec](docs/specs/PERFORMANCE-MANAGEMENT-SPEC.md).
-- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, and terminals. See [Coding Workspace Spec](docs/specs/CODING-WORKSPACE-SPEC.md).
-- `Automations` (`#/automations`) for saved and scheduled Guardian workflows and assistant tasks. See [Automation Framework Spec](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md).
-- `Security`, `Network`, and `Cloud` for alerts, posture, diagnostics, and infrastructure oversight. Start with [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md) and [SECURITY.md](SECURITY.md).
+- `Performance` (`#/performance`) for workstation health, editable profiles, live processes, and reviewed cleanup. See [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md).
+- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, and terminals. See [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md).
+- `Automations` (`#/automations`) for saved and scheduled Guardian workflows and assistant tasks. See [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md).
+- `Security`, `Network`, and `Cloud` for alerts, posture, diagnostics, and infrastructure oversight. Start with [WebUI Design](docs/design/WEBUI-DESIGN.md) and [SECURITY.md](SECURITY.md).
 - `Configuration` and `Reference Guide` for setup, integrations, policy, and operator guidance.
 
 ### Shared Assistant
@@ -92,7 +92,7 @@ Second Brain (`#/`) is the default web home.
 - Web, CLI, and Telegram all use the same guarded assistant model
 - Local, managed-cloud, and frontier LLM providers are supported, including Ollama, Ollama Cloud, Anthropic, OpenAI, and others
 - Built-in tools, integrations, memory, and automations stay behind approval and policy controls
-- More detail: [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md), [Tools Control Plane Spec](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- More detail: [WebUI Design](docs/design/WEBUI-DESIGN.md), [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ## Screenshots
 
@@ -271,13 +271,13 @@ GuardianAgent is accessible through three channels:
 - Use the Coding Assistant for repository-scoped work with editor, diffing, approvals, checks, and terminals
 - Run guarded tools, integrations, search, and automation workflows across the same assistant
 
-**Approvals and safety:** Actions may run automatically, wait for approval, or be denied depending on policy, trust level, and tool risk. For the detailed behavior, see [SECURITY.md](SECURITY.md) and [Tools Control Plane Spec](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md).
+**Approvals and safety:** Actions may run automatically, wait for approval, or be denied depending on policy, trust level, and tool risk. For the detailed behavior, see [SECURITY.md](SECURITY.md) and [Tools Control Plane Design](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md).
 
 ### Coding Assistant
 
 The web `Code` page is a dedicated repo-scoped workspace with its own session context, editor, diffing, approvals, checks, and terminals.
 
-Implementation detail and current limitations are documented in [docs/specs/CODING-WORKSPACE-SPEC.md](docs/specs/CODING-WORKSPACE-SPEC.md).
+Implementation detail and current limitations are documented in [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md).
 
 ### Telegram Setup
 
@@ -349,20 +349,20 @@ writable_roots:                # merged into allowedPaths + sandbox writePaths
 The default runtime stays brokered with a `workspace-write` sandbox profile and permissive enforcement. Set `sandbox_mode: strict` when you want risky subprocess-backed tools to fail closed unless a strong sandbox backend is available.
 
 For detailed configuration documentation:
-- [Configuration Center Spec](docs/specs/CONFIG-CENTER-SPEC.md)
-- [Setup Wizard Spec](docs/specs/SETUP-WIZARD-SPEC.md)
+- [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md)
+- [Setup Wizard Spec](docs/design/SETUP-WIZARD-DESIGN.md)
 
 ---
 
 ## Further Reading
 
 - [SECURITY.md](SECURITY.md) for the security model and trust boundaries
-- [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md) for page ownership and product-surface design
-- [Second Brain As-Built Spec](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md) for the daily-home experience
-- [Performance Management Spec](docs/specs/PERFORMANCE-MANAGEMENT-SPEC.md) for workstation operations
-- [Coding Workspace Spec](docs/specs/CODING-WORKSPACE-SPEC.md) for the repo-scoped IDE surface
-- [Automation Framework Spec](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md) for saved and scheduled automation behavior
-- [Configuration Center Spec](docs/specs/CONFIG-CENTER-SPEC.md) for setup, integrations, and policy controls
+- [WebUI Design](docs/design/WEBUI-DESIGN.md) for page ownership and product-surface design
+- [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md) for the daily-home experience
+- [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md) for workstation operations
+- [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md) for the repo-scoped IDE surface
+- [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md) for saved and scheduled automation behavior
+- [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md) for setup, integrations, and policy controls
 - [docs/](docs/) for the full architecture, specs, guides, proposals, and research set
 
 ---

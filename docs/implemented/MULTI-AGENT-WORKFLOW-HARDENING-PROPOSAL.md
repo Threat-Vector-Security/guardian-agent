@@ -8,7 +8,7 @@
 
 Update 2026-03-24:
 - The proposal is retained for rationale, but the core hardening items are now implemented.
-- See [MULTI-AGENT-WORKFLOW-HARDENING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/MULTI-AGENT-WORKFLOW-HARDENING-SPEC.md) for current status.
+- See [MULTI-AGENT-WORKFLOW-HARDENING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MULTI-AGENT-WORKFLOW-HARDENING-DESIGN.md) for current status.
 
 ---
 

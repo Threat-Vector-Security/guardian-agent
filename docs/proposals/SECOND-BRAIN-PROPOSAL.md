@@ -4,10 +4,10 @@
 **Date:** 2026-04-04  
 **Related:**
 - [Capability Authoring Guide](../guides/CAPABILITY-AUTHORING-GUIDE.md)
-- [Intent Gateway And Smart Routing Specification](../specs/INTENT-GATEWAY-ROUTING-SPEC.md)
+- [Intent Gateway And Smart Routing Specification](../design/INTENT-GATEWAY-ROUTING-DESIGN.md)
 - [Architecture Overview](../architecture/OVERVIEW.md)
 - [Forward Architecture](../architecture/FORWARD-ARCHITECTURE.md)
-- [Web UI Design Spec](../specs/WEBUI-DESIGN-SPEC.md)
+- [Web UI Design Spec](../design/WEBUI-DESIGN.md)
 - [Cross-Surface Continuity Uplift Plan](../plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md)
 - [Memory System Uplift Plan](../plans/MEMORY-SYSTEM-UPLIFT-PLAN.md)
 - [Memory Artifact Wiki Uplift Plan](../plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md)
@@ -32,8 +32,8 @@
 - [web/public/index.html](../../web/public/index.html)
 - [web/public/js/pages/memory.js](../../web/public/js/pages/memory.js)
 - [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
-- [Trust Presets Spec](../specs/TRUST-PRESETS-SPEC.md)
-- [Tools Control Plane Spec](../specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [Trust Presets Spec](../design/TRUST-PRESETS-DESIGN.md)
+- [Tools Control Plane Spec](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 **External product and OSS signals:**
 - [Motion auto-scheduling](https://www.usemotion.com/help/time-management/auto-scheduling)

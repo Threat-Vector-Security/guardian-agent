@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-12  
 **Type:** External repo comparison and Guardian-fit assessment  
-**Guardian sources reviewed:** `docs/specs/CODING-WORKSPACE-SPEC.md`, `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`, `docs/plans/SECOND-BRAIN-IMPLEMENTATION-PLAN.md`, `docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md`, `docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md`, `src/runtime/second-brain/*`, `web/public/js/pages/second-brain.js`  
+**Guardian sources reviewed:** `docs/design/CODING-WORKSPACE-DESIGN.md`, `docs/design/SECOND-BRAIN-AS-BUILT.md`, `docs/plans/SECOND-BRAIN-IMPLEMENTATION-PLAN.md`, `docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md`, `docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md`, `src/runtime/second-brain/*`, `web/public/js/pages/second-brain.js`  
 **External repos cloned locally:** `/mnt/s/Development/second-brain-starter`, `/mnt/s/Development/Archon`
 
 ## Repos Reviewed
@@ -48,7 +48,7 @@ The important conclusion is that the repo solves the "what should my assistant b
 
 ## Guardian `Second Brain`: Current Baseline
 
-Guardian already ships a meaningful `Second Brain` surface, documented in `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`.
+Guardian already ships a meaningful `Second Brain` surface, documented in `docs/design/SECOND-BRAIN-AS-BUILT.md`.
 
 Current strengths:
 
@@ -122,7 +122,7 @@ Guardian-fit implementation areas:
 - `src/search/search-service.ts`
 - `src/runtime/second-brain/*`
 - `web/public/js/pages/second-brain.js`
-- `docs/specs/CONFIG-CENTER-SPEC.md` search/reranker settings
+- `docs/design/CONFIG-CENTER-DESIGN.md` search/reranker settings
 
 This is the most direct path from today's `Second Brain` into the article's "corporate archive" experience.
 
@@ -199,7 +199,7 @@ Recommended uplift:
   - artifacts produced
   - delivery outcome
 
-This aligns with the future direction already documented in `docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md`.
+This aligns with the future direction already documented in `docs/design/SECOND-BRAIN-AS-BUILT.md`.
 
 ### Priority 7: Enforce budget policy, not just usage visibility
 
@@ -253,7 +253,7 @@ Guardian already has the right architectural center of gravity for safe coding w
 - shared pending action and approval model
 - shared run timeline and delegated job visibility
 - cross-surface attach/resume model
-- documented future `primary` / `referenced` / `child lane` portfolio model in `docs/specs/CODING-WORKSPACE-SPEC.md`
+- documented future `primary` / `referenced` / `child lane` portfolio model in `docs/design/CODING-WORKSPACE-DESIGN.md`
 
 That means Guardian should not import Archon as a second orchestration runtime. It should selectively absorb product patterns into the existing shared state model.
 
@@ -283,7 +283,7 @@ Guardian-fit implementation areas:
 
 - `src/runtime/workflows.ts`
 - `src/runtime/run-timeline.ts`
-- `docs/specs/CODING-WORKSPACE-SPEC.md`
+- `docs/design/CODING-WORKSPACE-DESIGN.md`
 - `docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md`
 
 The key is to keep these as Guardian-owned, curated recipes rather than importing Archon's whole YAML runtime semantics.
@@ -302,7 +302,7 @@ Recommended uplift:
 - keep the default foreground experience on the current attached workspace
 - require explicit lane creation for isolated mutation
 
-This maps cleanly to the portfolio direction already present in `docs/specs/CODING-WORKSPACE-SPEC.md`.
+This maps cleanly to the portfolio direction already present in `docs/design/CODING-WORKSPACE-DESIGN.md`.
 
 Guardrail:
 

@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Date:** 2026-04-07  
-**Primary references:** [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md), `/mnt/s/Development/awesome-design-md`
+**Primary references:** [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md), `/mnt/s/Development/awesome-design-md`
 
 ## Objective
 
@@ -153,7 +153,7 @@ Changes needed:
 
 Primary spec targets:
 
-- [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md)
+- [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
 - any derived appearance copy in [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
 
 ## Delivery Phases
@@ -181,7 +181,7 @@ Define the governed appearance surface before implementation starts.
 
 ### Likely implementation areas
 
-- [docs/specs/WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md)
+- [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
 - [web/public/js/theme.js](/mnt/s/Development/GuardianAgent/web/public/js/theme.js)
 - [web/public/js/monaco-themes.js](/mnt/s/Development/GuardianAgent/web/public/js/monaco-themes.js)
 - [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)

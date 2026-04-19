@@ -4,7 +4,7 @@
 **Date:** 2026-04-14  
 **Primary external references:** [IntentKit](https://github.com/crestalnetwork/intentkit), [IntentKit docs](https://docs.intentkit.io/), [Composio](https://github.com/ComposioHQ/composio), [Composio docs](https://docs.composio.dev/docs/toolkits/custom-tools-and-toolkits)  
 **Secondary external references:** Open Agents snapshot-backed sandbox startup research at commit `45f687b5`, Daytona TypeScript SDK docs, Vercel sandbox docs  
-**Related Guardian docs:** [INTENT-GATEWAY-ROUTING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md), [TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [BROKERED-AGENT-ISOLATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md), [SECURITY-ISOLATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-ISOLATION-SPEC.md), [CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md), [CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [REMOTE-SANDBOXING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/REMOTE-SANDBOXING-SPEC.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
+**Related Guardian docs:** [INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md), [SECURITY-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-ISOLATION-DESIGN.md), [CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [REMOTE-SANDBOXING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/REMOTE-SANDBOXING-DESIGN.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
 
 ## Objective
 
@@ -301,7 +301,7 @@ The uplift must not do any of the following:
 
 ## Security Compliance Check
 
-This uplift remains compliant with [SECURITY-ISOLATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-ISOLATION-SPEC.md) only if these constraints stay true throughout implementation:
+This uplift remains compliant with [SECURITY-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-ISOLATION-DESIGN.md) only if these constraints stay true throughout implementation:
 
 - Guardian keeps control-plane ownership of routing, approvals, pending actions, audit, policy, memory, secret resolution, and final output scanning.
 - Extra LLM turns for route extraction or clarification stay in Guardian-owned or broker-proxied provider paths. They do not give workers or sandboxes direct provider authority.
@@ -354,9 +354,9 @@ Split top-level route classification from route-specific entity resolution.
 
 ### Documentation to update in same phase
 
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md`
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
 
 ### Exit criteria
@@ -388,9 +388,9 @@ Move critical entity inference and repair into route-specific resolvers.
 
 ### Documentation to update in same phase
 
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
 - `docs/architecture/OVERVIEW.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md` if resolver ownership or route-to-execution handoff contracts change
+- `docs/design/SECURITY-ISOLATION-DESIGN.md` if resolver ownership or route-to-execution handoff contracts change
 - `src/reference-guide.ts` when user-visible routing behavior changes
 
 ### Exit criteria
@@ -428,9 +428,9 @@ Suggested patch/provenance model:
 
 ### Documentation to update in same phase
 
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md` if clarification ownership or cross-boundary state handling changes
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md` if clarification ownership or cross-boundary state handling changes
 - `docs/guides/INTEGRATION-TEST-HARNESS.md`
 
 ### Exit criteria
@@ -462,9 +462,9 @@ Move tool-family, provider-session, and sandbox-lane decisions out of the gatewa
 
 ### Documentation to update in same phase
 
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md`
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
 
 ### Exit criteria
@@ -496,8 +496,8 @@ Make planner execution contract-bound and broker-safe.
 
 ### Documentation to update in same phase
 
-- `docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md`
+- `docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md`
 - `SECURITY.md`
 - `docs/architecture/OVERVIEW.md`
 
@@ -532,11 +532,11 @@ Apply the reusable sandbox and snapshot-backed patterns in the correct layer.
 
 ### Documentation to update in same phase
 
-- `docs/specs/REMOTE-SANDBOXING-SPEC.md`
-- `docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md`
-- `docs/specs/CODING-WORKSPACE-SPEC.md`
-- `docs/specs/SECURITY-ISOLATION-SPEC.md`
-- `docs/specs/WEBUI-DESIGN-SPEC.md`
+- `docs/design/REMOTE-SANDBOXING-DESIGN.md`
+- `docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md`
+- `docs/design/CODING-WORKSPACE-DESIGN.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md`
+- `docs/design/WEBUI-DESIGN.md`
 - `docs/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md` if it remains the historical implementation record
 
 ### Exit criteria
@@ -566,7 +566,7 @@ Make the new staged architecture visible to operators and developers.
 
 ### Documentation to update in same phase
 
-- `docs/specs/WEBUI-DESIGN-SPEC.md`
+- `docs/design/WEBUI-DESIGN.md`
 - `docs/guides/INTEGRATION-TEST-HARNESS.md`
 - `src/reference-guide.ts`
 
@@ -620,19 +620,19 @@ These are the documentation surfaces that must be treated as part of the uplift,
 - `SECURITY.md`
   Why: planner-contract hardening, staged routing, and sandbox-lifecycle ownership change the documented security story.
 
-- `docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md`
+- `docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md`
   Why: planner execution contract and worker responsibilities change.
 
-- `docs/specs/SECURITY-ISOLATION-SPEC.md`
+- `docs/design/SECURITY-ISOLATION-DESIGN.md`
   Why: the uplift adds more internal routing stages, but control-plane ownership and backend neutrality must stay explicit so routing intelligence does not drift into a second runtime.
 
-- `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`
+- `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`
   Why: this is the primary contract for the whole uplift.
 
-- `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+- `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
   Why: capability resolution, provider/tool discovery, and post-route execution ownership move here.
 
-- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+- `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`
   Why: prompt-footprint changes are a core goal of the uplift.
 
 - `docs/architecture/FORWARD-ARCHITECTURE.md`
@@ -646,10 +646,10 @@ These are the documentation surfaces that must be treated as part of the uplift,
 
 ### Update when affected by the implementation slice
 
-- `docs/specs/CODING-WORKSPACE-SPEC.md`
-- `docs/specs/REMOTE-SANDBOXING-SPEC.md`
-- `docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md`
-- `docs/specs/WEBUI-DESIGN-SPEC.md`
+- `docs/design/CODING-WORKSPACE-DESIGN.md`
+- `docs/design/REMOTE-SANDBOXING-DESIGN.md`
+- `docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md`
+- `docs/design/WEBUI-DESIGN.md`
 - `src/reference-guide.ts`
 - `docs/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md`
 

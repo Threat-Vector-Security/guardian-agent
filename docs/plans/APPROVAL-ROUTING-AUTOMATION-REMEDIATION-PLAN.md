@@ -19,10 +19,10 @@ This plan is intentionally split into:
 
 The fixes in this plan must preserve the existing security model in [SECURITY.md](../../SECURITY.md) and the brokered/supervisor-owned control model in:
 
-- [docs/specs/PENDING-ACTION-ORCHESTRATION-SPEC.md](../specs/PENDING-ACTION-ORCHESTRATION-SPEC.md)
-- [docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md](../specs/BROKERED-AGENT-ISOLATION-SPEC.md)
-- [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](../specs/TOOLS-CONTROL-PLANE-SPEC.md)
-- [docs/specs/AUTOMATION-FRAMEWORK-SPEC.md](../specs/AUTOMATION-FRAMEWORK-SPEC.md)
+- [docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md](../design/PENDING-ACTION-ORCHESTRATION-DESIGN.md)
+- [docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md](../design/BROKERED-AGENT-ISOLATION-DESIGN.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [docs/design/AUTOMATION-FRAMEWORK-DESIGN.md](../design/AUTOMATION-FRAMEWORK-DESIGN.md)
 
 Non-goals:
 

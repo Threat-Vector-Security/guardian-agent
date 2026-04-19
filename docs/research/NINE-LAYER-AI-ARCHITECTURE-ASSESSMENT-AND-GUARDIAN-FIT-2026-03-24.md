@@ -327,7 +327,7 @@ Status: solid offline base, weaker online quality loop
 Evidence:
 - `src/eval/runner.ts`
 - `src/eval/metrics.ts`
-- `docs/specs/WORKFLOW-EVALUATION-UPLIFTS-SPEC.md`
+- `docs/design/WORKFLOW-EVALUATION-UPLIFTS-DESIGN.md`
 
 What exists:
 - runtime-path eval harness

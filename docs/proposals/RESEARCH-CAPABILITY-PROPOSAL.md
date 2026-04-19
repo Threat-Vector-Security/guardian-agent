@@ -5,12 +5,12 @@
 **Inspired by:** [getcompanion-ai/feynman](https://github.com/getcompanion-ai/feynman)  
 **Related:**
 - [Capability Authoring Guide](../guides/CAPABILITY-AUTHORING-GUIDE.md)
-- [Tools Control Plane Spec](../specs/TOOLS-CONTROL-PLANE-SPEC.md)
-- [Native Skills Specification](../specs/SKILLS-SPEC.md)
-- [Orchestration Specification](../specs/ORCHESTRATION-SPEC.md)
-- [Agent Orchestration Recipes Spec](../specs/AGENT-ORCHESTRATION-RECIPES-SPEC.md)
-- [WebUI Design Spec](../specs/WEBUI-DESIGN-SPEC.md)
-- [Evidence-Grounded Playbooks Spec](../specs/EVIDENCE-GROUNDED-PLAYBOOKS-SPEC.md)
+- [Tools Control Plane Spec](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [Native Skills Specification](../design/SKILLS-DESIGN.md)
+- [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md)
+- [Agent Orchestration Recipes Spec](../design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
+- [WebUI Design Spec](../design/WEBUI-DESIGN.md)
+- [Evidence-Grounded Playbooks Spec](../design/EVIDENCE-GROUNDED-PLAYBOOKS-DESIGN.md)
 - [Memory Artifact and Operator Wiki Uplift Plan](../plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md)
 - [Skills Progressive Disclosure Uplift Plan](../plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md)
 - [Runtime Intelligence Uplifts Proposal](./RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md)
@@ -595,7 +595,7 @@ This keeps Research near other execution-heavy work without burying it under Con
 Important:
 
 - this proposal does **not** change the current WebUI source-of-truth spec yet
-- if the capability is accepted and implemented as a real page, `WEBUI-DESIGN-SPEC.md` must be updated in the same implementation change
+- if the capability is accepted and implemented as a real page, `WEBUI-DESIGN.md` must be updated in the same implementation change
 
 ---
 

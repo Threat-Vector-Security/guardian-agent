@@ -3,8 +3,8 @@
 **Status:** Implemented (core phases delivered; deferred phase 6 items remain intentionally deferred)  
 **Date:** 2026-04-04  
 **Origin:** Follow-on plan from `docs/research/GOOGLE-ADK-SKILLS-COMPARISON-2026-04-04.md`, revised after alignment with the Context/Memory/Orchestration uplift and the Memory Artifact/Wiki uplift  
-**Primary specs impacted:** `docs/specs/SKILLS-SPEC.md`, `docs/specs/INTENT-GATEWAY-ROUTING-SPEC.md`, `docs/specs/ORCHESTRATION-SPEC.md`, `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`  
-**Companion specs/plans:** `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/plans/ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md`
+**Primary specs impacted:** `docs/design/SKILLS-DESIGN.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`  
+**Companion specs/plans:** `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/plans/ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md`
 
 ---
 
@@ -637,7 +637,7 @@ Lock the skills contract to the surrounding architecture before adding new behav
 
 ### Deliver
 
-- update `docs/specs/SKILLS-SPEC.md` to define the canonical L1/L2/L3 contract more explicitly
+- update `docs/design/SKILLS-DESIGN.md` to define the canonical L1/L2/L3 contract more explicitly
 - align the skills plan with the published context/memory/orchestration and memory-artifact contracts
 - define success metrics focused on local-model performance and selection quality
 - define diagnostics/metadata fields for selected skills and loaded material
@@ -852,7 +852,7 @@ Minimum verification should include:
 - tests for request-local cache behavior
 - integration tests for local-model skill-heavy workflows
 - regression tests proving the Intent Gateway remains authoritative
-- documentation updates in `SKILLS-SPEC.md` and any affected context/orchestration specs
+- documentation updates in `SKILLS-DESIGN.md` and any affected context/orchestration specs
 
 Recommended manual/harness validation:
 

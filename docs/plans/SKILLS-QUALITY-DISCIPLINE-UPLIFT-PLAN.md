@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-04-04  
 **Origin:** Follow-on plan from `docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`  
-**Primary specs impacted:** `docs/specs/SKILLS-SPEC.md`
+**Primary specs impacted:** `docs/design/SKILLS-DESIGN.md`
 
 ---
 
@@ -49,7 +49,7 @@ We lack a streamlined way for the user to trigger these specific SDLC workflows 
 ### Phase 1: Skill Anatomy Standardization
 **Goal:** Upgrade the structure of existing skills.
 
-1.  Update `docs/specs/SKILLS-SPEC.md` to define the new mandatory anatomy for `SKILL.md` files:
+1.  Update `docs/design/SKILLS-DESIGN.md` to define the new mandatory anatomy for `SKILL.md` files:
     *   **Overview/When to Use:** Standard descriptive frontmatter.
     *   **Process:** Step-by-step workflow.
     *   **Common Rationalizations (Anti-Rationalization Table):** A markdown table mapping common LLM excuses (e.g., "I'll test it later") to reality ("Bugs compound. Test now.").

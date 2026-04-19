@@ -3,7 +3,7 @@
 **Date:** 2026-04-08  
 **Status:** Draft  
 **Source review:** `badlogic/pi-mono` at `main@f10cce94`  
-**Primary Guardian inputs:** [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md), [docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md), [docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md), [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [docs/specs/CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [docs/specs/CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md)
+**Primary Guardian inputs:** [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md), [docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md), [docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
 
 ---
 
@@ -224,7 +224,7 @@ Make progress, pending, and completion state backend-authored and transport-neut
 - [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
 - [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
 - [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md)
+- [docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
 
 ### Architecture benefit
 
@@ -279,7 +279,7 @@ For operator-visible controls:
 - [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts)
 - [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
 - [src/channels/cli-command-guide.ts](/mnt/s/Development/GuardianAgent/src/channels/cli-command-guide.ts)
-- [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ### Architecture benefit
 
@@ -376,8 +376,8 @@ Turn context assembly and compaction into stable runtime contracts instead of pr
 - [src/util/context-budget.ts](/mnt/s/Development/GuardianAgent/src/util/context-budget.ts)
 - [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
 - [src/runtime/agent-memory-store.ts](/mnt/s/Development/GuardianAgent/src/runtime/agent-memory-store.ts)
-- [docs/specs/CONTEXT-ASSEMBLY-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXT-ASSEMBLY-SPEC.md)
-- [docs/specs/CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
 
 ### Architecture benefit
 
@@ -495,7 +495,7 @@ Not allowed:
 - [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
 - [src/runtime/approval-continuations.ts](/mnt/s/Development/GuardianAgent/src/runtime/approval-continuations.ts)
 - [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- [docs/specs/TOOLS-CONTROL-PLANE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ### Architecture benefit
 

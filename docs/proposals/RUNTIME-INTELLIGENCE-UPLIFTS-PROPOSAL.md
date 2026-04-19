@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-03-29  
 **Primary Guardian files:** [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts), [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts), [src/llm/openai.ts](/mnt/s/Development/GuardianAgent/src/llm/openai.ts), [src/runtime/model-routing-ux.ts](/mnt/s/Development/GuardianAgent/src/runtime/model-routing-ux.ts), [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts), [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts), [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts), [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [src/runtime/sentinel.ts](/mnt/s/Development/GuardianAgent/src/runtime/sentinel.ts), [src/runtime/security-triage-agent.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-triage-agent.ts)  
-**Related docs:** [ORCHESTRATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [BITNET-CPU-DECISION-LANE-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BITNET-CPU-DECISION-LANE-PROPOSAL.md)
+**Related docs:** [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [BITNET-CPU-DECISION-LANE-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BITNET-CPU-DECISION-LANE-PROPOSAL.md)
 
 ---
 
@@ -242,7 +242,7 @@ What it lacks is a dedicated research-shaped execution lane with explicit steps 
 
 ### Primary files
 
-- [docs/specs/ORCHESTRATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/ORCHESTRATION-SPEC.md)
+- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
 - [src/agent/orchestration.ts](/mnt/s/Development/GuardianAgent/src/agent/orchestration.ts)
 - [src/agent/recipes.ts](/mnt/s/Development/GuardianAgent/src/agent/recipes.ts)
 - [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)

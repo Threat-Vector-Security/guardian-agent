@@ -4,9 +4,9 @@
 **Date:** 2026-04-14
 
 **Informed by:**
-- [Intelligence In Depth Specification](/mnt/s/development/guardianagent/docs/specs/INTELLIGENCE-IN-DEPTH-SPEC.md)
-- [Configuration Center Spec](/mnt/s/development/guardianagent/docs/specs/CONFIG-CENTER-SPEC.md)
-- [WebUI Design Spec](/mnt/s/development/guardianagent/docs/specs/WEBUI-DESIGN-SPEC.md)
+- [Intelligence In Depth Specification](/mnt/s/development/guardianagent/docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md)
+- [Configuration Center Spec](/mnt/s/development/guardianagent/docs/design/CONFIG-CENTER-DESIGN.md)
+- [WebUI Design Spec](/mnt/s/development/guardianagent/docs/design/WEBUI-DESIGN.md)
 - [Integration Test Harness Guide](/mnt/s/development/guardianagent/docs/guides/INTEGRATION-TEST-HARNESS.md)
 - [Provider Registry](/mnt/s/development/guardianagent/src/llm/provider-registry.ts)
 - [Provider Metadata](/mnt/s/development/guardianagent/src/llm/provider-metadata.ts)

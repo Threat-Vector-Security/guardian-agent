@@ -314,7 +314,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) Amplification risk — single message can trigger N sub-agent calls (mitigated by rate limiting)
 - (-) Indirect prompt injection through state pipeline is an open challenge
 
-**Spec:** `docs/specs/ORCHESTRATION-SPEC.md`
+**Spec:** `docs/design/ORCHESTRATION-DESIGN.md`
 
 ---
 
@@ -338,7 +338,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) TypeScript MCP SDK not yet GA — we implement the protocol directly
 - (-) Only stdio transport supported initially (SSE planned)
 
-**Spec:** `docs/specs/MCP-CLIENT-SPEC.md`
+**Spec:** `docs/design/MCP-CLIENT-DESIGN.md`
 
 ---
 
@@ -365,7 +365,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) Rate limiting may throttle rapid eval runs
 - (-) No LLM-as-judge or semantic matching (planned for future)
 
-**Spec:** `docs/specs/EVAL-FRAMEWORK-SPEC.md`
+**Spec:** `docs/design/EVAL-FRAMEWORK-DESIGN.md`
 
 ---
 
@@ -391,7 +391,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) State is in-memory only — no persistence for long-running orchestrations
 - (-) State poisoning via crafted response content is an open challenge (InputSanitizer helps but doesn't fully solve)
 
-**Spec:** `docs/specs/SHARED-STATE-SPEC.md`
+**Spec:** `docs/design/SHARED-STATE-DESIGN.md`
 
 ---
 
@@ -415,7 +415,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) Requires building native runtime modules for connector registry/playbook execution.
 - (-) Limited ecosystem compared with mature workflow products until connector catalog grows.
 
-**Spec:** `docs/specs/AUTOMATION-FRAMEWORK-SPEC.md`
+**Spec:** `docs/design/AUTOMATION-FRAMEWORK-DESIGN.md`
 
 ---
 
@@ -511,7 +511,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (-) Two concepts to explain to users: skills for guidance, tools for action.
 - (-) Requires prompt-budget discipline so skill context does not bloat every request.
 
-**Specs:** `docs/specs/SKILLS-SPEC.md`, `docs/specs/MCP-CLIENT-SPEC.md`
+**Specs:** `docs/design/SKILLS-DESIGN.md`, `docs/design/MCP-CLIENT-DESIGN.md`
 
 ---
 
@@ -538,7 +538,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (-) Dynamic provider surfaces require stricter service allowlists and capability mapping.
 - (-) Two code paths to maintain (mitigated by shared tool interface and shared policy layer).
 
-**Specs:** `docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md` (native mode), `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md` (CLI mode)
+**Specs:** `docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md` (native mode), `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md` (CLI mode)
 
 ---
 
@@ -563,7 +563,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (-) Some capabilities will be unavailable on hosts without strong sandbox support.
 - (-) Requires additional platform-specific runtime code and UX states.
 
-**Refs:** `SECURITY.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+**Refs:** `SECURITY.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`
 
 ## ADR-029: Per-Tool LLM Provider Routing
 
@@ -595,7 +595,7 @@ Resolution order: tool-name match > category match > smart category default > de
 - (-) External provider routing incurs API costs for those tool calls.
 - (-) Smart defaults are opinionated — users who disagree can disable via toggle or override per-category.
 
-**Refs:** `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `src/index.ts` (`resolveToolProviderRouting`, `resolveRoutedProviderForTools`)
+**Refs:** `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `src/index.ts` (`resolveToolProviderRouting`, `resolveRoutedProviderForTools`)
 
 ---
 
@@ -618,7 +618,7 @@ Additionally, auto-approving automation tools (`task_create`, `workflow_upsert`)
 
 The workspace root is authorized through `codeContext` while the request is inside a Code session. It is not added to the global `allowedPaths` policy, so ordinary non-Code chat does not inherit repo access just because a Code session exists.
 
-**Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/specs/CODING-WORKSPACE-SPEC.md` § codeContext Propagation.
+**Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/design/CODING-WORKSPACE-DESIGN.md` § codeContext Propagation.
 
 **Consequences:**
 - (+) Eliminates approval friction for coding workflow — edits, creates, tests, and automations execute immediately
@@ -630,4 +630,4 @@ The workspace root is authorized through `codeContext` while the request is insi
 - (-) If Guardian Agent is disabled or configured as fail-open, automation tools execute without any approval checkpoint
 - (-) codeContext propagation is fragile — if any layer in the broker/worker chain drops it, auto-approve silently degrades to require_approval
 
-**Refs:** `docs/specs/CODING-WORKSPACE-SPEC.md`, `src/tools/executor.ts` (`isCodeSessionWorkspaceTool`), `src/index.ts` (workspace root auto-add), `src/supervisor/worker-manager.ts` (automation pre-route codeContext), `src/broker/broker-client.ts` + `src/broker/broker-server.ts` (broker codeContext forwarding)
+**Refs:** `docs/design/CODING-WORKSPACE-DESIGN.md`, `src/tools/executor.ts` (`isCodeSessionWorkspaceTool`), `src/index.ts` (workspace root auto-add), `src/supervisor/worker-manager.ts` (automation pre-route codeContext), `src/broker/broker-client.ts` + `src/broker/broker-server.ts` (broker codeContext forwarding)
