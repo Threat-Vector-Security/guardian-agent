@@ -12,6 +12,7 @@ import {
 } from '../runtime/code-workspace-structure.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
+import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 
 interface RequestPrincipal {
   principalId: string;
@@ -71,7 +72,7 @@ export async function handleWebCodeSessionRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
     }));
     return true;
   }
@@ -101,7 +102,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         title: parsed.title!,
         workspaceRoot: parsed.workspaceRoot!,
         agentId: trimOptionalString(parsed.agentId) ?? null,
@@ -136,7 +137,7 @@ export async function handleWebCodeSessionRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
     });
     sendJSON(res, 200, result);
     return true;
@@ -159,7 +160,7 @@ export async function handleWebCodeSessionRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       referencedSessionIds: Array.isArray(parsed.referencedSessionIds)
         ? parsed.referencedSessionIds.filter((value): value is string => typeof value === 'string')
         : [],
@@ -185,7 +186,7 @@ export async function handleWebCodeSessionRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       targetSessionId: trimOptionalString(parsed.targetSessionId) ?? null,
     });
     sendJSON(res, 200, result);
@@ -209,7 +210,7 @@ export async function handleWebCodeSessionRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       mode: trimOptionalString(parsed.mode) as CodeSessionAttachmentMode | undefined,
     });
     sendJSON(res, 200, result);
@@ -248,7 +249,7 @@ export async function handleWebCodeSessionRoutes(
         principalId: principal.principalId,
         principalRole: principal.principalRole,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         reason: trimOptionalString(parsed.reason),
       });
       sendJSON(res, 200, result);
@@ -306,7 +307,7 @@ export async function handleWebCodeSessionRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
       limit: Number.isFinite(limit) ? limit : 12,
     });
     if (!result) {
@@ -334,7 +335,7 @@ export async function handleWebCodeSessionRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
     });
     if (!result) {
       sendJSON(res, 404, { error: 'Code session not found' });
@@ -370,7 +371,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         targetId: trimOptionalString(parsed.targetId),
         profileId: trimOptionalString(parsed.profileId),
         runtime: trimOptionalString(parsed.runtime),
@@ -417,7 +418,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
     } catch (err) {
@@ -460,7 +461,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
     } catch (err) {
@@ -495,7 +496,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
     } catch (err) {
@@ -524,7 +525,7 @@ export async function handleWebCodeSessionRoutes(
         userId,
         principalId: principal.principalId,
         channel,
-        surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+        surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
         historyLimit: Number.isFinite(historyLimit) ? historyLimit : 120,
       });
       if (!result) {
@@ -557,7 +558,7 @@ export async function handleWebCodeSessionRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         title: trimOptionalString(parsed.title),
         workspaceRoot: trimOptionalString(parsed.workspaceRoot),
         agentId: hasOwn(parsed as object, 'agentId') ? (trimOptionalString(parsed.agentId) ?? null) : undefined,
@@ -586,7 +587,7 @@ export async function handleWebCodeSessionRoutes(
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+          surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         });
         sendJSON(res, result.success ? 200 : 404, result);
       } catch (err) {
@@ -623,7 +624,7 @@ export async function handleWebCodeSessionRoutes(
       userId,
       principalId: principal.principalId,
       channel,
-      surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+      surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });
     if (!snapshot) {
@@ -696,7 +697,7 @@ export async function handleWebCodeSessionRoutes(
       userId: parsed.userId || 'web-user',
       principalId: principal.principalId,
       channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       historyLimit: 1,
     });
     if (!snapshot) {

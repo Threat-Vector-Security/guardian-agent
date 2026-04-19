@@ -9,6 +9,7 @@ import {
   getDefaultShellForPlatform,
   getPtyShellLaunch,
 } from './web-shell-launch.js';
+import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 
 interface RequestPrincipal {
   principalId: string;
@@ -89,7 +90,7 @@ export async function handleWebTerminalRoutes(
         userId: parsed.userId || 'web-user',
         principalId: principal.principalId,
         channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         historyLimit: 1,
       });
       if (!snapshot) {

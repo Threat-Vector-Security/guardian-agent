@@ -118,6 +118,49 @@ export function deepMerge<T>(target: T, source: Partial<T>): T {
   return result as T;
 }
 
+function hasExplicitPreferredProviderOverride(
+  config: Partial<GuardianAgentConfig>,
+  key: 'local' | 'managedCloud' | 'frontier' | 'external',
+): boolean {
+  const preferredProviders = config.assistant?.tools?.preferredProviders;
+  return !!preferredProviders
+    && typeof preferredProviders === 'object'
+    && !Array.isArray(preferredProviders)
+    && Object.prototype.hasOwnProperty.call(preferredProviders, key);
+}
+
+function alignImplicitLocalPreferredProvider(
+  config: GuardianAgentConfig,
+  source: Partial<GuardianAgentConfig>,
+  hasExplicitDefaultProvider: boolean,
+): GuardianAgentConfig {
+  if (!hasExplicitDefaultProvider || hasExplicitPreferredProviderOverride(source, 'local')) {
+    return config;
+  }
+
+  const defaultProvider = config.defaultProvider?.trim();
+  if (!defaultProvider) return config;
+
+  const defaultProviderType = config.llm[defaultProvider]?.provider;
+  if (getProviderLocality(defaultProviderType) !== 'local') {
+    return config;
+  }
+
+  return {
+    ...config,
+    assistant: {
+      ...config.assistant,
+      tools: {
+        ...config.assistant.tools,
+        preferredProviders: {
+          ...(config.assistant.tools.preferredProviders ?? {}),
+          local: defaultProvider,
+        },
+      },
+    },
+  };
+}
+
 /** Validate required configuration fields. */
 export function validateConfig(config: GuardianAgentConfig): string[] {
   const errors: string[] = [];
@@ -1482,6 +1525,7 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
   } else {
     merged = applyDerivedDefaultProvider(merged);
   }
+  merged = alignImplicitLocalPreferredProvider(merged, interpolated, hasExplicitDefaultProvider);
   logSecurityBaselineEnforcement(enforceSecurityBaseline(merged, 'config_file'));
 
   const errors = validateConfig(merged);

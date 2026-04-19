@@ -30,6 +30,7 @@ import {
 } from '../pending-actions.js';
 import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
 import { formatPendingApprovalMessage } from '../pending-approval-copy.js';
+import { resolveConversationSurfaceId } from '../channel-surface-ids.js';
 
 export const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 
@@ -132,8 +133,12 @@ function buildExecutionRefLabel(record: ExecutionRecord | null | undefined): str
     : content;
 }
 
-function resolveSurfaceId(surfaceId: string | undefined, userId: string): string {
-  return surfaceId?.trim() || userId.trim() || 'default-surface';
+function resolveSurfaceId(channel: string | undefined, surfaceId: string | undefined, userId: string): string {
+  return resolveConversationSurfaceId({
+    channel,
+    surfaceId,
+    userId,
+  });
 }
 
 function isResumableExecution(record: ExecutionRecord | null | undefined): boolean {
@@ -214,7 +219,7 @@ export class ChatAgentOrchestrationState {
       agentId: this.stateAgentId,
       userId,
       channel,
-      surfaceId: resolveSurfaceId(surfaceId, userId),
+      surfaceId: resolveSurfaceId(channel, surfaceId, userId),
     };
   }
 
@@ -236,7 +241,7 @@ export class ChatAgentOrchestrationState {
       assistantId: this.stateAgentId,
       userId: userId.trim(),
       channel: channel.trim(),
-      surfaceId: resolveSurfaceId(surfaceId, userId),
+      surfaceId: resolveSurfaceId(channel, surfaceId, userId),
       ...(codeSessionId?.trim() ? { codeSessionId: codeSessionId.trim() } : {}),
       ...(continuityKey?.trim() ? { continuityKey: continuityKey.trim() } : {}),
     };
@@ -500,7 +505,7 @@ export class ChatAgentOrchestrationState {
     const normalizedUserId = userId.trim();
     const normalizedChannel = channel.trim();
     if (!normalizedUserId || !normalizedChannel || !this.continuityThreadStore) return null;
-    const normalizedSurfaceId = resolveSurfaceId(surfaceId, normalizedUserId);
+    const normalizedSurfaceId = resolveSurfaceId(normalizedChannel, surfaceId, normalizedUserId);
     const existing = this.getContinuityThread(normalizedUserId, nowMs);
     const nextExecutionRefs = codeSessionId?.trim()
       ? replaceContinuityExecutionRefsByKind(
@@ -576,7 +581,7 @@ export class ChatAgentOrchestrationState {
       {
         touchSurface: {
           channel: normalizedChannel,
-          surfaceId: resolveSurfaceId(input.surfaceId, normalizedUserId),
+          surfaceId: resolveSurfaceId(normalizedChannel, input.surfaceId, normalizedUserId),
         },
         ...(summary ? { focusSummary: summary } : {}),
         ...(nextLastActionableRequest ? { lastActionableRequest: nextLastActionableRequest } : {}),
@@ -601,7 +606,7 @@ export class ChatAgentOrchestrationState {
       {
         touchSurface: {
           channel: normalizedChannel,
-          surfaceId: resolveSurfaceId(surfaceId, normalizedUserId),
+          surfaceId: resolveSurfaceId(normalizedChannel, surfaceId, normalizedUserId),
         },
         continuationState,
       },

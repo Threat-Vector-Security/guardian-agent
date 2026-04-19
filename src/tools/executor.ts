@@ -156,6 +156,7 @@ import { registerBuiltinCloudTools } from './builtin/cloud-tools.js';
 import { syncBuiltinBrowserTools } from './builtin/browser-tools.js';
 import { buildToolContext, type ToolContextCloudProfileSummary } from './tool-context.js';
 import type { ConfigUpdate, DashboardMutationResult, DashboardCodeSessionSandboxesResponse } from '../channels/web-types.js';
+import { resolveConversationSurfaceId } from '../runtime/channel-surface-ids.js';
 export { validateHostParam } from './builtin/network-system-tools.js';
 
 const MAX_JOBS = 200;
@@ -2387,9 +2388,11 @@ export class ToolExecutor {
   }
 
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
-    const surfaceId = request?.surfaceId?.trim();
-    const userId = request?.userId?.trim();
-    return surfaceId || userId || 'default-surface';
+    return resolveConversationSurfaceId({
+      channel: request?.channel,
+      surfaceId: request?.surfaceId,
+      userId: request?.userId,
+    });
   }
 
   private listOwnedCodeSessions(request?: Partial<ToolExecutionRequest>) {

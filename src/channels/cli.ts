@@ -31,6 +31,7 @@ import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
 import type { DashboardRunDetail, DashboardRunTimelineItem, DashboardRunStatus } from '../runtime/run-timeline.js';
 import { assistantTraceMatchesContextFilters } from '../runtime/trace-context-filters.js';
 import { selectOperatorRelevantAssistantJobs } from '../runtime/assistant-jobs.js';
+import { CLI_GUARDIAN_CHAT_SURFACE_ID } from '../runtime/channel-surface-ids.js';
 
 import { getGuardianBaseDir } from '../util/env.js';
 
@@ -39,7 +40,6 @@ const log = createLogger('channel:cli');
 const HISTORY_DIR = getGuardianBaseDir();
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
-const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
 const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
 const CLI_PASTED_MESSAGE_CONTINUATION_GAP_MS = 25;
 const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;

@@ -19,7 +19,16 @@ describe('approval continuations', () => {
     })).toEqual({
       userId: 'web-user',
       channel: 'web',
-      surfaceId: 'web-user',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(normalizeApprovalContinuationScope({
+      userId: 'cli-user',
+      channel: 'cli',
+    })).toEqual({
+      userId: 'cli-user',
+      channel: 'cli',
+      surfaceId: 'cli-guardian-chat',
     });
 
     expect(buildApprovalContinuationScopeKey({

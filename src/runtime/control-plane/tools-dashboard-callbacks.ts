@@ -61,7 +61,7 @@ interface ToolsDashboardCallbackOptions {
     }) => void;
   };
   resolveSharedStateAgentId: (agentId?: string) => string | undefined;
-  getCodeSessionSurfaceId: (args: { surfaceId?: string; userId?: string; principalId?: string }) => string;
+  getCodeSessionSurfaceId: (args: { channel?: string; surfaceId?: string; userId?: string; principalId?: string }) => string;
   readMessageSurfaceId: (value: unknown) => string | undefined;
   readCodeRequestMetadata: (metadata: unknown) => ToolRunCodeRequestMetadata | undefined;
   persistToolsState: (policy: ToolPolicySnapshot) => { success: boolean; message: string };

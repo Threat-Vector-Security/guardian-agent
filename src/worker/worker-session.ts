@@ -6,6 +6,7 @@ import {
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
 } from '../runtime/pending-approval-copy.js';
+import { sanitizePendingActionPrompt } from '../runtime/pending-actions.js';
 import {
   buildLocalModelTooComplicatedMessage,
   isLocalToolCallParseError,
@@ -83,6 +84,13 @@ const PLANNER_TOOL_ALIASES = new Map<string, string>([
 interface PendingApprovalState {
   ids: string[];
   expiresAt: number;
+}
+
+interface ToolReportScope {
+  userId: string;
+  channel: string;
+  requestId?: string;
+  codeSessionId?: string;
 }
 
 interface SuspendedToolCall {
@@ -203,6 +211,42 @@ function buildApprovalPendingActionMetadata(
     }),
     ...(responseSource ? { responseSource } : {}),
   };
+}
+
+function buildClarificationPendingActionMetadata(
+  prompt: string,
+  responseSource?: ResponseSourceMetadata,
+): Record<string, unknown> {
+  return {
+    pendingAction: {
+      status: 'pending',
+      blocker: {
+        kind: 'clarification',
+        prompt,
+      },
+    },
+    ...buildWorkerExecutionMetadata({
+      lifecycle: 'blocked',
+      source: 'tool_loop',
+      completionReason: 'model_response',
+      responseQuality: 'final',
+      blockerKind: 'clarification',
+    }),
+    ...(responseSource ? { responseSource } : {}),
+  };
+}
+
+function buildPolicyBlockedClarificationPrompt(
+  samples: Array<{ toolName: string; message: string }>,
+): string {
+  const bullets = samples
+    .map(({ toolName, message }) => `- ${toolName}: ${message || 'blocked by tool policy.'}`)
+    .join('\n');
+  return [
+    'I could not complete the requested action because tool policy blocked it.',
+    bullets,
+    'Approve an allowlist update (for example via update_tool_policy with action "add_path", "add_domain", or "add_command"), or tell me a different target that is already allowed, and I will retry.',
+  ].join('\n\n');
 }
 
 function buildToolLoopExecutionMetadata(
@@ -517,6 +561,16 @@ class BrokeredToolExecutor {
     return this.listAlwaysLoadedDefinitions().map((definition) => toLLMToolDef(definition, locality));
   }
 
+  listExecutedJobs(): Array<{
+    id: string;
+    status: string;
+    toolName: string;
+    approvalId?: string;
+    message?: string;
+  }> {
+    return [...this.jobs];
+  }
+
   getToolDefinition(name: string): ToolDefinition | undefined {
     return this.toolDefinitions.get(name);
   }
@@ -604,9 +658,47 @@ export class BrokeredWorkerSession {
   private pendingApprovals: PendingApprovalState | null = null;
   private suspendedSession: SuspendedSession | null = null;
   private automationContinuation: AutomationApprovalContinuation | null = null;
+  private lastToolReportScope: ToolReportScope | null = null;
 
   constructor(client: BrokerClient) {
     this.client = client;
+  }
+
+  private rememberToolReportScope(
+    message: UserMessage,
+    codeContext: { workspaceRoot: string; sessionId?: string } | undefined,
+    toolExecutor: BrokeredToolExecutor,
+  ): void {
+    if (toolExecutor.listExecutedJobs().length <= 0) {
+      return;
+    }
+    const requestId = message.id?.trim();
+    const codeSessionId = codeContext?.sessionId?.trim();
+    this.lastToolReportScope = {
+      userId: message.userId,
+      channel: message.channel,
+      ...(requestId ? { requestId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+    };
+  }
+
+  private resolveToolReportScope(
+    message: UserMessage,
+    codeContext: { workspaceRoot: string; sessionId?: string } | undefined,
+  ): ToolReportScope {
+    if (
+      this.lastToolReportScope
+      && this.lastToolReportScope.userId === message.userId
+      && this.lastToolReportScope.channel === message.channel
+    ) {
+      return { ...this.lastToolReportScope };
+    }
+    const codeSessionId = codeContext?.sessionId?.trim();
+    return {
+      userId: message.userId,
+      channel: message.channel,
+      ...(codeSessionId ? { codeSessionId } : {}),
+    };
   }
 
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -669,14 +761,32 @@ export class BrokeredWorkerSession {
         selectedExecutionProfile,
       );
       if (plannerResult) {
+        this.rememberToolReportScope(params.message, codeContext, toolExecutor);
         return this.attachIntentGatewayMetadata(plannerResult, directIntent);
       }
+    }
+
+    if (directIntent?.decision.resolution === 'needs_clarification') {
+      const prompt = sanitizePendingActionPrompt(directIntent.decision.summary, 'clarification');
+      return this.attachIntentGatewayMetadata({
+        content: prompt,
+        metadata: buildClarificationPendingActionMetadata(prompt),
+      }, directIntent);
     }
 
     if ((directIntent?.decision.route === 'general_assistant' || directIntent?.decision.route === 'unknown')
       && isToolReportQuery(params.message.content)) {
       try {
-        const jobs = await this.client.listJobs(params.message.userId, undefined, 50);
+        const toolReportScope = this.resolveToolReportScope(params.message, codeContext);
+        const jobs = await this.client.listJobs(
+          toolReportScope.userId,
+          toolReportScope.channel,
+          50,
+          {
+            requestId: toolReportScope.requestId,
+            codeSessionId: toolReportScope.codeSessionId,
+          },
+        );
         if (jobs.length > 0) {
           const report = formatToolReport(jobs);
           if (report) {
@@ -695,6 +805,7 @@ export class BrokeredWorkerSession {
             assumeAuthoring: directRouting.gatewayDirected,
           });
           if (!directAutomationAuthoring) break;
+          this.rememberToolReportScope(params.message, codeContext, toolExecutor);
           return this.attachIntentGatewayMetadata(directAutomationAuthoring, directIntent);
         }
         case 'automation_control': {
@@ -704,6 +815,7 @@ export class BrokeredWorkerSession {
             directIntent?.decision,
           );
           if (!directAutomationControl) break;
+          this.rememberToolReportScope(params.message, codeContext, toolExecutor);
           return this.attachIntentGatewayMetadata(directAutomationControl, directIntent);
         }
         case 'automation_output': {
@@ -713,6 +825,7 @@ export class BrokeredWorkerSession {
             directIntent?.decision,
           );
           if (!directAutomationOutput) break;
+          this.rememberToolReportScope(params.message, codeContext, toolExecutor);
           return this.attachIntentGatewayMetadata(directAutomationOutput, directIntent);
         }
         case 'browser': {
@@ -722,6 +835,7 @@ export class BrokeredWorkerSession {
             directIntent?.decision,
           );
           if (!directBrowserAutomation) break;
+          this.rememberToolReportScope(params.message, codeContext, toolExecutor);
           return this.attachIntentGatewayMetadata(directBrowserAutomation, directIntent);
         }
         default:
@@ -1610,6 +1724,7 @@ export class BrokeredWorkerSession {
     );
 
     if (pendingTools.length > 0) {
+      this.rememberToolReportScope(message, codeContext, toolExecutor);
       const ids = pendingTools.map((pending) => pending.approvalId);
       this.pendingApprovals = {
         ids,
@@ -1637,7 +1752,23 @@ export class BrokeredWorkerSession {
 
     this.pendingApprovals = null;
     this.suspendedSession = null;
+    this.rememberToolReportScope(message, codeContext, toolExecutor);
     const phantomApproval = isPhantomPendingApprovalMessage(result.finalContent);
+
+    const policyBlockedSamples = result.outcome.policyBlockedSamples ?? [];
+    if (
+      !phantomApproval
+      && result.outcome.successfulToolResultCount === 0
+      && result.outcome.toolResultCount > 0
+      && policyBlockedSamples.length > 0
+    ) {
+      const prompt = buildPolicyBlockedClarificationPrompt(policyBlockedSamples);
+      return {
+        content: prompt,
+        metadata: buildClarificationPendingActionMetadata(prompt, responseSource),
+      };
+    }
+
     return {
       content: phantomApproval
         ? 'I did not create a real approval request for that action. Please try again.'

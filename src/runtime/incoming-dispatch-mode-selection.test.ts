@@ -102,8 +102,11 @@ function createBaseArgs(config: GuardianAgentConfig) {
         if (locality === 'local') return 'ollama';
         return current.assistant.tools.preferredProviders?.managedCloud ?? 'ollama-cloud';
       }),
-      getCodeSessionSurfaceId: ({ surfaceId, userId }: { surfaceId?: string; userId?: string }) => (
-        surfaceId?.trim() || userId?.trim() || 'default-surface'
+      getCodeSessionSurfaceId: ({ channel, surfaceId, userId }: { channel?: string; surfaceId?: string; userId?: string }) => (
+        surfaceId?.trim()
+        || (channel === 'web' ? 'web-guardian-chat' : channel === 'cli' ? 'cli-guardian-chat' : '')
+        || userId?.trim()
+        || 'default-surface'
       ),
       readMessageSurfaceId: vi.fn(() => undefined),
       readCodeRequestMetadata: vi.fn(() => undefined),

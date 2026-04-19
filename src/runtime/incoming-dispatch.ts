@@ -84,6 +84,7 @@ export function createIncomingDispatchPreparer(args: {
   resolveConfiguredAgentId?: (agentId?: string) => string | undefined;
   findProviderByLocality: (config: GuardianAgentConfig, locality: 'local' | 'external') => string | null | undefined;
   getCodeSessionSurfaceId: (args: {
+    channel?: string;
     surfaceId?: string;
     userId?: string;
     principalId?: string;
@@ -174,6 +175,7 @@ export function createIncomingDispatchPreparer(args: {
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
     const surfaceId = args.getCodeSessionSurfaceId({
+      channel,
       surfaceId: msg.surfaceId,
       userId: canonicalUserId,
     });

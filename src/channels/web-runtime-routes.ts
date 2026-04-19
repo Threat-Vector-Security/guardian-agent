@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readJsonBody, sendJSON } from './web-json.js';
+import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
 
 type PrivilegedTicketAction =
   | 'auth.config'
@@ -995,7 +996,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
     const userId = url.searchParams.get('userId') ?? 'web-user';
     const channel = url.searchParams.get('channel') ?? 'web';
-    const surfaceId = url.searchParams.get('surfaceId') ?? 'web-guardian-chat';
+    const surfaceId = resolveWebSurfaceId(url.searchParams.get('surfaceId') ?? undefined);
     sendJSON(res, 200, dashboard.onPendingActionCurrent({ userId, channel, surfaceId }));
     return true;
   }

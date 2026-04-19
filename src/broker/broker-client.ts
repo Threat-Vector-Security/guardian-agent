@@ -118,12 +118,18 @@ export class BrokerClient {
     userId?: string,
     channel?: string,
     limit?: number,
+    filters?: {
+      requestId?: string;
+      codeSessionId?: string;
+    },
   ): Promise<Array<{
     toolName: string;
     status: string;
     argsRedacted?: Record<string, unknown>;
     completedAt?: number;
     createdAt?: number;
+    requestId?: string;
+    codeSessionId?: string;
   }>> {
     const result = await this.sendRequest<{
       jobs: Array<{
@@ -132,8 +138,20 @@ export class BrokerClient {
         argsRedacted?: Record<string, unknown>;
         completedAt?: number;
         createdAt?: number;
+        requestId?: string;
+        codeSessionId?: string;
       }>;
-    }>('job.list', { userId, channel, limit });
+    }>('job.list', {
+      userId,
+      channel,
+      limit,
+      ...(typeof filters?.requestId === 'string' && filters.requestId.trim()
+        ? { requestId: filters.requestId.trim() }
+        : {}),
+      ...(typeof filters?.codeSessionId === 'string' && filters.codeSessionId.trim()
+        ? { codeSessionId: filters.codeSessionId.trim() }
+        : {}),
+    });
     return Array.isArray(result.jobs) ? result.jobs : [];
   }
 
