@@ -1,11 +1,5 @@
 import { isResponseDegraded } from './response-quality.js';
 
-const ANSWER_FIRST_SKILL_IDS = new Set([
-  'writing-plans',
-  'verification-before-completion',
-  'code-review',
-]);
-
 interface SkillLike {
   id?: string | null;
 }
@@ -38,6 +32,9 @@ function selectPrimaryAnswerFirstSkill(
   if (looksLikePlan && skillIds.has('writing-plans')) {
     return 'writing-plans';
   }
+  if (normalizedRequest) {
+    return null;
+  }
   if (skillIds.has('verification-before-completion')) {
     return 'verification-before-completion';
   }
@@ -50,11 +47,12 @@ function selectPrimaryAnswerFirstSkill(
   return null;
 }
 
-export function shouldUseAnswerFirstForSkills(skills: readonly SkillLike[]): boolean {
-  return skills.some((skill) => (
-    typeof skill.id === 'string'
-    && ANSWER_FIRST_SKILL_IDS.has(skill.id)
-  ));
+export function shouldUseAnswerFirstForSkills(
+  skills: readonly SkillLike[],
+  originalRequest?: string,
+): boolean {
+  const skillIds = collectSkillIds(skills);
+  return selectPrimaryAnswerFirstSkill(skillIds, originalRequest) !== null;
 }
 
 export function isAnswerFirstSkillResponseSufficient(

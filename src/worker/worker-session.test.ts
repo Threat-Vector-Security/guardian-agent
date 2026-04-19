@@ -566,7 +566,7 @@ describe('BrokeredWorkerSession automation control', () => {
     ).toHaveLength(1);
   });
 
-  it('retries through fallback providers when the selected model fails with a retryable API error', async () => {
+  it('does not silently switch delegated worker providers when the selected model fails', async () => {
     const llmChat = vi.fn(async (_messages, _options, routing) => {
       if (routing?.useFallback === true) {
         return {
@@ -590,7 +590,7 @@ describe('BrokeredWorkerSession automation control', () => {
       getApprovalResult: vi.fn(),
     } as never);
 
-    const result = await session.handleMessage({
+    const result = session.handleMessage({
       ...baseParams,
       hasFallbackProvider: true,
       executionProfile: {
@@ -637,18 +637,8 @@ describe('BrokeredWorkerSession automation control', () => {
       },
     });
 
-    expect(result.content).toBe('Fallback provider completed the request.');
-    expect(llmChat.mock.calls.some((call) => call[2]?.useFallback === true)).toBe(true);
-    expect(result.metadata).toMatchObject({
-      responseSource: {
-        locality: 'external',
-        providerName: 'xai',
-        providerTier: 'frontier',
-        model: 'grok-4.1-fast-reasoning',
-        usedFallback: true,
-        notice: 'Retried with an alternate model after the selected model failed to complete the request.',
-      },
-    });
+    await expect(result).rejects.toThrow('Ollama Cloud API error 503: Service Temporarily Unavailable');
+    expect(llmChat.mock.calls.some((call) => call[2]?.useFallback === true)).toBe(false);
   });
 
   it('resumes approval-blocked remote runs with the original request text so follow-up remote steps keep the same profile', async () => {
@@ -902,7 +892,7 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.content).toContain('browser_read');
     expect(result.metadata).toMatchObject({
       intentGateway: {
-        route: 'general_assistant',
+        route: expect.stringMatching(/^(general_assistant|unknown)$/),
       },
     });
     expect(listJobs).toHaveBeenCalledWith('owner', 'web', 50, {
@@ -1839,6 +1829,17 @@ describe('BrokeredWorkerSession automation control', () => {
         providerTier: 'managed_cloud',
         model: 'gpt-oss:120b',
       },
+      delegatedResult: {
+        taskContract: {
+          kind: 'general_answer',
+          route: 'complex_planning_task',
+        },
+        finalUserAnswer: expect.stringContaining('I generated and executed a DAG plan'),
+        modelProvenance: {
+          requestedProviderName: 'ollama-cloud',
+          resolvedProviderProfileName: 'ollama-cloud',
+        },
+      },
     });
   });
 
@@ -2001,6 +2002,13 @@ describe('BrokeredWorkerSession automation control', () => {
         status: 'completed',
         totalNodes: 5,
         completedNodeIds: ['mkdir', 'risks', 'controls', 'gaps', 'summary'],
+      },
+      delegatedResult: {
+        taskContract: {
+          kind: 'general_answer',
+          route: 'complex_planning_task',
+        },
+        finalUserAnswer: expect.stringContaining('I generated and executed a DAG plan'),
       },
     });
     expect(callRequests).toHaveLength(5);

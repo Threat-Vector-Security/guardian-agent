@@ -1,4 +1,4 @@
-import type { IntentGatewayOperation } from '../types.js';
+import type { IntentGatewayEntities, IntentGatewayOperation } from '../types.js';
 import { collapseIntentGatewayWhitespace } from '../text.js';
 
 const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandbox\b/i;
@@ -215,6 +215,16 @@ export function extractExplicitRemoteExecCommand(
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
   return command || undefined;
+}
+
+export function inferCodeSessionResource(
+  normalized: string,
+): IntentGatewayEntities['codeSessionResource'] | undefined {
+  if (!normalized) return undefined;
+  if (/\bsandboxes?\b/.test(normalized)) {
+    return 'managed_sandboxes';
+  }
+  return undefined;
 }
 
 export function cleanInferredSessionTarget(value: string | undefined): string | undefined {

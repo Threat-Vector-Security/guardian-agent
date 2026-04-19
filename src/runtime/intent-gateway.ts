@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatResponse, ToolDefinition } from '../llm/types.js';
 import { deriveIntentRouteClarification } from './intent/intent-route-clarification.js';
+import { confirmIntentGatewayDecisionIfNeeded } from './intent/confirmation-pass.js';
 import { selectIntentGatewayPromptProfile } from './intent/prompt-profiles.js';
 import { normalizeIntentGatewayPromptProfile, normalizeRoute } from './intent/normalization.js';
 import {
@@ -113,7 +114,16 @@ export class IntentGateway {
     record: IntentGatewayRecord,
     chat: IntentGatewayChatFn,
   ): Promise<IntentGatewayRecord> {
-    let decision = record.decision;
+    let decision = repairEmailProviderDecisionIfNeeded(input, record.decision);
+    decision = resolveSatisfiedClarificationIfNeeded(input, decision);
+    let workingRecord = decision === record.decision
+      ? record
+      : {
+          ...record,
+          decision,
+        };
+    workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
+    decision = workingRecord.decision;
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
       if (repairedName) {
@@ -133,11 +143,9 @@ export class IntentGateway {
         };
       }
     }
-    decision = repairEmailProviderDecisionIfNeeded(input, decision);
-    decision = resolveSatisfiedClarificationIfNeeded(input, decision);
-    decision = applyIntentRouteClarificationGuard(input, record, decision);
+    decision = applyIntentRouteClarificationGuard(input, workingRecord, decision);
     return {
-      ...record,
+      ...workingRecord,
       decision,
     };
   }
@@ -365,6 +373,9 @@ export function toIntentGatewayClientMetadata(
     preferredTier: record.decision.preferredTier,
     requiresRepoGrounding: record.decision.requiresRepoGrounding,
     requiresToolSynthesis: record.decision.requiresToolSynthesis,
+    ...(typeof record.decision.requireExactFileReferences === 'boolean'
+      ? { requireExactFileReferences: record.decision.requireExactFileReferences }
+      : {}),
     expectedContextPressure: record.decision.expectedContextPressure,
     ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
     preferredAnswerPath: record.decision.preferredAnswerPath,
@@ -396,6 +407,9 @@ export function serializeIntentGatewayRecord(
       preferredTier: record.decision.preferredTier,
       requiresRepoGrounding: record.decision.requiresRepoGrounding,
       requiresToolSynthesis: record.decision.requiresToolSynthesis,
+      ...(typeof record.decision.requireExactFileReferences === 'boolean'
+        ? { requireExactFileReferences: record.decision.requireExactFileReferences }
+        : {}),
       expectedContextPressure: record.decision.expectedContextPressure,
       ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
       preferredAnswerPath: record.decision.preferredAnswerPath,
@@ -412,6 +426,7 @@ export function deserializeIntentGatewayRecord(
   if (!isRecord(value)) return null;
   if (!isRecord(value.decision)) return null;
   const mode = value.mode === 'json_fallback' || value.mode === 'route_only_fallback'
+    || value.mode === 'confirmation'
     ? value.mode
     : 'primary';
   const normalizedDecision = normalizeIntentGatewayDecision(
@@ -464,10 +479,31 @@ export function readPreRoutedIntentGatewayMetadata(
   return deserializeIntentGatewayRecord(metadata[PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY]);
 }
 
+export function detachPreRoutedIntentGatewayMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!metadata || !(PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY in metadata)) {
+    return metadata;
+  }
+  const { [PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY]: _discarded, ...rest } = metadata;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 export function shouldReusePreRoutedIntentGateway(
   record: IntentGatewayRecord | null | undefined,
 ): record is IntentGatewayRecord {
   return !!record && record.available !== false;
+}
+
+export function shouldReusePreRoutedIntentGatewayForContent(
+  record: IntentGatewayRecord | null | undefined,
+  originalContent: string | undefined,
+  effectiveRoutingContent: string | undefined,
+): record is IntentGatewayRecord {
+  if (!shouldReusePreRoutedIntentGateway(record)) {
+    return false;
+  }
+  return (originalContent?.trim() ?? '') === (effectiveRoutingContent?.trim() ?? '');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

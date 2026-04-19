@@ -99,8 +99,10 @@ describe('routed tool execution', () => {
   it('adds repo-grounded tool guidance for coding inspection turns', () => {
     const section = buildRoutedIntentAdditionalSection(repoDecision());
 
-    expect(section?.content).toContain('Prefer native repo tools first: fs_search, code_symbol_search, and fs_read');
+    expect(section?.content).toContain('Prefer native repo tools first: fs_list, fs_search, code_symbol_search, and fs_read');
     expect(section?.content).toContain('Do not use shell_safe for grep, git grep, cat, sed');
+    expect(section?.content).toContain('enumerate likely directories before concluding that a client-side or implementation path does not exist');
+    expect(section?.content).toContain('If a filename search only reports that matches exist or the result is truncated');
   });
 
   it('adds external-backend guidance for explicit coding backend requests', () => {
@@ -131,7 +133,9 @@ describe('routed tool execution', () => {
     const prompt = buildToolExecutionCorrectionPrompt(repoDecision());
 
     expect(prompt).toContain('repo-grounded coding request');
-    expect(prompt).toContain('fs_search, code_symbol_search, and fs_read');
+    expect(prompt).toContain('fs_list, fs_search, code_symbol_search, and fs_read');
+    expect(prompt).toContain('enumerate likely directories before concluding the code path does not exist');
+    expect(prompt).toContain('If a filename search only says matches exist or the result is truncated');
     expect(prompt).toContain('Only ask the user for approval after a real tool result returns pending_approval');
   });
 

@@ -29,6 +29,12 @@ interface JsonCandidate {
   flags: StructuredJsonRepairFlag[];
 }
 
+type ToolCallLike = {
+  id: string;
+  name: string;
+  arguments?: string;
+};
+
 export function parseStructuredJsonObject<T extends Record<string, unknown>>(content: string): T | null {
   return parseStructuredJsonObjectDetailed<T>(content)?.value ?? null;
 }
@@ -118,6 +124,29 @@ export function recoverToolCallsFromStructuredText(
     confidence: parsed.confidence,
     repaired: parsed.repaired,
   };
+}
+
+export function normalizeToolCallsForExecution(
+  toolCalls: ToolCall[] | undefined,
+  availableTools?: ReadonlyArray<Pick<ToolDefinition, 'name'>>,
+): ToolCall[] | undefined;
+export function normalizeToolCallsForExecution<T extends ToolCallLike>(
+  toolCalls: T[] | undefined,
+  availableTools?: ReadonlyArray<Pick<ToolDefinition, 'name'>>,
+): Array<T & { arguments: string }> | undefined;
+export function normalizeToolCallsForExecution<T extends ToolCallLike>(
+  toolCalls: T[] | undefined,
+  availableTools?: ReadonlyArray<Pick<ToolDefinition, 'name'>>,
+): Array<T & { arguments: string }> | undefined {
+  if (!toolCalls?.length) return toolCalls as Array<T & { arguments: string }> | undefined;
+  const allowedToolNames = availableTools?.length
+    ? new Set(
+        availableTools
+          .map((tool) => tool.name.trim())
+          .filter(Boolean),
+      )
+    : undefined;
+  return toolCalls.map((toolCall) => normalizeToolCallForExecution(toolCall, allowedToolNames) as T & { arguments: string });
 }
 
 function pushCandidate(
@@ -323,7 +352,7 @@ function earliestNonNegative(...values: number[]): number {
 
 function normalizeRecoveredToolCalls(
   value: unknown,
-  allowedToolNames: ReadonlySet<string>,
+  allowedToolNames?: ReadonlySet<string>,
 ): Array<{ name: string; arguments: string }> {
   const candidateEntries = collectRecoveredToolCallEntries(value);
   const recovered: Array<{ name: string; arguments: string }> = [];
@@ -336,7 +365,8 @@ function normalizeRecoveredToolCalls(
       typeof entry.toolName === 'string' ? entry.toolName : undefined,
       typeof functionRecord?.name === 'string' ? functionRecord.name : undefined,
     );
-    if (!name || !allowedToolNames.has(name)) continue;
+    if (!name) continue;
+    if (allowedToolNames && allowedToolNames.size > 0 && !allowedToolNames.has(name)) continue;
 
     const rawArguments = entry.arguments ?? entry.args ?? functionRecord?.arguments ?? {};
     recovered.push({
@@ -346,6 +376,56 @@ function normalizeRecoveredToolCalls(
   }
 
   return recovered;
+}
+
+function normalizeToolCallForExecution(
+  toolCall: ToolCallLike,
+  allowedToolNames?: ReadonlySet<string>,
+): ToolCallLike & { arguments: string } {
+  const trimmedName = toolCall.name.trim();
+  const trimmedArguments = typeof toolCall.arguments === 'string'
+    ? toolCall.arguments.trim()
+    : '';
+  const recovered = recoverToolCallFromMalformedField(trimmedName, allowedToolNames)
+    ?? recoverToolCallFromMalformedField(trimmedArguments, allowedToolNames);
+  if (!recovered) {
+    return {
+      ...toolCall,
+      name: trimmedName,
+      arguments: trimmedArguments,
+    };
+  }
+
+  return {
+    ...toolCall,
+    name: recovered.name,
+    arguments: mergeRecoveredToolArguments(trimmedArguments, recovered.arguments),
+  };
+}
+
+function recoverToolCallFromMalformedField(
+  value: string,
+  allowedToolNames?: ReadonlySet<string>,
+): { name: string; arguments: string } | null {
+  if (!value) return null;
+  const parsed = parseStructuredJsonValueDetailed(value);
+  if (!parsed) return null;
+  return normalizeRecoveredToolCalls(parsed.value, allowedToolNames)[0] ?? null;
+}
+
+function mergeRecoveredToolArguments(
+  existingRawArguments: string,
+  recoveredRawArguments: string,
+): string {
+  const existingArguments = parseStructuredJsonObject<Record<string, unknown>>(existingRawArguments);
+  if (!existingArguments || Object.keys(existingArguments).length === 0 || isToolCallWrapperRecord(existingArguments)) {
+    return recoveredRawArguments;
+  }
+  const recoveredArguments = parseStructuredJsonObject<Record<string, unknown>>(recoveredRawArguments) ?? {};
+  return JSON.stringify({
+    ...recoveredArguments,
+    ...existingArguments,
+  });
 }
 
 function collectRecoveredToolCallEntries(value: unknown): Record<string, unknown>[] {
@@ -387,6 +467,20 @@ function serializeRecoveredToolArguments(rawArguments: unknown): string {
 
 function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => typeof value === 'string' && value.trim())?.trim();
+}
+
+function isToolCallWrapperRecord(value: Record<string, unknown>): boolean {
+  const toolCallsValue = value.toolCalls ?? value.tool_calls;
+  if (Array.isArray(toolCallsValue)) {
+    return true;
+  }
+  if (isRecord(value.function) && typeof value.function.name === 'string') {
+    return true;
+  }
+  const hasToolName = typeof value.name === 'string'
+    || typeof value.tool === 'string'
+    || typeof value.toolName === 'string';
+  return hasToolName && ('arguments' in value || 'args' in value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

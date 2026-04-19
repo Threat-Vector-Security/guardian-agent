@@ -140,6 +140,25 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('infers explicit built-in tool names and profile ids for general assistant tool requests', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Run the cloud tool whm_status using profileId social.' },
+      'general_assistant',
+      'run',
+      'classifier.primary',
+    );
+
+    expect(result.entities).toMatchObject({
+      toolName: 'whm_status',
+      profileId: 'social',
+    });
+    expect(result.provenance).toMatchObject({
+      toolName: 'resolver.tool_inventory',
+      profileId: 'resolver.tool_inventory',
+    });
+  });
+
   it('infers routine filters for personal-assistant reads', () => {
     expect(resolveIntentGatewayEntities(
       {},

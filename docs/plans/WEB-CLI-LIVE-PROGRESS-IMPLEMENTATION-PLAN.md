@@ -1,5 +1,7 @@
 # Web And CLI Live Progress Implementation Plan
 
+> Superseded for delegated-progress architecture and shared execution-event projections by [EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md](./EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md). Keep this document only for historical UX context that is still compatible with the canonical execution-event model.
+
 **Status:** Draft  
 **Date:** 2026-04-11  
 **Primary source proposal:** [Henchmen-Inspired Coding And Orchestration Uplifts Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/HENCHMEN-INSPIRED-CODING-AND-ORCHESTRATION-UPLIFTS-PROPOSAL.md)  

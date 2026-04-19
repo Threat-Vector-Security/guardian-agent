@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatOptions, ToolDefinition } from '../../llm/types.js';
 import { classifierProvenanceSourceForMode } from './provenance.js';
 import { buildRawResponsePreview, parseIntentGatewayDecision } from './structured-recovery.js';
+import { INTENT_GATEWAY_CAPABILITY_INVENTORY_PROMPT_LINES } from './capability-inventory.js';
 import {
   looksLikeContextDependentPromptSelectionTurn,
   looksLikeStandaloneGreetingTurn,
@@ -84,6 +85,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       requiresToolSynthesis: {
         type: 'boolean',
       },
+      requireExactFileReferences: {
+        type: 'boolean',
+      },
       expectedContextPressure: {
         type: 'string',
         enum: ['low', 'medium', 'high'],
@@ -129,6 +133,10 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       },
       sessionTarget: {
         type: 'string',
+      },
+      codeSessionResource: {
+        type: 'string',
+        enum: ['session', 'session_list', 'managed_sandboxes'],
       },
       emailProvider: {
         type: 'string',
@@ -189,11 +197,12 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- memory_task: durable memory operations such as remember/save, recall, or search memory.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
   '- coding_task: code execution, code generation, debugging, repo inspection, code review, implementation planning, or programming work within a coding workspace. NOT session management.',
-  '- coding_session_control: managing coding workspace sessions — listing, inspecting current session, switching/attaching, detaching, or creating sessions.',
+  '- coding_session_control: managing coding workspace sessions — listing sessions, inspecting the current session, inspecting managed sandboxes attached to the current session, switching/attaching, detaching, or creating sessions.',
   '- security_task: security triage, containment, or security-control operations.',
   '- channel_delivery: requests to explicitly deliver, post, or send content across communication channels like Telegram, CLI, or Web.',
   '- complex_planning_task: explicitly use Guardian\'s brokered DAG / complex-planning path for a multi-step task. Use this when the user directly asks for the planner path, DAG path, or complex-planning route itself. Do NOT use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
   '- general_assistant: everything else.',
+  ...INTENT_GATEWAY_CAPABILITY_INVENTORY_PROMPT_LINES,
   'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
   'An active pending action does not automatically make the next turn a follow_up, clarification_answer, or correction.',
   'If the user is clearly asking for a different task, classify it as turnRelation=new_request and route it on its own merits, even when a pending action exists.',
@@ -202,11 +211,12 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'If the request is genuinely ambiguous between two top-level routes, do not guess. Set resolution=needs_clarification, include missingFields=["intent_route"], keep route set to the most plausible candidate, lower confidence to low or medium, and make summary a short user-facing clarification question.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
-  'Also classify the workload metadata: executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
+  'Also classify the workload metadata: executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, requireExactFileReferences, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
   'preferredTier is a coarse local vs external hint only. Do not choose provider names or model names.',
   'executionClass must be one of direct_assistant, tool_orchestration, repo_grounded, provider_crud, or security_analysis.',
   'simpleVsComplex must be simple or complex.',
   'preferredAnswerPath must be direct, tool_loop, or chat_synthesis.',
+  'Set requireExactFileReferences=true only when the user explicitly asks you to name, cite, enumerate, or return the exact file paths, file names, or code paths for a repo-grounded or security inspection request.',
   'expectedContextPressure must be low, medium, or high based on how much bounded context the runtime will likely need to assemble.',
   'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, emailProvider, and calendarTarget. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
@@ -249,8 +259,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Examples: "Remember globally that my test marker is cedar-47." -> route=memory_task, operation=save; "What do you remember about cedar-47?" -> route=memory_task, operation=read; "Search memory for cedar-47." -> route=memory_task, operation=search.',
   'Prefer coding_session_control over coding_task when the user asks about which session is active, lists sessions, switches workspaces, attaches, detaches, or creates a new coding session.',
   'Requests to inspect, explain, review, or plan changes against specific repo files, diffs, PRs, patches, or source paths are coding_task when they are grounded in a coding workspace or named repo files. Do not collapse those into general_assistant just because the immediate output is prose.',
-  'coding_session_control operation mapping: navigate = list/show all sessions or workspaces; inspect = check which single session is currently active or attached; update = switch/attach to a different session; delete = detach/disconnect from current session; create = create a new session.',
-  'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
+  'coding_session_control operation mapping: navigate = list/show all sessions or workspaces; inspect = check which single session is currently active or attached, or inspect managed sandboxes attached to that session; update = switch/attach to a different session; delete = detach/disconnect from current session; create = create a new session.',
+  'When route=coding_session_control and the user is asking about attached managed sandboxes, set codeSessionResource=managed_sandboxes.',
+  'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "what managed sandboxes are attached to this coding session?" -> route=coding_session_control, operation=inspect, codeSessionResource=managed_sandboxes; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
   'When the request mentions a specific coding session or workspace to switch to, set sessionTarget to the session name, id, or workspace path mentioned.',
   'When a coding_task explicitly names a different coding workspace to operate in, keep route=coding_task and also set sessionTarget to that workspace name, id, or path.',
   'Example: "Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests." -> route=coding_task, operation=inspect.',
@@ -350,12 +361,14 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   '- channel_delivery: explicitly deliver, post, or send content across communication channels like Telegram, CLI, or Web.',
   '- complex_planning_task: explicitly use Guardian\'s brokered complex-planning / DAG path. Do not use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
   '- general_assistant: everything else.',
+  ...INTENT_GATEWAY_CAPABILITY_INVENTORY_PROMPT_LINES,
   'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'If the request is genuinely ambiguous between two top-level routes, do not guess. Set resolution=needs_clarification, include missingFields=["intent_route"], keep route set to the most plausible candidate, lower confidence to low or medium, and make summary a short user-facing clarification question.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
-  'Also classify executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
+  'Also classify executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, requireExactFileReferences, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
+  'Set requireExactFileReferences=true only when the user explicitly asks you to name, cite, enumerate, or return the exact file paths, file names, or code paths for a repo-grounded or security inspection request.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. Prefer general_assistant with uiSurface=config and provider/tool orchestration workload metadata for those requests.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct provider CRUD. Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, or personal retrieval across email/docs/calendar/notes.',
@@ -542,6 +555,9 @@ export async function classifyIntentGatewayPass(
       latencyMs: Date.now() - options.startedAt,
       promptProfile: options.promptProfile,
       decision: parsed.decision,
+      ...(parsed.rawStructuredDecision
+        ? { rawStructuredDecision: parsed.rawStructuredDecision }
+        : {}),
       rawResponsePreview: buildRawResponsePreview(response),
     };
   } catch (error) {
@@ -607,7 +623,7 @@ function resolveRouteClassifierPassConfig(
   }
 }
 
-function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: string): ChatMessage[] {
+export function buildIntentGatewayContextSections(input: IntentGatewayInput): string[] {
   const channelLabel = input.channel?.trim() || 'unknown';
   const rawRequest = input.content.trim();
   const normalizedRequest = collapseIntentGatewayWhitespace(rawRequest);
@@ -664,26 +680,30 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
     ? `Available coding backends: ${input.availableCodingBackends.join(', ')}\n`
     : '';
   return [
+    `Channel: ${channelLabel}`,
+    providerSection.trimEnd(),
+    codingBackendSection.trimEnd(),
+    'Classify this request.',
+    '',
+    normalizedRequest && normalizedRequest !== rawRequest
+      ? `Whitespace-normalized request: ${normalizedRequest}`
+      : '',
+    historySection,
+    pendingActionSection,
+    continuitySection,
+    rawRequest,
+  ].filter(Boolean);
+}
+
+function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: string): ChatMessage[] {
+  return [
     {
       role: 'system',
       content: systemPrompt,
     },
     {
       role: 'user',
-      content: [
-        `Channel: ${channelLabel}`,
-        providerSection.trimEnd(),
-        codingBackendSection.trimEnd(),
-        'Classify this request.',
-        '',
-        normalizedRequest && normalizedRequest !== rawRequest
-          ? `Whitespace-normalized request: ${normalizedRequest}`
-          : '',
-        historySection,
-        pendingActionSection,
-        continuitySection,
-        rawRequest,
-      ].filter(Boolean).join('\n'),
+      content: buildIntentGatewayContextSections(input).join('\n'),
     },
   ];
 }

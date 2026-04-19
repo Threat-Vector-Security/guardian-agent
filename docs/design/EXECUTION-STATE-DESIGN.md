@@ -1,5 +1,7 @@
 # Execution State Design
 
+> Superseded as the steady-state delegated execution design by [EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md](../plans/EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md). The current architecture must converge on the execution/event/evidence model defined there.
+
 **Status:** Implemented current architecture
 
 This spec defines Guardian's first-class execution model for user work.

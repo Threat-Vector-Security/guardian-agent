@@ -577,33 +577,52 @@ function deriveDelegatedExecutionDecision(input: {
   parentProfile: SelectedExecutionProfile | null | undefined;
 }): IntentGatewayDecision | null {
   const descriptor = input.orchestration;
+  const gatewayDecision = input.gatewayDecision ?? null;
   if (!descriptor) {
-    return input.gatewayDecision ?? null;
+    return gatewayDecision;
   }
 
-  const base = input.gatewayDecision ?? {
-    route: 'general_assistant',
-    confidence: 'high' as const,
-    operation: 'inspect' as const,
-    summary: 'Delegated workload.',
-    turnRelation: 'follow_up' as const,
-    resolution: 'ready' as const,
+  const baseRoute = gatewayDecision?.route ?? 'general_assistant';
+  const baseOperation = gatewayDecision?.operation ?? 'inspect';
+  const baseExecutionClass = gatewayDecision?.executionClass ?? 'tool_orchestration';
+  const basePreferredTier = gatewayDecision?.preferredTier
+    ?? input.parentProfile?.requestedTier
+    ?? 'external';
+  const baseRequiresRepoGrounding = gatewayDecision?.requiresRepoGrounding ?? false;
+  const baseRequiresToolSynthesis = gatewayDecision?.requiresToolSynthesis ?? true;
+  const baseExpectedContextPressure = gatewayDecision?.expectedContextPressure ?? 'medium';
+  const basePreferredAnswerPath = gatewayDecision?.preferredAnswerPath ?? 'tool_loop';
+  const baseSimpleVsComplex = gatewayDecision?.simpleVsComplex ?? 'simple';
+
+  const base: IntentGatewayDecision = {
+    route: baseRoute,
+    confidence: 'high',
+    operation: baseOperation,
+    summary: gatewayDecision?.summary ?? 'Delegated workload.',
+    turnRelation: gatewayDecision?.turnRelation ?? 'follow_up',
+    resolution: 'ready',
     missingFields: [],
-    executionClass: 'tool_orchestration' as const,
-    preferredTier: input.parentProfile?.requestedTier ?? 'external',
-    requiresRepoGrounding: false,
-    requiresToolSynthesis: true,
-    expectedContextPressure: 'medium' as const,
-    preferredAnswerPath: 'tool_loop' as const,
-    entities: {},
+    executionClass: baseExecutionClass,
+    preferredTier: basePreferredTier,
+    requiresRepoGrounding: baseRequiresRepoGrounding,
+    requiresToolSynthesis: baseRequiresToolSynthesis,
+    expectedContextPressure: baseExpectedContextPressure,
+    preferredAnswerPath: basePreferredAnswerPath,
+    simpleVsComplex: baseSimpleVsComplex,
+    ...(typeof gatewayDecision?.requireExactFileReferences === 'boolean'
+      ? { requireExactFileReferences: gatewayDecision.requireExactFileReferences }
+      : {}),
+    entities: {
+      ...(gatewayDecision?.entities ?? {}),
+    },
+    ...(gatewayDecision?.resolvedContent ? { resolvedContent: gatewayDecision.resolvedContent } : {}),
+    ...(gatewayDecision?.provenance ? { provenance: { ...gatewayDecision.provenance } } : {}),
   };
 
   const descriptorLabel = descriptor.label?.trim() || descriptor.role;
   const lenses = new Set(descriptor.lenses ?? []);
   const readOperation = isReadLikeOperation(base.operation) ? base.operation : 'inspect';
-  const mutateOperation = !isReadLikeOperation(base.operation) && base.operation !== 'unknown'
-    ? base.operation
-    : (lenses.has('provider-admin') ? 'update' : 'run');
+  const mutateOperation = lenses.has('provider-admin') ? 'update' : 'run';
   const preferredDirectTier = base.preferredTier
     ?? input.parentProfile?.requestedTier
     ?? 'local';
@@ -613,7 +632,7 @@ function deriveDelegatedExecutionDecision(input: {
     ...base,
     confidence: 'high',
     summary: `${descriptorLabel} delegated workload.`,
-    turnRelation: base.turnRelation === 'correction' ? 'correction' : 'follow_up',
+    turnRelation: gatewayDecision?.turnRelation ?? 'follow_up',
     resolution: 'ready',
     missingFields: [],
     ...overrides,

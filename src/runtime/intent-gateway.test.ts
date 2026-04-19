@@ -3,8 +3,10 @@ import type { ChatResponse } from '../llm/types.js';
 import {
   IntentGateway,
   attachPreRoutedIntentGatewayMetadata,
+  detachPreRoutedIntentGatewayMetadata,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
+  shouldReusePreRoutedIntentGatewayForContent,
   toIntentGatewayClientMetadata,
 } from './intent-gateway.js';
 
@@ -2093,6 +2095,93 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.enabled).toBe(false);
   });
 
+  it('runs a confirmation pass when capability ownership contradicts the first routing decision', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+    let confirmationSystemPrompt = '';
+    let confirmationUserPrompt = '';
+
+    const result = await gateway.classify(
+      {
+        content: 'Disable Browser Read Smoke in the automations page.',
+        channel: 'web',
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'ui_control',
+              confidence: 'high',
+              operation: 'toggle',
+              summary: 'Disable an existing automation from the automations page.',
+              automationName: 'Browser Read Smoke',
+              uiSurface: 'automations',
+              enabled: false,
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        confirmationSystemPrompt = messages[0]?.content ?? '';
+        confirmationUserPrompt = messages[1]?.content ?? '';
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: JSON.stringify({
+            route: 'automation_control',
+            confidence: 'high',
+            operation: 'toggle',
+            summary: 'Disable an existing automation.',
+            automationName: 'Browser Read Smoke',
+            enabled: false,
+          }),
+          model: 'confirm-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('confirmation');
+    expect(result.model).toBe('confirm-model');
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('toggle');
+    expect(confirmationSystemPrompt).toContain('intent gateway confirmation pass');
+    expect(confirmationSystemPrompt).toContain('Skill names are downstream execution aids');
+    expect(confirmationUserPrompt).toContain('Candidate routes: automation_control');
+    expect(confirmationUserPrompt).toContain('"route":"ui_control"');
+  });
+
+  it('re-derives explicit tool work as tool-loop general assistant workload when the classifier omits workload metadata', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Run the cloud tool whm_status using profileId social.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Runs the requested built-in cloud tool.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.entities.toolName).toBe('whm_status');
+    expect(result.decision.entities.profileId).toBe('social');
+    expect(result.decision.executionClass).toBe('tool_orchestration');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('routes historical automation-output analysis to the dedicated automation output lane', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -3141,5 +3230,69 @@ describe('IntentGateway', () => {
     const preRouted = readPreRoutedIntentGatewayMetadata(metadata);
     expect(preRouted?.available).toBe(false);
     expect(shouldReusePreRoutedIntentGateway(preRouted)).toBe(false);
+  });
+
+  it('drops stale pre-routed metadata without disturbing other message metadata', () => {
+    const metadata = attachPreRoutedIntentGatewayMetadata(
+      { codeContext: { workspaceRoot: '/repo' }, other: 'keep-me' },
+      {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_session_control',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Lists coding workspaces.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+      },
+    );
+
+    const stripped = detachPreRoutedIntentGatewayMetadata(metadata);
+
+    expect(readPreRoutedIntentGatewayMetadata(stripped)).toBeNull();
+    expect(stripped).toEqual({
+      codeContext: { workspaceRoot: '/repo' },
+      other: 'keep-me',
+    });
+  });
+
+  it('only reuses pre-routed metadata when the effective routing content is unchanged', () => {
+    const metadata = attachPreRoutedIntentGatewayMetadata(
+      undefined,
+      {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_session_control',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Lists coding workspaces.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+      },
+    );
+    const preRouted = readPreRoutedIntentGatewayMetadata(metadata);
+
+    expect(shouldReusePreRoutedIntentGatewayForContent(
+      preRouted,
+      'It is running now. Try again.',
+      'In the Guardian workspace, run `pwd` in the remote sandbox and report exact stdout.',
+    )).toBe(false);
+    expect(shouldReusePreRoutedIntentGatewayForContent(
+      preRouted,
+      '  In the Guardian workspace, run `pwd` in the remote sandbox and report exact stdout.  ',
+      'In the Guardian workspace, run `pwd` in the remote sandbox and report exact stdout.',
+    )).toBe(true);
   });
 });

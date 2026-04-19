@@ -7,6 +7,10 @@ const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|
 const CONCRETE_REPO_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder|file|files|source|function|class|module|component|symbol|path|paths|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
 const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
 const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
+const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
+const EXACT_FILE_LOOKUP_VERB_PATTERN = /\b(?:which|what|exact|cite|name|list|identify|locate|show|enumerate)\b/i;
+const EXACT_FILE_TARGET_PATTERN = /\b(?:client-side\s+files?|files?|file\s+paths?|file\s+names?|functions?|code\s+paths?|client-side\s+code\s+paths?)\b/i;
+const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
 
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
@@ -84,6 +88,15 @@ export function isExplicitRepoInspectionRequest(content: string | undefined): bo
 
   return asksForFileOrSymbolLocation && (mentionsRepoScope || mentionsCodeArtifact)
     || usesPositiveInspectionVerb && !negatesRepoSearch && (mentionsRepoScope || mentionsCodeArtifact);
+}
+
+export function requestNeedsExactFileReferences(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  const namesExactTargets = EXACT_FILE_LOOKUP_VERB_PATTERN.test(normalized)
+    && EXACT_FILE_TARGET_PATTERN.test(normalized);
+  return IMPLEMENTATION_LOOKUP_PATTERN.test(normalized)
+    && (EXACT_FILE_REQUEST_PATTERN.test(normalized) || namesExactTargets);
 }
 
 export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undefined): boolean {

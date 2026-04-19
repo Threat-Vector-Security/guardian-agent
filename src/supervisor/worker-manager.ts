@@ -43,6 +43,20 @@ import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
+import {
+  buildDelegatedExecutionMetadata,
+  readDelegatedResultEnvelope,
+  readExecutionEvents,
+} from '../runtime/execution/metadata.js';
+import {
+  buildDelegatedTaskContract,
+  verifyDelegatedResult,
+} from '../runtime/execution/verifier.js';
+import type {
+  DelegatedResultEnvelope,
+  ExecutionEvent,
+  VerificationDecision,
+} from '../runtime/execution/types.js';
 
 const log = createLogger('worker-manager');
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
@@ -51,22 +65,6 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const WORKER_WORKSPACE_CLEANUP_MAX_RETRIES = 10;
 const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
-const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
-const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
-const FILE_REFERENCE_PATTERN = /\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b|\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b/i;
-const INSUFFICIENT_RESULT_PATTERNS = [
-  /\btruncated\b/i,
-  /\b(?:cannot|can't)\s+(?:give|cite|identify|provide)\b.*\b(?:exact\s+files?|file\s+paths?)\b/i,
-  /\b(?:cannot|can't)\s+identify\b.*\b(?:files?|functions?|code\s+paths?)\b/i,
-  /\bbased\s+on\s+the\s+tool\s+results\s+available\s+in\s+this\s+conversation\b/i,
-  /\bno\s+(?:client-side\s+)?code\s+paths?\s+found\b/i,
-  /\bno\s+files?\s+or\s+functions?\s+were\s+found\b/i,
-  /\bsearch(?:es)?\s+came\s+back\s+empty\b/i,
-  /\bneed(?:ed)?\s+to\b.*\b(?:targeted|narrower|broader)\s+search/i,
-  /\bwould\s+you\s+like\s+me\s+to\s+run\b/i,
-  /\bdon't\s+have\s+enough\s+evidence\b/i,
-];
-
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
 
@@ -111,7 +109,7 @@ export interface WorkerDelegationMetadata {
 
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
-  runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents'>;
   now?: () => number;
 }
 
@@ -121,13 +119,8 @@ interface ResolvedDelegatedTargetMetadata {
   orchestration?: OrchestrationRoleDescriptor;
 }
 
-interface DelegatedEvidenceContractContext {
-  kind: 'repo_grounded' | 'filesystem_mutation' | 'security_analysis';
-  failureSummary: string;
-}
-
 interface DelegatedResultSufficiencyFailure {
-  kind: 'exact_file_references' | 'terminal_result';
+  decision: VerificationDecision;
   failureSummary: string;
   retryReason: string;
 }
@@ -239,7 +232,9 @@ export class WorkerManager {
 
     const requestId = input.delegation?.requestId ?? input.message.id;
     const delegatedJobDetail = describeDelegatedJob(input, delegatedTarget);
-    const evidenceContract = buildDelegatedEvidenceContractContext(input, effectiveIntentDecision ?? undefined);
+    const taskContract = buildDelegatedTaskContract(
+      effectiveIntentDecision ?? undefined,
+    );
 
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
@@ -334,12 +329,13 @@ export class WorkerManager {
       let effectiveInput = input;
       let effectiveExecutionProfile = input.executionProfile;
       let result = await this.dispatchToWorker(worker, baseDispatchParams);
-      let insufficiency = assessDelegatedResultSufficiency(
-        input,
-        result.content,
-        result.metadata,
-        effectiveIntentDecision ?? undefined,
-      );
+      let verifiedResult = verifyDelegatedWorkerResult({
+        metadata: result.metadata,
+        intentDecision: effectiveIntentDecision ?? undefined,
+        executionProfile: effectiveExecutionProfile,
+        taskContract,
+      });
+      let insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision);
       if (insufficiency) {
         const retryProfile = selectDelegatedRetryExecutionProfile(
           this.runtime,
@@ -348,6 +344,7 @@ export class WorkerManager {
           effectiveExecutionProfile,
         );
         if (retryProfile) {
+          const retryUsesSameProfile = isSameExecutionProfile(retryProfile, effectiveExecutionProfile);
           const retryDetail = buildDelegatedRetryDetail(
             describeDelegatedTarget(delegatedTarget),
             retryProfile,
@@ -390,17 +387,32 @@ export class WorkerManager {
             additionalSections: appendDelegatedRetrySection(
               baseDispatchParams.additionalSections,
               insufficiency,
+              { sameProfile: retryUsesSameProfile },
             ),
             executionProfile: retryProfile,
           });
-          insufficiency = assessDelegatedResultSufficiency(
-            input,
-            result.content,
-            result.metadata,
-            effectiveIntentDecision ?? undefined,
-          );
+          verifiedResult = verifyDelegatedWorkerResult({
+            metadata: result.metadata,
+            intentDecision: effectiveIntentDecision ?? undefined,
+            executionProfile: effectiveExecutionProfile,
+            taskContract,
+          });
+          insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision);
         }
       }
+      const verifiedEnvelope = attachDelegatedVerificationDecision(
+        verifiedResult.envelope,
+        verifiedResult.decision,
+        this.observability.now?.() ?? Date.now(),
+      );
+      const verifiedMetadata: Record<string, unknown> = {
+        ...(result.metadata ?? {}),
+        ...buildDelegatedExecutionMetadata(verifiedEnvelope),
+      };
+      const verifiedResultPayload = {
+        content: result.content,
+        metadata: verifiedMetadata,
+      };
       const handoff = insufficiency
         ? buildDelegatedInsufficientResultHandoff(
           insufficiency,
@@ -408,30 +420,38 @@ export class WorkerManager {
         )
         : buildDelegatedHandoff(
           result.content,
-          result.metadata,
+          verifiedMetadata,
           effectiveInput.delegation?.runClass,
-          evidenceContract,
+          verifiedResult.decision,
         );
       const lifecycle = insufficiency
         ? 'failed'
         : resolveDelegatedWorkerLifecycle(
-          result.metadata,
+          verifiedMetadata,
           handoff.unresolvedBlockerKind,
-          evidenceContract,
+          verifiedResult.decision,
         );
       const normalizedResult = insufficiency
         ? {
             content: formatFailedDelegatedMessage(handoff),
             metadata: {
-              ...(result.metadata ?? {}),
+              ...verifiedMetadata,
               delegatedHandoff: handoff,
               delegatedSufficiencyFailure: {
-                kind: insufficiency.kind,
+                decision: insufficiency.decision.decision,
                 reason: insufficiency.retryReason,
+                reasons: insufficiency.decision.reasons,
               },
             },
           }
-        : applyDelegatedFollowUpPolicy(result, handoff, evidenceContract);
+        : applyDelegatedFollowUpPolicy(verifiedResultPayload, handoff, verifiedResult.decision);
+      this.recordDelegatedExecutionArtifacts(
+        effectiveInput,
+        delegatedTarget,
+        requestId,
+        delegatedTaskRunId,
+        normalizedResult.metadata,
+      );
       if (handoff.reportingMode === 'held_for_operator') {
         this.delegatedFollowUpPayloads.set(delegatedJob.id, {
           content: result.content,
@@ -682,6 +702,77 @@ export class WorkerManager {
       activeExecutionRefs: input.delegation?.activeExecutionRefs,
       ...buildDelegatedExecutionProfileMetadata(input.executionProfile),
       timestamp: this.observability.now?.() ?? Date.now(),
+    });
+  }
+
+  private recordDelegatedExecutionArtifacts(
+    input: WorkerMessageRequest,
+    target: ResolvedDelegatedTargetMetadata,
+    requestId: string,
+    taskRunId: string,
+    metadata: Record<string, unknown> | undefined,
+  ): void {
+    const events = readExecutionEvents(metadata);
+    if (events.length <= 0) {
+      return;
+    }
+    const delegatedExecution = resolveDelegatedExecutionIdentity(input, taskRunId);
+    for (const event of events) {
+      this.recordDelegatedExecutionTraceEvent(input, target, requestId, delegatedExecution, event);
+    }
+    if (typeof this.observability.runTimeline?.ingestDelegatedExecutionEvents === 'function') {
+      this.observability.runTimeline.ingestDelegatedExecutionEvents({
+        parentRunId: delegatedExecution.executionId ?? requestId,
+        taskRunId,
+        parentExecutionId: delegatedExecution.executionId ?? requestId,
+        taskExecutionId: delegatedExecution.taskExecutionId,
+        rootExecutionId: delegatedExecution.rootExecutionId ?? delegatedExecution.executionId ?? requestId,
+        codeSessionId: input.delegation?.codeSessionId,
+        agentId: target.agentId,
+        channel: input.delegation?.originChannel ?? input.message.channel,
+        events,
+      });
+    }
+  }
+
+  private recordDelegatedExecutionTraceEvent(
+    input: WorkerMessageRequest,
+    target: ResolvedDelegatedTargetMetadata,
+    requestId: string,
+    delegatedExecution: {
+      executionId?: string;
+      rootExecutionId?: string;
+      taskExecutionId?: string;
+    },
+    event: ExecutionEvent,
+  ): void {
+    const stage = mapExecutionEventToTraceStage(event.type);
+    const contentPreview = buildDelegatedExecutionEventPreview(event);
+    this.observability.intentRoutingTrace?.record({
+      stage,
+      requestId,
+      messageId: input.message.id,
+      userId: input.userId,
+      channel: input.delegation?.originChannel ?? input.message.channel,
+      agentId: target.agentId,
+      ...(contentPreview ? { contentPreview } : {}),
+      details: {
+        ...(input.delegation?.originSurfaceId ? { originSurfaceId: input.delegation.originSurfaceId } : {}),
+        ...(delegatedExecution.executionId ? { executionId: delegatedExecution.executionId } : {}),
+        ...(delegatedExecution.rootExecutionId ? { rootExecutionId: delegatedExecution.rootExecutionId } : {}),
+        ...(delegatedExecution.taskExecutionId ? { taskExecutionId: delegatedExecution.taskExecutionId } : {}),
+        ...(input.delegation?.continuityKey ? { continuityKey: input.delegation.continuityKey } : {}),
+        ...(input.delegation?.activeExecutionRefs?.length ? { activeExecutionRefs: [...input.delegation.activeExecutionRefs] } : {}),
+        ...(input.delegation?.pendingActionId ? { pendingActionId: input.delegation.pendingActionId } : {}),
+        ...(input.delegation?.codeSessionId ? { codeSessionId: input.delegation.codeSessionId } : {}),
+        ...(target.agentName ? { agentName: target.agentName } : {}),
+        ...(target.orchestration?.role ? { orchestrationRole: target.orchestration.role } : {}),
+        ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
+        eventId: event.eventId,
+        eventType: event.type,
+        ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+        ...event.payload,
+      },
     });
   }
 
@@ -1802,7 +1893,30 @@ function buildDelegatedRetryDetail(
 function appendDelegatedRetrySection(
   sections: PromptAssemblyAdditionalSection[],
   insufficiency: DelegatedResultSufficiencyFailure,
+  options?: { sameProfile?: boolean },
 ): PromptAssemblyAdditionalSection[] {
+  const retryInstruction = options?.sameProfile
+    ? 'Retry this once now on the same execution profile, but follow the corrective directive strictly instead of repeating the broad search.'
+    : 'Retry this once now using the stronger execution profile.';
+  const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  if (missingEvidenceKinds.includes('execution_evidence')) {
+    return [
+      ...sections,
+      {
+        section: 'Delegated Retry Directive',
+        mode: 'plain',
+        content: [
+          'The previous delegated attempt was not sufficient for the user request.',
+          `Failure mode: ${insufficiency.failureSummary}`,
+          retryInstruction,
+          'Discovering or listing tools does not satisfy an execution request.',
+          'If you used find_tools to load code_remote_exec or another execution tool, call that tool in this retry.',
+          'Do not ask the user whether to proceed when the original request already told you to run the command or verification step.',
+          'Only pause if a real tool result returns pending_approval or another real blocker.',
+        ].join('\n'),
+      },
+    ];
+  }
   return [
     ...sections,
     {
@@ -1811,9 +1925,11 @@ function appendDelegatedRetrySection(
       content: [
         'The previous delegated attempt was not sufficient for the user request.',
         `Failure mode: ${insufficiency.failureSummary}`,
-        'Retry this once now using the stronger execution profile.',
+        retryInstruction,
         'Do not ask the user whether to narrow the search. Narrow it yourself.',
         'Use targeted repo inspection and return exact file paths or exact file citations in the final answer.',
+        'If you are about to conclude that an implementation path does not exist, enumerate likely directories with fs_list first instead of relying on content search alone.',
+        'If a search result is truncated or only reports that matches exist, immediately narrow the scope with fs_list/fs_search/fs_read until you can cite the exact files.',
       ].join('\n'),
     },
   ];
@@ -1831,56 +1947,160 @@ function buildDelegatedInsufficientResultHandoff(
   };
 }
 
-function assessDelegatedResultSufficiency(
-  input: WorkerMessageRequest,
-  content: string,
-  metadata: Record<string, unknown> | undefined,
-  intentDecision: IntentGatewayDecision | undefined,
+function buildDelegatedRetryableFailure(
+  decision: VerificationDecision,
 ): DelegatedResultSufficiencyFailure | null {
-  const workerExecution = readWorkerExecutionMetadata(metadata);
-  if (!workerExecution) return null;
-  if (
-    workerExecution.completionReason === 'intermediate_response'
-    || workerExecution.responseQuality === 'intermediate'
-  ) {
-    return {
-      kind: 'terminal_result',
-      failureSummary: 'Delegated worker returned a progress update instead of a terminal result.',
-      retryReason: 'the previous attempt stopped at a progress update instead of completing the delegated task',
-    };
-  }
-  if (!intentDecision || workerExecution.lifecycle !== 'completed') return null;
-  if ((workerExecution.successfulToolResultCount ?? 0) <= 0) return null;
-  if (!requestNeedsExactFileReferences(input.message.content, intentDecision)) return null;
-  if (contentHasConcreteFileReferences(content)) return null;
-  if (!contentSignalsInsufficientGroundedLookup(content)) return null;
+  if (!decision.retryable) return null;
+  if (decision.decision !== 'insufficient' && decision.decision !== 'contradicted') return null;
   return {
-    kind: 'exact_file_references',
-    failureSummary: 'Delegated worker did not return the exact file references requested after repo inspection.',
-    retryReason: 'the previous answer did not name the exact files or code paths that were requested',
+    decision,
+    failureSummary: decision.reasons[0]?.trim() || 'Delegated worker did not satisfy the task contract.',
+    retryReason: buildDelegatedRetryReason(decision),
   };
 }
 
-function requestNeedsExactFileReferences(
-  requestText: string,
-  intentDecision: IntentGatewayDecision,
-): boolean {
-  if (!(intentDecision.requiresRepoGrounding === true || intentDecision.executionClass === 'repo_grounded')) {
-    return false;
+function buildDelegatedRetryReason(decision: VerificationDecision): string {
+  const missingEvidenceKinds = decision.missingEvidenceKinds ?? [];
+  if (missingEvidenceKinds.includes('file_reference_claim')) {
+    return 'the previous answer did not name the exact files or code paths that were requested';
   }
-  if (!isReadOnlyFilesystemOperation(intentDecision.operation) && intentDecision.route !== 'coding_task' && intentDecision.route !== 'security_task') {
-    return false;
+  if (missingEvidenceKinds.includes('filesystem_mutation_receipt')) {
+    return 'the previous attempt claimed a filesystem change without producing a successful tool result or a real blocker';
   }
-  return EXACT_FILE_REQUEST_PATTERN.test(requestText) && IMPLEMENTATION_LOOKUP_PATTERN.test(requestText);
+  if (missingEvidenceKinds.includes('execution_evidence')) {
+    return 'the previous attempt did not actually execute the requested command or verification step';
+  }
+  if (missingEvidenceKinds.includes('repo_evidence')) {
+    return 'the previous attempt answered without collecting successful repo evidence';
+  }
+  if (missingEvidenceKinds.includes('security_evidence')) {
+    return 'the previous attempt answered without collecting successful security evidence';
+  }
+  if (missingEvidenceKinds.includes('delegated_result_envelope')) {
+    return 'the previous attempt did not return the typed delegated result envelope required by the protocol';
+  }
+  return decision.reasons[0]?.trim().toLowerCase()
+    || 'the previous attempt did not satisfy the delegated task contract';
 }
 
-function contentHasConcreteFileReferences(content: string): boolean {
-  return FILE_REFERENCE_PATTERN.test(content);
+function verifyDelegatedWorkerResult(input: {
+  metadata: Record<string, unknown> | undefined;
+  intentDecision: IntentGatewayDecision | undefined;
+  executionProfile: SelectedExecutionProfile | undefined;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+}): {
+  envelope: DelegatedResultEnvelope;
+  decision: VerificationDecision;
+} {
+  const envelope = readDelegatedResultEnvelope(input.metadata);
+  if (!envelope) {
+    return {
+      envelope: buildProtocolFailureEnvelope(
+        input.taskContract,
+        'Delegated worker did not return a typed result envelope.',
+      ),
+      decision: {
+        decision: 'contradicted',
+        reasons: ['Delegated worker did not return a typed result envelope.'],
+        retryable: true,
+        requiredNextAction: 'Retry the delegated run and require a typed delegated result envelope.',
+        missingEvidenceKinds: ['delegated_result_envelope'],
+      },
+    };
+  }
+  return {
+    envelope,
+    decision: verifyDelegatedResult({
+      envelope,
+      gatewayDecision: input.intentDecision,
+      executionProfile: input.executionProfile,
+    }),
+  };
 }
 
-function contentSignalsInsufficientGroundedLookup(content: string): boolean {
-  const normalized = String(content ?? '');
-  return INSUFFICIENT_RESULT_PATTERNS.some((pattern) => pattern.test(normalized));
+function buildProtocolFailureEnvelope(
+  taskContract: DelegatedResultEnvelope['taskContract'],
+  operatorSummary: string,
+): DelegatedResultEnvelope {
+  return {
+    taskContract,
+    operatorSummary,
+    claims: [],
+    evidenceReceipts: [],
+    interruptions: [],
+    artifacts: [],
+    events: [],
+  };
+}
+
+function attachDelegatedVerificationDecision(
+  envelope: DelegatedResultEnvelope,
+  decision: VerificationDecision,
+  timestamp: number,
+): DelegatedResultEnvelope {
+  const verificationEvent: ExecutionEvent = {
+    eventId: `verification:${decision.decision}`,
+    type: 'verification_decided',
+    timestamp,
+    payload: {
+      decision: decision.decision,
+      reasons: [...decision.reasons],
+      retryable: decision.retryable,
+      ...(decision.requiredNextAction ? { requiredNextAction: decision.requiredNextAction } : {}),
+      ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
+      summary: decision.reasons[0] ?? 'Verification completed.',
+    },
+  };
+  return {
+    ...envelope,
+    verification: {
+      ...decision,
+      reasons: [...decision.reasons],
+      ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
+    },
+    events: [
+      ...envelope.events.filter((event) => event.type !== 'verification_decided'),
+      verificationEvent,
+    ],
+  };
+}
+
+function mapExecutionEventToTraceStage(
+  type: ExecutionEvent['type'],
+): Extract<
+  IntentRoutingTraceStage,
+  | 'delegated_tool_call_started'
+  | 'delegated_tool_call_completed'
+  | 'delegated_interruption_requested'
+  | 'delegated_interruption_resolved'
+  | 'delegated_claim_emitted'
+  | 'delegated_verification_decided'
+> {
+  switch (type) {
+    case 'tool_call_started':
+      return 'delegated_tool_call_started';
+    case 'tool_call_completed':
+      return 'delegated_tool_call_completed';
+    case 'interruption_requested':
+      return 'delegated_interruption_requested';
+    case 'interruption_resolved':
+      return 'delegated_interruption_resolved';
+    case 'claim_emitted':
+      return 'delegated_claim_emitted';
+    case 'verification_decided':
+    default:
+      return 'delegated_verification_decided';
+  }
+}
+
+function buildDelegatedExecutionEventPreview(event: ExecutionEvent): string | undefined {
+  const toolName = typeof event.payload.toolName === 'string' ? event.payload.toolName.trim() : '';
+  const summary = typeof event.payload.summary === 'string' ? event.payload.summary.trim() : '';
+  const prompt = typeof event.payload.prompt === 'string' ? event.payload.prompt.trim() : '';
+  if (toolName) return toolName;
+  if (summary) return truncateInlineText(summary, 220);
+  if (prompt) return truncateInlineText(prompt, 220);
+  return undefined;
 }
 
 function selectDelegatedRetryExecutionProfile(
@@ -1890,8 +2110,8 @@ function selectDelegatedRetryExecutionProfile(
   currentProfile: SelectedExecutionProfile | undefined,
 ): SelectedExecutionProfile | null {
   const config = runtime.getConfigSnapshot?.();
-  if (!config) return null;
-  return selectEscalatedDelegatedExecutionProfile({
+  if (!config) return currentProfile ?? null;
+  const escalated = selectEscalatedDelegatedExecutionProfile({
     config,
     currentProfile,
     parentProfile: currentProfile,
@@ -1899,9 +2119,29 @@ function selectDelegatedRetryExecutionProfile(
     orchestration: target.orchestration,
     mode: currentProfile?.routingMode,
   });
+  return escalated ?? currentProfile ?? null;
+}
+
+function isSameExecutionProfile(
+  left: SelectedExecutionProfile | undefined,
+  right: SelectedExecutionProfile | undefined,
+): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const leftId = typeof left.id === 'string' ? left.id.trim() : '';
+  const rightId = typeof right.id === 'string' ? right.id.trim() : '';
+  if (leftId && rightId && leftId === rightId) return true;
+  return left.providerName === right.providerName
+    && left.providerModel === right.providerModel
+    && left.providerTier === right.providerTier
+    && left.providerLocality === right.providerLocality;
 }
 
 function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined): number {
+  const approvalInterruption = readDelegatedApprovalInterruption(metadata);
+  if (approvalInterruption) {
+    return approvalInterruption.approvalSummaries?.length ?? 0;
+  }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (typeof workerExecution?.pendingApprovalCount === 'number') {
     return workerExecution.pendingApprovalCount;
@@ -1914,6 +2154,10 @@ function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined)
 }
 
 function readPendingActionKind(metadata: Record<string, unknown> | undefined): string | undefined {
+  const interruptionKind = readDelegatedInterruptionKind(metadata);
+  if (interruptionKind) {
+    return interruptionKind;
+  }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (workerExecution?.blockerKind?.trim()) {
     return workerExecution.blockerKind.trim();
@@ -1924,43 +2168,21 @@ function readPendingActionKind(metadata: Record<string, unknown> | undefined): s
   return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined;
 }
 
-function buildDelegatedEvidenceContractContext(
-  input: WorkerMessageRequest,
-  intentDecision: IntentGatewayDecision | undefined,
-): DelegatedEvidenceContractContext | undefined {
-  if (!intentDecision) return undefined;
-
-  if (intentDecision.route === 'filesystem_task' && !isReadOnlyFilesystemOperation(intentDecision.operation)) {
-    return {
-      kind: 'filesystem_mutation',
-      failureSummary: 'Delegated worker claimed a filesystem change without producing a successful tool result or a real blocker.',
-    };
-  }
-
-  if (intentDecision.route === 'security_task' && (intentDecision.requiresRepoGrounding === true || hasDelegatedWorkspaceContext(input))) {
-    return {
-      kind: 'security_analysis',
-      failureSummary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
-    };
-  }
-
-  if (intentDecision.requiresRepoGrounding === true || intentDecision.executionClass === 'repo_grounded') {
-    return {
-      kind: 'repo_grounded',
-      failureSummary: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
-    };
-  }
-
-  return undefined;
-}
-
 function resolveDelegatedWorkerLifecycle(
   metadata: Record<string, unknown> | undefined,
   unresolvedBlockerKind?: string,
-  evidenceContract?: DelegatedEvidenceContractContext,
+  verification?: VerificationDecision,
 ): 'completed' | 'blocked' | 'failed' {
-  if (violatesDelegatedEvidenceContract(evidenceContract, metadata)) {
-    return 'failed';
+  if (verification) {
+    if (verification.decision === 'blocked' || verification.decision === 'policy_blocked') {
+      return 'blocked';
+    }
+    if (verification.decision === 'insufficient' || verification.decision === 'contradicted') {
+      return 'failed';
+    }
+    if (verification.decision === 'satisfied') {
+      return 'completed';
+    }
   }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (workerExecution?.lifecycle) {
@@ -1972,10 +2194,12 @@ function resolveDelegatedWorkerLifecycle(
 function buildDelegatedFailureSummary(
   content: string,
   metadata: Record<string, unknown> | undefined,
-  evidenceContract?: DelegatedEvidenceContractContext,
+  verification?: VerificationDecision,
 ): string | undefined {
-  if (violatesDelegatedEvidenceContract(evidenceContract, metadata)) {
-    return evidenceContract?.failureSummary;
+  if (verification && verification.decision !== 'satisfied' && verification.decision !== 'blocked') {
+    return verification.reasons[0]
+      ?? verification.requiredNextAction
+      ?? 'Delegated worker did not satisfy the task contract.';
   }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (!workerExecution || workerExecution.lifecycle !== 'failed') {
@@ -2002,16 +2226,16 @@ function buildDelegatedHandoff(
   content: string,
   metadata: Record<string, unknown> | undefined,
   runClassInput?: DelegatedWorkerRunClass,
-  evidenceContract?: DelegatedEvidenceContractContext,
+  verification?: VerificationDecision,
 ): DelegatedWorkerHandoff {
-  const unresolvedBlockerKind = readPendingActionKind(metadata);
-  const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind, evidenceContract);
-  const summary = buildDelegatedFailureSummary(content, metadata, evidenceContract)
+  const unresolvedBlockerKind = resolveDelegatedBlockedKind(metadata, verification);
+  const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind, verification);
+  const summary = buildDelegatedFailureSummary(content, metadata, verification)
     ?? truncateInlineText(content, 220)
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
   const runClass = normalizeDelegatedRunClass(runClassInput);
-  let nextAction = 'Result returned inline to the original conversation.';
+  let nextAction = verification?.requiredNextAction ?? 'Result returned inline to the original conversation.';
   let reportingMode: DelegatedWorkerHandoff['reportingMode'] = 'inline_response';
   let operatorState: DelegatedWorkerHandoff['operatorState'] | undefined;
 
@@ -2024,8 +2248,11 @@ function buildDelegatedHandoff(
   } else if (unresolvedBlockerKind === 'workspace_switch') {
     nextAction = 'Switch to the requested coding workspace to continue the delegated run.';
     reportingMode = 'status_only';
+  } else if (unresolvedBlockerKind === 'policy_blocked') {
+    nextAction = verification?.requiredNextAction ?? 'Resolve the policy blocker before retrying.';
+    reportingMode = 'status_only';
   } else if (lifecycle === 'failed') {
-    nextAction = 'Inspect the delegated worker failure details before retrying.';
+    nextAction = verification?.requiredNextAction ?? 'Inspect the delegated worker failure details before retrying.';
   } else if (runClass === 'long_running' || runClass === 'automation_owned') {
     // TODO(background-delegation-uplift): Broaden run-class adoption beyond this brokered worker path,
     // define stronger per-class follow-up defaults, and extend this from bounded held-result handling
@@ -2049,9 +2276,9 @@ function buildDelegatedHandoff(
 function applyDelegatedFollowUpPolicy(
   result: { content: string; metadata?: Record<string, unknown> },
   handoff: DelegatedWorkerHandoff,
-  evidenceContract?: DelegatedEvidenceContractContext,
+  verification?: VerificationDecision,
 ): { content: string; metadata?: Record<string, unknown> } {
-  const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind, evidenceContract);
+  const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind, verification);
   const metadata: Record<string, unknown> = {
     ...(result.metadata ?? {}),
     delegatedHandoff: handoff,
@@ -2091,6 +2318,8 @@ function formatStatusOnlyDelegatedMessage(
     ? 'Delegated work is paused: clarification required.'
     : handoff.unresolvedBlockerKind === 'workspace_switch'
       ? 'Delegated work is paused: workspace switch required.'
+      : handoff.unresolvedBlockerKind === 'policy_blocked'
+        ? 'Delegated work is paused: policy blocker must be resolved.'
       : 'Delegated work is paused.';
   const blockerPrompt = readPendingActionPrompt(metadata);
   const parts = [
@@ -2121,39 +2350,56 @@ function formatFailedDelegatedMessage(handoff: DelegatedWorkerHandoff): string {
 }
 
 function readPendingActionPrompt(metadata: Record<string, unknown> | undefined): string | undefined {
+  const interruptionPrompt = readDelegatedInterruptionPrompt(metadata);
+  if (interruptionPrompt) {
+    return interruptionPrompt;
+  }
   const pendingAction = metadata?.pendingAction;
   if (!isRecord(pendingAction) || !isRecord(pendingAction.blocker)) return undefined;
   const prompt = pendingAction.blocker.prompt;
   return typeof prompt === 'string' && prompt.trim().length > 0 ? prompt.trim() : undefined;
 }
 
-function violatesDelegatedEvidenceContract(
-  evidenceContract: DelegatedEvidenceContractContext | undefined,
+function resolveDelegatedBlockedKind(
   metadata: Record<string, unknown> | undefined,
-): boolean {
-  if (!evidenceContract) {
-    return false;
+  verification?: VerificationDecision,
+): string | undefined {
+  if (verification?.decision === 'policy_blocked') {
+    return 'policy_blocked';
   }
-  if (readPendingActionKind(metadata)) {
-    return false;
-  }
-  const workerExecution = readWorkerExecutionMetadata(metadata);
-  if (!workerExecution || workerExecution.lifecycle !== 'completed') {
-    return false;
-  }
-  return (workerExecution.successfulToolResultCount ?? 0) <= 0;
+  return readPendingActionKind(metadata);
 }
 
-function hasDelegatedWorkspaceContext(input: WorkerMessageRequest): boolean {
-  if (normalizeDelegatedIdentityValue(input.delegation?.codeSessionId)) {
-    return true;
-  }
-  return (input.delegation?.activeExecutionRefs ?? []).some((ref) =>
-    typeof ref === 'string' && ref.trim().toLowerCase().startsWith('code_session:'));
+function readDelegatedApprovalInterruption(
+  metadata: Record<string, unknown> | undefined,
+): DelegatedResultEnvelope['interruptions'][number] | undefined {
+  return readDelegatedResultEnvelope(metadata)?.interruptions.find((interruption) => interruption.kind === 'approval');
 }
 
-function isReadOnlyFilesystemOperation(operation: IntentGatewayDecision['operation']): boolean {
-  return operation === 'inspect' || operation === 'read' || operation === 'search';
+function readDelegatedInterruptionKind(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const interruption = readDelegatedResultEnvelope(metadata)?.interruptions[0];
+  if (!interruption) {
+    return undefined;
+  }
+  switch (interruption.kind) {
+    case 'approval':
+    case 'clarification':
+    case 'workspace_switch':
+      return interruption.kind;
+    case 'policy_blocked':
+      return 'policy_blocked';
+    default:
+      return undefined;
+  }
+}
+
+function readDelegatedInterruptionPrompt(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const prompt = readDelegatedResultEnvelope(metadata)?.interruptions[0]?.prompt;
+  return typeof prompt === 'string' && prompt.trim().length > 0 ? prompt.trim() : undefined;
 }
 
 function normalizeDelegatedRunClass(value: unknown): DelegatedWorkerRunClass {

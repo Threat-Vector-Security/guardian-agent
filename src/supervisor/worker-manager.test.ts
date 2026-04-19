@@ -5,8 +5,11 @@ import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import { buildDelegatedExecutionMetadata } from '../runtime/execution/metadata.js';
+import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
-import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
+import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
+import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
@@ -68,7 +71,41 @@ function repoGroundedCodingMetadata(
       turnRelation: 'new_request',
       resolution: 'ready',
       missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
       requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      entities: {},
+    },
+  });
+}
+
+function generalAssistantDirectMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'User asks for a concise project summary.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
       entities: {},
     },
   });
@@ -91,8 +128,11 @@ function securityReviewMetadata(
       resolution: 'ready',
       missingFields: [],
       executionClass: 'security_analysis',
+      preferredTier: 'external',
       requiresRepoGrounding: true,
       requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'high',
       preferredAnswerPath: 'chat_synthesis',
       entities: {},
     },
@@ -116,12 +156,216 @@ function filesystemMutationMetadata(
       resolution: 'ready',
       missingFields: [],
       executionClass: 'repo_grounded',
+      preferredTier: 'external',
       requiresRepoGrounding: true,
       requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
       preferredAnswerPath: 'tool_loop',
       entities: {},
     },
   });
+}
+
+function buildTestGatewayDecisionFromRequest(params: Record<string, unknown> | undefined) {
+  const request = params?.message as { content?: string; metadata?: Record<string, unknown> } | undefined;
+  const requestContent = typeof request?.content === 'string' ? request.content : '';
+  const preRouted = readPreRoutedIntentGatewayMetadata(request?.metadata);
+  if (preRouted?.decision) {
+    const decision = preRouted.decision;
+    return {
+      ...decision,
+      ...(typeof decision.requireExactFileReferences === 'boolean'
+        ? {}
+        : {
+            requireExactFileReferences: (
+              decision.requiresRepoGrounding === true
+              || decision.executionClass === 'repo_grounded'
+              || decision.executionClass === 'security_analysis'
+            ) && requestNeedsExactFileReferences(requestContent),
+          }),
+    };
+  }
+
+  const repoGrounded = /\b(?:repo|repository|workspace|codebase|files?|functions?|paths?)\b/i.test(requestContent);
+  if (repoGrounded) {
+    return {
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Recovered repo-grounded delegated test request.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: requestNeedsExactFileReferences(requestContent),
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      entities: {},
+    } as const;
+  }
+
+  return {
+    route: 'general_assistant',
+    confidence: 'low',
+    operation: 'inspect',
+    summary: 'Recovered direct-answer delegated test request.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'direct_assistant',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    entities: {},
+  } as const;
+}
+
+function extractTestFileReferences(content: string): string[] {
+  const matches = new Set<string>();
+  const pattern = /(?:^|[\s`'"])((?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml))/g;
+  for (const match of content.matchAll(pattern)) {
+    const ref = match[1]?.trim();
+    if (ref) {
+      matches.add(ref.replaceAll('\\', '/'));
+    }
+  }
+  return [...matches];
+}
+
+function ensureDelegatedResultEnvelopeForTest(
+  response: { content: string; metadata?: Record<string, unknown> },
+  params: Record<string, unknown> | undefined,
+): { content: string; metadata?: Record<string, unknown> } {
+  const metadata = response.metadata ? { ...response.metadata } : undefined;
+  if (metadata?.skipTestDelegatedEnvelope === true) {
+    delete metadata.skipTestDelegatedEnvelope;
+    return metadata ? { ...response, metadata } : response;
+  }
+  if (metadata?.delegatedResult) {
+    return response;
+  }
+
+  const decision = buildTestGatewayDecisionFromRequest(params);
+  const taskContract = buildDelegatedTaskContract(decision);
+  const workerExecution = metadata?.workerExecution as Record<string, unknown> | undefined;
+  const successfulToolResultCount = typeof workerExecution?.successfulToolResultCount === 'number'
+    ? Math.max(0, Math.trunc(workerExecution.successfulToolResultCount))
+    : 0;
+  const receipts = Array.from({ length: successfulToolResultCount }, (_, index) => ({
+    receiptId: `test-receipt-${index + 1}`,
+    sourceType: 'tool_call' as const,
+    toolName: 'fs_search',
+    status: 'succeeded' as const,
+    refs: [],
+    summary: `Test receipt ${index + 1}`,
+    startedAt: index + 1,
+    endedAt: index + 1,
+  }));
+  const fileRefs = extractTestFileReferences(response.content);
+  const claims = [
+    ...fileRefs.map((ref, index) => ({
+      claimId: `test-file-${index + 1}`,
+      kind: 'file_reference' as const,
+      subject: ref,
+      value: ref,
+      evidenceReceiptIds: receipts.length > 0
+        ? [receipts[Math.min(index, receipts.length - 1)]!.receiptId]
+        : [],
+      confidence: 0.8,
+    })),
+    ...(taskContract.kind === 'filesystem_mutation' && receipts.length > 0
+      ? [{
+          claimId: 'test-filesystem-mutation',
+          kind: 'filesystem_mutation' as const,
+          subject: 'filesystem',
+          value: response.content.trim() || 'Filesystem mutation completed.',
+          evidenceReceiptIds: [receipts[0]!.receiptId],
+          confidence: 0.9,
+        }]
+      : []),
+  ];
+  const pendingAction = metadata?.pendingAction as {
+    blocker?: {
+      kind?: string;
+      prompt?: string;
+      approvalSummaries?: Array<{ id: string; toolName: string; argsPreview?: string }>;
+    };
+  } | undefined;
+  const interruptions = pendingAction?.blocker?.kind
+    ? [{
+        interruptionId: `test-${pendingAction.blocker.kind}`,
+        kind: pendingAction.blocker.kind === 'approval'
+          || pendingAction.blocker.kind === 'clarification'
+          || pendingAction.blocker.kind === 'workspace_switch'
+          ? pendingAction.blocker.kind
+          : 'policy_blocked',
+        prompt: pendingAction.blocker.prompt ?? 'Delegated worker is waiting for operator input.',
+        ...(pendingAction.blocker.kind === 'approval'
+          ? {
+              approvalSummaries: (pendingAction.blocker.approvalSummaries ?? []).map((summary) => ({
+                ...summary,
+              })),
+            }
+          : {}),
+      }]
+    : [];
+  const events = interruptions.length > 0
+    ? [{
+        eventId: `${interruptions[0]!.interruptionId}:requested`,
+        type: 'interruption_requested' as const,
+        timestamp: 1,
+        payload: {
+          kind: interruptions[0]!.kind,
+          prompt: interruptions[0]!.prompt,
+        },
+      }]
+    : response.content.trim()
+      ? [{
+          eventId: 'test-claim',
+          type: 'claim_emitted' as const,
+          timestamp: 1,
+          payload: {
+            kind: 'answer',
+            content: response.content.trim(),
+          },
+        }]
+      : [];
+
+  return {
+    ...response,
+    metadata: {
+      ...(metadata ?? {}),
+      ...buildDelegatedExecutionMetadata({
+        taskContract,
+        ...(response.content.trim() && interruptions.length === 0 ? { finalUserAnswer: response.content.trim() } : {}),
+        operatorSummary: response.content.trim() || 'Delegated worker completed.',
+        claims,
+        evidenceReceipts: receipts,
+        interruptions,
+        artifacts: [],
+        ...(workerExecution
+          ? {
+              verificationHints: {
+                ...(typeof workerExecution.responseQuality === 'string'
+                  ? { responseQuality: workerExecution.responseQuality }
+                  : {}),
+                ...(typeof workerExecution.completionReason === 'string'
+                  ? { completionReason: workerExecution.completionReason }
+                  : {}),
+              },
+            }
+          : {}),
+        events,
+      }),
+    },
+  };
 }
 
 function createExecutionProfileTestConfig(): GuardianAgentConfig {
@@ -189,10 +433,14 @@ class FakeWorkerChild extends EventEmitter {
         if (message.method === 'message.handle') {
           Promise.resolve(workerMessageHandler?.(message.params ?? {}) ?? { content: 'ok' })
             .then((response) => {
+              const normalizedResponse = ensureDelegatedResultEnvelopeForTest(
+                response,
+                message.params ?? {},
+              );
               this.stdout.write(`${JSON.stringify({
                 jsonrpc: '2.0',
                 method: 'message.response',
-                params: response,
+                params: normalizedResponse,
               })}\n`);
             });
         }
@@ -777,6 +1025,8 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_interruption_requested',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
     expect(intentRoutingTrace.record.mock.calls[0]?.[0]).toMatchObject({
@@ -812,7 +1062,10 @@ describe('WorkerManager', () => {
         lifecycle: 'running',
       },
     });
-    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+    const completedTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_completed');
+    expect(completedTrace).toMatchObject({
       stage: 'delegated_worker_completed',
       requestId: 'm-observe',
       details: {
@@ -1115,9 +1368,14 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_failed',
     ]);
-    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+    const failedTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_failed');
+    expect(failedTrace).toMatchObject({
       stage: 'delegated_worker_failed',
       requestId: 'm-failed-delegated',
       contentPreview: 'Delegated worker returned a progress update instead of a terminal result.',
@@ -1232,9 +1490,14 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_failed',
     ]);
-    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+    const repoFailureTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_failed');
+    expect(repoFailureTrace).toMatchObject({
       stage: 'delegated_worker_failed',
       requestId: 'm-repo-grounding-failed',
       details: {
@@ -1253,6 +1516,198 @@ describe('WorkerManager', () => {
       requestId: 'm-repo-grounding-failed',
       detail: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
     });
+
+    manager.shutdown();
+  });
+
+  it('allows delegated direct general-assistant turns to complete without repo evidence even when a code session is visible', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'GuardianAgent is a security-first AI assistant for daily use, guarded workstation operations, and coding workflows.',
+      metadata: {
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'answer_first_response',
+          responseQuality: 'final',
+          toolCallCount: 0,
+          toolResultCount: 0,
+          successfulToolResultCount: 0,
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 123_556,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-general-assistant-direct',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'In one sentence, what is this project?',
+        metadata: generalAssistantDirectMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-general-assistant-direct',
+        originChannel: 'web',
+        codeSessionId: 'code-1',
+        orchestration: {
+          role: 'coordinator',
+          label: 'Guardian Coordinator',
+        },
+      },
+    });
+
+    expect(result.content).toBe('GuardianAgent is a security-first AI assistant for daily use, guarded workstation operations, and coding workflows.');
+    expect(result.content).not.toContain('Delegated work failed.');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
+      'delegated_worker_completed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[0]?.[0]).toMatchObject({
+      stage: 'delegated_worker_started',
+      requestId: 'm-general-assistant-direct',
+      details: {
+        delegatedIntentRoute: 'general_assistant',
+        delegatedIntentExecutionClass: 'direct_assistant',
+        delegatedIntentRequiresRepoGrounding: false,
+        delegatedIntentPreferredAnswerPath: 'direct',
+      },
+    });
+    const generalAssistantCompletedTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_completed');
+    expect(generalAssistantCompletedTrace).toMatchObject({
+      stage: 'delegated_worker_completed',
+      requestId: 'm-general-assistant-direct',
+      details: {
+        lifecycle: 'completed',
+        workerExecutionCompletionReason: 'answer_first_response',
+        workerExecutionToolCallCount: 0,
+        workerExecutionToolResultCount: 0,
+        workerExecutionSuccessfulToolResultCount: 0,
+      },
+    });
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'completed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('fails delegated worker results that omit the typed result envelope', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'The delegated worker progress implementation lives in src/supervisor/worker-manager.ts.',
+      metadata: {
+        skipTestDelegatedEnvelope: true,
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'model_response',
+          responseQuality: 'final',
+          toolCallCount: 1,
+          toolResultCount: 1,
+          successfulToolResultCount: 1,
+        },
+      },
+    });
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-missing-envelope',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-missing-envelope',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('typed result envelope');
 
     manager.shutdown();
   });
@@ -1406,6 +1861,8 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
@@ -1432,23 +1889,28 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('fails exact-file delegated repo inspections when no stronger escalation profile is available', async () => {
+  it('fails exact-file delegated repo inspections after exhausting a same-profile corrective retry when no stronger escalation profile is available', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
-    workerMessageHandler = () => ({
-      content: 'The searches confirmed the files exist, but the detailed match output was truncated so I cannot give you exact file paths with confidence.',
-      metadata: {
-        workerExecution: {
-          lifecycle: 'completed',
-          source: 'tool_loop',
-          completionReason: 'tool_result_recovery',
-          responseQuality: 'final',
-          toolCallCount: 3,
-          toolResultCount: 3,
-          successfulToolResultCount: 3,
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      return {
+        content: 'The searches confirmed the files exist, but the detailed match output was truncated so I cannot give you exact file paths with confidence.',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'tool_result_recovery',
+            responseQuality: 'final',
+            toolCallCount: 3,
+            toolResultCount: 3,
+            successfulToolResultCount: 3,
+          },
         },
-      },
-    });
+      };
+    };
 
     const intentRoutingTrace = {
       record: vi.fn(),
@@ -1532,12 +1994,180 @@ describe('WorkerManager', () => {
       },
     });
 
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'ollama-cloud-coding']);
     expect(result.content).toContain('Delegated work failed.');
     expect(result.content).toContain('exact file references requested');
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_failed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('retries exact-file delegated repo inspections on the same frontier profile when truncated search output can be corrected without escalation', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    let attempts = 0;
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      attempts += 1;
+      if (attempts > 1) {
+        return {
+          content: [
+            'Live progress in chat is rendered in `web/public/js/chat-panel.js` and matched in `web/public/js/chat-run-tracking.js`.',
+            'Repo timelines are rendered in `web/public/js/pages/code.js`, `web/public/js/pages/system.js`, and `web/public/js/pages/automations.js`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 5,
+              toolResultCount: 5,
+              successfulToolResultCount: 5,
+            },
+          },
+        };
+      }
+      return {
+        content: [
+          'The filename searches found matches for "progress" and "timeline", but the tool output was truncated and I cannot surface the exact file names yet.',
+          'I would need to drill into likely directories next.',
+        ].join(' '),
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'tool_result_recovery',
+            responseQuality: 'final',
+            toolCallCount: 3,
+            toolResultCount: 3,
+            successfulToolResultCount: 3,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => {
+          const config = createExecutionProfileTestConfig();
+          delete config.llm['ollama-cloud-coding'];
+          config.assistant.tools.preferredProviders = {
+            ...config.assistant.tools.preferredProviders,
+            managedCloud: '',
+          };
+          return config;
+        },
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 400_200,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-same-profile-exact-files',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect the repo and name the client-side files that render live progress or timeline activity. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'openai-frontier',
+        providerName: 'openai-frontier',
+        providerType: 'openai',
+        providerModel: 'gpt-5.4',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openai-frontier'],
+        reason: 'frontier repo inspection profile selected',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-same-profile-exact-files',
+        executionId: 'exec-retry-same-profile-exact-files',
+        rootExecutionId: 'exec-retry-same-profile-exact-files-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['openai-frontier', 'openai-frontier']);
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(result.content).toContain('web/public/js/chat-run-tracking.js');
+    expect(result.content).toContain('web/public/js/pages/code.js');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
+      'delegated_worker_completed',
     ]);
 
     manager.shutdown();
@@ -1686,6 +2316,8 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
     expect(intentRoutingTrace.record.mock.calls[0]?.[0]).toMatchObject({
@@ -1728,7 +2360,11 @@ describe('WorkerManager', () => {
         };
       }
       return {
-        content: '**No client-side code paths found** rendering delegated worker progress in the web UI.',
+        content: [
+          'The search found no client-side files matching "progress", "timeline", "activity", or "live render" patterns.',
+          'This aligns with the repo profile: GuardianAgent is a backend Node.js/TypeScript agent project, not a frontend UI application.',
+          'Repo map directories show no client/, ui/, or src/ client folders listed.',
+        ].join(' '),
         metadata: {
           workerExecution: {
             lifecycle: 'completed',
@@ -1843,6 +2479,163 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
+      'delegated_worker_completed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('retries imperative client-side file requests when the delegated worker stops at truncated filename-search summaries', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: [
+            'Live progress in chat is rendered in `web/public/js/chat-panel.js` and matched in `web/public/js/chat-run-tracking.js`.',
+            'Broader timeline activity is rendered in `web/public/js/pages/code.js`, `web/public/js/pages/system.js`, and `web/public/js/pages/automations.js`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 5,
+              toolResultCount: 5,
+              successfulToolResultCount: 5,
+            },
+          },
+        };
+      }
+      return {
+        content: [
+          'The filename searches this time did find matches, but the tool output was truncated and I cannot see the actual file names from the serialized results.',
+          'The repo has a `demo/` directory and an `examples/` directory at the top level, which are the most likely locations for any client-side rendering code.',
+          'To get you the specific file names, I would need to do a focused `fs_list` on those directories or read the search results at a narrower scope. Want me to drill into those directories next?',
+        ].join(' '),
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'tool_result_recovery',
+            responseQuality: 'final',
+            toolCallCount: 4,
+            toolResultCount: 4,
+            successfulToolResultCount: 4,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 777_150,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-client-side-files',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect the repo and name the client-side files that render live progress or timeline activity. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'minimax-m2.7',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-client-side-files',
+        executionId: 'exec-retry-client-side-files',
+        rootExecutionId: 'exec-retry-client-side-files-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(result.content).toContain('web/public/js/chat-run-tracking.js');
+    expect(result.content).toContain('web/public/js/pages/system.js');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
 
@@ -1992,6 +2785,8 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
 
@@ -2136,6 +2931,8 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
       'delegated_worker_completed',
     ]);
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
@@ -2225,16 +3022,16 @@ describe('WorkerManager', () => {
 
     expect(result.content).toContain('Delegated work failed.');
     expect(result.content).toContain('source-backed security findings without collecting successful tool results or evidence');
-    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
-      stage: 'delegated_worker_failed',
+    const verificationTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_verification_decided');
+    expect(verificationTrace).toMatchObject({
+      stage: 'delegated_verification_decided',
       requestId: 'm-security-evidence-failed',
       details: {
-        lifecycle: 'failed',
-        reason: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
-        handoffSummary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
-        workerExecutionToolCallCount: 3,
-        workerExecutionToolResultCount: 3,
-        workerExecutionSuccessfulToolResultCount: 0,
+        decision: 'contradicted',
+        summary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
+        missingEvidenceKinds: ['security_evidence'],
       },
     });
 
@@ -2363,6 +3160,7 @@ describe('WorkerManager', () => {
         principalRole: 'owner',
         channel: 'web',
         content: 'Run the long repository digest.',
+        metadata: generalAssistantDirectMetadata(),
         timestamp: Date.now(),
       },
       systemPrompt: 'system',

@@ -181,7 +181,9 @@ export function buildToolExecutionCorrectionPrompt(
     const lines = [
       'System correction: this turn is a repo-grounded coding request.',
       'Do not answer from memory or stop at narration before using repo/filesystem tools.',
-      'Inspect the requested files with fs_search, code_symbol_search, and fs_read, and write any requested scratch outputs with fs_write/fs_mkdir unless a real tool result blocks you.',
+      'Inspect the requested files with fs_list, fs_search, code_symbol_search, and fs_read, and write any requested scratch outputs with fs_write/fs_mkdir unless a real tool result blocks you.',
+      'When locating implementation paths, enumerate likely directories before concluding the code path does not exist.',
+      'If a filename search only says matches exist or the result is truncated, narrow the scope immediately with fs_list/fs_search/fs_read until you can cite the exact files.',
       'Only ask the user for approval after a real tool result returns pending_approval.',
     ];
     if (decision.entities.codingRemoteExecRequested === true) {
@@ -328,8 +330,10 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
     }
     const lines = [
       'This turn is a repo-grounded coding request.',
-      'Prefer native repo tools first: fs_search, code_symbol_search, and fs_read for locating and reading code.',
+      'Prefer native repo tools first: fs_list, fs_search, code_symbol_search, and fs_read for locating and reading code.',
       'Do not use shell_safe for grep, git grep, cat, sed, or similar repo inspection when the built-in repo tools can answer the question.',
+      'When the user asks where code lives, enumerate likely directories before concluding that a client-side or implementation path does not exist.',
+      'If a filename search only reports that matches exist or the result is truncated, immediately narrow the search to likely directories until you can cite exact files.',
     ];
     if (decision.operation === 'run') {
       lines.push('This is an explicit request to run repo commands (such as tests, builds, or scripts).');

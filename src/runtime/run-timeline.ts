@@ -7,6 +7,7 @@ import type {
   CodeSessionVerificationEntry,
 } from './code-sessions.js';
 import type { AssistantDispatchTrace, WorkflowTraceNode } from './orchestrator.js';
+import type { ExecutionEvent } from './execution/types.js';
 import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
 import { runDetailMatchesContextFilters } from './trace-context-filters.js';
@@ -508,6 +509,74 @@ export class RunTimelineStore {
         ],
       },
       items: [buildDelegatedWorkerProgressItem(taskRunId, event)],
+    });
+  }
+
+  ingestDelegatedExecutionEvents(input: {
+    parentRunId: string;
+    taskRunId?: string;
+    parentExecutionId?: string;
+    taskExecutionId?: string;
+    rootExecutionId?: string;
+    codeSessionId?: string;
+    agentId?: string;
+    channel?: string;
+    events: ExecutionEvent[];
+  }): void {
+    const parentRunId = nonEmptyText(input.parentRunId);
+    if (!parentRunId || !Array.isArray(input.events) || input.events.length <= 0) {
+      return;
+    }
+    const normalizedEvents = input.events
+      .filter((event) => !!event && typeof event.eventId === 'string' && typeof event.type === 'string')
+      .sort((left, right) => left.timestamp - right.timestamp);
+    if (normalizedEvents.length <= 0) {
+      return;
+    }
+
+    const parentSummary = this.runs.get(parentRunId)?.detail.summary;
+    const taskRunId = nonEmptyText(input.taskRunId);
+    const taskSummary = taskRunId ? this.runs.get(taskRunId)?.detail.summary : undefined;
+    const parentItems = normalizedEvents.map((event) => buildDelegatedExecutionEventItem(parentRunId, event));
+    this.commitRun(parentRunId, {
+      summary: {
+        ...(nonEmptyText(input.parentExecutionId) ? { executionId: nonEmptyText(input.parentExecutionId) } : {}),
+        ...(nonEmptyText(input.rootExecutionId) ? { rootExecutionId: nonEmptyText(input.rootExecutionId) } : {}),
+        ...(nonEmptyText(input.codeSessionId) ? { codeSessionId: nonEmptyText(input.codeSessionId) } : {}),
+        groupId: parentSummary?.groupId ?? (input.codeSessionId ? `code-session:${input.codeSessionId}` : parentRunId),
+        kind: parentSummary?.kind ?? (input.codeSessionId ? 'code_session' : 'assistant_dispatch'),
+        title: parentSummary?.title ?? 'Delegated worker activity',
+        ...(parentSummary?.subtitle ? { subtitle: parentSummary.subtitle } : {}),
+        ...(parentSummary?.agentId ?? input.agentId ? { agentId: parentSummary?.agentId ?? input.agentId } : {}),
+        ...(parentSummary?.channel ?? input.channel ? { channel: parentSummary?.channel ?? input.channel } : {}),
+        startedAt: parentSummary?.startedAt ?? normalizedEvents[0].timestamp,
+        tags: mergeTags(parentSummary?.tags ?? [], ['delegated-worker', 'execution-events']),
+      },
+      items: parentItems,
+    });
+
+    if (!taskRunId) {
+      return;
+    }
+
+    const taskItems = normalizedEvents.map((event) => buildDelegatedExecutionEventItem(taskRunId, event));
+    this.commitRun(taskRunId, {
+      summary: {
+        parentRunId,
+        ...(nonEmptyText(input.taskExecutionId) ? { executionId: nonEmptyText(input.taskExecutionId) } : {}),
+        ...(nonEmptyText(input.parentExecutionId) ? { parentExecutionId: nonEmptyText(input.parentExecutionId) } : {}),
+        ...(nonEmptyText(input.rootExecutionId) ? { rootExecutionId: nonEmptyText(input.rootExecutionId) } : {}),
+        ...(nonEmptyText(input.codeSessionId) ? { codeSessionId: nonEmptyText(input.codeSessionId) } : {}),
+        groupId: taskSummary?.groupId ?? parentSummary?.groupId ?? (input.codeSessionId ? `code-session:${input.codeSessionId}` : parentRunId),
+        kind: 'delegated_task',
+        title: taskSummary?.title ?? 'Delegated task',
+        ...(taskSummary?.subtitle ? { subtitle: taskSummary.subtitle } : {}),
+        ...(taskSummary?.agentId ?? input.agentId ? { agentId: taskSummary?.agentId ?? input.agentId } : {}),
+        ...(taskSummary?.channel ?? input.channel ? { channel: taskSummary?.channel ?? input.channel } : {}),
+        startedAt: taskSummary?.startedAt ?? normalizedEvents[0].timestamp,
+        tags: mergeTags(taskSummary?.tags ?? [], ['delegated-worker', 'execution-events']),
+      },
+      items: taskItems,
     });
   }
 
@@ -1124,6 +1193,90 @@ function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerP
         title: `${targetName} failed`,
         detail,
         ...(contextAssembly ? { contextAssembly } : {}),
+      };
+  }
+}
+
+function buildDelegatedExecutionEventItem(runId: string, event: ExecutionEvent): DashboardRunTimelineItem {
+  const toolName = nonEmptyText(typeof event.payload.toolName === 'string' ? event.payload.toolName : undefined);
+  const interruptionKind = nonEmptyText(typeof event.payload.kind === 'string' ? event.payload.kind : undefined);
+  const verificationDecision = nonEmptyText(typeof event.payload.decision === 'string' ? event.payload.decision : undefined);
+  const status = mapDelegatedExecutionEventStatus(event);
+  switch (event.type) {
+    case 'tool_call_started':
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_started',
+        status,
+        source: 'system',
+        title: `Tool started: ${humanizeToolName(toolName ?? 'tool')}`,
+        ...(toolName ? { toolName } : {}),
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
+      };
+    case 'tool_call_completed':
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: 'tool_call_completed',
+        status,
+        source: 'system',
+        title: buildDelegatedExecutionCompletionTitle(toolName, event),
+        ...(toolName ? { toolName } : {}),
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
+      };
+    case 'interruption_requested':
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: interruptionKind === 'approval' ? 'approval_requested' : 'note',
+        status,
+        source: 'system',
+        title: interruptionKind === 'approval'
+          ? 'Approval requested'
+          : 'Delegated interruption requested',
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
+      };
+    case 'interruption_resolved':
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: interruptionKind === 'approval' ? 'approval_resolved' : 'note',
+        status,
+        source: 'system',
+        title: interruptionKind === 'approval'
+          ? 'Approval resolved'
+          : 'Delegated interruption resolved',
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
+      };
+    case 'claim_emitted':
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: 'note',
+        status,
+        source: 'system',
+        title: 'Delegated claim emitted',
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
+      };
+    case 'verification_decided':
+    default:
+      return {
+        id: `execution-event:${event.eventId}:${runId}`,
+        runId,
+        timestamp: event.timestamp,
+        type: 'verification_completed',
+        status,
+        source: 'system',
+        title: verificationDecision
+          ? `Verification ${verificationDecision}`
+          : 'Verification completed',
+        ...(buildDelegatedExecutionEventDetail(event) ? { detail: buildDelegatedExecutionEventDetail(event) } : {}),
       };
   }
 }
@@ -1773,6 +1926,63 @@ function describeDelegatedWorkerExecutionProfile(event: DelegatedWorkerProgressE
 function buildDelegatedWorkerExecutionProfileSentence(event: DelegatedWorkerProgressEvent): string | undefined {
   const label = describeDelegatedWorkerExecutionProfile(event);
   return label ? `Execution profile: ${label}.` : undefined;
+}
+
+function buildDelegatedExecutionCompletionTitle(
+  toolName: string | undefined,
+  event: ExecutionEvent,
+): string {
+  const resultStatus = nonEmptyText(typeof event.payload.resultStatus === 'string' ? event.payload.resultStatus : undefined)?.toLowerCase();
+  if (resultStatus === 'pending_approval' || resultStatus === 'blocked') {
+    return `Tool blocked: ${humanizeToolName(toolName ?? 'tool')}`;
+  }
+  if (resultStatus === 'failed' || resultStatus === 'denied' || resultStatus === 'error' || nonEmptyText(typeof event.payload.errorMessage === 'string' ? event.payload.errorMessage : undefined)) {
+    return `Tool failed: ${humanizeToolName(toolName ?? 'tool')}`;
+  }
+  return `Tool completed: ${humanizeToolName(toolName ?? 'tool')}`;
+}
+
+function buildDelegatedExecutionEventDetail(event: ExecutionEvent): string | undefined {
+  const detailParts = [
+    nonEmptyText(typeof event.payload.resultMessage === 'string' ? event.payload.resultMessage : undefined),
+    nonEmptyText(typeof event.payload.errorMessage === 'string' ? event.payload.errorMessage : undefined),
+    nonEmptyText(typeof event.payload.prompt === 'string' ? event.payload.prompt : undefined),
+    nonEmptyText(typeof event.payload.summary === 'string' ? event.payload.summary : undefined),
+    Array.isArray(event.payload.reasons)
+      ? event.payload.reasons
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .join(' ')
+      : undefined,
+  ].filter((value): value is string => !!value);
+  const detail = detailParts.join('\n');
+  return truncateText(detail || undefined, 220);
+}
+
+function mapDelegatedExecutionEventStatus(event: ExecutionEvent): DashboardRunTimelineItem['status'] {
+  const resultStatus = nonEmptyText(typeof event.payload.resultStatus === 'string' ? event.payload.resultStatus : undefined)?.toLowerCase();
+  const decision = nonEmptyText(typeof event.payload.decision === 'string' ? event.payload.decision : undefined)?.toLowerCase();
+  switch (event.type) {
+    case 'tool_call_started':
+      return 'running';
+    case 'tool_call_completed':
+      if (resultStatus === 'pending_approval' || resultStatus === 'blocked') return 'blocked';
+      if (resultStatus === 'failed' || resultStatus === 'denied' || resultStatus === 'error') return 'failed';
+      if (nonEmptyText(typeof event.payload.errorMessage === 'string' ? event.payload.errorMessage : undefined)) return 'failed';
+      return 'succeeded';
+    case 'interruption_requested':
+      return 'blocked';
+    case 'interruption_resolved':
+      return 'succeeded';
+    case 'claim_emitted':
+      return 'info';
+    case 'verification_decided':
+    default:
+      if (decision === 'satisfied') return 'succeeded';
+      if (decision === 'blocked' || decision === 'policy_blocked') return 'blocked';
+      if (decision === 'insufficient') return 'warning';
+      if (decision === 'contradicted') return 'failed';
+      return 'info';
+  }
 }
 
 function buildDelegatedWorkerProgressDetail(event: DelegatedWorkerProgressEvent): string | undefined {

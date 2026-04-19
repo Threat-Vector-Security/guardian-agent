@@ -16,6 +16,7 @@ const ENTITY_KEYS = [
   'query',
   'path',
   'sessionTarget',
+  'codeSessionResource',
   'emailProvider',
   'mailboxReadMode',
   'calendarTarget',
@@ -34,6 +35,8 @@ export function classifierProvenanceSourceForMode(
   mode: IntentGatewayRecord['mode'],
 ): IntentGatewayProvenanceSource {
   switch (mode) {
+    case 'confirmation':
+      return 'classifier.confirmation';
     case 'json_fallback':
       return 'classifier.json_fallback';
     case 'route_only_fallback':
@@ -51,11 +54,14 @@ export function normalizeIntentGatewayProvenanceSource(
     case 'classifier.primary':
     case 'classifier.json_fallback':
     case 'classifier.route_only_fallback':
+    case 'classifier.confirmation':
     case 'resolver.email':
     case 'resolver.coding':
     case 'resolver.personal_assistant':
     case 'resolver.provider_config':
+    case 'resolver.tool_inventory':
     case 'resolver.clarification':
+    case 'repair.structured':
     case 'repair.unstructured':
     case 'repair.automation_name':
     case 'derived.workload':
@@ -92,6 +98,9 @@ export function normalizeIntentGatewayDecisionProvenance(
       : {}),
     ...(normalizeIntentGatewayProvenanceSource(record.requiresToolSynthesis)
       ? { requiresToolSynthesis: normalizeIntentGatewayProvenanceSource(record.requiresToolSynthesis)! }
+      : {}),
+    ...(normalizeIntentGatewayProvenanceSource(record.requireExactFileReferences)
+      ? { requireExactFileReferences: normalizeIntentGatewayProvenanceSource(record.requireExactFileReferences)! }
       : {}),
     ...(normalizeIntentGatewayProvenanceSource(record.expectedContextPressure)
       ? { expectedContextPressure: normalizeIntentGatewayProvenanceSource(record.expectedContextPressure)! }

@@ -458,6 +458,7 @@ export class CLIChannel implements ChannelAdapter {
   private pendingPastedMessageTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingPastedMessageLastQueuedAt = 0;
   private liveProgressStates = new Set<CliLiveProgressState>();
+  private transientProgressVisible = false;
   private unsubscribeSse: (() => void) | null = null;
   private shutdownRequested = false;
 
@@ -564,6 +565,7 @@ export class CLIChannel implements ChannelAdapter {
     this.clearPendingPastedMessageTimer();
     this.pendingPastedMessageLines = [];
     this.pendingPastedMessageLastQueuedAt = 0;
+    this.clearTransientProgressLine();
     this.liveProgressStates.clear();
     this.unsubscribeSse?.();
     this.unsubscribeSse = null;
@@ -580,6 +582,7 @@ export class CLIChannel implements ChannelAdapter {
 
   private promptIfReady(): void {
     if (this.shutdownRequested) return;
+    this.clearTransientProgressLine();
     try {
       this.rl?.prompt();
     } catch (err) {
@@ -1001,7 +1004,30 @@ export class CLIChannel implements ChannelAdapter {
           : (this.useColor ? this.dim('[progress]') : '[progress]');
     const suffix = snapshot.detail ? ` — ${snapshot.detail}` : '';
     const line = `${badge} ${snapshot.title}${suffix}`;
+    if (this.shouldUseTransientProgressLine()) {
+      this.writeTransientProgressLine(line);
+      return;
+    }
     this.write(`${line}\n`);
+  }
+
+  private shouldUseTransientProgressLine(): boolean {
+    return this.useColor;
+  }
+
+  private writeTransientProgressLine(line: string): void {
+    if (!this.shouldUseTransientProgressLine()) {
+      this.write(`${line}\n`);
+      return;
+    }
+    this.output.write(`\r\x1b[2K${line}`);
+    this.transientProgressVisible = true;
+  }
+
+  private clearTransientProgressLine(): void {
+    if (!this.transientProgressVisible || !this.shouldUseTransientProgressLine()) return;
+    this.output.write('\r\x1b[2K');
+    this.transientProgressVisible = false;
   }
 
   /**
@@ -4971,6 +4997,7 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   private write(text: string): void {
+    this.clearTransientProgressLine();
     this.output.write(text);
   }
 

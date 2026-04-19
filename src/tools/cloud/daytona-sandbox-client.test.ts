@@ -15,6 +15,8 @@ const {
   downloadFileMock,
   deleteMock,
   startMock,
+  refreshDataMock,
+  waitUntilStartedMock,
   DaytonaCtor,
 } = vi.hoisted(() => ({
   createMock: vi.fn(),
@@ -29,6 +31,14 @@ const {
   downloadFileMock: vi.fn(async () => null),
   deleteMock: vi.fn(async () => undefined),
   startMock: vi.fn(async function (this: { state?: string }) {
+    this.state = 'started';
+  }),
+  refreshDataMock: vi.fn(async function (this: { state?: string; __refreshedState?: string }) {
+    if (typeof this.__refreshedState === 'string') {
+      this.state = this.__refreshedState;
+    }
+  }),
+  waitUntilStartedMock: vi.fn(async function (this: { state?: string }) {
     this.state = 'started';
   }),
   DaytonaCtor: class {
@@ -61,8 +71,10 @@ function createSandboxRecord(state = 'started') {
   return {
     id: 'sandbox_123',
     state,
+    __refreshedState: undefined as string | undefined,
     getWorkDir: getWorkDirMock,
     getUserHomeDir: getUserHomeDirMock,
+    refreshData: refreshDataMock,
     fs: {
       createFolder: createFolderMock,
       uploadFiles: uploadFilesMock,
@@ -72,6 +84,7 @@ function createSandboxRecord(state = 'started') {
     process: {
       executeCommand: executeCommandMock,
     },
+    waitUntilStarted: waitUntilStartedMock,
     start: startMock,
     delete: deleteMock,
   };
@@ -91,6 +104,8 @@ describe('DaytonaSandboxClient', () => {
     downloadFileMock.mockClear();
     deleteMock.mockClear();
     startMock.mockClear();
+    refreshDataMock.mockClear();
+    waitUntilStartedMock.mockClear();
   });
 
   it('retries sandbox creation without resources when Daytona rejects snapshot-backed resources', async () => {
@@ -150,8 +165,13 @@ describe('DaytonaSandboxClient', () => {
     expect(getUserHomeDirMock).not.toHaveBeenCalled();
   });
 
-  it('updates the wrapped session state after start', async () => {
-    getMock.mockResolvedValueOnce(createSandboxRecord('stopped'));
+  it('refreshes the wrapped session state after start', async () => {
+    const sandbox = createSandboxRecord('stopped');
+    startMock.mockImplementationOnce(async function (this: { state?: string; __refreshedState?: string }) {
+      this.state = 'starting';
+      this.__refreshedState = 'started';
+    });
+    getMock.mockResolvedValueOnce(sandbox);
 
     const client = new DaytonaSandboxClient();
     const session = await client.getSandbox({
@@ -164,5 +184,6 @@ describe('DaytonaSandboxClient', () => {
     await session.start(30);
     expect(session.state).toBe('started');
     expect(startMock).toHaveBeenCalledWith(30);
+    expect(refreshDataMock).toHaveBeenCalled();
   });
 });
