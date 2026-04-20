@@ -208,6 +208,27 @@ export class WorkerManager {
     this.reapInterval = setInterval(() => this.reapIdleWorkers(), 60_000);
   }
 
+  private buildCodeSessionRegistrySection(input: WorkerMessageRequest): PromptAssemblyAdditionalSection | null {
+    const toolExecutor = this.tools as ToolExecutor & {
+      buildCodeSessionRegistryAdditionalSection?: (
+        request?: Partial<import('../tools/types.js').ToolExecutionRequest>,
+        maxSessions?: number,
+      ) => PromptAssemblyAdditionalSection | null;
+    };
+    if (typeof toolExecutor.buildCodeSessionRegistryAdditionalSection !== 'function') {
+      return null;
+    }
+    const codeContext = input.message.metadata?.codeContext as import('../tools/types.js').ToolExecutionRequest['codeContext'] | undefined;
+    return toolExecutor.buildCodeSessionRegistryAdditionalSection({
+      userId: input.userId,
+      principalId: input.message.principalId ?? input.userId,
+      principalRole: input.message.principalRole,
+      channel: input.message.channel,
+      surfaceId: input.message.surfaceId,
+      ...(codeContext ? { codeContext } : {}),
+    });
+  }
+
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
     if (approvalResponse) return approvalResponse;
@@ -311,13 +332,17 @@ export class WorkerManager {
       // LLM calls are proxied through the broker — the worker no longer needs the provider config.
       // We only tell the worker whether a fallback provider exists for quality-based retry.
       const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
+      const additionalSections = appendPromptAdditionalSection(
+        input.additionalSections ?? [],
+        this.buildCodeSessionRegistrySection(input),
+      );
       const baseDispatchParams = {
         message: input.message,
         systemPrompt: input.systemPrompt,
         history: input.history,
         knowledgeBases: input.knowledgeBases ?? [],
         activeSkills: input.activeSkills ?? [],
-        additionalSections: input.additionalSections ?? [],
+        additionalSections,
         toolContext: input.toolContext ?? '',
         runtimeNotices: input.runtimeNotices ?? [],
         executionProfile: input.executionProfile,
@@ -405,9 +430,10 @@ export class WorkerManager {
         verifiedResult.decision,
         this.observability.now?.() ?? Date.now(),
       );
+      const sanitizedVerifiedEnvelope = sanitizeDelegatedEnvelopeForOperator(verifiedEnvelope);
       const verifiedMetadata: Record<string, unknown> = {
         ...(result.metadata ?? {}),
-        ...buildDelegatedExecutionMetadata(verifiedEnvelope),
+        ...buildDelegatedExecutionMetadata(sanitizedVerifiedEnvelope),
       };
       const verifiedResultPayload = {
         content: result.content,
@@ -451,6 +477,7 @@ export class WorkerManager {
         requestId,
         delegatedTaskRunId,
         normalizedResult.metadata,
+        verifiedEnvelope.events,
       );
       if (handoff.reportingMode === 'held_for_operator') {
         this.delegatedFollowUpPayloads.set(delegatedJob.id, {
@@ -711,16 +738,17 @@ export class WorkerManager {
     requestId: string,
     taskRunId: string,
     metadata: Record<string, unknown> | undefined,
+    traceEvents: ExecutionEvent[] = readExecutionEvents(metadata),
   ): void {
-    const events = readExecutionEvents(metadata);
-    if (events.length <= 0) {
+    const timelineEvents = readExecutionEvents(metadata);
+    if (traceEvents.length <= 0 && timelineEvents.length <= 0) {
       return;
     }
     const delegatedExecution = resolveDelegatedExecutionIdentity(input, taskRunId);
-    for (const event of events) {
-      this.recordDelegatedExecutionTraceEvent(input, target, requestId, delegatedExecution, event);
+    for (const event of traceEvents) {
+      this.recordDelegatedExecutionTraceEvent(input, target, requestId, delegatedExecution, event, traceEvents);
     }
-    if (typeof this.observability.runTimeline?.ingestDelegatedExecutionEvents === 'function') {
+    if (timelineEvents.length > 0 && typeof this.observability.runTimeline?.ingestDelegatedExecutionEvents === 'function') {
       this.observability.runTimeline.ingestDelegatedExecutionEvents({
         parentRunId: delegatedExecution.executionId ?? requestId,
         taskRunId,
@@ -730,7 +758,7 @@ export class WorkerManager {
         codeSessionId: input.delegation?.codeSessionId,
         agentId: target.agentId,
         channel: input.delegation?.originChannel ?? input.message.channel,
-        events,
+        events: timelineEvents,
       });
     }
   }
@@ -745,6 +773,7 @@ export class WorkerManager {
       taskExecutionId?: string;
     },
     event: ExecutionEvent,
+    traceEvents: ExecutionEvent[],
   ): void {
     const stage = mapExecutionEventToTraceStage(event.type);
     const contentPreview = buildDelegatedExecutionEventPreview(event);
@@ -772,8 +801,66 @@ export class WorkerManager {
         eventType: event.type,
         ...(event.nodeId ? { nodeId: event.nodeId } : {}),
         ...event.payload,
+        ...this.buildDelegatedVerificationFailureTraceDetails(input, requestId, event, traceEvents),
       },
     });
+  }
+
+  private buildDelegatedVerificationFailureTraceDetails(
+    input: WorkerMessageRequest,
+    requestId: string,
+    event: ExecutionEvent,
+    traceEvents: ExecutionEvent[],
+  ): Record<string, unknown> {
+    if (event.type !== 'verification_decided' || event.payload.decision === 'satisfied') {
+      return {};
+    }
+
+    const tracedToolResults = traceEvents
+      .filter((entry) => entry.type === 'tool_call_completed')
+      .map((entry) => {
+        const payload = entry.payload;
+        const preview = typeof payload.traceResultPreview === 'string'
+          ? payload.traceResultPreview
+          : undefined;
+        if (!preview) {
+          return null;
+        }
+        return {
+          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined,
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : undefined,
+          resultStatus: typeof payload.resultStatus === 'string' ? payload.resultStatus : undefined,
+          resultMessage: typeof payload.resultMessage === 'string' ? payload.resultMessage : undefined,
+          errorMessage: typeof payload.errorMessage === 'string' ? payload.errorMessage : undefined,
+          resultPreview: preview,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => !!entry)
+      .slice(-6);
+
+    const jobSnapshots = typeof (this.tools as { listJobs?: unknown }).listJobs === 'function'
+      ? this.tools.listJobs(100)
+        .filter((job) => job.requestId === requestId)
+        .slice(0, 12)
+        .map((job) => ({
+          jobId: job.id,
+          toolName: job.toolName,
+          status: job.status,
+          argsPreview: job.argsPreview,
+          resultPreview: job.resultPreview,
+          error: job.error,
+        }))
+      : [];
+
+    return {
+      verificationFailureDiagnostics: {
+        requestId,
+        userId: input.userId,
+        channel: input.delegation?.originChannel ?? input.message.channel,
+        ...(tracedToolResults.length > 0 ? { tracedToolResults } : {}),
+        ...(jobSnapshots.length > 0 ? { jobSnapshots } : {}),
+      },
+    };
   }
 
   shutdown(): void {
@@ -2063,6 +2150,37 @@ function attachDelegatedVerificationDecision(
       verificationEvent,
     ],
   };
+}
+
+function sanitizeDelegatedEnvelopeForOperator(
+  envelope: DelegatedResultEnvelope,
+): DelegatedResultEnvelope {
+  return {
+    ...envelope,
+    events: envelope.events.map((event) => {
+      if (!('traceResultPreview' in event.payload)) {
+        return event;
+      }
+      const { traceResultPreview: _traceResultPreview, ...payload } = event.payload;
+      return {
+        ...event,
+        payload,
+      };
+    }),
+  };
+}
+
+function appendPromptAdditionalSection(
+  sections: PromptAssemblyAdditionalSection[],
+  extraSection: PromptAssemblyAdditionalSection | null,
+): PromptAssemblyAdditionalSection[] {
+  if (!extraSection) {
+    return [...sections];
+  }
+  if (sections.some((section) => section.section === extraSection.section)) {
+    return [...sections];
+  }
+  return [...sections, extraSection];
 }
 
 function mapExecutionEventToTraceStage(

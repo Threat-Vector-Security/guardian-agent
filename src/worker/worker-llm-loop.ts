@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatResponse, ChatOptions } from '../llm/types.js';
 import type { ToolCaller } from '../broker/types.js';
-import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
+import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import { isIntermediateStatusResponse, isResponseDegraded } from '../util/response-quality.js';
@@ -17,6 +17,12 @@ export interface LlmLoopOptions {
   principalId?: string;
   /** Optional principal role to authorize tool executions. */
   principalRole?: string;
+  /** Optional request metadata for tool-job correlation and code-session scoping. */
+  requestId?: string;
+  userId?: string;
+  channel?: string;
+  surfaceId?: string;
+  codeContext?: ToolExecutionRequest['codeContext'];
   /** When true, model-authored memory mutation tool calls are allowed. */
   allowModelMemoryMutation?: boolean;
   /** Optional fallback chat function for quality-based retry with an external provider. */
@@ -417,12 +423,17 @@ export async function runLlmLoop(
             origin: 'assistant',
             toolName: tc.name,
             args: parsedArgs,
+            requestId: options?.requestId,
+            userId: options?.userId,
+            channel: options?.channel,
+            surfaceId: options?.surfaceId,
             principalId: options?.principalId ?? 'worker-session',
             principalRole: (options?.principalRole as import('../tools/types.js').PrincipalRole) ?? 'owner',
             contentTrustLevel: currentContextTrustLevel,
             taintReasons: [...currentTaintReasons],
             derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
             allowModelMemoryMutation: options?.allowModelMemoryMutation === true,
+            ...(options?.codeContext ? { codeContext: options.codeContext } : {}),
           });
 
           if (onToolCalled) {

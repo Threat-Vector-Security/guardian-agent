@@ -559,6 +559,96 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('appends the code session registry section to delegated worker prompt context when available', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const buildRegistrySection = vi.fn(() => ({
+      section: 'Code Session Registry',
+      content: '<code-session-registry>\ncurrentSessionId: code-1\n</code-session-registry>',
+      mode: 'metadata',
+      itemCount: 2,
+    }));
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        buildCodeSessionRegistryAdditionalSection: buildRegistrySection,
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-registry',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        surfaceId: 'web-chat',
+        channel: 'web',
+        content: 'Switch back to the main repo session and inspect auth routing.',
+        metadata: {
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [{
+        section: 'Existing Context',
+        content: 'existing',
+      }],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    expect(buildRegistrySection).toHaveBeenCalledWith({
+      userId: 'tester',
+      principalId: 'tester',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-chat',
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'code-1',
+      },
+    });
+    const messageHandle = workerNotifications.find((entry) => entry.method === 'message.handle');
+    expect(messageHandle?.params.additionalSections).toEqual([
+      {
+        section: 'Existing Context',
+        content: 'existing',
+      },
+      {
+        section: 'Code Session Registry',
+        content: '<code-session-registry>\ncurrentSessionId: code-1\n</code-session-registry>',
+        mode: 'metadata',
+        itemCount: 2,
+      },
+    ]);
+
+    manager.shutdown();
+  });
+
   it('spawns separate workers for the same surface session when the agent lane changes', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
     const sandbox = await import('../sandbox/index.js');
@@ -2005,6 +2095,129 @@ describe('WorkerManager', () => {
       'delegated_verification_decided',
       'delegated_worker_failed',
     ]);
+
+    manager.shutdown();
+  });
+
+  it('records verifier-failure trace diagnostics with tool previews without exposing them in returned metadata', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const gatewayDecision = readPreRoutedIntentGatewayMetadata(repoGroundedCodingMetadata())?.decision;
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+
+    workerMessageHandler = () => ({
+      content: 'The search output was truncated, so I cannot provide exact grounded file references yet.',
+      metadata: {
+        delegatedResult: {
+          taskContract: buildDelegatedTaskContract(gatewayDecision),
+          operatorSummary: 'Search output was truncated before exact file references could be proven.',
+          claims: [],
+          evidenceReceipts: [],
+          interruptions: [],
+          artifacts: [],
+          events: [{
+            eventId: 'tool-1:completed',
+            nodeId: 'tool-1',
+            type: 'tool_call_completed',
+            timestamp: 1,
+            payload: {
+              toolCallId: 'tool-1',
+              toolName: 'fs_search',
+              resultStatus: 'succeeded',
+              resultMessage: 'Search completed.',
+              traceResultPreview: '{"success":true,"output":{"matches":["src/runtime/intent-routing-trace.ts [content] trace details"]}}',
+            },
+          }],
+        },
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'model_response',
+          responseQuality: 'final',
+          toolCallCount: 1,
+          toolResultCount: 1,
+          successfulToolResultCount: 1,
+        },
+      },
+    });
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listJobs: () => [{
+          id: 'job-1',
+          toolName: 'fs_search',
+          risk: 'read_only',
+          origin: 'assistant',
+          argsPreview: '{"query":"trace"}',
+          status: 'succeeded',
+          createdAt: 1,
+          requestId: 'm-trace-failure',
+          resultPreview: '{"matches":["src/runtime/intent-routing-trace.ts"]}',
+          requiresApproval: false,
+        }],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-trace-failure',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-trace-failure',
+        originChannel: 'web',
+      },
+    });
+
+    const verificationTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_verification_decided');
+    expect(verificationTrace?.details.verificationFailureDiagnostics).toMatchObject({
+      requestId: 'm-trace-failure',
+      tracedToolResults: [{
+        toolName: 'fs_search',
+        resultPreview: '{"success":true,"output":{"matches":["src/runtime/intent-routing-trace.ts [content] trace details"]}}',
+      }],
+      jobSnapshots: [{
+        toolName: 'fs_search',
+        resultPreview: '{"matches":["src/runtime/intent-routing-trace.ts"]}',
+      }],
+    });
+    expect(JSON.stringify(result.metadata ?? {})).not.toContain('traceResultPreview');
 
     manager.shutdown();
   });

@@ -35,9 +35,9 @@ import {
 } from './util/context-budget.js';
 
 const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
-const MAX_TOOL_RESULT_STRING_CHARS = 600;
-const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
-const MAX_TOOL_RESULT_OBJECT_KEYS = 20;
+const MAX_TOOL_RESULT_STRING_CHARS = 1000;
+const MAX_TOOL_RESULT_ARRAY_ITEMS = 50;
+const MAX_TOOL_RESULT_OBJECT_KEYS = 100;
 const DIRECT_DEFINITION_SEARCH_PATH_LIMIT = 8;
 
 type DirectFilesystemSearchMatch = {
@@ -779,6 +779,7 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
 
     if ((toolName === 'fs_search' || toolName === 'code_symbol_search') && Array.isArray(obj.matches)) {
       const matches = obj.matches as unknown[];
+      const compactMatches = compactFilesystemSearchMatchesForLLM(matches);
       return {
         root: truncateText(toString(obj.root), 240) || undefined,
         query: truncateText(toString(obj.query), 200) || undefined,
@@ -786,8 +787,18 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
         scannedDirs: toNumber(obj.scannedDirs) ?? undefined,
         scannedFiles: toNumber(obj.scannedFiles) ?? undefined,
         truncated: toBoolean(obj.truncated),
-        matches: matches.slice(0, 20).map((match) => compactFilesystemSearchMatchForLLM(match)),
-        ...(matches.length > 20 ? { moreMatches: matches.length - 20 } : {}),
+        matches: compactMatches,
+        ...(matches.length > compactMatches.length ? { moreMatches: matches.length - compactMatches.length } : {}),
+      };
+    }
+
+    if (toolName === 'fs_list' && Array.isArray(obj.entries)) {
+      const entries = obj.entries as unknown[];
+      const compactEntries = compactFilesystemListEntriesForLLM(entries);
+      return {
+        path: truncateText(toString(obj.path), 240) || undefined,
+        entries: compactEntries,
+        ...(entries.length > compactEntries.length ? { moreEntries: entries.length - compactEntries.length } : {}),
       };
     }
 
@@ -835,21 +846,81 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
   return compactValueForLLM(output);
 }
 
-function compactFilesystemSearchMatchForLLM(match: unknown): Record<string, unknown> {
+function compactFilesystemSearchMatchesForLLM(matches: unknown[]): string[] {
+  const compacted: string[] = [];
+  let usedChars = 0;
+  for (const match of matches) {
+    if (compacted.length >= 40 || usedChars >= 3_600) {
+      break;
+    }
+    const line = compactFilesystemSearchMatchForLLM(match);
+    if (!line) {
+      continue;
+    }
+    const nextChars = usedChars + line.length;
+    if (compacted.length > 0 && nextChars > 3_600) {
+      break;
+    }
+    compacted.push(line);
+    usedChars = nextChars;
+  }
+  return compacted;
+}
+
+function compactFilesystemListEntriesForLLM(entries: unknown[]): string[] {
+  const compacted: string[] = [];
+  let usedChars = 0;
+  for (const entry of entries) {
+    if (compacted.length >= 60 || usedChars >= 3_200) {
+      break;
+    }
+    const line = compactFilesystemListEntryForLLM(entry);
+    if (!line) {
+      continue;
+    }
+    const nextChars = usedChars + line.length;
+    if (compacted.length > 0 && nextChars > 3_200) {
+      break;
+    }
+    compacted.push(line);
+    usedChars = nextChars;
+  }
+  return compacted;
+}
+
+function compactFilesystemSearchMatchForLLM(match: unknown): string | null {
   if (!match || typeof match !== 'object') {
-    return { value: compactValueForLLM(match) };
+    const value = truncateText(String(compactValueForLLM(match)), 200);
+    return value || null;
   }
 
   const value = match as Record<string, unknown>;
   const relativePath = truncateText(toString(value.relativePath) || toString(value.path), 240) || undefined;
   const matchType = truncateText(toString(value.matchType), 24) || undefined;
   const snippet = truncateText(toString(value.snippet), 240) || undefined;
+  if (!relativePath) {
+    return null;
+  }
+  return snippet
+    ? `${relativePath} [${matchType ?? 'match'}] ${snippet}`
+    : `${relativePath} [${matchType ?? 'match'}]`;
+}
 
-  return {
-    relativePath,
-    matchType,
-    ...(snippet ? { snippet } : {}),
-  };
+function compactFilesystemListEntryForLLM(entry: unknown): string | null {
+  if (!entry || typeof entry !== 'object') {
+    const value = truncateText(String(compactValueForLLM(entry)), 200);
+    return value || null;
+  }
+
+  const value = entry as Record<string, unknown>;
+  const name = truncateText(toString(value.name) || toString(value.path), 240) || undefined;
+  const type = truncateText(toString(value.type), 24) || undefined;
+  if (!name) {
+    return null;
+  }
+  return type
+    ? `[${type}] ${name}`
+    : name;
 }
 
 function compactGwsOutputForLLM(output: unknown): unknown {
@@ -906,7 +977,7 @@ function compactValueForLLM(value: unknown, depth: number = 0): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return truncateText(value, MAX_TOOL_RESULT_STRING_CHARS);
   if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (depth >= 3) return `[${Array.isArray(value) ? 'Array' : 'Object'} omitted]`;
+  if (depth >= 5) return `[${Array.isArray(value) ? 'Array' : 'Object'} omitted]`;
 
   if (Array.isArray(value)) {
     const items = value.slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS).map((item) => compactValueForLLM(item, depth + 1));

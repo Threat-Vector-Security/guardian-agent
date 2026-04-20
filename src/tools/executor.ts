@@ -116,6 +116,8 @@ import type { AutomationOutputStore } from '../runtime/automation-output-store.j
 import type { PersistMemoryEntryResult } from '../runtime/memory-mutation-service.js';
 import type { PerformanceService } from '../runtime/performance-service.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
+import type { PromptAssemblyAdditionalSection } from '../runtime/context-assembly.js';
+import { buildCodeSessionRegistryAdditionalSection as buildCodeSessionRegistryAdditionalSectionContent } from '../runtime/code-session-portfolio.js';
 import {
   getMemoryMutationIntentDeniedMessage,
   isDirectMemoryMutationToolName,
@@ -142,7 +144,10 @@ import { registerBuiltinWebTools } from './builtin/web-tools.js';
 import { registerBuiltinAutomationTools } from './builtin/automation-tools.js';
 import { registerBuiltinContactsEmailTools } from './builtin/contacts-email-tools.js';
 import { registerBuiltinCodingTools } from './builtin/coding-tools.js';
-import { registerBuiltinFilesystemTools } from './builtin/filesystem-tools.js';
+import {
+  getCriticalFilesystemPathBlockReason,
+  registerBuiltinFilesystemTools,
+} from './builtin/filesystem-tools.js';
 import { registerBuiltinMemoryTools } from './builtin/memory-tools.js';
 import { registerBuiltinNetworkSystemTools } from './builtin/network-system-tools.js';
 import { registerBuiltinPolicyTools } from './builtin/policy-tools.js';
@@ -174,6 +179,7 @@ const BUILTIN_REMOTE_SANDBOX_CONTROL_PLANE_HOSTS = new Set([
   'app.daytona.io',
 ]);
 const MAX_TOOL_ARG_BYTES = 128_000;
+const HIGH_VOLUME_FILE_THRESHOLD = 10;
 const TOOL_CHAIN_TTL_MS = 10 * 60_000;
 const MAX_TOOL_CALLS_PER_CHAIN = 24;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
@@ -2467,6 +2473,28 @@ export class ToolExecutor {
     return this.options.codeSessionStore.listSessionsForUser(ownerUserId);
   }
 
+  buildCodeSessionRegistryAdditionalSection(
+    request?: Partial<ToolExecutionRequest>,
+    maxSessions = 6,
+  ): PromptAssemblyAdditionalSection | null {
+    const availableSessions = this.listOwnedCodeSessions(request);
+    const currentSession = this.getCurrentCodeSessionRecord(request);
+    const content = buildCodeSessionRegistryAdditionalSectionContent({
+      currentSession,
+      availableSessions,
+      maxSessions,
+    });
+    if (!content) {
+      return null;
+    }
+    return {
+      section: 'Code Session Registry',
+      content,
+      mode: 'metadata',
+      itemCount: availableSessions.length,
+    };
+  }
+
   private getOwnedCodeSession(sessionId: string, request?: Partial<ToolExecutionRequest>) {
     const ownerUserId = this.getRealOwnerUserId(request);
     if (!ownerUserId || !this.options.codeSessionStore) return null;
@@ -3715,6 +3743,21 @@ export class ToolExecutor {
       };
     }
 
+    const criticalPathError = this.getCriticalFilesystemPathError(entry.definition.name, args);
+    if (criticalPathError) {
+      job.status = 'denied';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(criticalPathError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: criticalPathError,
+      };
+    }
+
     const decision = this.decide(entry.definition, args, request);
     if (decision === 'deny') {
       job.status = 'denied';
@@ -3731,7 +3774,7 @@ export class ToolExecutor {
     }
 
     if (decision === 'require_approval') {
-      if (request.bypassApprovals) {
+      if (request.bypassApprovals && !this.requiresExplicitUserApproval(entry.definition, args)) {
         return await this.execute(job, request, args, entry.handler);
       }
 
@@ -4099,12 +4142,62 @@ export class ToolExecutor {
     budget.signatureFailureCounts.set(signature, (budget.signatureFailureCounts.get(signature) ?? 0) + 1);
   }
 
+  private getCriticalFilesystemPathError(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): string | null {
+    if (toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete') {
+      const rawPath = asString(args.path).trim();
+      return rawPath ? getCriticalFilesystemPathBlockReason(rawPath, toolName) : null;
+    }
+    if (toolName === 'fs_move' || toolName === 'fs_copy') {
+      const rawSource = asString(args.source).trim();
+      const rawDestination = asString(args.destination).trim();
+      return (rawSource ? getCriticalFilesystemPathBlockReason(rawSource, toolName) : null)
+        || (rawDestination ? getCriticalFilesystemPathBlockReason(rawDestination, toolName) : null)
+        || null;
+    }
+    return null;
+  }
+
+  private isHighVolumeAction(toolName: string, args: Record<string, unknown>): boolean {
+    if (toolName === 'fs_delete') {
+      return args.recursive === true;
+    }
+    const targetList = ['paths', 'files', 'targets']
+      .map((key) => args[key])
+      .find((value) => Array.isArray(value));
+    if (Array.isArray(targetList)) {
+      return targetList.length > HIGH_VOLUME_FILE_THRESHOLD;
+    }
+    if (toolName === 'shell_safe') {
+      const command = asString(args.command).trim().toLowerCase();
+      return command.includes('rm -rf')
+        || command.includes('rm -r')
+        || command.includes('del /s')
+        || command.includes('rmdir /s');
+    }
+    return false;
+  }
+
+  private requiresExplicitUserApproval(
+    definition: ToolDefinition,
+    args: Record<string, unknown>,
+  ): boolean {
+    return this.isHighVolumeAction(definition.name, args);
+  }
+
   private decide(
     definition: ToolDefinition,
     args: Record<string, unknown>,
     request: Partial<ToolExecutionRequest> = {},
   ): ToolDecision {
     if (!this.options.enabled) return 'deny';
+
+    // Force approval for high-volume or destructive-looking actions
+    if (this.isHighVolumeAction(definition.name, args)) {
+      return 'require_approval';
+    }
 
     const contentTrustLevel = request.contentTrustLevel ?? 'trusted';
     const derivedFromTaintedContent = request.derivedFromTaintedContent === true;

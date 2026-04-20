@@ -59,6 +59,48 @@ describe('formatToolResultForLLM', () => {
     expect(rendered).toContain('src/runtime/message-router.ts');
     expect(rendered).not.toContain('[Object omitted]');
   });
+
+  it('keeps large filesystem search results flat enough for follow-on tool calls', () => {
+    const rendered = formatToolResultForLLM('fs_search', {
+      success: true,
+      status: 'succeeded',
+      output: {
+        root: 'S:\\Development\\GuardianAgent',
+        query: 'routing trace',
+        mode: 'content',
+        scannedDirs: 12,
+        scannedFiles: 87,
+        truncated: false,
+        matches: Array.from({ length: 40 }, (_value, index) => ({
+          relativePath: `src/runtime/file-${index}.ts`,
+          matchType: 'content',
+          snippet: `routing trace match ${index}`,
+        })),
+      },
+    });
+
+    expect(rendered).toContain('src/runtime/file-39.ts');
+    expect(rendered).toContain('routing trace match 39');
+    expect(rendered).not.toContain('[Object omitted]');
+  });
+
+  it('keeps filesystem list results flat instead of collapsing directory entries', () => {
+    const rendered = formatToolResultForLLM('fs_list', {
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'S:\\Development\\GuardianAgent',
+        entries: [
+          { name: 'src', type: 'dir' },
+          { name: 'package.json', type: 'file' },
+        ],
+      },
+    });
+
+    expect(rendered).toContain('[dir] src');
+    expect(rendered).toContain('[file] package.json');
+    expect(rendered).not.toContain('[Object omitted]');
+  });
 });
 
 describe('formatDirectFilesystemSearchResponse', () => {

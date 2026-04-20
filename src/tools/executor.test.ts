@@ -6407,6 +6407,54 @@ describe('ToolExecutor', () => {
     await expect(readFile(join(root, 'note.txt'), 'utf-8')).resolves.toBe('hello from scheduler');
   });
 
+  it('still requires a real approval for high-volume destructive actions even when bypassApprovals is set', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_delete',
+      args: { path: 'tmp-folder', recursive: true },
+      origin: 'web',
+      bypassApprovals: true,
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(1);
+  });
+
+  it('blocks critical repository paths before approval handling', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_delete',
+      args: { path: '.git', recursive: true },
+      origin: 'web',
+      bypassApprovals: true,
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('denied');
+    expect(run.message).toContain("Action 'fs_delete' blocked");
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(0);
+  });
+
   it('summarizes one-shot Gmail automation saves without exposing raw RFC822 payloads', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
