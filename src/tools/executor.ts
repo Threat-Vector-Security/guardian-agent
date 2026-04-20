@@ -2452,14 +2452,23 @@ export class ToolExecutor {
     });
   }
 
-  private listOwnedCodeSessions(request?: Partial<ToolExecutionRequest>) {
+  private getRealOwnerUserId(request?: Partial<ToolExecutionRequest>): string | undefined {
     const ownerUserId = request?.userId?.trim();
+    if (!ownerUserId) return undefined;
+    if (ownerUserId.startsWith('code-session:') || ownerUserId.startsWith('delegated-task:') || ownerUserId.startsWith('sched-task:')) {
+      return request?.principalId?.trim() ?? ownerUserId;
+    }
+    return ownerUserId;
+  }
+
+  private listOwnedCodeSessions(request?: Partial<ToolExecutionRequest>) {
+    const ownerUserId = this.getRealOwnerUserId(request);
     if (!ownerUserId || !this.options.codeSessionStore) return [];
     return this.options.codeSessionStore.listSessionsForUser(ownerUserId);
   }
 
   private getOwnedCodeSession(sessionId: string, request?: Partial<ToolExecutionRequest>) {
-    const ownerUserId = request?.userId?.trim();
+    const ownerUserId = this.getRealOwnerUserId(request);
     if (!ownerUserId || !this.options.codeSessionStore) return null;
     return this.options.codeSessionStore.getSession(sessionId, ownerUserId);
   }

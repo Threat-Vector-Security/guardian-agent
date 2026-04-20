@@ -459,6 +459,14 @@ guardian:
       }, expectedText, { timeout });
     }
 
+    async function waitForTerminalOutput(expectedText, { timeout = 15000 } = {}) {
+      await page.waitForFunction((expected) => {
+        return Array.from(document.querySelectorAll('.code-terminal__viewport .xterm-rows')).some((node) => {
+          return (node.textContent || '').includes(expected);
+        });
+      }, expectedText, { timeout });
+    }
+
     async function openCodePanel(panel) {
       const button = page.locator(`[data-code-panel-switch="${panel}"]`);
       const alreadyActive = await button.evaluate((node) => node.classList.contains('is-active')).catch(() => false);
@@ -963,6 +971,41 @@ guardian:
       });
     });
     await page.waitForSelector('.code-terminal__viewport .xterm');
+
+    const terminalPasteToken = 'WISPR_FLOW_PASTE_SMOKE';
+    await page.evaluate((token) => {
+      const helper = document.querySelector('.code-terminal__viewport textarea');
+      if (!(helper instanceof HTMLTextAreaElement)) {
+        throw new Error('Terminal helper textarea not found');
+      }
+      helper.focus();
+      const event = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value: {
+          getData: (type) => (type === 'text/plain' ? `echo ${token}\r` : ''),
+        },
+      });
+      helper.dispatchEvent(event);
+    }, terminalPasteToken);
+    await waitForTerminalOutput(terminalPasteToken);
+
+    const terminalInsertToken = 'WISPR_FLOW_INSERT_SMOKE';
+    await page.evaluate((token) => {
+      const helper = document.querySelector('.code-terminal__viewport textarea');
+      if (!(helper instanceof HTMLTextAreaElement)) {
+        throw new Error('Terminal helper textarea not found');
+      }
+      helper.focus();
+      helper.value = `echo ${token}\r`;
+      const event = new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        data: `echo ${token}\r`,
+        inputType: 'insertText',
+      });
+      helper.dispatchEvent(event);
+    }, terminalInsertToken);
+    await waitForTerminalOutput(terminalInsertToken);
 
     const draftInput = page.locator('#chat-input');
     await draftInput.click();

@@ -336,8 +336,16 @@ function finalAnswerCitesFileReference(answer: string, fileClaims: Claim[]): boo
   return fileClaims.some((claim) => {
     const subject = normalizeFileReferenceText(claim.subject);
     const value = normalizeFileReferenceText(claim.value);
-    return (!!subject && normalizedAnswer.includes(subject))
-      || (!!value && normalizedAnswer.includes(value));
+
+    // Ignore overly generic matches that are just search directories
+    const isGeneric = (str: string) => {
+      if (!str || str.length <= 2) return true;
+      if (['src', 'docs', 'lib', 'test', 'tests', 'bin', 'public', 'root'].includes(str)) return true;
+      return false;
+    };
+
+    return (!isGeneric(subject) && normalizedAnswer.includes(subject))
+      || (!isGeneric(value) && normalizedAnswer.includes(value));
   });
 }
 
