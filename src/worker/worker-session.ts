@@ -92,6 +92,8 @@ const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go 
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const TOOL_TRACE_PREVIEW_MAX_CHARS = 12_000;
+const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_search', 'code_symbol_search']);
 const PLANNER_TOOL_ALIASES = new Map<string, string>([
   ['fs_readfile', 'fs_read'],
   ['fs_writefile', 'fs_write'],
@@ -362,6 +364,24 @@ function buildEvidenceSummary(toolName: string, result: Record<string, unknown> 
   return message.length > 220 ? `${message.slice(0, 217).trimEnd()}...` : message;
 }
 
+function truncateToolTracePreview(value: string): string {
+  if (value.length <= TOOL_TRACE_PREVIEW_MAX_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, TOOL_TRACE_PREVIEW_MAX_CHARS - 25)}\n[... trace preview truncated ...]`;
+}
+
+function buildToolTracePreview(toolName: string, result: Record<string, unknown> | undefined): string | undefined {
+  if (!result || !TOOL_TRACE_PREVIEW_TOOL_NAMES.has(toolName)) {
+    return undefined;
+  }
+  try {
+    return truncateToolTracePreview(JSON.stringify(result));
+  } catch {
+    return truncateToolTracePreview(formatToolResultForLLM(toolName, result));
+  }
+}
+
 function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
   if (errorMessage) return 'failed';
   const status = typeof result?.status === 'string' ? result.status.trim().toLowerCase() : '';
@@ -391,6 +411,9 @@ function buildToolReceipt(event: LlmLoopToolEvent): EvidenceReceipt | null {
 }
 
 function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
+  const traceResultPreview = event.phase === 'completed'
+    ? buildToolTracePreview(event.toolCall.name, event.result)
+    : undefined;
   return {
     eventId: `${event.toolCall.id}:${event.phase}`,
     nodeId: event.toolCall.id,
@@ -401,6 +424,7 @@ function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
       toolName: event.toolCall.name,
       args: event.args,
       ...(event.result ? { resultStatus: event.result.status, resultMessage: event.result.message } : {}),
+      ...(traceResultPreview ? { traceResultPreview } : {}),
       ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
     },
   };
@@ -2014,6 +2038,11 @@ export class BrokeredWorkerSession {
       {
         principalId: message.principalId ?? message.userId,
         principalRole: message.principalRole ?? 'owner',
+        requestId: message.id,
+        userId: message.userId,
+        channel: message.channel,
+        surfaceId: message.surfaceId,
+        ...(codeContext ? { codeContext } : {}),
         allowModelMemoryMutation,
         preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest),
         answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),

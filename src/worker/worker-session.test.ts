@@ -2204,10 +2204,18 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(callRequests[0]).toMatchObject({
       toolName: 'fs_read',
       args: { path: 'src/chat-agent.ts' },
+      requestId: 'msg-plan-alias-normalization',
+      userId: 'owner',
+      channel: 'web',
+      principalId: 'owner',
     });
     expect(callRequests[1]).toMatchObject({
       toolName: 'fs_write',
       args: { path: 'summary.md', content: 'done' },
+      requestId: 'msg-plan-alias-normalization',
+      userId: 'owner',
+      channel: 'web',
+      principalId: 'owner',
     });
   });
 

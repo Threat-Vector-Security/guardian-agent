@@ -19,6 +19,25 @@ interface FilesystemToolRegistrarContext {
   maxReadBytes: number;
 }
 
+export const CRITICAL_FILESYSTEM_PATH_PATTERNS = [
+  /(^|[\\\/])\.git([\\\/]|$)/i,
+  /(^|[\\\/])\.github([\\\/]|$)/i,
+  /(^|[\\\/])\.guardianagent([\\\/]|$)/i,
+  /(^|[\\\/])\.env(\..*)?$/i,
+];
+
+export function isCriticalFilesystemPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/');
+  return CRITICAL_FILESYSTEM_PATH_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function getCriticalFilesystemPathBlockReason(path: string, action: string): string | null {
+  if (!isCriticalFilesystemPath(path)) {
+    return null;
+  }
+  return `Action '${action}' blocked: path '${path}' is a critical repository metadata directory or sensitive configuration file.`;
+}
+
 export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarContext): void {
   const {
     requireString,
@@ -30,6 +49,36 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     maxSearchFileBytes,
     maxReadBytes,
   } = context;
+
+  function checkCriticalPath(path: string, action: string): { success: boolean; error?: string } {
+    const reason = getCriticalFilesystemPathBlockReason(path, action);
+    if (reason) {
+      return {
+        success: false,
+        error: reason,
+      };
+    }
+    return { success: true };
+  }
+
+  async function resolveNonCriticalPath(
+    rawPath: string,
+    action: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): Promise<{ safePath?: string; error?: string }> {
+    const rawCheck = checkCriticalPath(rawPath, action);
+    if (!rawCheck.success) {
+      return { error: rawCheck.error };
+    }
+
+    const safePath = await context.resolveAllowedPath(rawPath, request);
+    const resolvedCheck = checkCriticalPath(safePath, action);
+    if (!resolvedCheck.success) {
+      return { error: resolvedCheck.error };
+    }
+
+    return { safePath };
+  }
   context.registry.register(
     {
       name: 'fs_list',
@@ -281,6 +330,10 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     },
     async (args, request) => {
       const rawPath = requireString(args.path, 'path');
+      const resolved = await resolveNonCriticalPath(rawPath, 'fs_write', request);
+      if (resolved.error) {
+        return { success: false, error: resolved.error };
+      }
       const content = requireStringAllowEmpty(args.content, 'content');
       const append = !!args.append;
       const contentScan = scanWriteContent(content);
@@ -294,7 +347,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           error: `Write content rejected by security policy: ${findings.join(', ')}.`,
         };
       }
-      const safePath = await context.resolveAllowedPath(rawPath, request);
+      const safePath = resolved.safePath!;
       context.guardAction(request, 'write_file', { path: rawPath, content });
       await mkdir(dirname(safePath), { recursive: true });
       if (append) {
@@ -333,8 +386,12 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     },
     async (args, request) => {
       const rawPath = requireString(args.path, 'path');
+      const resolved = await resolveNonCriticalPath(rawPath, 'fs_mkdir', request);
+      if (resolved.error) {
+        return { success: false, error: resolved.error };
+      }
       const recursive = args.recursive !== false;
-      const safePath = await context.resolveAllowedPath(rawPath, request);
+      const safePath = resolved.safePath!;
       context.guardAction(request, 'write_file', { path: rawPath, content: '[mkdir]' });
       await mkdir(safePath, { recursive });
       return {
@@ -366,8 +423,12 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     },
     async (args, request) => {
       const rawPath = requireString(args.path, 'path');
+      const resolved = await resolveNonCriticalPath(rawPath, 'fs_delete', request);
+      if (resolved.error) {
+        return { success: false, error: resolved.error };
+      }
       const recursive = !!args.recursive;
-      const safePath = await context.resolveAllowedPath(rawPath, request);
+      const safePath = resolved.safePath!;
       context.guardAction(request, 'write_file', { path: rawPath, content: '[delete]' });
       const details = await stat(safePath);
       const isDir = details.isDirectory();
@@ -407,8 +468,12 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     async (args, request) => {
       const rawSource = requireString(args.source, 'source');
       const rawDest = requireString(args.destination, 'destination');
-      const safeSource = await context.resolveAllowedPath(rawSource, request);
-      const safeDest = await context.resolveAllowedPath(rawDest, request);
+      const resolvedSource = await resolveNonCriticalPath(rawSource, 'fs_move', request);
+      if (resolvedSource.error) return { success: false, error: resolvedSource.error };
+      const resolvedDest = await resolveNonCriticalPath(rawDest, 'fs_move', request);
+      if (resolvedDest.error) return { success: false, error: resolvedDest.error };
+      const safeSource = resolvedSource.safePath!;
+      const safeDest = resolvedDest.safePath!;
       context.guardAction(request, 'write_file', { path: rawSource, content: `[move → ${rawDest}]` });
       await mkdir(dirname(safeDest), { recursive: true });
       await rename(safeSource, safeDest);
@@ -442,8 +507,12 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     async (args, request) => {
       const rawSource = requireString(args.source, 'source');
       const rawDest = requireString(args.destination, 'destination');
-      const safeSource = await context.resolveAllowedPath(rawSource, request);
-      const safeDest = await context.resolveAllowedPath(rawDest, request);
+      const resolvedSource = await resolveNonCriticalPath(rawSource, 'fs_copy', request);
+      if (resolvedSource.error) return { success: false, error: resolvedSource.error };
+      const resolvedDest = await resolveNonCriticalPath(rawDest, 'fs_copy', request);
+      if (resolvedDest.error) return { success: false, error: resolvedDest.error };
+      const safeSource = resolvedSource.safePath!;
+      const safeDest = resolvedDest.safePath!;
       context.guardAction(request, 'write_file', { path: rawDest, content: `[copy from ${rawSource}]` });
       await mkdir(dirname(safeDest), { recursive: true });
       await copyFile(safeSource, safeDest);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildCodeSessionRegistryAdditionalSection,
   buildCodeSessionPortfolioAdditionalSection,
   normalizeReferencedCodeSessionIds,
   normalizeTargetCodeSessionId,
@@ -65,5 +66,17 @@ describe('code session portfolio helpers', () => {
       currentSession: CURRENT_SESSION as never,
       referencedSessions: [REFERENCED_SESSION as never],
     })).toContain('Do not edit files');
+  });
+
+  it('builds a session registry prompt section with ids and titles for delegated workers', () => {
+    const rendered = buildCodeSessionRegistryAdditionalSection({
+      currentSession: CURRENT_SESSION as never,
+      availableSessions: [CURRENT_SESSION as never, REFERENCED_SESSION as never],
+    });
+
+    expect(rendered).toContain('currentSessionId: current-session');
+    expect(rendered).toContain('availableSessionCount: 2');
+    expect(rendered).toContain('sessionId: referenced-session');
+    expect(rendered).toContain('title: Tactical Game');
   });
 });

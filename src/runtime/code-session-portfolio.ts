@@ -79,6 +79,19 @@ function summarizePortfolioSession(session: CodeSessionRecord): string {
   ].join('\n');
 }
 
+function summarizeRegistrySession(session: CodeSessionRecord): string {
+  const effectiveTrustState = getEffectiveCodeWorkspaceTrustState(
+    session.workState.workspaceTrust,
+    session.workState.workspaceTrustReview,
+  ) || session.workState.workspaceTrust?.state || 'unknown';
+  return [
+    `- sessionId: ${session.id}`,
+    `  title: ${session.title}`,
+    `  workspaceRoot: ${session.resolvedRoot}`,
+    `  trust: ${effectiveTrustState}`,
+  ].join('\n');
+}
+
 export function buildCodeSessionPortfolioAdditionalSection(input: {
   currentSession?: CodeSessionRecord | null;
   referencedSessions?: readonly CodeSessionRecord[];
@@ -117,5 +130,49 @@ export function buildCodeSessionPortfolioAdditionalSection(input: {
   lines.push('Use referenced workspaces for inspect, compare, summarize, and search-oriented reasoning.');
   lines.push('Do not edit files, run git actions, execute tests/builds, or issue shell mutations in a referenced workspace unless the user explicitly switches the primary workspace or pins another target.');
   lines.push('</code-session-portfolio>');
+  return lines.join('\n');
+}
+
+export function buildCodeSessionRegistryAdditionalSection(input: {
+  currentSession?: CodeSessionRecord | null;
+  availableSessions?: readonly CodeSessionRecord[];
+  maxSessions?: number;
+} = {}): string {
+  const currentSessionId = input.currentSession?.id ?? null;
+  const availableSessions = Array.isArray(input.availableSessions)
+    ? input.availableSessions.filter(Boolean)
+    : [];
+  const maxSessions = Number.isFinite(input.maxSessions) ? Math.max(0, Number(input.maxSessions)) : 6;
+  const boundedSessions = availableSessions.slice(0, maxSessions);
+  if (!input.currentSession && boundedSessions.length === 0) {
+    return '';
+  }
+
+  const lines = [
+    '<code-session-registry>',
+    'Use this registry to disambiguate code_session_attach targets by exact sessionId, title, or workspaceRoot.',
+    currentSessionId
+      ? `currentSessionId: ${currentSessionId}`
+      : 'currentSessionId: (none attached)',
+    input.currentSession
+      ? `currentWorkspace: ${input.currentSession.title} (${input.currentSession.resolvedRoot})`
+      : 'currentWorkspace: (none attached)',
+    `availableSessionCount: ${availableSessions.length}`,
+  ];
+
+  if (boundedSessions.length > 0) {
+    lines.push('availableSessions:');
+    for (const session of boundedSessions) {
+      lines.push(summarizeRegistrySession(session));
+    }
+    if (availableSessions.length > boundedSessions.length) {
+      lines.push(`- additionalAvailableSessions: ${availableSessions.length - boundedSessions.length}`);
+    }
+  } else {
+    lines.push('availableSessions: (none)');
+  }
+
+  lines.push('When the user references another workspace like "the main repo" or a saved title, use this registry instead of guessing from the current sandbox identity.');
+  lines.push('</code-session-registry>');
   return lines.join('\n');
 }
