@@ -2012,6 +2012,8 @@ export class BrokeredWorkerSession {
         }
       },
       {
+        principalId: message.principalId ?? message.userId,
+        principalRole: message.principalRole ?? 'owner',
         allowModelMemoryMutation,
         preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest),
         answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),

@@ -48,6 +48,19 @@ Because it found two fuzzy matches and no single exact match (since "main Guardi
 **Remediation:**
 - Extended `extractSecondBrainTextBody` with a regex fallback (`/\b(?:reminding\s+me(?:\s+to|\s+that)?|saying(?:\s+that)?|about|that)\s+([\s\S]+?)(?:$|\n)/i`) to gracefully extract unquoted sentence payloads and strip trailing punctuation.
 
+### 7. Exact File Citation False-Positives via Generic Search Roots
+**Symptom:** Even with exact file requirements enforced, a model hallucinated an answer containing `src/types/records.ts` (which doesn't exist) and the verifier accepted it as a valid file citation.
+**Root Cause:** The `extractRefsFromUnknown` function naively pulls every `path:` value out of a tool call's arguments to generate `file_reference` claims. Because the model ran `fs_list` on `.` and `src`, the verifier tracked `.` and `src` as valid file claims. The `finalAnswerCitesFileReference` function checked if the model's final answer included any of these claim substrings. Since the hallucinated path `src/types/records.ts` contains the string `src`, the verifier incorrectly concluded that the model successfully cited a valid file claim.
+**Remediation:**
+- Hardened `finalAnswerCitesFileReference` in `src/runtime/execution/verifier.ts` to ignore generic directory paths (e.g., `.`, `src`, `docs`, `test`, `lib`) when cross-referencing citations against the model's final answer. This forces the verifier to only accept matches against specific file paths retrieved by the tools, shutting down hallucinated path bypasses.
+
+### 8. Delegated Worker Identity Sandboxing in Code Session Tools
+**Symptom:** Even when workspace ambiguity was resolved, asking to "Switch to Guardian Agent repo" failed inside the delegated worker with `No coding session matched "Guardian Agent"`.
+**Root Cause:** Under `BROKERED-AGENT-ISOLATION-DESIGN.md`, the worker process runs with an isolated, temporary identity (e.g., `userId: code-session:<id>`). However, the `code_session_attach`, `code_session_detach`, `code_session_list`, and `code_session_create` tools strictly queried the session database using the immediate `request.userId`. Since the worker's sandboxed identity didn't own the human's real workspaces, the database returned an empty list, causing the tool to fail.
+**Remediation:**
+- Updated the tools in `src/tools/builtin/coding-tools.ts` and the `ToolExecutor` helper `getRealOwnerUserId` (`src/tools/executor.ts`) to detect when a request is initiated by a delegated identity (e.g., `code-session:`, `delegated-task:`, `sched-task:`).
+- In those cases, the tools now securely fall back to `request.principalId`, properly resolving to the original human owner's identity and granting the worker permission to attach to the target session.
+
 ## Post-Remediation Verification
 - Verified `test-coding-assistant.mjs` harness passed, confirming no regressions in tool validation or classification.
 - Verified `test-code-ui-smoke.mjs` harness passed, confirming web interactions and approvals remain intact.
@@ -56,3 +69,10 @@ Because it found two fuzzy matches and no single exact match (since "main Guardi
 - Validated that `hasFilesystemMutationEvidence` safely rejects false-positive read-only tool calls pretending to be mutating receipts.
 - Validated that `requestNeedsExactFileReferences` heuristic correctly overrides model omissions.
 - Validated that `extractSecondBrainTextBody` successfully captures unquoted conversational intent payloads.
+- Validated that `finalAnswerCitesFileReference` enforces strict path matching and rejects overly generic directory substring collisions.
+- Validated that `code_session_*` tools properly penetrate the worker sandbox identity boundary by safely resolving the human owner via `principalId`.
+
+### 9. Worker Sandbox Identity Boundary (`principalId` drop)
+- **Symptom:** When the Intent Gateway delegated a task to a worker (e.g. `Find out what coding sessions I have available`), the worker could not list or attach to the user's code sessions. The worker operated with an isolated `code-session:<id>` principal that owned no workspaces, preventing session switching.
+- **Root Cause:** The `principalId` and `principalRole` fields were missing from the `LlmLoopOptions` interface bridging the worker's LLM loop to the `ToolCaller`. The executor received `undefined` and fell back to the worker's sandboxed `userId`.
+- **Remediation:** Threaded `principalId` and `principalRole` through `WorkerSession.handleMessage` into `LlmLoopOptions` and passed them down to the `toolCallerWithDiscovery` wrapper. The worker now safely proxies the user's true identity for tool execution authorization.

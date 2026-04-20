@@ -1913,7 +1913,13 @@ function isClipboardPasteSentinel(text) {
 
 function shouldBridgeTerminalTextInput(event, text = '') {
   const inputType = String(event?.inputType || '');
-  if (inputType === 'insertFromPaste' || inputType === 'insertFromDrop' || inputType === 'insertReplacementText') {
+  if (
+    inputType === 'insertFromPaste'
+    || inputType === 'insertFromDrop'
+    || inputType === 'insertReplacementText'
+    || inputType === 'insertFromComposition'
+    || inputType === 'insertCompositionText'
+  ) {
     return true;
   }
   const candidate = typeof text === 'string' && text
@@ -1922,7 +1928,8 @@ function shouldBridgeTerminalTextInput(event, text = '') {
   if (!candidate) return false;
   if (isClipboardPasteSentinel(candidate)) return true;
   if (/[\r\n\t]/.test(candidate)) return true;
-  return candidate.length >= 4;
+  if (/\s/.test(candidate)) return true;
+  return candidate.length > 1;
 }
 
 async function forwardTerminalInsertedText(event, tab, text = '') {
@@ -2824,16 +2831,6 @@ async function mountActiveTerminals(container, session, { focusTabId = null } = 
         void copyTextToClipboard(term.getSelection());
         term.clearSelection();
         event.preventDefault();
-        return false;
-      }
-      const isPaste = event.type === 'keydown'
-        && (
-          (event.key.toLowerCase() === 'v' && (event.ctrlKey || event.metaKey))
-          || (event.key === 'Insert' && event.shiftKey)
-        );
-      if (isPaste) {
-        event.preventDefault();
-        void forwardTerminalPaste(event, tab);
         return false;
       }
       return true;

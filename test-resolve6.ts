@@ -1,10 +1,3 @@
-export interface CodeSessionTargetRecord {
-  id: string;
-  title: string;
-  workspaceRoot: string;
-  resolvedRoot?: string | null;
-}
-
 const GENERIC_CODE_SESSION_TOKENS = new Set([
   'a',
   'an',
@@ -24,11 +17,11 @@ const GENERIC_CODE_SESSION_TOKENS = new Set([
   'main',
 ]);
 
-function normalizeCodeSessionTarget(value: string): string {
+function normalizeCodeSessionTarget(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-function normalizeSemanticCodeSessionTarget(value: string): string {
+function normalizeSemanticCodeSessionTarget(value) {
   return value
     .trim()
     .toLowerCase()
@@ -38,7 +31,7 @@ function normalizeSemanticCodeSessionTarget(value: string): string {
     .join('');
 }
 
-function resolveMatchSet<T extends CodeSessionTargetRecord>(matches: T[], query: string, semanticNeedle?: string): { session?: T; error?: string } | null {
+function resolveMatchSet(matches, query, semanticNeedle) {
   if (matches.length === 1) return { session: matches[0] };
   if (matches.length > 1) {
     if (semanticNeedle) {
@@ -55,59 +48,53 @@ function resolveMatchSet<T extends CodeSessionTargetRecord>(matches: T[], query:
   return null;
 }
 
-export function resolveCodeSessionTarget<T extends CodeSessionTargetRecord>(
-  query: string,
-  sessions: T[],
-): { session?: T; error?: string } {
+function resolveCodeSessionTarget(query, sessions) {
   const needle = query.trim().toLowerCase();
   if (!needle) {
-    return { error: 'Attach requires a session id, title, or workspace match.' };
+    return { error: 'Code session target is empty.' };
   }
 
-  const exactId = sessions.find((session) => session.id.toLowerCase() === needle);
-  if (exactId) return { session: exactId };
-
-  const exactLabelMatches = sessions.filter((session) => (
-    session.title.toLowerCase() === needle
+  const exactMatches = sessions.filter((session) => (
+    session.id === needle
+    || session.title.toLowerCase() === needle
     || session.workspaceRoot.toLowerCase() === needle
-    || session.resolvedRoot?.toLowerCase() === needle
+    || (session.resolvedRoot && session.resolvedRoot.toLowerCase() === needle)
   ));
-  const exactLabelResult = resolveMatchSet(exactLabelMatches, query);
-  if (exactLabelResult) return exactLabelResult;
+  const exactResult = resolveMatchSet(exactMatches, query);
+  if (exactResult) return exactResult;
 
   const fuzzyMatches = sessions.filter((session) => (
-    session.id.toLowerCase().includes(needle)
+    session.id.includes(needle)
     || session.title.toLowerCase().includes(needle)
     || session.workspaceRoot.toLowerCase().includes(needle)
-    || session.resolvedRoot?.toLowerCase().includes(needle)
+    || (session.resolvedRoot && session.resolvedRoot.toLowerCase().includes(needle))
   ));
   const fuzzyResult = resolveMatchSet(fuzzyMatches, query);
   if (fuzzyResult) return fuzzyResult;
 
   const normalizedNeedle = normalizeCodeSessionTarget(query);
-  if (!normalizedNeedle) {
-    return { error: 'Attach requires a session id, title, or workspace match.' };
+  if (normalizedNeedle) {
+    const normalizedExactMatches = sessions.filter((session) => (
+      normalizeCodeSessionTarget(session.id) === normalizedNeedle
+      || normalizeCodeSessionTarget(session.title) === normalizedNeedle
+      || normalizeCodeSessionTarget(session.workspaceRoot) === normalizedNeedle
+      || normalizeCodeSessionTarget(session.resolvedRoot ?? '') === normalizedNeedle
+    ));
+    const normalizedExactResult = resolveMatchSet(normalizedExactMatches, query);
+    if (normalizedExactResult) return normalizedExactResult;
+
+    const normalizedFuzzyMatches = sessions.filter((session) => (
+      normalizeCodeSessionTarget(session.id).includes(normalizedNeedle)
+      || normalizeCodeSessionTarget(session.title).includes(normalizedNeedle)
+      || normalizeCodeSessionTarget(session.workspaceRoot).includes(normalizedNeedle)
+      || normalizeCodeSessionTarget(session.resolvedRoot ?? '').includes(normalizedNeedle)
+    ));
+    const normalizedFuzzyResult = resolveMatchSet(normalizedFuzzyMatches, query);
+    if (normalizedFuzzyResult) return normalizedFuzzyResult;
   }
 
-  const normalizedExactMatches = sessions.filter((session) => (
-    normalizeCodeSessionTarget(session.id) === normalizedNeedle
-    || normalizeCodeSessionTarget(session.title) === normalizedNeedle
-    || normalizeCodeSessionTarget(session.workspaceRoot) === normalizedNeedle
-    || normalizeCodeSessionTarget(session.resolvedRoot ?? '') === normalizedNeedle
-  ));
-  const normalizedExactResult = resolveMatchSet(normalizedExactMatches, query);
-  if (normalizedExactResult) return normalizedExactResult;
-
-  const normalizedFuzzyMatches = sessions.filter((session) => (
-    normalizeCodeSessionTarget(session.id).includes(normalizedNeedle)
-    || normalizeCodeSessionTarget(session.title).includes(normalizedNeedle)
-    || normalizeCodeSessionTarget(session.workspaceRoot).includes(normalizedNeedle)
-    || normalizeCodeSessionTarget(session.resolvedRoot ?? '').includes(normalizedNeedle)
-  ));
-  const normalizedFuzzyResult = resolveMatchSet(normalizedFuzzyMatches, query);
-  if (normalizedFuzzyResult) return normalizedFuzzyResult;
-
   const semanticNeedle = normalizeSemanticCodeSessionTarget(query);
+  console.log('semanticNeedle:', semanticNeedle);
   if (semanticNeedle) {
     const semanticExactMatches = sessions.filter((session) => (
       normalizeSemanticCodeSessionTarget(session.id) === semanticNeedle
@@ -115,6 +102,7 @@ export function resolveCodeSessionTarget<T extends CodeSessionTargetRecord>(
       || normalizeSemanticCodeSessionTarget(session.workspaceRoot) === semanticNeedle
       || normalizeSemanticCodeSessionTarget(session.resolvedRoot ?? '') === semanticNeedle
     ));
+    console.log('semanticExactMatches:', semanticExactMatches.length);
     const semanticExactResult = resolveMatchSet(semanticExactMatches, query, semanticNeedle);
     if (semanticExactResult) return semanticExactResult;
 
@@ -124,9 +112,17 @@ export function resolveCodeSessionTarget<T extends CodeSessionTargetRecord>(
       || normalizeSemanticCodeSessionTarget(session.workspaceRoot).includes(semanticNeedle)
       || normalizeSemanticCodeSessionTarget(session.resolvedRoot ?? '').includes(semanticNeedle)
     ));
+    console.log('semanticFuzzyMatches:', semanticFuzzyMatches.length);
     const semanticFuzzyResult = resolveMatchSet(semanticFuzzyMatches, query, semanticNeedle);
     if (semanticFuzzyResult) return semanticFuzzyResult;
   }
 
   return { error: `No coding session matched "${query}".` };
 }
+
+const sessions = [
+  { id: '24745176-9267-47ae-97e9-3c05bc874f52', title: 'Test Tactical Game App', workspaceRoot: 'S:\\Development\\TestApp' },
+  { id: 'da47084e-7fde-4638-b77c-3f0bbb5c3684', title: 'Guardian Agent', workspaceRoot: 'S:\\Development\\GuardianAgent' }
+];
+
+console.log(resolveCodeSessionTarget('main GuardianAgent repo', sessions));

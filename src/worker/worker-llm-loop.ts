@@ -13,6 +13,10 @@ import type {
 } from '../runtime/worker-execution-metadata.js';
 
 export interface LlmLoopOptions {
+  /** Optional principal ID to authorize tool executions. */
+  principalId?: string;
+  /** Optional principal role to authorize tool executions. */
+  principalRole?: string;
   /** When true, model-authored memory mutation tool calls are allowed. */
   allowModelMemoryMutation?: boolean;
   /** Optional fallback chat function for quality-based retry with an external provider. */
@@ -413,8 +417,8 @@ export async function runLlmLoop(
             origin: 'assistant',
             toolName: tc.name,
             args: parsedArgs,
-            principalId: 'worker-session',
-            principalRole: 'owner',
+            principalId: options?.principalId ?? 'worker-session',
+            principalRole: (options?.principalRole as import('../tools/types.js').PrincipalRole) ?? 'owner',
             contentTrustLevel: currentContextTrustLevel,
             taintReasons: [...currentTaintReasons],
             derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',

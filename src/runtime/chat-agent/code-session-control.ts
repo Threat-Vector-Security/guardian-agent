@@ -579,8 +579,21 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
   if (!input.toolsEnabled) return null;
   if (!input.decision || input.decision.route !== 'coding_session_control') return null;
 
-  const operation = input.decision.operation;
+  let operation = input.decision.operation;
   const resource = input.decision.entities.codeSessionResource;
+
+  if (!operation || operation === 'unknown') {
+    const text = input.message.content.toLowerCase();
+    if (/\b(?:switch|attach|use|change to|connect)\b/.test(text)) {
+      operation = 'update';
+    } else if (/\b(?:detach|disconnect|leave)\b/.test(text)) {
+      operation = 'delete';
+    } else if (/\b(?:create|new|start)\b/.test(text)) {
+      operation = 'create';
+    } else if (/\b(?:current|active|what)\b/.test(text)) {
+      operation = 'inspect';
+    }
+  }
 
   if (operation === 'navigate' || operation === 'search' || operation === 'read') {
     return handleCodeSessionList(input);
@@ -595,7 +608,13 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
     return handleCodeSessionDetach(input);
   }
   if (operation === 'update') {
-    const target = input.decision.entities.sessionTarget || input.decision.entities.query || '';
+    let target = input.decision.entities.sessionTarget || input.decision.entities.query || '';
+    if (!target.trim()) {
+      const match = input.message.content.match(/\b(?:switch|attach|change to|connect)\s+(?:to\s+)?(?:the\s+)?(.*)/i);
+      if (match?.[1]) {
+        target = match[1].trim();
+      }
+    }
     if (!target.trim()) {
       return { content: 'Please specify which coding session or workspace to switch to.' };
     }
@@ -605,7 +624,13 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
     });
   }
   if (operation === 'create') {
-    const target = input.decision.entities.sessionTarget || input.decision.entities.path || input.decision.entities.query || '';
+    let target = input.decision.entities.sessionTarget || input.decision.entities.path || input.decision.entities.query || '';
+    if (!target.trim()) {
+      const match = input.message.content.match(/\b(?:create|new|start)\s+(?:coding\s+)?(?:workspace|session)\s+(?:for|in|at)\s+(.*)/i);
+      if (match?.[1]) {
+        target = match[1].trim();
+      }
+    }
     if (!target.trim()) {
       return { content: 'Please specify the workspace path or name for the new coding session.' };
     }

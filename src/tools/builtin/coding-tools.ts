@@ -851,7 +851,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!context.codeSessionStore) {
         return { success: false, error: 'Code session store is not available.' };
       }
-      const userId = request.userId?.trim();
+      let userId = request.userId?.trim();
+      if (userId?.startsWith('code-session:') || userId?.startsWith('delegated-task:') || userId?.startsWith('sched-task:')) {
+        userId = request.principalId?.trim() ?? userId;
+      }
       const channel = request.channel?.trim();
       if (!userId || !channel) {
         return { success: false, error: 'Current user context is unavailable.' };
@@ -894,7 +897,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!context.codeSessionStore) {
         return { success: false, error: 'Code session store is not available.' };
       }
-      const ownerUserId = request.userId?.trim();
+      let ownerUserId = request.userId?.trim();
+      if (ownerUserId?.startsWith('code-session:') || ownerUserId?.startsWith('delegated-task:') || ownerUserId?.startsWith('sched-task:')) {
+        ownerUserId = request.principalId?.trim() ?? ownerUserId;
+      }
       const channel = request.channel?.trim();
       if (!ownerUserId || !channel) {
         return { success: false, error: 'Current user context is unavailable.' };
@@ -944,7 +950,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!context.codeSessionStore) {
         return { success: false, error: 'Code session store is not available.' };
       }
-      const ownerUserId = request.userId?.trim();
+      let ownerUserId = request.userId?.trim();
+      if (ownerUserId?.startsWith('code-session:') || ownerUserId?.startsWith('delegated-task:') || ownerUserId?.startsWith('sched-task:')) {
+        ownerUserId = request.principalId?.trim() ?? ownerUserId;
+      }
       const channel = request.channel?.trim();
       if (!ownerUserId || !channel) {
         return { success: false, error: 'Current user context is unavailable.' };
@@ -989,7 +998,10 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!context.codeSessionStore) {
         return { success: false, error: 'Code session store is not available.' };
       }
-      const ownerUserId = request.userId?.trim();
+      let ownerUserId = request.userId?.trim();
+      if (ownerUserId?.startsWith('code-session:') || ownerUserId?.startsWith('delegated-task:') || ownerUserId?.startsWith('sched-task:')) {
+        ownerUserId = request.principalId?.trim() ?? ownerUserId;
+      }
       const channel = request.channel?.trim();
       if (!ownerUserId || !channel) {
         return { success: false, error: 'Current user context is unavailable.' };
