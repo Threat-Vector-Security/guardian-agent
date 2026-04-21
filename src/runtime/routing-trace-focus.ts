@@ -100,7 +100,15 @@ export function pickRoutingTraceFocusItem(
       return toFocusItem(delegatedWorkingItem ?? startedHandoffItem ?? latestItem);
     case 'delegated_worker_completed':
     case 'delegated_worker_failed':
+    case 'delegated_verification_decided':
       return toFocusItem(completedHandoffItem ?? delegatedWorkingItem ?? latestItem);
+    case 'delegated_tool_call_started':
+    case 'delegated_interruption_requested':
+    case 'delegated_interruption_resolved':
+    case 'delegated_claim_emitted':
+      return toFocusItem(startedToolItem ?? delegatedWorkingItem ?? latestItem);
+    case 'delegated_tool_call_completed':
+      return toFocusItem(completedToolItem ?? delegatedWorkingItem ?? latestItem);
     case 'direct_tool_call_started':
       return toFocusItem(startedToolItem ?? contextItem ?? latestItem);
     case 'direct_tool_call_completed':

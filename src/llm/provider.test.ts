@@ -89,6 +89,7 @@ describe('OllamaProvider', () => {
         },
       }),
     ));
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
     const provider = createProvider(config);
@@ -96,8 +97,10 @@ describe('OllamaProvider', () => {
     await expect(
       provider.chat([{ role: 'user', content: 'hello' }]),
     ).rejects.toThrow('Ollama API error 500');
+    expect(consoleLogSpy).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+    consoleLogSpy.mockRestore();
   });
 
   it('should parse successful chat response', async () => {

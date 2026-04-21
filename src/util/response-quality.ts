@@ -51,7 +51,7 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
     return true;
   }
 
-  const explicitContinuationPrompt = /\b(?:let me know if you(?:['’]d like me to| want me to)? continue|say (?:['"]?continue['"]?|['"]?go ahead['"]?)|should i (?:proceed|continue)|would you like me to continue|want me to continue|shall i continue|next steps needed)\b/i;
+  const explicitContinuationPrompt = /\b(?:let me know if you(?:['’]d like me to| want me to)? continue|say (?:['"]?continue['"]?|['"]?go ahead['"]?)|should i (?:proceed|continue|retry|try|finish|do)|would you like me to (?:continue|retry|try|finish|do|proceed)|want me to (?:continue|retry|try|finish|do|proceed)|shall i (?:continue|retry|try|finish|do|proceed)|next steps needed|proceed with (?:the|those|remaining)? steps?)\b/i;
   if (explicitContinuationPrompt.test(lower)) {
     return true;
   }
@@ -64,21 +64,22 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
   const finalLine = lines.at(-1) ?? '';
   const finalLineLooksOngoing = !!finalLine
     && finalLine.length <= 180
-    && presentTenseActionStartPattern.test(finalLine)
+    && (presentTenseActionStartPattern.test(finalLine) || explicitContinuationPrompt.test(finalLine))
     && !/\b(?:done|completed|created|wrote|written|saved|updated|ready|waiting for approval|approval required|blocked|failed|unable|cannot|can't|will not|won't|do not|don't)\b/i.test(finalLine);
-  if (finalLineLooksOngoing && lineCount <= 8) {
+  if (finalLineLooksOngoing && lineCount <= 12) {
     return true;
   }
-  if (normalized.length > 320 || lineCount > 5) {
+  if (normalized.length > 1000 || lineCount > 20) {
     return false;
   }
 
   const continuationMarkers = [
-    /^(?:ok(?:ay)?|sure|alright|all right|right)[,:\s-]*(?:i['’]ll|i will|let me)\b/i,
-    /^(?:i['’]ll|i will|let me)\b/i,
+    /^(?:ok(?:ay)?|sure|alright|all right|right)[,:\s-]*(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
+    /^(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     presentTenseActionStartPattern,
-    /\b(?:now|next|first)\s+(?:i['’]ll|i will|let me)\b/i,
-    /\b(?:let me|i['’]ll|i will)\s+(?:inspect|check|review|look|find|apply|restart|resume|write|create|read|use|try|run|continue|proceed)\b/i,
+    /\b(?:now|next|first|then)\s+(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
+    /\b(?:let me|i['’]ll|i will(?!\s+not))\s+(?:inspect|check|review|look|find|apply|restart|resume|write|create|read|use|try|run|continue|proceed|retry|delete|remove|append|save)\b/i,
+    /\b(?:proceeding to|moving on to|next step is|i still need to)\b/i,
   ];
   const terminalMarkers = [
     /\b(?:done|completed|created|wrote|written|saved|updated|ready|waiting for approval|approval required|blocked|failed|unable|cannot|can't|will not|won't|do not|don't|exact stdout|file content|what changed|results?:|summary:|report created)\b/i,
@@ -87,7 +88,12 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
 
   const looksOngoing = continuationMarkers.some((pattern) => pattern.test(normalized))
     || (/\b(?:before|then)\b/.test(lower) && /\b(?:i['’]ll|i will|let me)\b/.test(lower));
+  
   if (!looksOngoing) return false;
+  
+  const finalLineMatchesContinuation = continuationMarkers.some((pattern) => pattern.test(finalLine));
+  if (finalLineMatchesContinuation) return true;
+
   if (terminalMarkers.some((pattern) => pattern.test(normalized))) return false;
   return true;
 }

@@ -365,5 +365,25 @@ function verifyEnvelopeTerminality(
       requiredNextAction: 'Inspect the delegated worker failure details before retrying.',
     };
   }
+
+  const quality = envelope.verificationHints?.responseQuality;
+  if (quality === 'intermediate') {
+    return {
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned an intermediate progress update instead of a final answer.'],
+      retryable: true,
+      requiredNextAction: 'Retry the delegated run and require a terminal answer.',
+    };
+  }
+
+  if (quality === 'degraded') {
+    return {
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned a degraded or low-quality response.'],
+      retryable: true,
+      requiredNextAction: 'Retry the delegated run with a higher quality model if possible.',
+    };
+  }
+
   return null;
 }

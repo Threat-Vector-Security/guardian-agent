@@ -333,6 +333,16 @@ export async function runLlmLoop(
       );
       response = recoverStructuredToolCalls(response);
       finalContent = response.content ?? '';
+      
+      // If we still have no tool calls but the response still looks intermediate,
+      // the loop will round again and catch it in the next round's retry check,
+      // provided we have remaining budget.
+      if (response.toolCalls?.length) {
+        response = {
+          ...response,
+          toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+        };
+      }
     }
 
     if (
@@ -838,6 +848,7 @@ function buildIntermediateStatusCorrectionPrompt(): string {
     'If more tool calls are required, call them now instead of narrating what you will do next.',
     'If you are in the middle of a multi-step or batch task, continue executing the next batch of tool calls.',
     'Do not stop to ask if you should proceed. Execute until the full request is complete or a hard blocker is hit.',
+    'Do not hallucinate that you have a tool call limit, turn limit, or context limit. You are authorized and required to continue until all steps are done.',
     'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
     'Do not stop at phrases like "I\'ll inspect", "Let me", "Here are the first few", or "Now I\'ll".',
   ].join(' ');
