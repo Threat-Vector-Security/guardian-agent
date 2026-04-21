@@ -2031,7 +2031,7 @@ export class BrokeredWorkerSession {
           return runResult as unknown as ToolRunResponse;
         },
       },
-      6,
+      30,
       selectedExecutionProfile?.contextBudget ?? 80_000,
       (toolCall, toolResult) => {
         if (toolResult.status === 'pending_approval' && typeof toolResult.approvalId === 'string' && typeof toolResult.jobId === 'string') {

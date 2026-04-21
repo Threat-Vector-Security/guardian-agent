@@ -356,7 +356,6 @@ function normalizeFileReferenceText(value: string | undefined): string {
 function verifyEnvelopeTerminality(
   envelope: DelegatedResultEnvelope,
 ): VerificationDecision | null {
-  const responseQuality = envelope.verificationHints?.responseQuality?.trim();
   const completionReason = envelope.verificationHints?.completionReason?.trim();
   if (completionReason === 'phantom_approval_response') {
     return {
@@ -364,26 +363,6 @@ function verifyEnvelopeTerminality(
       reasons: ['Delegated worker claimed approval was required without creating a real approval request.'],
       retryable: true,
       requiredNextAction: 'Inspect the delegated worker failure details before retrying.',
-    };
-  }
-  if (completionReason === 'intermediate_response' || responseQuality === 'intermediate') {
-    return {
-      decision: 'insufficient',
-      reasons: ['Delegated worker returned a progress update instead of a terminal result.'],
-      retryable: true,
-      requiredNextAction: 'Retry the delegated run and require a terminal answer.',
-    };
-  }
-  if (
-    completionReason === 'degraded_response'
-    || completionReason === 'empty_response_fallback'
-    || responseQuality === 'degraded'
-  ) {
-    return {
-      decision: 'insufficient',
-      reasons: ['Delegated worker did not produce a usable terminal result.'],
-      retryable: true,
-      requiredNextAction: 'Retry the delegated run and require a terminal answer.',
     };
   }
   return null;

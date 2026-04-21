@@ -43,13 +43,19 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
 
   const normalized = content.trim();
   const lower = normalized.toLowerCase();
-  const presentTenseActionStartPattern = /^(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking|listing|appending|continuing|renaming|moving|copying|deleting|running|opening)\b/i;
+  const presentTenseActionStartPattern = /(?:^|[\.\?!]\s+)(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking|listing|appending|continuing|renaming|moving|copying|deleting|running|opening)\b/i;
   if (/<\/?think>/i.test(normalized)) {
     return true;
   }
   if (/<details>\s*<summary>\s*(?:tool calls|raw tool results)/i.test(normalized)) {
     return true;
   }
+
+  const explicitContinuationPrompt = /\b(?:let me know if you(?:['’]d like me to| want me to)? continue|say (?:['"]?continue['"]?|['"]?go ahead['"]?)|should i (?:proceed|continue)|would you like me to continue|want me to continue|shall i continue|next steps needed)\b/i;
+  if (explicitContinuationPrompt.test(lower)) {
+    return true;
+  }
+
   const rawLines = normalized.split(/\r?\n/);
   const lines = rawLines
     .map((line) => line.replace(/^[>\-\d.*#\s`]+/, '').replace(/[*_`]/g, '').trim())

@@ -314,7 +314,7 @@ export async function runLlmLoop(
     }
 
     if (
-      forcedIntermediateStatusRetryCount < 2
+      forcedIntermediateStatusRetryCount < 10
       && (!response.toolCalls || response.toolCalls.length === 0)
       && shouldRetryIntermediateStatusCorrection(response.content ?? '', {
         hasToolResults: lastToolRoundResults.length > 0,
@@ -836,8 +836,10 @@ function buildIntermediateStatusCorrectionPrompt(): string {
     'System correction: your previous reply was an intermediate progress update, not a completed response.',
     'Continue the same request now.',
     'If more tool calls are required, call them now instead of narrating what you will do next.',
+    'If you are in the middle of a multi-step or batch task, continue executing the next batch of tool calls.',
+    'Do not stop to ask if you should proceed. Execute until the full request is complete or a hard blocker is hit.',
     'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
-    'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
+    'Do not stop at phrases like "I\'ll inspect", "Let me", "Here are the first few", or "Now I\'ll".',
   ].join(' ');
 }
 
