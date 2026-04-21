@@ -120,12 +120,13 @@ export class OllamaProvider implements LLMProvider {
       client: new Ollama({
         host: this.host,
         ...(Object.keys(headers).length > 0 ? { headers } : {}),
-        fetch: (input, init) => {
+        fetch: async (input, init) => {
           const upstreamSignal = init?.signal;
           const mergedSignal = upstreamSignal
             ? anySignal([upstreamSignal, requestSignal])
             : requestSignal;
-          return fetch(input, { ...init, signal: mergedSignal });
+          const response = await fetch(input, { ...init, signal: mergedSignal });
+          return normalizeOllamaSdkErrorResponse(response);
         },
       }),
       cleanup: () => clearTimeout(timeout),
@@ -191,6 +192,41 @@ function toOllamaTool(tool: NonNullable<ChatOptions['tools']>[number]): OllamaTo
       parameters: tool.parameters as OllamaTool['function']['parameters'],
     },
   };
+}
+
+async function normalizeOllamaSdkErrorResponse(response: Response): Promise<Response> {
+  if (response.ok) {
+    return response;
+  }
+
+  const defaultMessage = `Error ${response.status}: ${response.statusText}`;
+  let message = defaultMessage;
+
+  try {
+    const raw = await response.text();
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { error?: unknown };
+        const parsedMessage = typeof parsed?.error === 'string' ? parsed.error : '';
+        message = parsedMessage || raw;
+      } catch {
+        message = raw;
+      }
+    }
+  } catch {
+    // Preserve the SDK's fallback behavior without letting it write to stdout.
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'application/json; charset=utf-8');
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+
+  return new Response(JSON.stringify({ error: message }), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] {
