@@ -1460,7 +1460,7 @@ describe('WorkerManager', () => {
     });
 
     expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('progress update instead of a terminal result');
+    expect(result.content).toContain('Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.');
 
     const state = manager.getJobState(5);
     expect(state.jobs[0]).toMatchObject({
@@ -1491,12 +1491,12 @@ describe('WorkerManager', () => {
     expect(failedTrace).toMatchObject({
       stage: 'delegated_worker_failed',
       requestId: 'm-failed-delegated',
-      contentPreview: 'Delegated worker returned a progress update instead of a terminal result.',
+      contentPreview: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
       details: {
         taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
         lifecycle: 'failed',
-        reason: 'Delegated worker returned a progress update instead of a terminal result.',
-        handoffSummary: 'Delegated worker returned a progress update instead of a terminal result.',
+        reason: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+        handoffSummary: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
         handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
         workerExecutionSource: 'tool_loop',
         workerExecutionCompletionReason: 'intermediate_response',
@@ -1515,7 +1515,7 @@ describe('WorkerManager', () => {
       id: expect.stringMatching(/^delegated-worker:job-[^:]+:failed$/),
       kind: 'failed',
       requestId: 'm-failed-delegated',
-      detail: 'Delegated worker returned a progress update instead of a terminal result.',
+      detail: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
     });
 
     manager.shutdown();
@@ -3174,7 +3174,7 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
       stage: 'delegated_worker_retrying',
       details: {
-        reason: expect.stringContaining('progress update'),
+        reason: expect.stringContaining('without collecting successful repo evidence'),
         executionProfileName: 'openai-frontier',
         executionProfileTier: 'frontier',
       },
