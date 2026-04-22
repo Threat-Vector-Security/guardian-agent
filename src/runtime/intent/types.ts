@@ -90,6 +90,22 @@ export type IntentGatewayPreferredTier =
   | 'local'
   | 'external';
 
+export type IntentGatewayPlannedStepKind =
+  | 'tool_call'
+  | 'write'
+  | 'read'
+  | 'search'
+  | 'memory_save'
+  | 'answer';
+
+export interface IntentGatewayPlannedStep {
+  kind: IntentGatewayPlannedStepKind;
+  summary: string;
+  expectedToolCategories?: string[];
+  required?: boolean;
+  dependsOn?: string[];
+}
+
 export interface IntentGatewayEntities {
   automationName?: string;
   newAutomationName?: string;
@@ -136,6 +152,7 @@ export interface IntentGatewayDecision {
   confidence: IntentGatewayConfidence;
   operation: IntentGatewayOperation;
   summary: string;
+  recoveryReason?: string;
   turnRelation: IntentGatewayTurnRelation;
   resolution: IntentGatewayResolution;
   missingFields: string[];
@@ -148,6 +165,7 @@ export interface IntentGatewayDecision {
   expectedContextPressure: IntentGatewayExpectedContextPressure;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
   simpleVsComplex?: IntentGatewaySimpleVsComplex;
+  plannedSteps?: IntentGatewayPlannedStep[];
   provenance?: IntentGatewayDecisionProvenance;
   entities: IntentGatewayEntities;
 }

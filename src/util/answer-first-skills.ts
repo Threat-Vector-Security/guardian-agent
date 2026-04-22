@@ -1,5 +1,3 @@
-import { isResponseDegraded } from './response-quality.js';
-
 interface SkillLike {
   id?: string | null;
 }
@@ -61,7 +59,7 @@ export function isAnswerFirstSkillResponseSufficient(
   originalRequest?: string,
 ): boolean {
   const normalized = content.trim();
-  if (!normalized || isResponseDegraded(normalized)) {
+  if (!normalized || isStructurallyDegradedAnswer(normalized)) {
     return false;
   }
 
@@ -89,6 +87,23 @@ export function isAnswerFirstSkillResponseSufficient(
   }
 
   return true;
+}
+
+function isStructurallyDegradedAnswer(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return true;
+  if (/<\/?tool_result\b|<\/?tool_calls?\b|<\/?tool_call\b/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.length < 200 && /^\{[\s\S]*\}$/.test(trimmed)) {
+    try {
+      JSON.parse(trimmed);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function buildAnswerFirstSkillCorrectionPrompt(

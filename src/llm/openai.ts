@@ -87,6 +87,7 @@ export class OpenAIProvider implements LLMProvider {
         : undefined,
       model: response.model,
       finishReason: mapFinishReason(choice?.finish_reason),
+      ...(choice?.finish_reason ? { providerFinishReason: choice.finish_reason } : {}),
     };
   }
 

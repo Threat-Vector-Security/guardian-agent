@@ -6,6 +6,12 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { buildDelegatedExecutionMetadata } from '../runtime/execution/metadata.js';
+import {
+  buildStepReceipts,
+  computeWorkerRunStatus,
+  findAnswerStepId,
+  matchPlannedStepForTool,
+} from '../runtime/execution/task-plan.js';
 import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
@@ -255,28 +261,59 @@ function ensureDelegatedResultEnvelopeForTest(
   const decision = buildTestGatewayDecisionFromRequest(params);
   const taskContract = buildDelegatedTaskContract(decision);
   const workerExecution = metadata?.workerExecution as Record<string, unknown> | undefined;
+  const toolResultCount = typeof workerExecution?.toolResultCount === 'number'
+    ? Math.max(0, Math.trunc(workerExecution.toolResultCount))
+    : 0;
   const successfulToolResultCount = typeof workerExecution?.successfulToolResultCount === 'number'
     ? Math.max(0, Math.trunc(workerExecution.successfulToolResultCount))
     : 0;
+  const fileRefs = extractTestFileReferences(response.content);
+  const exactFileReadReceipts = taskContract.requireExactFileReferences
+    && taskContract.plan.steps.some((step) => step.kind === 'read')
+    && fileRefs.length > 0;
   const receipts = Array.from({ length: successfulToolResultCount }, (_, index) => ({
     receiptId: `test-receipt-${index + 1}`,
     sourceType: 'tool_call' as const,
-    toolName: 'fs_search',
+    toolName: exactFileReadReceipts && index > 0 ? 'fs_read' : 'fs_search',
     status: 'succeeded' as const,
-    refs: [],
-    summary: `Test receipt ${index + 1}`,
+    refs: exactFileReadReceipts && index > 0
+      ? [fileRefs[Math.min(index - 1, fileRefs.length - 1)]!]
+      : [],
+    summary: exactFileReadReceipts && index > 0
+      ? `Read ${fileRefs[Math.min(index - 1, fileRefs.length - 1)]!}`
+      : `Test receipt ${index + 1}`,
     startedAt: index + 1,
     endedAt: index + 1,
   }));
-  const fileRefs = extractTestFileReferences(response.content);
+  if (
+    toolResultCount > 0
+    && successfulToolResultCount === 0
+    && workerExecution?.lifecycle === 'failed'
+  ) {
+    receipts.push({
+      receiptId: 'test-receipt-failed',
+      sourceType: 'tool_call',
+      toolName: 'tool_call',
+      status: 'failed',
+      refs: [],
+      summary: 'Delegated tool execution failed.',
+      startedAt: toolResultCount + 1,
+      endedAt: toolResultCount + 1,
+    });
+  }
+  const readReceiptIds = receipts
+    .filter((receipt) => receipt.toolName === 'fs_read' && receipt.status === 'succeeded')
+    .map((receipt) => receipt.receiptId);
   const claims = [
     ...fileRefs.map((ref, index) => ({
       claimId: `test-file-${index + 1}`,
       kind: 'file_reference' as const,
       subject: ref,
       value: ref,
-      evidenceReceiptIds: receipts.length > 0
-        ? [receipts[Math.min(index, receipts.length - 1)]!.receiptId]
+      evidenceReceiptIds: readReceiptIds.length > 0
+        ? [readReceiptIds[Math.min(index, readReceiptIds.length - 1)]!]
+        : receipts.length > 0
+          ? [receipts[Math.min(index, receipts.length - 1)]!.receiptId]
         : [],
       confidence: 0.8,
     })),
@@ -337,6 +374,47 @@ function ensureDelegatedResultEnvelopeForTest(
           },
         }]
       : [];
+  const receiptStepIds = new Map<string, string>();
+  for (const receipt of receipts) {
+    const matchedStepId = matchPlannedStepForTool({
+      plannedTask: taskContract.plan,
+      toolName: receipt.toolName ?? 'tool_call',
+      args: { refs: receipt.refs },
+    });
+    if (matchedStepId) {
+      receiptStepIds.set(receipt.receiptId, matchedStepId);
+    }
+  }
+  const answerStepId = findAnswerStepId(taskContract.plan);
+  const answerReceipt = response.content.trim() && interruptions.length === 0 && answerStepId
+    ? {
+        receiptId: 'test-answer-receipt',
+        sourceType: 'model_answer' as const,
+        status: 'succeeded' as const,
+        refs: [] as string[],
+        summary: response.content.trim(),
+        startedAt: Math.max(1, receipts.length + 1),
+        endedAt: Math.max(1, receipts.length + 1),
+      }
+    : null;
+  if (answerReceipt && answerStepId) {
+    receiptStepIds.set(answerReceipt.receiptId, answerStepId);
+  }
+  const evidenceReceipts = answerReceipt ? [...receipts, answerReceipt] : receipts;
+  const stopReason = interruptions.length > 0 ? 'approval_required' : 'end_turn';
+  const stepReceipts = buildStepReceipts({
+    plannedTask: taskContract.plan,
+    evidenceReceipts,
+    toolReceiptStepIds: receiptStepIds,
+    ...(answerReceipt ? { finalAnswerReceiptId: answerReceipt.receiptId } : {}),
+    interruptions,
+  });
+  const runStatus = computeWorkerRunStatus(
+    taskContract.plan,
+    stepReceipts,
+    interruptions,
+    stopReason,
+  );
 
   return {
     ...response,
@@ -344,24 +422,17 @@ function ensureDelegatedResultEnvelopeForTest(
       ...(metadata ?? {}),
       ...buildDelegatedExecutionMetadata({
         taskContract,
-        ...(response.content.trim() && interruptions.length === 0 ? { finalUserAnswer: response.content.trim() } : {}),
+        runStatus,
+        stopReason,
+        stepReceipts,
+        ...(response.content.trim() && interruptions.length === 0 && runStatus === 'completed'
+          ? { finalUserAnswer: response.content.trim() }
+          : {}),
         operatorSummary: response.content.trim() || 'Delegated worker completed.',
         claims,
-        evidenceReceipts: receipts,
+        evidenceReceipts,
         interruptions,
         artifacts: [],
-        ...(workerExecution
-          ? {
-              verificationHints: {
-                ...(typeof workerExecution.responseQuality === 'string'
-                  ? { responseQuality: workerExecution.responseQuality }
-                  : {}),
-                ...(typeof workerExecution.completionReason === 'string'
-                  ? { completionReason: workerExecution.completionReason }
-                  : {}),
-              },
-            }
-          : {}),
         events,
       }),
     },
@@ -1135,6 +1206,7 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_worker_contract_reconciled',
       'delegated_interruption_requested',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -1460,7 +1532,7 @@ describe('WorkerManager', () => {
     });
 
     expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('Delegated worker returned an intermediate progress update instead of a final answer.');
+    expect(result.content).toContain('Delegated worker stopped before satisfying every required planned step.');
 
     const state = manager.getJobState(5);
     expect(state.jobs[0]).toMatchObject({
@@ -1481,6 +1553,7 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_failed',
@@ -1491,18 +1564,13 @@ describe('WorkerManager', () => {
     expect(failedTrace).toMatchObject({
       stage: 'delegated_worker_failed',
       requestId: 'm-failed-delegated',
-      contentPreview: 'Delegated worker returned an intermediate progress update instead of a final answer.',
+      contentPreview: 'Delegated worker stopped before satisfying every required planned step.',
       details: {
         taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
         lifecycle: 'failed',
-        reason: 'Delegated worker returned an intermediate progress update instead of a final answer.',
-        handoffSummary: 'Delegated worker returned an intermediate progress update instead of a final answer.',
+        reason: 'Delegated worker stopped before satisfying every required planned step.',
+        handoffSummary: 'Delegated worker stopped before satisfying every required planned step.',
         handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
-        workerExecutionSource: 'tool_loop',
-        workerExecutionCompletionReason: 'intermediate_response',
-        workerExecutionResponseQuality: 'intermediate',
-        workerExecutionToolCallCount: 0,
-        workerExecutionToolResultCount: 0,
       },
     });
 
@@ -1515,7 +1583,7 @@ describe('WorkerManager', () => {
       id: expect.stringMatching(/^delegated-worker:job-[^:]+:failed$/),
       kind: 'failed',
       requestId: 'm-failed-delegated',
-      detail: 'Delegated worker returned an intermediate progress update instead of a final answer.',
+      detail: 'Delegated worker stopped before satisfying every required planned step.',
     });
 
     manager.shutdown();
@@ -1598,11 +1666,12 @@ describe('WorkerManager', () => {
     });
 
     expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('repo-grounded answer without collecting successful tool results or evidence');
+    expect(result.content).toContain('Delegated worker stopped before satisfying every required planned step.');
 
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_failed',
@@ -1615,8 +1684,8 @@ describe('WorkerManager', () => {
       requestId: 'm-repo-grounding-failed',
       details: {
         lifecycle: 'failed',
-        reason: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
-        handoffSummary: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+        reason: 'Delegated worker stopped before satisfying every required planned step.',
+        handoffSummary: 'Delegated worker stopped before satisfying every required planned step.',
         handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
         workerExecutionCompletionReason: 'answer_first_response',
         workerExecutionToolCallCount: 0,
@@ -1627,7 +1696,7 @@ describe('WorkerManager', () => {
     expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
       kind: 'failed',
       requestId: 'm-repo-grounding-failed',
-      detail: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+      detail: 'Delegated worker stopped before satisfying every required planned step.',
     });
 
     manager.shutdown();
@@ -1719,6 +1788,7 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
       'delegated_worker_running',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -1764,13 +1834,14 @@ describe('WorkerManager', () => {
       metadata: {
         skipTestDelegatedEnvelope: true,
         workerExecution: {
-          lifecycle: 'completed',
+          lifecycle: 'failed',
           source: 'tool_loop',
-          completionReason: 'model_response',
-          responseQuality: 'final',
-          toolCallCount: 1,
-          toolResultCount: 1,
-          successfulToolResultCount: 1,
+          completionReason: 'degraded_response',
+          responseQuality: 'degraded',
+          terminationReason: 'disconnect',
+          toolCallCount: 0,
+          toolResultCount: 0,
+          successfulToolResultCount: 0,
         },
       },
     });
@@ -1821,6 +1892,213 @@ describe('WorkerManager', () => {
 
     expect(result.content).toContain('Delegated work failed.');
     expect(result.content).toContain('typed result envelope');
+
+    manager.shutdown();
+  });
+
+  it('retries missing-envelope delegated runs when the worker shows partial progress and hits its budget', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: 'The delegated worker completion contract is defined in src/runtime/execution/types.ts, src/runtime/execution/task-plan.ts, src/runtime/execution/verifier.ts, and src/runtime/execution/metadata.ts.',
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              terminationReason: 'clean_exit',
+              toolCallCount: 4,
+              toolResultCount: 4,
+              successfulToolResultCount: 4,
+            },
+          },
+        };
+      }
+      return {
+        content: 'I searched the repo and started reading the contract files, but I ran out of turns before I could finish the final grounded answer.',
+        metadata: {
+          skipTestDelegatedEnvelope: true,
+          workerExecution: {
+            lifecycle: 'failed',
+            source: 'tool_loop',
+            completionReason: 'degraded_response',
+            responseQuality: 'degraded',
+            terminationReason: 'max_rounds',
+            roundCount: 30,
+            toolCallCount: 2,
+            toolResultCount: 1,
+            successfulToolResultCount: 1,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listJobs: vi.fn(() => [
+          {
+            id: 'job-contract-search',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            requestId: 'm-missing-envelope-budget',
+            argsPreview: '{"path":"src/runtime","pattern":"DelegatedResultEnvelope"}',
+            resultPreview: '{"matches":["src/runtime/execution/types.ts"]}',
+            createdAt: 10,
+            startedAt: 20,
+            completedAt: 30,
+          },
+          {
+            id: 'job-contract-read',
+            toolName: 'fs_read',
+            status: 'running',
+            requestId: 'm-missing-envelope-budget',
+            argsPreview: '{"path":"src/runtime/execution/verifier.ts"}',
+            createdAt: 40,
+            startedAt: 50,
+          },
+        ]),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 654_000,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-missing-envelope-budget',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo and identify the delegated worker completion contract files and symbols.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'chat_synthesis',
+            plannedSteps: [
+              { kind: 'search', summary: 'Search the repo for the delegated worker completion contract files.', required: true },
+              { kind: 'answer', summary: 'Answer with exact file names and symbol names grounded in the repo evidence.', required: true, dependsOn: ['step_1'] },
+            ],
+            entities: {},
+          },
+        }),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'qwen3-coder-next',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-missing-envelope-budget',
+        executionId: 'exec-missing-envelope-budget',
+        rootExecutionId: 'exec-missing-envelope-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('src/runtime/execution/types.ts');
+    expect(result.content).toContain('src/runtime/execution/verifier.ts');
+    expect(result.content).not.toContain('Delegated work failed.');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_job_wait_expired',
+      'delegated_worker_retrying',
+      'delegated_job_wait_expired',
+      'delegated_worker_contract_reconciled',
+      'delegated_claim_emitted',
+      'delegated_verification_decided',
+      'delegated_worker_completed',
+    ]);
 
     manager.shutdown();
   });
@@ -1974,6 +2252,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -2114,6 +2393,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_failed',
@@ -2231,10 +2511,6 @@ describe('WorkerManager', () => {
       .find((entry) => entry.stage === 'delegated_verification_decided');
     expect(verificationTrace?.details.verificationFailureDiagnostics).toMatchObject({
       requestId: 'm-trace-failure',
-      tracedToolResults: [{
-        toolName: 'fs_search',
-        resultPreview: '{"success":true,"output":{"matches":["src/runtime/intent-routing-trace.ts [content] trace details"]}}',
-      }],
       jobSnapshots: [{
         toolName: 'fs_search',
         resultPreview: '{"matches":["src/runtime/intent-routing-trace.ts"]}',
@@ -2401,6 +2677,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -2552,6 +2829,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -2715,6 +2993,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -2870,6 +3149,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -3021,6 +3301,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -3167,6 +3448,7 @@ describe('WorkerManager', () => {
       'delegated_worker_started',
       'delegated_worker_running',
       'delegated_worker_retrying',
+      'delegated_worker_contract_reconciled',
       'delegated_claim_emitted',
       'delegated_verification_decided',
       'delegated_worker_completed',
@@ -3174,10 +3456,208 @@ describe('WorkerManager', () => {
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
       stage: 'delegated_worker_retrying',
       details: {
-        reason: expect.stringContaining('returned an intermediate progress update instead of a final answer'),
+        reason: expect.stringContaining('required steps remain unsatisfied'),
         executionProfileName: 'openai-frontier',
         executionProfileTier: 'frontier',
       },
+    });
+
+    manager.shutdown();
+  });
+
+  it('does not carry a dependent answer step forward as satisfied on exact-file retries', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const retrySatisfiedStepIds: string[][] = [];
+    let dispatchCount = 0;
+    workerMessageHandler = (params) => {
+      dispatchCount += 1;
+      const carriedForward = Array.isArray(params.priorSatisfiedStepReceipts)
+        ? (params.priorSatisfiedStepReceipts as Array<{ stepId?: string }>)
+            .map((receipt) => typeof receipt.stepId === 'string' ? receipt.stepId : '')
+            .filter(Boolean)
+        : [];
+      retrySatisfiedStepIds.push(carriedForward);
+
+      if (dispatchCount === 1) {
+        const gatewayDecision = readPreRoutedIntentGatewayMetadata(repoGroundedCodingMetadata())?.decision;
+        const taskContract = buildDelegatedTaskContract(gatewayDecision);
+        return {
+          content: 'I found likely files, but I still need to inspect them directly.',
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus: 'incomplete',
+            stopReason: 'end_turn',
+            stepReceipts: [
+              {
+                stepId: 'step_1',
+                status: 'satisfied',
+                evidenceReceiptIds: ['receipt-search'],
+                summary: 'Search found candidate files.',
+                startedAt: 1,
+                endedAt: 2,
+              },
+              {
+                stepId: 'step_2',
+                status: 'failed',
+                evidenceReceiptIds: [],
+                summary: 'Read the specific implementation files needed to ground the exact file references.',
+                startedAt: 0,
+                endedAt: 0,
+              },
+              {
+                stepId: 'step_3',
+                status: 'satisfied',
+                evidenceReceiptIds: ['receipt-answer'],
+                summary: 'The likely files are src/support/workerProgress.ts and src/timeline/renderTimeline.ts.',
+                startedAt: 3,
+                endedAt: 4,
+              },
+            ],
+            operatorSummary: 'The likely files are src/support/workerProgress.ts and src/timeline/renderTimeline.ts.',
+            claims: [],
+            evidenceReceipts: [
+              {
+                receiptId: 'receipt-search',
+                sourceType: 'tool_call',
+                toolName: 'fs_search',
+                status: 'succeeded',
+                refs: ['src/worker', 'web/public/js'],
+                summary: 'Search found candidate directories.',
+                startedAt: 1,
+                endedAt: 2,
+              },
+              {
+                receiptId: 'receipt-answer',
+                sourceType: 'model_answer',
+                status: 'succeeded',
+                refs: [],
+                summary: 'The likely files are src/support/workerProgress.ts and src/timeline/renderTimeline.ts.',
+                startedAt: 3,
+                endedAt: 4,
+              },
+            ],
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      }
+
+      return {
+        content: 'The delegated worker progress implementation lives in `src/supervisor/worker-manager.ts`, and the run timeline rendering path lives in `web/public/js/chat-panel.js`.',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'model_response',
+            responseQuality: 'final',
+            toolCallCount: 2,
+            toolResultCount: 2,
+            successfulToolResultCount: 2,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 888_000,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-exact-file-retry-deps',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-5.1',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-exact-file-retry-deps',
+        executionId: 'exec-exact-file-retry-deps',
+        rootExecutionId: 'exec-exact-file-retry-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(retrySatisfiedStepIds).toEqual([[], ['step_1']]);
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_retrying',
     });
 
     manager.shutdown();
@@ -3257,7 +3737,7 @@ describe('WorkerManager', () => {
     });
 
     expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('source-backed security findings without collecting successful tool results or evidence');
+    expect(result.content).toContain('Delegated worker stopped before satisfying every required planned step.');
     const verificationTrace = intentRoutingTrace.record.mock.calls
       .map(([entry]) => entry)
       .find((entry) => entry.stage === 'delegated_verification_decided');
@@ -3265,9 +3745,10 @@ describe('WorkerManager', () => {
       stage: 'delegated_verification_decided',
       requestId: 'm-security-evidence-failed',
       details: {
-        decision: 'contradicted',
-        summary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
-        missingEvidenceKinds: ['security_evidence'],
+        decision: 'insufficient',
+        summary: 'Delegated worker stopped before satisfying every required planned step.',
+        missingEvidenceKinds: ['read'],
+        unsatisfiedStepIds: ['step_1'],
       },
     });
 

@@ -54,24 +54,26 @@ export function repairUnavailableIntentGatewayDecision(
   if (!sourceContent) return null;
   if (isExplicitComplexPlanningRequest(rawSourceContent)) {
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered explicit complex-planning request after an unstructured gateway response.',
+      ),
       route: 'complex_planning_task',
       operation: 'run',
       confidence: normalizeConfidence(parsed?.confidence) ?? 'medium',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered explicit complex-planning request after an unstructured gateway response.',
     }, repairContext, { classifierSource: 'repair.unstructured' });
   }
   if (looksLikeStandaloneGreetingTurn(rawSourceContent)) {
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered a standalone greeting after an unstructured gateway response.',
+      ),
       route: 'general_assistant',
       operation: 'inspect',
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered a standalone greeting after an unstructured gateway response.',
       executionClass: 'direct_assistant',
       preferredTier: 'external',
       requiresRepoGrounding: false,
@@ -83,13 +85,14 @@ export function repairUnavailableIntentGatewayDecision(
   }
   if (isExplicitRepoPlanningRequest(rawSourceContent)) {
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered repo-scoped implementation-planning intent after an unstructured gateway response.',
+      ),
       route: 'coding_task',
       operation: 'inspect',
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered repo-scoped implementation-planning intent after an unstructured gateway response.',
     }, repairContext, { classifierSource: 'repair.unstructured' });
   }
   const inferredProviderConfigDecision = inferExplicitProviderConfigDecision(
@@ -125,13 +128,14 @@ export function repairUnavailableIntentGatewayDecision(
   if (inferredRemoteExecCommand || isExplicitRemoteSandboxTaskRequest(rawSourceContent, sourceContent)) {
     const resolvedProfileId = resolveExplicitRemoteProfileId(rawSourceContent);
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered explicit remote-sandbox coding intent after an unstructured gateway response.',
+      ),
       route: 'coding_task',
       operation: 'run',
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered explicit remote-sandbox coding intent after an unstructured gateway response.',
       ...(inferredRemoteExecCommand ? { command: inferredRemoteExecCommand } : {}),
       codingRemoteExecRequested: true,
       ...(resolvedProfileId ? { profileId: resolvedProfileId } : {}),
@@ -147,13 +151,14 @@ export function repairUnavailableIntentGatewayDecision(
   );
   if (inferredCodingBackendRequest) {
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered coding-backend intent from an explicit backend workspace request after an unstructured gateway response.',
+      ),
       route: 'coding_task',
       operation: inferredCodingBackendRequest.operation,
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered coding-backend intent from an explicit backend workspace request after an unstructured gateway response.',
       codingBackend: inferredCodingBackendRequest.codingBackend,
       codingBackendRequested: true,
       ...(inferredCodingBackendRequest.sessionTarget
@@ -164,13 +169,14 @@ export function repairUnavailableIntentGatewayDecision(
   const inferredFilesystemOperation = inferExplicitFilesystemTaskOperation(sourceContent, parsedOperation);
   if (inferredFilesystemOperation) {
     return normalizeIntentGatewayDecision({
-      ...(parsed ?? {}),
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered filesystem intent from an explicit workspace or path request after an unstructured gateway response.',
+      ),
       route: 'filesystem_task',
       operation: inferredFilesystemOperation,
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : 'Recovered filesystem intent from an explicit workspace or path request after an unstructured gateway response.',
       ...(extractExplicitRepoFilePath(rawSourceContent)
         ? { path: extractExplicitRepoFilePath(rawSourceContent) }
         : {}),
@@ -187,13 +193,14 @@ export function repairUnavailableIntentGatewayDecision(
   const inferredCodingOperation = inferExplicitCodingTaskOperation(sourceContent, parsedOperation);
   if (!inferredCodingOperation) return null;
   return normalizeIntentGatewayDecision({
-    ...(parsed ?? {}),
+    ...buildRecoveredDecisionSeed(
+      parsed,
+      rawSourceContent,
+      'Recovered coding-task intent from explicit repo file references after an unstructured gateway response.',
+    ),
     route: 'coding_task',
     operation: inferredCodingOperation,
     confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'Recovered coding-task intent from explicit repo file references after an unstructured gateway response.',
   }, repairContext, { classifierSource: 'repair.unstructured' });
 }
 
@@ -202,6 +209,7 @@ function inferExplicitSecondBrainDecision(
   parsed: Record<string, unknown> | undefined,
   normalizeIntentGatewayDecision: NormalizeIntentGatewayDecisionFn,
 ): IntentGatewayDecision | null {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const operation = inferSecondBrainOperation(
     repairContext?.sourceContent,
     'personal_assistant_task',
@@ -225,14 +233,15 @@ function inferExplicitSecondBrainDecision(
     return null;
   }
   return normalizeIntentGatewayDecision({
-    ...(parsed ?? {}),
+    ...buildRecoveredDecisionSeed(
+      parsed,
+      rawSourceContent,
+      'Recovered Second Brain intent from an unstructured gateway response.',
+    ),
     route: 'personal_assistant_task',
     operation,
     personalItemType,
     confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'Recovered Second Brain intent from an unstructured gateway response.',
   }, repairContext, { classifierSource: 'repair.unstructured' });
 }
 
@@ -245,13 +254,14 @@ function inferExplicitProviderConfigDecision(
   if (!isExplicitProviderConfigRequest(rawSourceContent)) return null;
   const parsedOperation = normalizeOperation(parsed?.operation);
   return normalizeIntentGatewayDecision({
-    ...(parsed ?? {}),
+    ...buildRecoveredDecisionSeed(
+      parsed,
+      rawSourceContent,
+      'Recovered an AI provider configuration request after an unstructured gateway response.',
+    ),
     route: 'general_assistant',
     operation: inferProviderConfigOperation(rawSourceContent, parsedOperation),
     confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'Recovered an AI provider configuration request after an unstructured gateway response.',
     uiSurface: 'config',
     executionClass: 'provider_crud',
     preferredTier: 'external',
@@ -276,7 +286,11 @@ function inferExplicitAutomationControlDecision(
   );
   if (!operation || operation === 'unknown') return null;
   return normalizeIntentGatewayDecision({
-    ...(parsed ?? {}),
+    ...buildRecoveredDecisionSeed(
+      parsed,
+      rawSourceContent,
+      'Recovered an automation-control request after an unstructured gateway response.',
+    ),
     route: 'automation_control',
     operation,
     ...(extractExplicitAutomationName(rawSourceContent)
@@ -286,9 +300,6 @@ function inferExplicitAutomationControlDecision(
       ? { enabled: inferAutomationEnabledState(rawSourceContent) }
       : {}),
     confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'Recovered an automation-control request after an unstructured gateway response.',
   }, repairContext, { classifierSource: 'repair.unstructured' });
 }
 
@@ -305,15 +316,38 @@ function inferExplicitAutomationOutputDecision(
   );
   if (!operation || operation === 'unknown') return null;
   return normalizeIntentGatewayDecision({
-    ...(parsed ?? {}),
+    ...buildRecoveredDecisionSeed(
+      parsed,
+      rawSourceContent,
+      'Recovered an automation-output analysis request after an unstructured gateway response.',
+    ),
     route: 'automation_output_task',
     operation,
     ...(extractExplicitAutomationOutputName(rawSourceContent)
       ? { automationName: extractExplicitAutomationOutputName(rawSourceContent) }
       : {}),
     confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
-    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'Recovered an automation-output analysis request after an unstructured gateway response.',
   }, repairContext, { classifierSource: 'repair.unstructured' });
+}
+
+function buildRecoveredDecisionSeed(
+  parsed: Record<string, unknown> | undefined,
+  rawSourceContent: string,
+  recoveryReason: string,
+): Record<string, unknown> {
+  return {
+    ...(parsed ?? {}),
+    summary: buildRecoveredRequestSummary(rawSourceContent),
+    recoveryReason,
+  };
+}
+
+function buildRecoveredRequestSummary(rawSourceContent: string): string {
+  const normalized = collapseIntentGatewayWhitespace(rawSourceContent);
+  if (!normalized) {
+    return 'Recovered request after an unstructured gateway response.';
+  }
+  return normalized.length <= 120
+    ? normalized
+    : `${normalized.slice(0, 117).trimEnd()}...`;
 }

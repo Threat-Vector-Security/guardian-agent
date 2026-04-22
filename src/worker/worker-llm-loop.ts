@@ -3,10 +3,10 @@ import type { ToolCaller } from '../broker/types.js';
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
-import { isIntermediateStatusResponse, isResponseDegraded } from '../util/response-quality.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../util/structured-json.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
+import type { PlannedTask, WorkerStopReason } from '../runtime/execution/types.js';
 import type {
   WorkerExecutionCompletionReason,
   WorkerExecutionResponseQuality,
@@ -37,11 +37,16 @@ export interface LlmLoopOptions {
   answerFirstFallbackContent?: string;
   /** Optional system correction used when a repo/file task narrates instead of using tools. */
   toolExecutionCorrectionPrompt?: string;
+  /** When true, the answer-first skill lane may complete even if repo-tool correction guidance exists. */
+  allowAnswerFirstCompletionWithToolExecutionCorrection?: boolean;
+  /** Optional structural plan the worker should satisfy. */
+  plannedTask?: PlannedTask;
   /** Structured per-tool lifecycle callback for delegated execution receipts. */
   onToolEvent?: (event: LlmLoopToolEvent) => void;
 }
 
 export interface LlmLoopOutcome {
+  stopReason: WorkerStopReason;
   completionReason: WorkerExecutionCompletionReason;
   responseQuality: WorkerExecutionResponseQuality;
   roundCount: number;
@@ -55,6 +60,7 @@ export interface LlmLoopToolEvent {
   phase: 'started' | 'completed';
   toolCall: { id: string; name: string };
   args: Record<string, unknown>;
+  stepId?: string;
   startedAt: number;
   endedAt?: number;
   result?: Record<string, unknown>;
@@ -74,6 +80,7 @@ export async function runLlmLoop(
   let finalContent = '';
   let rounds = 0;
   let hasPendingApprovals = false;
+  let stopReason: WorkerStopReason = 'error';
   let completionReason: WorkerExecutionCompletionReason = 'model_response';
   let toolCallCount = 0;
   let toolResultCount = 0;
@@ -83,14 +90,16 @@ export async function runLlmLoop(
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
   let forcedDiscoveryContinuationRetryUsed = false;
-  let forcedIntermediateStatusRetryCount = 0;
   let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
   let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
   const currentTaintReasons = new Set<string>();
   let seededAnswerFirstResponse: ChatResponse | null = null;
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
-  let llmToolDefs = allToolDefs.map((definition) => toLLMToolDef(definition, 'external'));
+  const toWorkerToolDefinition = (definition: ToolDefinition): import('../llm/types.js').ToolDefinition => addPlannerStepIdHint(
+    toLLMToolDef(definition, 'external'),
+  );
+  let llmToolDefs = allToolDefs.map((definition) => toWorkerToolDefinition(definition));
 
   const formatToolResult = (toolName: string, result: unknown): string => {
     if (toolCaller && typeof (toolCaller as unknown as { formatToolResultForLlm?: (name: string, value: unknown) => string }).formatToolResultForLlm === 'function') {
@@ -109,7 +118,7 @@ export async function runLlmLoop(
     for (const discovered of tools) {
       if (!llmToolDefs.some((tool) => tool.name === discovered.name)) {
         allToolDefs.push(discovered);
-        llmToolDefs.push(toLLMToolDef(discovered, 'external'));
+        llmToolDefs.push(toWorkerToolDefinition(discovered));
       }
     }
   };
@@ -197,11 +206,15 @@ export async function runLlmLoop(
       const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
       if (
         answerFirstContent
-        && !options?.toolExecutionCorrectionPrompt?.trim()
-        && (options?.answerFirstResponseIsSufficient?.(answerFirstContent) ?? !isResponseDegraded(answerFirstContent))
+        && (
+          options?.allowAnswerFirstCompletionWithToolExecutionCorrection === true
+          || !options?.toolExecutionCorrectionPrompt?.trim()
+        )
+        && (options?.answerFirstResponseIsSufficient?.(answerFirstContent) ?? hasUsableDirectContent(answerFirstContent))
         && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
       ) {
         finalContent = answerFirstContent;
+        stopReason = 'end_turn';
         completionReason = 'answer_first_response';
       } else if (answerFirstResponse.toolCalls?.length) {
         seededAnswerFirstResponse = answerFirstResponse;
@@ -223,12 +236,17 @@ export async function runLlmLoop(
       currentContextTrustLevel,
       currentTaintReasons,
     );
+    const plannedTaskMessages = prependPlannedTaskPrompt(
+      plannerMessages,
+      options?.plannedTask,
+    );
 
     let response = rounds === 0 && seededAnswerFirstResponse
       ? seededAnswerFirstResponse
-      : await chatFn(plannerMessages, { tools: llmToolDefs });
+      : await chatFn(plannedTaskMessages, { tools: llmToolDefs });
     seededAnswerFirstResponse = null;
     finalContent = response.content ?? '';
+    stopReason = mapChatResponseStopReason(response);
 
     if (
       !forcedPolicyRetryUsed
@@ -238,17 +256,19 @@ export async function runLlmLoop(
       forcedPolicyRetryUsed = true;
       response = await chatFn(
         [
-          ...plannerMessages,
+          ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: buildPolicyUpdateCorrectionPrompt() },
         ],
         { tools: llmToolDefs },
       );
       finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
     }
 
     response = recoverStructuredToolCalls(response);
     finalContent = response.content ?? '';
+    stopReason = mapChatResponseStopReason(response);
     if (response.toolCalls?.length) {
       response = {
         ...response,
@@ -264,7 +284,7 @@ export async function runLlmLoop(
       forcedPolicyBlockedRetryUsed = true;
       response = await chatFn(
         [
-          ...plannerMessages,
+          ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: buildPolicyBlockedToolRoundCorrectionPrompt() },
         ],
@@ -272,6 +292,7 @@ export async function runLlmLoop(
       );
       response = recoverStructuredToolCalls(response);
       finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
     }
 
     if (
@@ -284,7 +305,7 @@ export async function runLlmLoop(
       forcedSkillShapeRetryCount += 1;
       response = await chatFn(
         [
-          ...plannerMessages,
+          ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: options.answerFirstCorrectionPrompt },
         ],
@@ -292,6 +313,7 @@ export async function runLlmLoop(
       );
       response = recoverStructuredToolCalls(response);
       finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
     }
 
     if (
@@ -303,7 +325,7 @@ export async function runLlmLoop(
       forcedToolExecutionRetryUsed = true;
       response = await chatFn(
         [
-          ...plannerMessages,
+          ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: options?.toolExecutionCorrectionPrompt ?? '' },
         ],
@@ -311,38 +333,7 @@ export async function runLlmLoop(
       );
       response = recoverStructuredToolCalls(response);
       finalContent = response.content ?? '';
-    }
-
-    if (
-      forcedIntermediateStatusRetryCount < 10
-      && (!response.toolCalls || response.toolCalls.length === 0)
-      && shouldRetryIntermediateStatusCorrection(response.content ?? '', {
-        hasToolResults: lastToolRoundResults.length > 0,
-        hasAnswerFirstContract: typeof options?.answerFirstResponseIsSufficient === 'function',
-        hasToolExecutionContract: !!options?.toolExecutionCorrectionPrompt?.trim(),
-      })
-    ) {
-      forcedIntermediateStatusRetryCount += 1;
-      response = await chatFn(
-        [
-          ...plannerMessages,
-          { role: 'assistant', content: response.content ?? '' },
-          { role: 'user', content: buildIntermediateStatusCorrectionPrompt() },
-        ],
-        { tools: llmToolDefs },
-      );
-      response = recoverStructuredToolCalls(response);
-      finalContent = response.content ?? '';
-      
-      // If we still have no tool calls but the response still looks intermediate,
-      // the loop will round again and catch it in the next round's retry check,
-      // provided we have remaining budget.
-      if (response.toolCalls?.length) {
-        response = {
-          ...response,
-          toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
-        };
-      }
+      stopReason = mapChatResponseStopReason(response);
     }
 
     if (
@@ -353,7 +344,7 @@ export async function runLlmLoop(
       forcedDiscoveryContinuationRetryUsed = true;
       response = await chatFn(
         [
-          ...plannerMessages,
+          ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: buildDiscoveryContinuationCorrectionPrompt() },
         ],
@@ -361,6 +352,7 @@ export async function runLlmLoop(
       );
       response = recoverStructuredToolCalls(response);
       finalContent = response.content ?? '';
+      stopReason = mapChatResponseStopReason(response);
       if (response.toolCalls?.length) {
         response = {
           ...response,
@@ -397,6 +389,12 @@ export async function runLlmLoop(
         if (tc.arguments?.trim()) {
           try { parsedArgs = JSON.parse(tc.arguments); } catch { /* empty */ }
         }
+        const stepId = typeof parsedArgs.step_id === 'string' && parsedArgs.step_id.trim()
+          ? parsedArgs.step_id.trim()
+          : undefined;
+        if ('step_id' in parsedArgs) {
+          delete parsedArgs.step_id;
+        }
         if (tc.name === 'find_tools') {
           parsedArgs = normalizeFindToolsArgs(parsedArgs, latestUserRequest());
         }
@@ -405,6 +403,7 @@ export async function runLlmLoop(
           phase: 'started',
           toolCall: { id: tc.id, name: tc.name },
           args: parsedArgs,
+          ...(stepId ? { stepId } : {}),
           startedAt,
         });
 
@@ -422,6 +421,7 @@ export async function runLlmLoop(
             phase: 'completed',
             toolCall: { id: tc.id, name: tc.name },
             args: parsedArgs,
+            ...(stepId ? { stepId } : {}),
             startedAt,
             endedAt: Date.now(),
             result: denied as unknown as Record<string, unknown>,
@@ -453,6 +453,7 @@ export async function runLlmLoop(
             phase: 'completed',
             toolCall: { id: tc.id, name: tc.name },
             args: parsedArgs,
+            ...(stepId ? { stepId } : {}),
             startedAt,
             endedAt: Date.now(),
             result: res as unknown as Record<string, unknown>,
@@ -464,6 +465,7 @@ export async function runLlmLoop(
             phase: 'completed',
             toolCall: { id: tc.id, name: tc.name },
             args: parsedArgs,
+            ...(stepId ? { stepId } : {}),
             startedAt,
             endedAt: Date.now(),
             errorMessage: error instanceof Error ? error.message : String(error),
@@ -541,6 +543,7 @@ export async function runLlmLoop(
         (s) => s.status === 'fulfilled' && (s.value as any).result?.status === 'pending_approval',
       );
       if (allPending) {
+        stopReason = 'approval_required';
         // Remove the pending tool result messages we just pushed so we don't
         // send duplicate toolCallIds when resuming after approval.
         messages.splice(-toolResults.length, toolResults.length);
@@ -556,46 +559,21 @@ export async function runLlmLoop(
     rounds += 1;
   }
 
-  // Quality-based fallback: if the primary LLM produced a degraded response
-  // and a fallback chat function was provided, retry with it.
-  if ((isResponseDegraded(finalContent) || isIntermediateStatusResponse(finalContent)) && options?.fallbackChatFn) {
+  if (rounds >= maxRounds && !finalContent && stopReason !== 'approval_required') {
+    stopReason = 'max_rounds';
+  }
+
+  if (stopReason === 'max_tokens' && options?.fallbackChatFn) {
     try {
       const fbResponse = await options.fallbackChatFn(messages, { tools: llmToolDefs });
       if (fbResponse.content?.trim()) {
         finalContent = fbResponse.content;
+        stopReason = mapChatResponseStopReason(fbResponse);
         completionReason = 'fallback_model_response';
       }
     } catch {
-      // Fallback also failed, keep original content
+      stopReason = 'error';
     }
-  }
-
-  const allRoundResultsPolicyBlocked = lastToolRoundResults.length > 0
-    && lastToolRoundResults.every(({ result }) => isFixablePolicyBlockedToolResult(result));
-
-  if (
-    (
-      !finalContent
-      || isIntermediateStatusResponse(finalContent)
-      || (
-        !!options?.answerFirstFallbackContent
-        && !!options.answerFirstResponseIsSufficient
-        && !options.answerFirstResponseIsSufficient(finalContent)
-      )
-    )
-    && lastToolRoundResults.length > 0
-    && !allRoundResultsPolicyBlocked
-  ) {
-    const recovered = await tryRecoverDirectAnswer(messages, chatFn, options?.fallbackChatFn);
-    if (recovered) {
-      finalContent = recovered;
-      completionReason = 'tool_result_recovery';
-    }
-  }
-
-  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
-    finalContent = summarizeToolRoundFallback(lastToolRoundResults);
-    completionReason = 'tool_result_summary_fallback';
   }
 
   if (
@@ -603,14 +581,15 @@ export async function runLlmLoop(
     && options.answerFirstResponseIsSufficient
     && (
       !options.answerFirstResponseIsSufficient(finalContent)
-      || isIntermediateStatusResponse(finalContent)
+      || !hasUsableDirectContent(finalContent)
     )
   ) {
     finalContent = options.answerFirstFallbackContent;
+    stopReason = 'end_turn';
     completionReason = 'answer_first_fallback';
   }
 
-  if (!finalContent) {
+  if (!finalContent.trim() && !hasPendingApprovals) {
     finalContent = 'I could not generate a final response for that request.';
     completionReason = 'empty_response_fallback';
   }
@@ -618,13 +597,9 @@ export async function runLlmLoop(
   if (hasPendingApprovals) {
     completionReason = 'approval_pending';
   }
-  const responseQuality = classifyLlmLoopResponseQuality(finalContent);
-  if (!hasPendingApprovals) {
-    if (responseQuality === 'intermediate') {
-      completionReason = 'intermediate_response';
-    } else if (responseQuality === 'degraded' && completionReason !== 'empty_response_fallback') {
-      completionReason = 'degraded_response';
-    }
+  const responseQuality = classifyLlmLoopResponseQuality(stopReason, finalContent);
+  if (!hasPendingApprovals && responseQuality === 'degraded' && completionReason === 'model_response') {
+    completionReason = 'degraded_response';
   }
 
   const policyBlockedSamples: Array<{ toolName: string; message: string }> = [];
@@ -640,6 +615,7 @@ export async function runLlmLoop(
     messages,
     hasPendingApprovals,
     outcome: {
+      stopReason,
       completionReason,
       responseQuality,
       roundCount: rounds,
@@ -651,10 +627,117 @@ export async function runLlmLoop(
   };
 }
 
-function classifyLlmLoopResponseQuality(content: string | undefined): WorkerExecutionResponseQuality {
-  if (isResponseDegraded(content)) return 'degraded';
-  if (isIntermediateStatusResponse(content)) return 'intermediate';
-  return 'final';
+function classifyLlmLoopResponseQuality(
+  stopReason: WorkerStopReason,
+  content: string | undefined,
+): WorkerExecutionResponseQuality {
+  if (stopReason === 'max_tokens' || stopReason === 'max_rounds' || stopReason === 'error') {
+    return 'degraded';
+  }
+  return hasUsableDirectContent(content) ? 'final' : 'degraded';
+}
+
+function mapChatResponseStopReason(response: ChatResponse): WorkerStopReason {
+  const providerReason = response.providerFinishReason?.trim().toLowerCase();
+  switch (providerReason) {
+    case 'tool_use':
+    case 'tool_calls':
+      return 'tool_use_pending';
+    case 'max_tokens':
+    case 'length':
+      return 'max_tokens';
+    case 'error':
+      return 'error';
+    case 'end_turn':
+    case 'stop':
+    case 'stop_sequence':
+      return 'end_turn';
+    default:
+      break;
+  }
+  switch (response.finishReason) {
+    case 'tool_calls':
+      return 'tool_use_pending';
+    case 'length':
+      return 'max_tokens';
+    case 'error':
+      return 'error';
+    default:
+      return 'end_turn';
+  }
+}
+
+function prependPlannedTaskPrompt(
+  messages: ChatMessage[],
+  plannedTask: PlannedTask | undefined,
+): ChatMessage[] {
+  if (!plannedTask || plannedTask.steps.length === 0) {
+    return messages;
+  }
+  const planText = plannedTask.steps
+    .map((step) => {
+      const requirement = step.required ? 'required' : 'optional';
+      const categories = step.expectedToolCategories?.length
+        ? `; expected tool categories: ${step.expectedToolCategories.join(', ')}`
+        : '';
+      const dependencies = step.dependsOn?.length
+        ? `; depends on: ${step.dependsOn.join(', ')}`
+        : '';
+      return `${step.stepId}: ${step.kind} - ${step.summary} (${requirement}${categories}${dependencies})`;
+    })
+    .join('\n');
+  return [
+    {
+      role: 'system',
+      content: [
+        'Execution plan:',
+        planText,
+        'When calling a tool for one of these steps, include the matching step_id argument.',
+        'Only use step_id values from the plan.',
+      ].join('\n'),
+    },
+    ...messages,
+  ];
+}
+
+function addPlannerStepIdHint(
+  definition: import('../llm/types.js').ToolDefinition,
+): import('../llm/types.js').ToolDefinition {
+  const parameters = definition.parameters;
+  const properties = isRecord(parameters.properties)
+    ? parameters.properties as Record<string, unknown>
+    : {};
+  return {
+    ...definition,
+    parameters: {
+      ...parameters,
+      type: 'object',
+      properties: {
+        ...properties,
+        step_id: {
+          type: 'string',
+          description: 'Optional execution-plan step id for the planned step this tool call is satisfying.',
+        },
+      },
+    },
+  };
+}
+
+function hasUsableDirectContent(content: string | undefined): boolean {
+  const trimmed = content?.trim() ?? '';
+  if (!trimmed) return false;
+  if (/<\/?tool_result\b|<\/?tool_calls?\b|<\/?tool_call\b/i.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.length < 200 && /^\{[\s\S]*\}$/.test(trimmed)) {
+    try {
+      JSON.parse(trimmed);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  return true;
 }
 
 function isSuccessfulToolResult(result: Record<string, unknown>): boolean {
@@ -679,44 +762,6 @@ function isSuccessfulToolResult(result: Record<string, unknown>): boolean {
     return true;
   }
   return status === 'success' || status === 'completed' || status === 'ok';
-}
-
-async function tryRecoverDirectAnswer(
-  messages: ChatMessage[],
-  chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
-  fallbackChatFn?: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
-): Promise<string> {
-  const recoveryMessages: ChatMessage[] = [
-    ...messages,
-    {
-      role: 'user',
-      content: [
-        'You already completed tool calls for this request.',
-        'Now answer the user directly in plain language using the tool results already in the conversation.',
-        'Do not call any more tools.',
-      ].join(' '),
-    },
-  ];
-
-  try {
-    const recovery = await chatFn(recoveryMessages, { tools: [] });
-    const content = recovery.content?.trim() ?? '';
-    if (content && !isResponseDegraded(content) && !isIntermediateStatusResponse(content)) {
-      return content;
-    }
-  } catch {
-    // Fall through to the fallback model or synthesized summary.
-  }
-
-  if (!fallbackChatFn) return '';
-
-  try {
-    const fallback = await fallbackChatFn(recoveryMessages, { tools: [] });
-    const content = fallback.content?.trim() ?? '';
-    return isIntermediateStatusResponse(content) ? '' : content;
-  } catch {
-    return '';
-  }
 }
 
 function shouldRetryPolicyUpdateCorrection(
@@ -775,20 +820,6 @@ function shouldRetryToolExecutionCorrection(
     && toolDefs.length > 0;
 }
 
-function shouldRetryIntermediateStatusCorrection(
-  responseContent: string,
-  context: {
-    hasToolResults: boolean;
-    hasAnswerFirstContract: boolean;
-    hasToolExecutionContract: boolean;
-  },
-): boolean {
-  if (!isIntermediateStatusResponse(responseContent)) {
-    return false;
-  }
-  return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
-}
-
 function shouldRetryDiscoveryContinuation(
   results: Array<{ toolName: string; result: Record<string, unknown> }>,
   toolExecutionCorrectionPrompt?: string,
@@ -841,19 +872,6 @@ function collectToolResultText(result: Record<string, unknown>): string {
   ].filter(Boolean).join('\n');
 }
 
-function buildIntermediateStatusCorrectionPrompt(): string {
-  return [
-    'System correction: your previous reply was an intermediate progress update, not a completed response.',
-    'Continue the same request now.',
-    'If more tool calls are required, call them now instead of narrating what you will do next.',
-    'If you are in the middle of a multi-step or batch task, continue executing the next batch of tool calls.',
-    'Do not stop to ask if you should proceed. Execute until the full request is complete or a hard blocker is hit.',
-    'Do not hallucinate that you have a tool call limit, turn limit, or context limit. You are authorized and required to continue until all steps are done.',
-    'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
-    'Do not stop at phrases like "I\'ll inspect", "Let me", "Here are the first few", or "Now I\'ll".',
-  ].join(' ');
-}
-
 function buildDiscoveryContinuationCorrectionPrompt(): string {
   return [
     'System correction: discovering a tool is not the requested outcome.',
@@ -885,39 +903,14 @@ function buildPolicyBlockedToolRoundCorrectionPrompt(): string {
   ].join(' ');
 }
 
-function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
-  const anySucceeded = results.some(({ result }) => isSuccessfulToolResult(result));
-  const summaries = results
-    .map(({ toolName, result }) => summarizeSingleToolFallback(toolName, result))
-    .filter((summary): summary is string => !!summary);
-  if (summaries.length === 0) return '';
-  if (summaries.length === 1) return summaries[0];
-  const header = anySucceeded
-    ? 'Completed the requested actions:'
-    : 'The requested action did not complete. Tool results:';
-  return `${header}\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
-}
-
-function summarizeSingleToolFallback(toolName: string, result: Record<string, unknown>): string {
-  const status = readString(result.status).toLowerCase();
-  if (status === 'pending_approval') return `${toolName} is awaiting approval.`;
-
-  const message = readString(result.message) || extractToolOutputMessage(result);
-  const succeeded = result.success === true || status === 'succeeded' || status === 'completed';
-  if (succeeded) {
-    return message || `Completed ${toolName}.`;
-  }
-
-  if (message) {
-    return `${toolName} did not complete: ${message}`;
-  }
-  return `Attempted ${toolName}, but it did not complete successfully.`;
-}
-
 function extractToolOutputMessage(result: Record<string, unknown>): string {
   const output = result.output;
   if (!output || typeof output !== 'object' || Array.isArray(output)) return '';
   return readString((output as Record<string, unknown>).message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function readString(value: unknown): string {

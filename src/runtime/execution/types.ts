@@ -33,6 +33,54 @@ export type DelegatedTaskContractKind =
   | 'filesystem_mutation'
   | 'security_analysis';
 
+export type PlannedStepKind =
+  | 'tool_call'
+  | 'write'
+  | 'read'
+  | 'search'
+  | 'memory_save'
+  | 'answer';
+
+export interface PlannedStep {
+  stepId: string;
+  kind: PlannedStepKind;
+  summary: string;
+  expectedToolCategories?: string[];
+  required: boolean;
+  dependsOn?: string[];
+}
+
+export interface PlannedTask {
+  planId: string;
+  steps: PlannedStep[];
+  allowAdditionalSteps: boolean;
+}
+
+export interface StepReceipt {
+  stepId: string;
+  status: 'satisfied' | 'failed' | 'blocked' | 'skipped';
+  evidenceReceiptIds: string[];
+  interruptionId?: string;
+  summary: string;
+  startedAt: number;
+  endedAt: number;
+}
+
+export type WorkerStopReason =
+  | 'end_turn'
+  | 'tool_use_pending'
+  | 'max_tokens'
+  | 'max_rounds'
+  | 'approval_required'
+  | 'error';
+
+export type WorkerRunStatus =
+  | 'completed'
+  | 'suspended'
+  | 'incomplete'
+  | 'failed'
+  | 'max_turns';
+
 export interface DelegatedTaskContract {
   kind: DelegatedTaskContractKind;
   route?: string;
@@ -41,6 +89,7 @@ export interface DelegatedTaskContract {
   allowsAnswerFirst: boolean;
   requireExactFileReferences: boolean;
   summary?: string;
+  plan: PlannedTask;
 }
 
 export interface ExecutionRecordV2 {
@@ -164,10 +213,14 @@ export interface VerificationDecision {
   retryable: boolean;
   requiredNextAction?: string;
   missingEvidenceKinds?: string[];
+  unsatisfiedStepIds?: string[];
 }
 
 export interface DelegatedResultEnvelope {
   taskContract: DelegatedTaskContract;
+  runStatus: WorkerRunStatus;
+  stopReason: WorkerStopReason;
+  stepReceipts: StepReceipt[];
   finalUserAnswer?: string;
   operatorSummary: string;
   claims: Claim[];
@@ -179,10 +232,6 @@ export interface DelegatedResultEnvelope {
     label: string;
     refs?: string[];
   }>;
-  verificationHints?: {
-    responseQuality?: string;
-    completionReason?: string;
-  };
   modelProvenance?: ProviderSelectionSnapshot;
   events: ExecutionEvent[];
   verification?: VerificationDecision;

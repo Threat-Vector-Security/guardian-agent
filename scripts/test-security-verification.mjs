@@ -22,6 +22,56 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForChildExit(child, timeoutMs = 10_000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    sleep(timeoutMs),
+  ]);
+}
+
+async function closeServer(server) {
+  if (!server?.listening) return;
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function closeStream(stream) {
+  if (!stream || stream.destroyed || stream.closed) {
+    return;
+  }
+  await new Promise((resolve) => {
+    stream.once('close', resolve);
+    stream.end();
+  });
+}
+
+async function removeTreeBestEffort(target, options = {}) {
+  const keepTmp = process.env.HARNESS_KEEP_TMP === '1';
+  if (keepTmp) {
+    console.error(`Preserving temp root at ${target}`);
+    return;
+  }
+
+  const attempts = options.attempts ?? 20;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error?.code;
+      const retryable = code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY';
+      if (!retryable || attempt === attempts) {
+        console.error(`WARN: failed to remove temp root ${target}: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      await sleep(retryDelayMs);
+    }
+  }
+}
+
 async function waitForHealth(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -141,6 +191,31 @@ async function createMockLlmServer() {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/chat') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const parsed = body ? JSON.parse(body) : {};
+      const lastMessage = Array.isArray(parsed.messages) ? parsed.messages[parsed.messages.length - 1] : undefined;
+      const prompt = String(lastMessage?.content ?? '');
+      const content = prompt.includes('Say the key back')
+        ? `The secret is ${secretValue}.`
+        : 'Harness response.';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        model: 'llama3.2',
+        created_at: new Date().toISOString(),
+        message: {
+          role: 'assistant',
+          content,
+        },
+        done: true,
+        done_reason: 'stop',
+        prompt_eval_count: 12,
+        eval_count: 8,
+      }));
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
   });
@@ -189,6 +264,7 @@ async function main() {
       '    enabled: false',
       '  web:',
       '    enabled: true',
+      '    host: 127.0.0.1',
       `    port: ${appPort}`,
       `    authToken: "${authToken}"`,
       'assistant:',
@@ -237,8 +313,10 @@ async function main() {
       XDG_CACHE_HOME: tempRoot,
     },
   });
-  app.stdout.pipe(createWriteStream(stdoutLogPath, { flags: 'a' }));
-  app.stderr.pipe(createWriteStream(stderrLogPath, { flags: 'a' }));
+  const stdoutStream = createWriteStream(stdoutLogPath, { flags: 'a' });
+  const stderrStream = createWriteStream(stderrLogPath, { flags: 'a' });
+  app.stdout.pipe(stdoutStream);
+  app.stderr.pipe(stderrStream);
 
   const results = [];
 
@@ -470,8 +548,15 @@ async function main() {
       assert(result.controller === 'CapabilityController', `Expected CapabilityController, got ${result.controller}`);
     });
   } finally {
-    app.kill('SIGKILL');
-    llmServer.close();
+    if (app.exitCode === null && app.signalCode === null) {
+      app.kill('SIGKILL');
+    }
+    await waitForChildExit(app);
+    await closeServer(llmServer);
+    await Promise.all([
+      closeStream(stdoutStream),
+      closeStream(stderrStream),
+    ]);
     if (results.some((result) => !result.ok)) {
       if (existsSync(stdoutLogPath)) {
         const stdoutLog = readFileSync(stdoutLogPath, 'utf8').trim();
@@ -488,7 +573,7 @@ async function main() {
         }
       }
     }
-    rmSync(tempRoot, { recursive: true, force: true });
+    await removeTreeBestEffort(tempRoot);
   }
 
   const failed = results.filter((result) => !result.ok);

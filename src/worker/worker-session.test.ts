@@ -90,12 +90,34 @@ describe('BrokeredWorkerSession automation control', () => {
         channel: 'web',
         content: 'Write an implementation plan before editing anything.',
         timestamp: Date.now(),
-        metadata: {
+        metadata: attachPreRoutedIntentGatewayMetadata({
           codeContext: {
             workspaceRoot: '/repo',
             sessionId: 'code-1',
           },
-        },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Inspect the coding workspace and plan the implementation.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_execution',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            entities: {},
+          },
+        }),
       },
     });
 
@@ -185,13 +207,116 @@ describe('BrokeredWorkerSession automation control', () => {
       workerExecution: {
         lifecycle: 'completed',
         source: 'tool_loop',
-        completionReason: 'model_response',
+        completionReason: 'answer_first_response',
         responseQuality: 'final',
       },
     });
     expect(llmChat).toHaveBeenCalled();
     expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.length === 0)).toBe(true);
     expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'code_plan'))).toBe(false);
+  });
+
+  it('uses the direct answer-first lane for delegated general-assistant turns that allow answer-first completion', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      if (Array.isArray(options?.tools) && options.tools.length === 0) {
+        return {
+          content: 'Hello back.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } as ChatResponse;
+      }
+      throw new Error('The delegated direct-answer turn should not enter the tool loop.');
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_search',
+        description: 'Search files.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            pattern: { type: 'string' },
+          },
+          required: ['path', 'pattern'],
+        },
+      }],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'frontier_direct',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test direct-answer profile',
+      },
+      message: {
+        id: 'msg-general-direct-answer-first',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Just reply hello back',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Answer the greeting directly.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'direct_assistant',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: false,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'low',
+            preferredAnswerPath: 'direct',
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.content).toBe('Hello back.');
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        source: 'tool_loop',
+        completionReason: 'answer_first_response',
+        responseQuality: 'final',
+        toolCallCount: 0,
+        toolResultCount: 0,
+      },
+    });
+    expect(llmChat).toHaveBeenCalledTimes(1);
+    expect(llmChat.mock.calls[0]?.[1]?.tools).toEqual([]);
   });
 
   it('suppresses approval-looking text when no real approval metadata exists', async () => {
@@ -262,7 +387,7 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
   });
 
-  it('marks narration-only worker replies as failed execution metadata instead of completed work', async () => {
+  it('treats narration-only replies as completed answer-only runs when the gateway falls back to a direct-answer contract', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
       if (firstTool === 'route_intent') {
@@ -311,10 +436,10 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.content).toContain('inspect the repository first');
     expect(result.metadata).toMatchObject({
       workerExecution: {
-        lifecycle: 'failed',
+        lifecycle: 'completed',
         source: 'tool_loop',
-        completionReason: 'intermediate_response',
-        responseQuality: 'intermediate',
+        completionReason: 'answer_first_response',
+        responseQuality: 'final',
         toolCallCount: 0,
         toolResultCount: 0,
       },
@@ -662,6 +787,197 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(
       llmChat.mock.calls.filter(([, options]) => options?.tools?.[0]?.name === 'route_intent'),
     ).toHaveLength(1);
+  });
+
+  it('captures matched fs_search file refs for exact-file delegated repo inspections instead of the search root', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed repo inspections should not reclassify the turn.');
+      }
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-read-1') {
+        return {
+          content: [
+            'Delegated worker progress is implemented in `src/supervisor/worker-manager.ts`.',
+            'Run timeline rendering is implemented in `web/public/js/chat-panel.js`.',
+          ].join('\n'),
+          model: 'test-model',
+          finishReason: 'stop',
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-read-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'src/supervisor/worker-manager.ts' }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_search')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-search-1',
+            name: 'fs_search',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent',
+              query: 'delegated worker progress',
+              mode: 'content',
+              maxResults: 10,
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 120) : 'unknown'}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string }) => {
+      if (request.toolName === 'fs_search') {
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'fs_search completed.',
+          output: {
+            root: 'S:\\Development\\GuardianAgent',
+            query: 'delegated worker progress',
+            mode: 'content',
+            truncated: false,
+            matches: [{
+              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+              relativePath: 'src/supervisor/worker-manager.ts',
+              matchType: 'content',
+            }],
+          },
+        };
+      }
+      if (request.toolName === 'fs_read') {
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'fs_read completed.',
+          output: {
+            path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+            content: 'export class WorkerManager {}',
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${request.toolName}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_search',
+          description: 'Search files for a pattern.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              query: { type: 'string' },
+              mode: { type: 'string' },
+              maxResults: { type: 'number' },
+            },
+            required: ['query'],
+          },
+        },
+        {
+          name: 'fs_read',
+          description: 'Read a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+            },
+            required: ['path'],
+          },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test exact-file repo inspection profile',
+      },
+      message: {
+        id: 'msg-exact-file-refs',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo to identify files implementing delegated worker progress and run timeline rendering without editing.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.metadata).toMatchObject({
+      delegatedResult: {
+        finalUserAnswer: expect.stringContaining('src/supervisor/worker-manager.ts'),
+        taskContract: {
+          requireExactFileReferences: true,
+        },
+      },
+    });
+    const delegatedResult = result.metadata?.delegatedResult as { claims?: Array<{ kind?: string; subject?: string }> } | undefined;
+    const fileClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'file_reference') ?? [];
+    expect(fileClaims.some((claim) => claim.subject === 'src/supervisor/worker-manager.ts')).toBe(true);
+    expect(fileClaims.some((claim) => claim.subject === 'S:\\Development\\GuardianAgent')).toBe(false);
   });
 
   it('does not silently switch delegated worker providers when the selected model fails', async () => {
@@ -1132,6 +1448,180 @@ describe('BrokeredWorkerSession automation control', () => {
     });
   });
 
+  it('keeps tool-report scope isolated per user and channel', async () => {
+    let assistantCallCount = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        const userMessage = messages.findLast((message) => message.role === 'user');
+        const content = String(userMessage?.content ?? '');
+        if (content.includes('What exact tools did you use')) {
+          return {
+            content: JSON.stringify({
+              route: 'general_assistant',
+              confidence: 'high',
+              operation: 'read',
+              summary: 'Answer the tool report follow-up.',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the requested file.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+
+      assistantCallCount += 1;
+      if (assistantCallCount === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-owner-read',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'README.md' }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      }
+      if (assistantCallCount === 2) {
+        return {
+          content: 'Inspected README.md.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (assistantCallCount === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-other-read',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'package.json' }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: 'Inspected package.json.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+    const callTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-read',
+      message: 'Read a file.',
+      output: {
+        content: '',
+      },
+    }));
+    const listJobs = vi.fn(async (_userId: string, _channel: string, _limit: number, filters?: { requestId?: string }) => {
+      if (filters?.requestId === 'msg-owner-turn') {
+        return [{
+          toolName: 'fs_read',
+          status: 'succeeded',
+          argsRedacted: { path: 'README.md' },
+          completedAt: Date.now(),
+          requestId: 'msg-owner-turn',
+        }];
+      }
+      if (filters?.requestId === 'msg-other-turn') {
+        return [{
+          toolName: 'fs_read',
+          status: 'succeeded',
+          argsRedacted: { path: 'package.json' },
+          completedAt: Date.now(),
+          requestId: 'msg-other-turn',
+        }];
+      }
+      return [{
+        toolName: 'fs_read',
+        status: 'succeeded',
+        argsRedacted: { path: 'package.json' },
+        completedAt: Date.now(),
+        requestId: 'msg-other-turn',
+      }];
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_read',
+        description: 'Read a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+        risk: 'read_only',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs,
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-owner-turn',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect README.md.',
+        timestamp: Date.now(),
+      },
+    });
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-other-turn',
+        userId: 'other-user',
+        principalId: 'other-user',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect package.json.',
+        timestamp: Date.now(),
+      },
+    });
+
+    const report = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-owner-tool-report',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'What exact tools did you use for that?',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(report.content).toContain('README.md');
+    expect(report.content).not.toContain('package.json');
+    expect(listJobs).toHaveBeenCalledWith('owner', 'web', 50, {
+      requestId: 'msg-owner-turn',
+      codeSessionId: undefined,
+    });
+  });
+
   it('returns clarification-blocked metadata instead of entering the tool loop when the gateway needs more detail', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -1197,6 +1687,67 @@ describe('BrokeredWorkerSession automation control', () => {
         resolution: 'needs_clarification',
       },
     });
+    expect(callTool).not.toHaveBeenCalled();
+    expect(llmChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats unstructured gateway clarification prose as a clarification blocker instead of entering the tool loop', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error('The brokered worker should not enter the tool loop when clarification is required.');
+    });
+    const callTool = vi.fn();
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-unstructured-clarification-needed',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create brokered-test.txt in the requested external directory.',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.content).toContain('exact external path');
+    expect(result.metadata).toMatchObject({
+      pendingAction: {
+        status: 'pending',
+        blocker: {
+          kind: 'clarification',
+        },
+      },
+      workerExecution: {
+        lifecycle: 'blocked',
+        source: 'tool_loop',
+        completionReason: 'model_response',
+        responseQuality: 'final',
+        blockerKind: 'clarification',
+      },
+      intentGateway: {
+        route: 'filesystem_task',
+        resolution: 'needs_clarification',
+      },
+    });
+    expect(result.metadata?.intentGateway?.missingFields).toContain('path');
     expect(callTool).not.toHaveBeenCalled();
     expect(llmChat).toHaveBeenCalledTimes(1);
   });
@@ -1499,7 +2050,10 @@ describe('BrokeredWorkerSession automation control', () => {
           finishReason: 'stop',
         } satisfies ChatResponse;
       }
-      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      const systemPrompt = messages
+        .filter((entry) => entry.role === 'system')
+        .map((entry) => String(entry.content ?? ''))
+        .find((content) => content.includes('[routed-intent]')) ?? '';
       const lastMessage = messages[messages.length - 1];
       if (lastMessage?.role === 'tool') {
         expect(lastMessage.content).toContain('local Second Brain calendar');
@@ -1578,7 +2132,10 @@ describe('BrokeredWorkerSession automation control', () => {
           finishReason: 'stop',
         } satisfies ChatResponse;
       }
-      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      const systemPrompt = messages
+        .filter((entry) => entry.role === 'system')
+        .map((entry) => String(entry.content ?? ''))
+        .find((content) => content.includes('[routed-intent]')) ?? '';
       const lastMessage = messages[messages.length - 1];
       if (lastMessage?.role === 'tool') {
         expect(lastMessage.content).toContain('local Second Brain calendar');
@@ -1683,7 +2240,10 @@ describe('BrokeredWorkerSession automation control', () => {
           finishReason: 'stop',
         } satisfies ChatResponse;
       }
-      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      const systemPrompt = messages
+        .filter((entry) => entry.role === 'system')
+        .map((entry) => String(entry.content ?? ''))
+        .find((content) => content.includes('[routed-intent]')) ?? '';
       expect(systemPrompt).toContain('[routed-intent]');
       expect(systemPrompt).toContain('route: unknown');
       return {

@@ -76,6 +76,15 @@ async function startFakeProvider(testDir, scenarioLog) {
         .map((message) => (typeof message?.content === 'string' ? message.content : ''))
         .filter(Boolean)
         .join('\n');
+      const asksToCreateEmptyFile = latestUser.includes('create an empty file')
+        || latestUser.includes('brokered-test.txt')
+        || latestUser.toLowerCase().includes('use path ');
+      const targetsPrimaryFile = targetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        || latestUser.includes(testDir)
+        || latestUser.includes(testDir.replace(/\\/g, '/'));
+      const targetsRecoveryFile = recoveryTargetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        || latestUser.includes(recoveryDir)
+        || latestUser.includes(recoveryDir.replace(/\\/g, '/'));
       const isRecoveryConversation = recoveryTargetFilePathCandidates.some((candidate) => conversationText.includes(candidate))
         || conversationText.includes(recoveryDir)
         || conversationText.includes(recoveryDir.replace(/\\/g, '/'));
@@ -112,6 +121,32 @@ async function startFakeProvider(testDir, scenarioLog) {
         return;
       }
 
+      if (latestUser.includes('System correction: this turn is a workspace filesystem mutation request.')) {
+        const approvedPolicy = conversationText.includes('Result: ✓ update_tool_policy: Approved and executed');
+        const correctionTargetPath = isRecoveryConversation ? recoveryTargetFilePath : targetFilePath;
+        const correctionTargetDir = isRecoveryConversation ? recoveryDir : testDir;
+        sendResponse({
+          model: 'brokered-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [approvedPolicy
+            ? {
+                id: isRecoveryConversation ? 'bk-recovery-correction-write' : 'bk-correction-write',
+                name: 'fs_write',
+                arguments: JSON.stringify({
+                  path: correctionTargetPath,
+                  content: '',
+                  append: false,
+                }),
+              }
+            : {
+                id: isRecoveryConversation ? 'bk-recovery-correction-policy' : 'bk-correction-policy',
+                name: 'update_tool_policy',
+                arguments: JSON.stringify({ action: 'add_path', value: correctionTargetDir }),
+              }],
+        });
+        return;
+      }
+
       // Recovery scenario: model wrongly tries fs_write first, then must self-correct.
       if (
         latestUser.includes('previous tool call did not complete because tool policy blocked it')
@@ -130,8 +165,8 @@ async function startFakeProvider(testDir, scenarioLog) {
       }
 
       if (
-        latestUser.includes('create an empty file')
-        && recoveryTargetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        asksToCreateEmptyFile
+        && targetsRecoveryFile
         && conversationText.includes('outside allowed paths')
       ) {
         sendResponse({
@@ -142,8 +177,8 @@ async function startFakeProvider(testDir, scenarioLog) {
       }
 
       if (
-        latestUser.includes('create an empty file')
-        && recoveryTargetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        asksToCreateEmptyFile
+        && targetsRecoveryFile
       ) {
         sendResponse({
           model: 'brokered-harness-model',
@@ -163,8 +198,8 @@ async function startFakeProvider(testDir, scenarioLog) {
 
       // Step 1: user asks to create a file at a specific external path → model calls update_tool_policy
       if (
-        latestUser.includes('create an empty file')
-        && targetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
+        asksToCreateEmptyFile
+        && targetsPrimaryFile
       ) {
         sendResponse({
           model: 'brokered-harness-model',
@@ -210,7 +245,7 @@ async function startFakeProvider(testDir, scenarioLog) {
       // Fallback
       sendResponse({
         model: 'brokered-harness-model',
-        content: 'Unexpected harness prompt.',
+        content: `Unexpected harness prompt. latestUser=${JSON.stringify(latestUser)} asksToCreateEmptyFile=${String(asksToCreateEmptyFile)} targetsPrimaryFile=${String(targetsPrimaryFile)} targetsRecoveryFile=${String(targetsRecoveryFile)}`,
       });
       return;
     }
@@ -585,7 +620,7 @@ guardian:
     assert.ok(!memorySaveSeen, 'memory_save should not appear in operational scenario log');
     console.log('  PASS: No spurious memory_save calls in scenario.');
 
-    // --- Test 3: Direct tool report via job.list ---
+    // --- Test 3: Direct tool report via job.list for the latest request ---
     console.log('Test 3: Direct tool report (what tools did you use?)...');
     const followUp = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'What exact tools did you use?',
@@ -593,10 +628,9 @@ guardian:
       channel: 'web',
     });
     assert.ok(typeof followUp.content === 'string' && followUp.content.length > 0, 'Expected tool report response');
-    assert.match(followUp.content, /update_tool_policy/);
     assert.match(followUp.content, /fs_write/);
     assert.equal(getPendingApprovalSummaries(followUp).length, 0, 'No pending approvals on follow-up');
-    console.log('  PASS: Tool report returned expected tool names.');
+    console.log('  PASS: Tool report returned the latest request tool names.');
 
     console.log('PASS: All brokered approval harness tests passed.');
     completed = true;

@@ -10,10 +10,13 @@ function createConfig(): GuardianAgentConfig {
   return structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
 }
 
-function createGatewayRecord(partial: Partial<IntentGatewayRecord['decision']> = {}): IntentGatewayRecord {
+function createGatewayRecord(
+  partial: Partial<IntentGatewayRecord['decision']> = {},
+  options?: { available?: boolean },
+): IntentGatewayRecord {
   return {
     mode: 'primary',
-    available: true,
+    available: options?.available ?? true,
     model: 'test-model',
     latencyMs: 12,
     decision: {
@@ -301,6 +304,59 @@ describe('createIncomingDispatchPreparer', () => {
     expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
       providerTier: 'frontier',
       id: 'frontier_deep',
+    });
+  });
+
+  it('keeps degraded structured gateway decisions on gateway-first tier routing', async () => {
+    const router = {
+      findAgentByRole: vi.fn((role: string) => {
+        if (role === 'local') return { id: 'local-agent' };
+        if (role === 'external') return { id: 'external-agent' };
+        return undefined;
+      }),
+      route: vi.fn(() => ({ agentId: 'fallback-agent', confidence: 'low', reason: 'fallback' })),
+      routeWithTier: vi.fn(() => ({ agentId: 'local-agent', confidence: 'medium', reason: 'tier route', tier: 'local' })),
+      routeWithTierFromIntent: vi.fn(() => ({ agentId: 'external-agent', confidence: 'high', reason: 'intent tier route', tier: 'external' })),
+    } as unknown as MessageRouter;
+    const gatewayRecord = createGatewayRecord({
+      route: 'coding_task',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+    }, { available: false });
+    const routingIntentGateway = {
+      classify: vi.fn(async () => gatewayRecord),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      router,
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'inspect the repo and explain the routing path',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalled();
+    expect((router as any).routeWithTierFromIntent).toHaveBeenCalledOnce();
+    expect((router as any).routeWithTier).not.toHaveBeenCalled();
+    expect(result.decision).toEqual({
+      agentId: 'external-agent',
+      confidence: 'high',
+      reason: 'intent tier route',
+      tier: 'external',
+    });
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)).toMatchObject({
+      available: false,
+      decision: {
+        route: 'coding_task',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+      },
     });
   });
 

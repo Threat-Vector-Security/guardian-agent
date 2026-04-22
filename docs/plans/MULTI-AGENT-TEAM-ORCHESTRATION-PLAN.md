@@ -19,7 +19,7 @@ The correct target model is:
 
 This plan therefore favors shared runtime integration over new bespoke stores, bespoke event wakeups, or many persistent specialist personas.
 
-Phase 1 of this plan depends on the execution-backed foundation defined in [INTENT-GATEWAY-EXECUTION-CONTINUATION-REMEDIATION-PLAN.md](./INTENT-GATEWAY-EXECUTION-CONTINUATION-REMEDIATION-PLAN.md), because delegated specialist work must bind to shared execution identity and blocker state rather than transcript heuristics or ad hoc recovery flows.
+Phase 1 of this plan depends on the routing and delegated-execution convergence defined in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](./INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md), because delegated specialist work must bind to shared execution identity and blocker state rather than transcript heuristics or ad hoc recovery flows.
 
 ## 1. Interaction Model: One Lead, Bounded Specialists
 

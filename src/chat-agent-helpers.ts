@@ -101,22 +101,22 @@ function isAffirmativeContinuation(content: string): boolean {
   return /^(?:ok|okay|yes|yep|yeah|sure|please do|go ahead|do it|create it|make it so|proceed)\b/i.test(content.trim());
 }
 
-function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
+function summarizeToolRoundStatusMessage(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
   const summaries = results
-    .map(({ toolName, result }) => summarizeSingleToolFallback(toolName, result))
+    .map(({ toolName, result }) => summarizeSingleToolStatusMessage(toolName, result))
     .filter((summary): summary is string => !!summary);
   if (summaries.length === 0) return '';
   if (summaries.length === 1) return summaries[0];
-  return `Completed the requested actions:\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
+  return `Tool round status:\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
 }
 
-function summarizeSingleToolFallback(toolName: string, result: Record<string, unknown>): string {
+function summarizeSingleToolStatusMessage(toolName: string, result: Record<string, unknown>): string {
   const message = toString(result.message).trim() || extractToolFallbackOutputMessage(result);
   if (message) return message;
 
   const status = toString(result.status).trim().toLowerCase();
   if (status === 'pending_approval') return `${toolName} is awaiting approval.`;
-  if (result.success === true || status === 'succeeded' || status === 'completed') return `Completed ${toolName}.`;
+  if (result.success === true || status === 'succeeded' || status === 'completed') return `${toolName} returned a successful result.`;
   return `Attempted ${toolName}, but it did not complete successfully.`;
 }
 
@@ -1930,7 +1930,7 @@ export {
   summarizeCodeSessionFocus,
   summarizeGmailMessage,
   summarizeM365From,
-  summarizeToolRoundFallback,
+  summarizeToolRoundStatusMessage,
   toBoolean,
   toLLMToolDef,
   toNumber,

@@ -9,6 +9,7 @@ import type { ToolExecutionRequest } from '../tools/types.js';
 import { parseToolJobOutputPreview } from '../tools/job-results.js';
 import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../llm/types.js';
 import { getProviderLocalityFromName } from '../runtime/model-routing-ux.js';
+import { stringifyJsonTransport, toJsonTransportValue } from './json-safe.js';
 
 const log = createLogger('broker-server');
 
@@ -51,9 +52,9 @@ export class BrokerServer {
     const notification: JsonRpcNotification = {
       jsonrpc: '2.0',
       method,
-      params,
+      params: toJsonTransportValue(params),
     };
-    this.outputStream.write(`${JSON.stringify(notification)}\n`);
+    this.outputStream.write(`${stringifyJsonTransport(notification)}\n`);
   }
 
   private handleData(data: string): void {
@@ -389,7 +390,7 @@ export class BrokerServer {
   }
 
   private sendResponse(response: JsonRpcResponse): void {
-    this.outputStream.write(`${JSON.stringify(response)}\n`);
+    this.outputStream.write(`${stringifyJsonTransport(response)}\n`);
   }
 }
 

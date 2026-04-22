@@ -29,7 +29,7 @@ import {
   summarizeCodeSessionFocus,
   summarizeGmailMessage,
   summarizeM365From,
-  summarizeToolRoundFallback,
+  summarizeToolRoundStatusMessage,
   toBoolean,
   toLLMToolDef,
   toNumber,
@@ -38,7 +38,10 @@ import {
 import type { GmailMessageSummary } from './chat-agent-helpers.js';
 import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import type { ContextCompactionResult } from './util/context-budget.js';
-import { isIntermediateStatusResponse as _isIntermediateStatusResponse, isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
+import {
+  lacksUsableAssistantContent as _lacksUsableAssistantContent,
+  looksLikeOngoingWorkResponse as _looksLikeOngoingWorkResponse,
+} from './util/assistant-response-shape.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
   buildAnswerFirstSkillFallbackResponse,
@@ -2449,9 +2452,57 @@ type DirectIntentShadowCandidate =
       chatFn,
       currentContextTrustLevel,
       currentTaintReasons,
-      isResponseDegraded: (content) => this.isResponseDegraded(content),
-      isIntermediateStatusResponse: (content) => this.isIntermediateStatusResponse(content),
+        lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
+        looksLikeOngoingWorkResponse: (content) => this.looksLikeOngoingWorkResponse(content),
     });
+  }
+
+  private resolvePreferredProviderOrder(
+    fallbackProviderOrder?: string[],
+  ): string[] | undefined {
+    if (!Array.isArray(fallbackProviderOrder) || fallbackProviderOrder.length <= 0) {
+      return undefined;
+    }
+    const normalized = [...new Set(
+      fallbackProviderOrder
+        .map((providerName) => providerName.trim())
+        .filter((providerName) => providerName.length > 0),
+    )];
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private shouldStartChatWithPreferredProvider(
+    primaryProviderName: string | undefined,
+    preferredProviderOrder: string[] | undefined,
+  ): boolean {
+    if (!this.fallbackChain || !preferredProviderOrder || preferredProviderOrder.length <= 0) {
+      return false;
+    }
+    const preferredPrimary = preferredProviderOrder[0]?.trim() || '';
+    if (!preferredPrimary) return false;
+    return preferredPrimary !== (primaryProviderName?.trim() || '');
+  }
+
+  private shouldHandleDirectAssistantInline(input: {
+    gateway: IntentGatewayRecord | null | undefined;
+    selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
+    currentProviderName?: string;
+  }): boolean {
+    const decision = input.gateway?.decision;
+    if (!decision) return false;
+    if (decision.executionClass !== 'direct_assistant') return false;
+    if (decision.requiresRepoGrounding || decision.requiresToolSynthesis) return false;
+    const preferredAnswerPath = decision.preferredAnswerPath ?? input.selectedExecutionProfile?.preferredAnswerPath;
+    if (preferredAnswerPath !== 'direct') return false;
+
+    const requestedProviderName = input.selectedExecutionProfile?.selectionSource === 'request_override'
+      ? input.selectedExecutionProfile.providerName?.trim()
+      : '';
+    if (!requestedProviderName) {
+      return true;
+    }
+    return requestedProviderName === (input.currentProviderName?.trim() || '')
+      || !!this.fallbackChain;
   }
 
   /**
@@ -2464,12 +2515,14 @@ type DirectIntentShadowCandidate =
     options?: import('./llm/types.js').ChatOptions,
     fallbackProviderOrder?: string[],
   ): Promise<import('./llm/types.js').ChatResponse> {
+    const preferredOrder = this.resolvePreferredProviderOrder(fallbackProviderOrder);
+    const primaryProviderName = ctx.llm?.name?.trim();
+    if (this.shouldStartChatWithPreferredProvider(primaryProviderName, preferredOrder)) {
+      return (await this.fallbackChain!.chatWithProviderOrder(preferredOrder!, messages, options)).response;
+    }
     if (!this.fallbackChain) {
       return ctx.llm!.chat(messages, options);
     }
-    const preferredOrder = Array.isArray(fallbackProviderOrder) && fallbackProviderOrder.length > 0
-      ? fallbackProviderOrder
-      : undefined;
     try {
       return await ctx.llm!.chat(messages, options);
     } catch (primaryError) {
@@ -2499,9 +2552,19 @@ type DirectIntentShadowCandidate =
   }> {
     const primaryProviderName = ctx.llm?.name ?? 'unknown';
     const primaryProviderLocality = getProviderLocalityFromName(primaryProviderName);
-    const preferredOrder = Array.isArray(fallbackProviderOrder) && fallbackProviderOrder.length > 0
-      ? fallbackProviderOrder
-      : undefined;
+    const preferredOrder = this.resolvePreferredProviderOrder(fallbackProviderOrder);
+
+    if (this.shouldStartChatWithPreferredProvider(primaryProviderName, preferredOrder)) {
+      const startedAt = Date.now();
+      const result = await this.fallbackChain!.chatWithProviderOrder(preferredOrder!, messages, options);
+      return {
+        response: result.response,
+        providerName: result.providerName,
+        providerLocality: getProviderLocalityFromName(result.providerName),
+        usedFallback: result.usedFallback,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      };
+    }
 
     if (!this.fallbackChain) {
       try {
@@ -3697,7 +3760,13 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    if (workerManager) {
+    const handleDirectAssistantInline = this.shouldHandleDirectAssistantInline({
+      gateway: earlyGateway,
+      selectedExecutionProfile,
+      currentProviderName: ctx.llm?.name,
+    });
+
+    if (workerManager && !handleDirectAssistantInline) {
       try {
         const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
@@ -3960,7 +4029,7 @@ type DirectIntentShadowCandidate =
       const response = await chatFn(llmMessages);
       finalContent = response.content;
       // Quality-based fallback for non-tool path
-      if (this.qualityFallbackEnabled && this.isResponseDegraded(finalContent) && this.fallbackChain && providerLocality === 'local') {
+      if (this.qualityFallbackEnabled && this.lacksUsableAssistantContent(finalContent) && this.fallbackChain && providerLocality === 'local') {
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
           const fbStartedAt = Date.now();
@@ -4217,7 +4286,7 @@ type DirectIntentShadowCandidate =
         if (
           forcedIntermediateStatusRetryCount < 2
           && (!response.toolCalls || response.toolCalls.length === 0)
-          && this.shouldRetryIntermediateStatusCorrection(response.content ?? '', {
+        && this.shouldRetryTerminalResultCorrection(response.content ?? '', {
             hasToolResults: lastToolRoundResults.length > 0,
             hasAnswerFirstContract: !!answerFirstCorrectionPrompt,
             hasToolExecutionContract: false,
@@ -4228,7 +4297,7 @@ type DirectIntentShadowCandidate =
             [
               ...plannerMessages,
               { role: 'assistant', content: response.content ?? '' },
-              { role: 'user', content: this.buildIntermediateStatusCorrectionPrompt() },
+          { role: 'user', content: this.buildTerminalResultCorrectionPrompt() },
             ],
             { tools: llmToolDefs },
           );
@@ -4564,7 +4633,7 @@ type DirectIntentShadowCandidate =
       if (
         (
           !finalContent
-          || this.isIntermediateStatusResponse(finalContent)
+            || this.looksLikeOngoingWorkResponse(finalContent)
           || (
             !!answerFirstFallbackResponse
             && !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
@@ -4586,7 +4655,7 @@ type DirectIntentShadowCandidate =
       // LLM can call tools, not just produce text.
       if (
         this.qualityFallbackEnabled
-        && (this.isResponseDegraded(finalContent) || this.isIntermediateStatusResponse(finalContent))
+        && (this.lacksUsableAssistantContent(finalContent) || this.looksLikeOngoingWorkResponse(finalContent))
         && this.fallbackChain
         && providerLocality === 'local'
         // If the tool round already produced concrete results or a real approval,
@@ -4828,7 +4897,7 @@ type DirectIntentShadowCandidate =
         answerFirstFallbackResponse
         && (
           !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
-          || this.isIntermediateStatusResponse(finalContent)
+        || this.looksLikeOngoingWorkResponse(finalContent)
         )
       ) {
         finalContent = answerFirstFallbackResponse;
@@ -4878,13 +4947,13 @@ type DirectIntentShadowCandidate =
         if (pendingActionResult.collisionPrompt) {
           finalContent = pendingActionResult.collisionPrompt;
         } else if (pendingActionResult.action?.blocker.approvalSummaries?.length
-          && (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent))) {
+          && (shouldUseStructuredPendingApprovalMessage(finalContent) || this.lacksUsableAssistantContent(finalContent))) {
           finalContent = formatPendingApprovalMessage(pendingActionResult.action.blocker.approvalSummaries);
         }
       }
 
-      if ((!finalContent || this.isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
-        finalContent = summarizeToolRoundFallback(lastToolRoundResults);
+      if ((!finalContent || this.looksLikeOngoingWorkResponse(finalContent)) && lastToolRoundResults.length > 0) {
+        finalContent = summarizeToolRoundStatusMessage(lastToolRoundResults);
       }
 
       // Local models sometimes emit generic approval copy without ever producing
@@ -4892,7 +4961,7 @@ type DirectIntentShadowCandidate =
       // runtime actually has pending approval metadata to back it.
       if (!pendingActionMeta && isPhantomPendingApprovalMessage(finalContent)) {
         finalContent = lastToolRoundResults.length > 0
-          ? summarizeToolRoundFallback(lastToolRoundResults)
+          ? summarizeToolRoundStatusMessage(lastToolRoundResults)
           : 'I did not create a real approval request for that action. Please try again.';
       }
 
@@ -6543,15 +6612,15 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private isResponseDegraded(content: string | undefined): boolean {
-    return _isResponseDegraded(content);
+  private lacksUsableAssistantContent(content: string | undefined): boolean {
+    return _lacksUsableAssistantContent(content);
   }
 
-  private isIntermediateStatusResponse(content: string | undefined): boolean {
-    return _isIntermediateStatusResponse(content);
+  private looksLikeOngoingWorkResponse(content: string | undefined): boolean {
+    return _looksLikeOngoingWorkResponse(content);
   }
 
-  private shouldRetryIntermediateStatusCorrection(
+  private shouldRetryTerminalResultCorrection(
     content: string,
     context: {
       hasToolResults: boolean;
@@ -6559,15 +6628,15 @@ type DirectIntentShadowCandidate =
       hasToolExecutionContract: boolean;
     },
   ): boolean {
-    if (!this.isIntermediateStatusResponse(content)) {
+    if (!this.looksLikeOngoingWorkResponse(content)) {
       return false;
     }
     return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
   }
 
-  private buildIntermediateStatusCorrectionPrompt(): string {
+  private buildTerminalResultCorrectionPrompt(): string {
     return [
-      'System correction: your previous reply was an intermediate progress update, not a completed response.',
+      'System correction: your previous reply narrated ongoing work instead of delivering a terminal result.',
       'Continue the same request now.',
       'If more tool calls are required, call them now instead of narrating what you will do next.',
       'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
@@ -8989,7 +9058,7 @@ type DirectIntentShadowCandidate =
         result,
         providerKind,
       ),
-      isResponseDegraded: (content) => this.isResponseDegraded(content),
+          lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
       storeSuspendedSession: ({ scope, llmMessages, pendingTools, originalMessage, ctx }) => {
         const normalizedScope = normalizeApprovalContinuationScope(scope);
         this.suspendedSessions.set(

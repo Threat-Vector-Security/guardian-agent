@@ -331,6 +331,78 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
+  it('synthesizes planned steps for multi-step filesystem work on unstructured fallback paths', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Write the current date and time to tmp/manual-web/current-time.txt. Search src/runtime for planned_steps. Write a short summary to tmp/manual-web/planned-steps-summary.txt.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'I am not sure.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.plannedSteps).toEqual([
+      expect.objectContaining({ kind: 'write', summary: 'Write the current date and time to tmp/manual-web/current-time.txt.' }),
+      expect.objectContaining({ kind: 'search', summary: 'Search src/runtime for planned_steps.', dependsOn: ['step_1'] }),
+      expect.objectContaining({ kind: 'write', summary: 'Write a short summary to tmp/manual-web/planned-steps-summary.txt.', dependsOn: ['step_2'] }),
+    ]);
+  });
+
+  it('uses the request preview for unstructured recovery summaries and keeps recovery diagnostics out of client metadata', async () => {
+    const gateway = new IntentGateway();
+    const request = 'Use the external path C:\\tmp\\manual-check.txt.';
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: request,
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'I am not sure.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).not.toBe('unknown');
+    expect(result.decision.summary).toBe(request);
+    expect(typeof result.decision.recoveryReason).toBe('string');
+    expect(result.decision.recoveryReason).not.toBe(request);
+
+    const metadata = attachPreRoutedIntentGatewayMetadata(undefined, result);
+    const restored = readPreRoutedIntentGatewayMetadata(metadata);
+    expect(restored?.decision.summary).toBe(request);
+    expect(restored?.decision.recoveryReason).toBe(result.decision.recoveryReason);
+    expect(toIntentGatewayClientMetadata(restored)).not.toHaveProperty('recoveryReason');
+  });
+
   it('keeps explicit complex-planning requests on the JSON fallback path', async () => {
     const gateway = new IntentGateway();
     const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
@@ -594,6 +666,29 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.path).toBe('tmp/followup-queue-test.txt');
     expect(result.decision.requiresRepoGrounding).toBe(true);
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('preserves unstructured missing-detail questions as clarification blockers instead of ready filesystem work', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Please create an empty file called brokered-test.txt in the requested external directory.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('filesystem_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('path');
+    expect(result.decision.summary).toContain('exact external path');
   });
 
   it('drops generic "current attached" session targets from structured gateway output', async () => {
@@ -2858,6 +2953,38 @@ describe('IntentGateway', () => {
     expect(result.decision.resolvedContent).toContain('Gmail / Google Workspace');
   });
 
+  it('repairs satisfied path clarifications into a corrected actionable request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Please create an empty file at C:\\tmp\\brokered-test.txt.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-path',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'path',
+          route: 'filesystem_task',
+          operation: 'create',
+          prompt: 'Which external path should I use?',
+          originalRequest: 'Please create an empty file called brokered-test.txt in the requested external directory.',
+        },
+      },
+      async () => ({
+        content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('filesystem_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.entities.path).toBe('C:\\tmp\\brokered-test.txt');
+    expect(result.decision.resolvedContent).toContain('Use path C:\\tmp\\brokered-test.txt');
+    expect(result.decision.resolvedContent).toContain('requested external directory');
+  });
+
   it('asks for clarification instead of guessing between repo work and coding-session control', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -3267,7 +3394,7 @@ describe('IntentGateway', () => {
     });
   });
 
-  it('does not reuse pre-routed gateway metadata when the preroute was unavailable', () => {
+  it('reuses structured pre-routed gateway metadata even when the preroute degraded', () => {
     const metadata = attachPreRoutedIntentGatewayMetadata(
       undefined,
       {
@@ -3290,7 +3417,7 @@ describe('IntentGateway', () => {
 
     const preRouted = readPreRoutedIntentGatewayMetadata(metadata);
     expect(preRouted?.available).toBe(false);
-    expect(shouldReusePreRoutedIntentGateway(preRouted)).toBe(false);
+    expect(shouldReusePreRoutedIntentGateway(preRouted)).toBe(true);
   });
 
   it('drops stale pre-routed metadata without disturbing other message metadata', () => {

@@ -1,5 +1,4 @@
-/** Detect degraded LLM responses that warrant a fallback retry. */
-export function isResponseDegraded(content: string | undefined): boolean {
+export function lacksUsableAssistantContent(content: string | undefined): boolean {
   if (!content?.trim()) return true;
   const trimmed = content.trim();
   const lower = trimmed.toLowerCase();
@@ -14,32 +13,24 @@ export function isResponseDegraded(content: string | undefined): boolean {
     'i cannot help with',
     'as an ai, i cannot',
   ];
-  if (degradedPatterns.some(p => lower.includes(p))) return true;
+  if (degradedPatterns.some((pattern) => lower.includes(pattern))) return true;
   if (rawToolMarkupPattern.test(trimmed)) return true;
 
-  // Detect raw JSON output — the model tried to "call" a tool by printing its
-  // arguments as text instead of using the proper tool_use format.
   if (trimmed.length < 200 && /^\{[\s\S]*\}$/.test(trimmed)) {
     try {
       JSON.parse(trimmed);
       return true;
     } catch {
-      // Not valid JSON — leave it alone.
+      return false;
     }
   }
 
   return false;
 }
 
-/**
- * Detect conversational progress updates that narrate future work instead of
- * delivering the requested result. These responses are fluent enough to avoid
- * the degraded-response fallback, but they are still not valid terminal
- * answers for delegated execution.
- */
-export function isIntermediateStatusResponse(content: string | undefined): boolean {
+export function looksLikeOngoingWorkResponse(content: string | undefined): boolean {
   if (!content?.trim()) return false;
-  if (isResponseDegraded(content)) return false;
+  if (lacksUsableAssistantContent(content)) return false;
 
   const normalized = content.trim();
   const lower = normalized.toLowerCase();
@@ -88,9 +79,9 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
 
   const looksOngoing = continuationMarkers.some((pattern) => pattern.test(normalized))
     || (/\b(?:before|then)\b/.test(lower) && /\b(?:i['’]ll|i will|let me)\b/.test(lower));
-  
+
   if (!looksOngoing) return false;
-  
+
   const finalLineMatchesContinuation = continuationMarkers.some((pattern) => pattern.test(finalLine));
   if (finalLineMatchesContinuation) return true;
 

@@ -1,6 +1,6 @@
 # Execution State Design
 
-> Superseded as the steady-state delegated execution design by [EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md](../plans/EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md). The current architecture must converge on the execution/event/evidence model defined there.
+> Current convergence of gateway routing, delegated completion, verifier authority, and execution-state boundaries is tracked in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
 
 **Status:** Implemented current architecture
 
@@ -35,7 +35,7 @@ It is the authoritative spec for:
 
 - Reconstructing older requests from chat text alone when execution state is missing.
 - Treating continuity summaries as authoritative semantic routing input.
-- Defining the final typed delegated-worker evidence payload. The current handoff remains bounded metadata plus normalized result content.
+- Defining the remaining gateway/delegated completion realignment program here. That convergence work lives in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
 
 ## Core Model
 

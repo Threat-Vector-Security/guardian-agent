@@ -27,6 +27,8 @@ export type IntentRoutingTraceStage =
   | 'delegated_worker_retrying'
   | 'delegated_worker_completed'
   | 'delegated_worker_failed'
+  | 'delegated_worker_contract_reconciled'
+  | 'delegated_job_wait_expired'
   | 'delegated_tool_call_started'
   | 'delegated_tool_call_completed'
   | 'delegated_interruption_requested'

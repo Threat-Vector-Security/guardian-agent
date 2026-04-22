@@ -3,7 +3,7 @@ import {
   compactMessagesIfOverBudget,
   formatToolResultForLLM,
   isRecord,
-  summarizeToolRoundFallback,
+  summarizeToolRoundStatusMessage,
   toLLMToolDef,
 } from '../../chat-agent-helpers.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js';
@@ -17,7 +17,7 @@ import type {
   ToolRisk,
 } from '../../tools/types.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
-import { isIntermediateStatusResponse } from '../../util/response-quality.js';
+import { looksLikeOngoingWorkResponse } from '../../util/assistant-response-shape.js';
 import { withTaintedContentSystemPrompt } from '../../util/tainted-content.js';
 import { getProviderLocalityFromName } from '../model-routing-ux.js';
 import { buildPendingApprovalMetadata, formatPendingApprovalMessage } from '../pending-approval-copy.js';
@@ -116,8 +116,8 @@ export async function recoverDirectAnswerAfterTools(input: {
   chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
   currentContextTrustLevel: ContentTrustLevel;
   currentTaintReasons: ReadonlySet<string>;
-  isResponseDegraded: (content: string | undefined) => boolean;
-  isIntermediateStatusResponse: (content: string | undefined) => boolean;
+  lacksUsableAssistantContent: (content: string | undefined) => boolean;
+  looksLikeOngoingWorkResponse: (content: string | undefined) => boolean;
 }): Promise<string> {
   const recoveryMessages: ChatMessage[] = [
     ...input.llmMessages,
@@ -141,7 +141,7 @@ export async function recoverDirectAnswerAfterTools(input: {
       { tools: [] },
     );
     const content = recovery.content?.trim() ?? '';
-    return content && !input.isResponseDegraded(content) && !input.isIntermediateStatusResponse(content) ? content : '';
+    return content && !input.lacksUsableAssistantContent(content) && !input.looksLikeOngoingWorkResponse(content) ? content : '';
   } catch {
     return '';
   }
@@ -181,7 +181,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
     result: unknown,
     providerKind: 'local' | 'external',
   ) => StoredToolLoopSanitizedResult;
-  isResponseDegraded: (content: string | undefined) => boolean;
+  lacksUsableAssistantContent: (content: string | undefined) => boolean;
   storeSuspendedSession: (input: StoredToolLoopSuspendedSessionInput) => void;
   setPendingApprovalAction: (
     userId: string,
@@ -502,20 +502,20 @@ export async function resumeStoredToolLoopPendingAction(input: {
     rounds += 1;
   }
 
-  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
+  if ((!finalContent || looksLikeOngoingWorkResponse(finalContent)) && lastToolRoundResults.length > 0) {
     finalContent = await recoverDirectAnswerAfterTools({
       llmMessages,
       chatFn: chatRunner.chatFn,
       currentContextTrustLevel,
       currentTaintReasons,
-      isResponseDegraded: input.isResponseDegraded,
-      isIntermediateStatusResponse,
+      lacksUsableAssistantContent: input.lacksUsableAssistantContent,
+      looksLikeOngoingWorkResponse,
     });
   }
-  if ((!finalContent || isIntermediateStatusResponse(finalContent)) && lastToolRoundResults.length > 0) {
-    finalContent = summarizeToolRoundFallback(lastToolRoundResults);
+  if ((!finalContent || looksLikeOngoingWorkResponse(finalContent)) && lastToolRoundResults.length > 0) {
+    finalContent = summarizeToolRoundStatusMessage(lastToolRoundResults);
   }
-  if (isIntermediateStatusResponse(finalContent)) {
+  if (looksLikeOngoingWorkResponse(finalContent)) {
     finalContent = '';
   }
   if (!finalContent) {

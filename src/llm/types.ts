@@ -28,6 +28,8 @@ export interface ChatResponse {
   model: string;
   /** Provider-specific finish reason. */
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
+  /** Raw provider finish/stop reason when available. */
+  providerFinishReason?: string;
 }
 
 /** A streamed chunk from a chat completion. */

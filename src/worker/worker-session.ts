@@ -49,7 +49,9 @@ import {
 import { readApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
 import {
   buildWorkerExecutionMetadata,
+  type WorkerExecutionLifecycle,
   type WorkerExecutionSource,
+  type WorkerExecutionTerminationReason,
 } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
@@ -57,13 +59,24 @@ import {
 import {
   buildDelegatedTaskContract,
 } from '../runtime/execution/verifier.js';
+import {
+  buildStepReceipts,
+  computeWorkerRunStatus,
+  filterDependencySatisfiedStepReceipts,
+  findAnswerStepId,
+  matchPlannedStepForTool,
+} from '../runtime/execution/task-plan.js';
 import type {
   Claim,
+  DelegatedTaskContract,
   DelegatedResultEnvelope,
   EvidenceReceipt,
   ExecutionEvent,
   Interruption,
   ProviderSelectionSnapshot,
+  StepReceipt,
+  WorkerRunStatus,
+  WorkerStopReason,
 } from '../runtime/execution/types.js';
 import {
   runLlmLoop,
@@ -205,6 +218,8 @@ export interface WorkerMessageHandleParams {
   pendingApprovalNotice?: string;
   /** Whether a fallback provider is available on the supervisor side for quality-based retry. */
   hasFallbackProvider?: boolean;
+  /** Step receipts satisfied in a prior attempt; the worker should skip re-running them. */
+  priorSatisfiedStepReceipts?: StepReceipt[];
 }
 
 function buildApprovalPendingActionMetadata(
@@ -272,17 +287,23 @@ function buildPolicyBlockedClarificationPrompt(
 
 function buildToolLoopExecutionMetadata(
   outcome: LlmLoopOutcome,
-  options?: { phantomApproval?: boolean },
+  options?: {
+    phantomApproval?: boolean;
+    runStatus?: WorkerRunStatus;
+  },
 ): Record<string, unknown> {
   const phantomApproval = options?.phantomApproval === true;
-  const lifecycle = phantomApproval || outcome.responseQuality !== 'final'
+  const lifecycle = phantomApproval
     ? 'failed'
-    : 'completed';
+    : mapWorkerExecutionLifecycle(options?.runStatus, outcome.stopReason);
   return buildWorkerExecutionMetadata({
     lifecycle,
     source: 'tool_loop',
     completionReason: phantomApproval ? 'phantom_approval_response' : outcome.completionReason,
     responseQuality: phantomApproval ? 'degraded' : outcome.responseQuality,
+    terminationReason: phantomApproval
+      ? 'clean_exit'
+      : mapWorkerExecutionTerminationReason(options?.runStatus, outcome.stopReason),
     roundCount: outcome.roundCount,
     toolCallCount: outcome.toolCallCount,
     toolResultCount: outcome.toolResultCount,
@@ -290,20 +311,128 @@ function buildToolLoopExecutionMetadata(
   });
 }
 
-function buildDelegatedVerificationHints(
-  outcome: Pick<LlmLoopOutcome, 'completionReason' | 'responseQuality'>,
-  options?: {
-    phantomApproval?: boolean;
-    completionReason?: string;
-    responseQuality?: string;
-  },
-): NonNullable<DelegatedResultEnvelope['verificationHints']> {
+function mapWorkerExecutionLifecycle(
+  runStatus: WorkerRunStatus | undefined,
+  stopReason: WorkerStopReason,
+): WorkerExecutionLifecycle {
+  switch (runStatus) {
+    case 'completed':
+      return 'completed';
+    case 'suspended':
+      return 'blocked';
+    case 'failed':
+    case 'incomplete':
+    case 'max_turns':
+      return 'failed';
+    default:
+      return stopReason === 'approval_required' ? 'blocked' : 'failed';
+  }
+}
+
+function mapWorkerExecutionTerminationReason(
+  runStatus: WorkerRunStatus | undefined,
+  stopReason: WorkerStopReason,
+): WorkerExecutionTerminationReason {
+  if (stopReason === 'max_rounds' || stopReason === 'max_tokens' || runStatus === 'max_turns') {
+    return 'max_rounds';
+  }
+  if (stopReason === 'error' || runStatus === 'failed') {
+    return 'provider_error';
+  }
+  return 'clean_exit';
+}
+
+function deriveWorkerLoopBudget(
+  taskContract: DelegatedTaskContract,
+  selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+): { maxRounds: number; contextBudget: number } {
+  const requiredStepCount = Math.max(
+    1,
+    taskContract.plan.steps.filter((step) => step.required !== false).length,
+  );
+  const baseContextBudget = selectedExecutionProfile?.contextBudget ?? 80_000;
   return {
-    completionReason: options?.completionReason
-      ?? (options?.phantomApproval ? 'phantom_approval_response' : outcome.completionReason),
-    responseQuality: options?.responseQuality
-      ?? (options?.phantomApproval ? 'degraded' : outcome.responseQuality),
+    maxRounds: Math.min(96, 30 + Math.max(0, requiredStepCount - 1) * 10),
+    contextBudget: Math.min(240_000, baseContextBudget + Math.max(0, requiredStepCount - 1) * 20_000),
   };
+}
+
+function buildAnswerOnlyTaskContract(
+  taskContract: DelegatedTaskContract,
+  summary: string,
+): DelegatedTaskContract {
+  const normalizedSummary = summary.trim() || taskContract.summary?.trim() || 'Answer the request directly.';
+  return {
+    ...taskContract,
+    kind: 'general_answer',
+    requiresEvidence: false,
+    allowsAnswerFirst: true,
+    requireExactFileReferences: false,
+    summary: normalizedSummary,
+    plan: {
+      planId: `${taskContract.plan.planId}:answer_only`,
+      steps: [{
+        stepId: 'step_1',
+        kind: 'answer',
+        summary: normalizedSummary,
+        required: true,
+      }],
+      allowAdditionalSteps: false,
+    },
+  };
+}
+
+function shouldPromoteAnswerOnlyTaskContract(
+  outcome: LlmLoopOutcome,
+  preferAnswerFirst: boolean,
+): boolean {
+  if (!preferAnswerFirst) {
+    return false;
+  }
+  if (outcome.toolCallCount > 0 || outcome.toolResultCount > 0) {
+    return false;
+  }
+  return outcome.completionReason === 'answer_first_response'
+    || outcome.completionReason === 'answer_first_fallback';
+}
+
+function shouldUseDelegatedAnswerFirstLane(input: {
+  taskContract: DelegatedTaskContract;
+  intentDecision: IntentGatewayDecision | undefined;
+  selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
+}): boolean {
+  if (!input.taskContract.allowsAnswerFirst) {
+    return false;
+  }
+  if (input.intentDecision?.executionClass === 'direct_assistant') {
+    return true;
+  }
+  if (input.intentDecision?.preferredAnswerPath === 'direct') {
+    return true;
+  }
+  return input.selectedExecutionProfile?.preferredAnswerPath === 'direct';
+}
+
+function buildDelegatedAnswerFirstCorrectionPrompt(
+  taskContract: DelegatedTaskContract,
+  allowDelegatedAnswerFirst: boolean,
+  originalRequest: string,
+  skillCorrectionPrompt: string | undefined,
+): string | undefined {
+  if (skillCorrectionPrompt?.trim()) {
+    return skillCorrectionPrompt;
+  }
+  if (!taskContract.allowsAnswerFirst || !allowDelegatedAnswerFirst) {
+    return undefined;
+  }
+  const normalizedRequest = originalRequest.trim() || taskContract.summary?.trim() || 'the user request';
+  return [
+    'System correction: answer the request directly in plain text.',
+    `Answer this request directly: "${normalizedRequest}"`,
+    'Do not restate the instructions.',
+    'Do not narrate what you plan to do.',
+    'Do not mention tools unless the user explicitly asked about them.',
+  ].join(' ');
 }
 
 function buildDelegatedModelProvenance(
@@ -343,7 +472,15 @@ function extractRefsFromUnknown(value: unknown): string[] {
   }
   const refs: string[] = [];
   for (const [key, entry] of Object.entries(value)) {
-    if (key === 'path' || key === 'file' || key === 'files' || key === 'paths' || key === 'workspaceRoot') {
+    if (
+      key === 'path'
+      || key === 'file'
+      || key === 'files'
+      || key === 'paths'
+      || key === 'workspaceRoot'
+      || key === 'relativePath'
+      || key === 'matches'
+    ) {
       refs.push(...extractRefsFromUnknown(entry));
     }
   }
@@ -362,6 +499,13 @@ function buildEvidenceSummary(toolName: string, result: Record<string, unknown> 
         ? `${toolName} ${result.status.trim()}`
         : `Completed ${toolName}.`;
   return message.length > 220 ? `${message.slice(0, 217).trimEnd()}...` : message;
+}
+
+function truncateInlineText(value: string | undefined, maxChars: number): string | undefined {
+  const normalized = value?.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
 function truncateToolTracePreview(value: string): string {
@@ -386,6 +530,19 @@ function buildToolTracePreview(toolName: string, result: Record<string, unknown>
   }
 }
 
+function buildExactFileReferenceGuidance(taskContract: DelegatedTaskContract): string | null {
+  if (taskContract.requireExactFileReferences !== true) {
+    return null;
+  }
+  return [
+    'Exact file reference contract:',
+    'Only read or cite paths that came from successful fs_search/fs_list/code_symbol_search results or successful fs_read results.',
+    'Do not invent filenames or sibling paths after an ENOENT or a failed read/list call.',
+    'If a guessed path fails, go back to the successful search/list results and narrow using the exact returned relativePath values.',
+    'Before the final answer, make sure the exact file paths you name match the paths backed by successful tool receipts.',
+  ].join('\n');
+}
+
 function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
   if (errorMessage) return 'failed';
   const status = typeof result?.status === 'string' ? result.status.trim().toLowerCase() : '';
@@ -398,13 +555,15 @@ function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMes
 
 function buildToolReceipt(event: LlmLoopToolEvent): EvidenceReceipt | null {
   if (event.phase !== 'completed') return null;
+  const includeArgumentRefs = event.toolCall.name !== 'fs_search'
+    && event.toolCall.name !== 'code_symbol_search';
   return {
     receiptId: `${event.toolCall.id}:receipt`,
     sourceType: 'tool_call',
     toolName: event.toolCall.name,
     status: mapEvidenceStatus(event.result, event.errorMessage),
     refs: [...new Set([
-      ...extractRefsFromUnknown(event.args),
+      ...(includeArgumentRefs ? extractRefsFromUnknown(event.args) : []),
       ...extractRefsFromUnknown(event.result?.output),
       ...extractRefsFromUnknown(event.result),
     ])],
@@ -429,6 +588,7 @@ function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
     payload: {
       toolCallId: event.toolCall.id,
       toolName: event.toolCall.name,
+      ...(event.stepId ? { stepId: event.stepId } : {}),
       args: event.args,
       ...(event.result ? { resultStatus: event.result.status, resultMessage: event.result.message } : {}),
       ...(traceResultPreview ? { traceResultPreview } : {}),
@@ -453,7 +613,7 @@ function isReadOnlyEvidenceTool(toolName: string): boolean {
 
 function buildClaimsFromReceipts(
   receipts: EvidenceReceipt[],
-  taskContract: ReturnType<typeof buildDelegatedTaskContract>,
+  taskContract: DelegatedTaskContract,
 ): Claim[] {
   const claims: Claim[] = [];
   for (const receipt of receipts) {
@@ -488,36 +648,158 @@ function buildClaimsFromReceipts(
   return claims;
 }
 
+function buildAnswerReceipt(
+  content: string | undefined,
+  timestamp: number,
+): EvidenceReceipt | null {
+  const normalized = content?.trim();
+  if (!normalized) {
+    return null;
+  }
+  return {
+    receiptId: `answer:${timestamp}`,
+    sourceType: 'model_answer',
+    status: 'succeeded',
+    refs: [],
+    summary: truncateInlineText(normalized, 220) ?? 'Produced a final answer.',
+    startedAt: timestamp,
+    endedAt: timestamp,
+  };
+}
+
+function buildDelegatedClaims(
+  input: {
+    receipts: EvidenceReceipt[];
+    taskContract: DelegatedTaskContract;
+    finalUserAnswer?: string;
+    answerReceiptId?: string;
+  },
+): Claim[] {
+  const claims = buildClaimsFromReceipts(input.receipts, input.taskContract);
+  if (input.finalUserAnswer?.trim() && input.answerReceiptId) {
+    claims.push({
+      claimId: `${input.answerReceiptId}:answer`,
+      kind: 'answer',
+      subject: input.taskContract.summary?.trim() || 'final_answer',
+      value: input.finalUserAnswer.trim(),
+      evidenceReceiptIds: [input.answerReceiptId],
+      confidence: 1,
+    });
+  }
+  return claims;
+}
+
+function buildClaimEvents(
+  claims: Claim[],
+  receiptStepIds: Map<string, string>,
+  timestamp: number,
+): ExecutionEvent[] {
+  return claims.map((claim) => {
+    const stepId = claim.evidenceReceiptIds
+      .map((receiptId) => receiptStepIds.get(receiptId))
+      .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    return {
+      eventId: `${claim.claimId}:emitted`,
+      type: 'claim_emitted',
+      timestamp,
+      payload: {
+        claimId: claim.claimId,
+        kind: claim.kind,
+        subject: claim.subject,
+        value: claim.value,
+        evidenceReceiptIds: [...claim.evidenceReceiptIds],
+        ...(stepId ? { stepId } : {}),
+        summary: truncateInlineText(claim.value, 220) ?? claim.kind,
+      },
+    };
+  });
+}
+
+function resolveToolStepId(
+  event: LlmLoopToolEvent,
+  taskContract: DelegatedTaskContract,
+  knownStepIds: Map<string, string>,
+  matchedStepIds: Set<string>,
+): string | undefined {
+  const existing = knownStepIds.get(event.toolCall.id);
+  if (existing) {
+    return existing;
+  }
+  const matched = matchPlannedStepForTool({
+    hintStepId: event.stepId,
+    toolName: event.toolCall.name,
+    args: event.args,
+    plannedTask: taskContract.plan,
+    previouslyMatchedStepIds: matchedStepIds,
+  });
+  return matched;
+}
+
 function buildDelegatedResultEnvelope(input: {
-  intentDecision: IntentGatewayDecision | undefined;
-  finalUserAnswer?: string;
+  taskContract: DelegatedTaskContract;
+  finalAnswerCandidate?: string;
   operatorSummary: string;
   events: ExecutionEvent[];
   receipts: EvidenceReceipt[];
+  toolReceiptStepIds?: Map<string, string>;
   interruptions?: Interruption[];
   responseSource?: ResponseSourceMetadata;
   selectedExecutionProfile?: SelectedExecutionProfile | null;
-  verificationHints?: DelegatedResultEnvelope['verificationHints'];
+  stopReason: WorkerStopReason;
 }): DelegatedResultEnvelope {
-  const taskContract = buildDelegatedTaskContract(input.intentDecision);
+  const timestamp = Date.now();
+  const interruptions = input.interruptions ?? [];
+  const answerReceipt = buildAnswerReceipt(input.finalAnswerCandidate, timestamp);
+  const evidenceReceipts = answerReceipt
+    ? [...input.receipts, answerReceipt]
+    : [...input.receipts];
+  const receiptStepIds = new Map(input.toolReceiptStepIds ?? []);
+  const answerStepId = answerReceipt ? findAnswerStepId(input.taskContract.plan) : undefined;
+  if (answerReceipt && answerStepId) {
+    receiptStepIds.set(answerReceipt.receiptId, answerStepId);
+  }
+  const stepReceipts = buildStepReceipts({
+    plannedTask: input.taskContract.plan,
+    evidenceReceipts,
+    toolReceiptStepIds: receiptStepIds,
+    ...(answerReceipt ? { finalAnswerReceiptId: answerReceipt.receiptId } : {}),
+    interruptions,
+  });
+  const runStatus = computeWorkerRunStatus(
+    input.taskContract.plan,
+    stepReceipts,
+    interruptions,
+    input.stopReason,
+  );
+  const finalUserAnswer = runStatus === 'completed'
+    ? input.finalAnswerCandidate?.trim()
+    : undefined;
+  const claims = buildDelegatedClaims({
+    receipts: evidenceReceipts,
+    taskContract: input.taskContract,
+    ...(finalUserAnswer && answerReceipt ? {
+      finalUserAnswer,
+      answerReceiptId: answerReceipt.receiptId,
+    } : {}),
+  });
+  const claimEvents = buildClaimEvents(claims, receiptStepIds, timestamp);
+  const modelProvenance = buildDelegatedModelProvenance(
+    input.selectedExecutionProfile ?? null,
+    input.responseSource,
+  );
   return {
-    taskContract,
-    ...(input.finalUserAnswer?.trim() ? { finalUserAnswer: input.finalUserAnswer.trim() } : {}),
+    taskContract: input.taskContract,
+    runStatus,
+    stopReason: input.stopReason,
+    stepReceipts,
+    ...(finalUserAnswer ? { finalUserAnswer } : {}),
     operatorSummary: input.operatorSummary,
-    claims: buildClaimsFromReceipts(input.receipts, taskContract),
-    evidenceReceipts: input.receipts,
-    interruptions: input.interruptions ?? [],
+    claims,
+    evidenceReceipts,
+    interruptions,
     artifacts: [],
-    ...(input.verificationHints ? { verificationHints: input.verificationHints } : {}),
-    ...(buildDelegatedModelProvenance(input.selectedExecutionProfile ?? null, input.responseSource)
-      ? {
-          modelProvenance: buildDelegatedModelProvenance(
-            input.selectedExecutionProfile ?? null,
-            input.responseSource,
-          ),
-        }
-      : {}),
-    events: input.events,
+    ...(modelProvenance ? { modelProvenance } : {}),
+    events: [...input.events, ...claimEvents],
   };
 }
 
@@ -699,6 +981,7 @@ function buildPlannerWorkerExecutionMetadata(
         ? 'planner_failed'
         : 'unsupported_actions',
     responseQuality: 'final',
+    terminationReason: 'clean_exit',
   });
 }
 
@@ -711,11 +994,20 @@ function buildPlannerReceiptStatus(
   return null;
 }
 
-function buildPlannerEvidenceReceipts(
+function buildPlannerDelegatedEvidence(
   plan: ExecutionPlan,
+  taskContract: DelegatedTaskContract,
   timestamp: number,
-): EvidenceReceipt[] {
+): {
+  receipts: EvidenceReceipt[];
+  toolReceiptStepIds: Map<string, string>;
+  events: ExecutionEvent[];
+} {
   const receipts: EvidenceReceipt[] = [];
+  const toolReceiptStepIds = new Map<string, string>();
+  const events: ExecutionEvent[] = [];
+  const matchedStepIds = new Set<string>();
+
   for (const node of Object.values(plan.nodes ?? {})) {
     const receiptStatus = buildPlannerReceiptStatus(node.status);
     if (!receiptStatus) continue;
@@ -723,8 +1015,23 @@ function buildPlannerEvidenceReceipts(
       ? 'code_remote_exec'
       : node.target;
     const detail = readPlannerNodeResultDetail(node.result);
+    const receiptId = `planner:${plan.id}:${node.id}`;
+    const stepId = matchPlannedStepForTool({
+      toolName,
+      args: {
+        target: node.target,
+        description: node.description,
+        inputPrompt: node.inputPrompt,
+      },
+      plannedTask: taskContract.plan,
+      previouslyMatchedStepIds: matchedStepIds,
+    });
+    if (stepId) {
+      matchedStepIds.add(stepId);
+      toolReceiptStepIds.set(receiptId, stepId);
+    }
     receipts.push({
-      receiptId: `planner:${plan.id}:${node.id}`,
+      receiptId,
       sourceType: 'tool_call',
       ...(toolName?.trim() ? { toolName: toolName.trim() } : {}),
       status: receiptStatus,
@@ -733,44 +1040,20 @@ function buildPlannerEvidenceReceipts(
       startedAt: timestamp,
       endedAt: timestamp,
     });
-  }
-  return receipts;
-}
-
-function buildPlannerExecutionEvents(
-  plan: ExecutionPlan,
-  timestamp: number,
-): ExecutionEvent[] {
-  return Object.values(plan.nodes ?? {})
-    .filter((node) => buildPlannerReceiptStatus(node.status) !== null)
-    .map((node) => ({
+    events.push({
       eventId: `planner:${plan.id}:${node.id}:completed`,
       nodeId: node.id,
-      type: 'tool_call_completed' as const,
+      type: 'tool_call_completed',
       timestamp,
       payload: {
-        toolName: node.actionType === 'execute_code' ? 'code_remote_exec' : node.target,
+        toolName,
         resultStatus: normalizePlannerNodeStatus(node.status),
-        ...(readPlannerNodeResultDetail(node.result)
-          ? { resultMessage: readPlannerNodeResultDetail(node.result) }
-          : {}),
+        ...(detail ? { resultMessage: detail } : {}),
+        ...(stepId ? { stepId } : {}),
       },
-    }));
-}
-
-function buildPlannerCompletionEvent(
-  content: string,
-  timestamp: number,
-): ExecutionEvent {
-  return {
-    eventId: randomUUID(),
-    type: 'claim_emitted',
-    timestamp,
-    payload: {
-      kind: 'answer',
-      content,
-    },
-  };
+    });
+  }
+  return { receipts, toolReceiptStepIds, events };
 }
 
 function buildPlannerDelegatedEnvelope(input: {
@@ -782,22 +1065,20 @@ function buildPlannerDelegatedEnvelope(input: {
   selectedExecutionProfile?: SelectedExecutionProfile | null;
 }): DelegatedResultEnvelope {
   const timestamp = Date.now();
-  const receipts = input.plan ? buildPlannerEvidenceReceipts(input.plan, timestamp) : [];
-  const events = input.plan
-    ? [...buildPlannerExecutionEvents(input.plan, timestamp), buildPlannerCompletionEvent(input.content, timestamp)]
-    : [buildPlannerCompletionEvent(input.content, timestamp)];
+  const taskContract = buildDelegatedTaskContract(input.intentDecision ?? undefined);
+  const delegatedEvidence = input.plan
+    ? buildPlannerDelegatedEvidence(input.plan, taskContract, timestamp)
+    : { receipts: [], toolReceiptStepIds: new Map<string, string>(), events: [] };
   return buildDelegatedResultEnvelope({
-    intentDecision: input.intentDecision ?? undefined,
-    finalUserAnswer: input.content,
+    taskContract,
+    finalAnswerCandidate: input.content,
     operatorSummary: input.content,
-    events,
-    receipts,
+    events: delegatedEvidence.events,
+    receipts: delegatedEvidence.receipts,
+    toolReceiptStepIds: delegatedEvidence.toolReceiptStepIds,
     responseSource: input.responseSource,
     selectedExecutionProfile: input.selectedExecutionProfile,
-    verificationHints: {
-      completionReason: input.status,
-      responseQuality: 'final',
-    },
+    stopReason: input.status === 'completed' ? 'end_turn' : 'error',
   });
 }
 
@@ -1023,7 +1304,7 @@ export class BrokeredWorkerSession {
   private pendingApprovals: PendingApprovalState | null = null;
   private suspendedSession: SuspendedSession | null = null;
   private automationContinuation: AutomationApprovalContinuation | null = null;
-  private lastToolReportScope: ToolReportScope | null = null;
+  private readonly toolReportScopes = new Map<string, ToolReportScope>();
 
   constructor(client: BrokerClient) {
     this.client = client;
@@ -1039,24 +1320,23 @@ export class BrokeredWorkerSession {
     }
     const requestId = message.id?.trim();
     const codeSessionId = codeContext?.sessionId?.trim();
-    this.lastToolReportScope = {
+    this.toolReportScopes.set(this.buildToolReportScopeKey(message.userId, message.channel), {
       userId: message.userId,
       channel: message.channel,
       ...(requestId ? { requestId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),
-    };
+    });
   }
 
   private resolveToolReportScope(
     message: UserMessage,
     codeContext: { workspaceRoot: string; sessionId?: string } | undefined,
   ): ToolReportScope {
-    if (
-      this.lastToolReportScope
-      && this.lastToolReportScope.userId === message.userId
-      && this.lastToolReportScope.channel === message.channel
-    ) {
-      return { ...this.lastToolReportScope };
+    const rememberedScope = this.toolReportScopes.get(
+      this.buildToolReportScopeKey(message.userId, message.channel),
+    );
+    if (rememberedScope) {
+      return { ...rememberedScope };
     }
     const codeSessionId = codeContext?.sessionId?.trim();
     return {
@@ -1064,6 +1344,10 @@ export class BrokeredWorkerSession {
       channel: message.channel,
       ...(codeSessionId ? { codeSessionId } : {}),
     };
+  }
+
+  private buildToolReportScopeKey(userId: string, channel: string): string {
+    return `${userId}::${channel}`;
   }
 
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -1970,9 +2254,13 @@ export class BrokeredWorkerSession {
     params: WorkerMessageHandleParams,
     intentDecision?: IntentGatewayDecision,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const taskContract = buildDelegatedTaskContract(intentDecision);
     const pendingTools: SuspendedToolCall[] = [];
     const delegatedEvents: ExecutionEvent[] = [];
     const evidenceReceipts = new Map<string, EvidenceReceipt>();
+    const toolCallStepIds = new Map<string, string>();
+    const toolReceiptStepIds = new Map<string, string>();
+    const matchedStepIds = new Set<string>();
     let responseSource: ResponseSourceMetadata | undefined;
     const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
     const selectedExecutionProfile = params.executionProfile
@@ -1981,11 +2269,89 @@ export class BrokeredWorkerSession {
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
     const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision);
     const answerFirstOriginalRequest = stripLeadingContextPrefix(message.content);
+    const skillPrefersAnswerFirst = shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest);
+    const delegatedAnswerFirst = shouldUseDelegatedAnswerFirstLane({
+      taskContract,
+      intentDecision,
+      selectedExecutionProfile,
+    });
+    const preferAnswerFirst = delegatedAnswerFirst || skillPrefersAnswerFirst;
+    const answerFirstCorrectionPrompt = buildDelegatedAnswerFirstCorrectionPrompt(
+      taskContract,
+      delegatedAnswerFirst,
+      answerFirstOriginalRequest,
+      buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),
+    );
+    const workerLoopBudget = deriveWorkerLoopBudget(taskContract, selectedExecutionProfile);
+
+    const priorSatisfiedStepReceipts = filterDependencySatisfiedStepReceipts(
+      taskContract.plan,
+      (params.priorSatisfiedStepReceipts ?? [])
+        .filter((receipt) => receipt.status === 'satisfied'),
+    );
+    for (const receipt of priorSatisfiedStepReceipts) {
+      matchedStepIds.add(receipt.stepId);
+      const syntheticReceiptId = `prior:${receipt.stepId}`;
+      evidenceReceipts.set(syntheticReceiptId, {
+        receiptId: syntheticReceiptId,
+        sourceType: 'tool_call',
+        toolName: 'prior_attempt',
+        status: 'succeeded',
+        refs: [],
+        summary: receipt.summary,
+        startedAt: receipt.startedAt,
+        endedAt: receipt.endedAt,
+      } satisfies EvidenceReceipt);
+      toolReceiptStepIds.set(syntheticReceiptId, receipt.stepId);
+    }
+    if (priorSatisfiedStepReceipts.length > 0) {
+      const satisfiedLines = priorSatisfiedStepReceipts
+        .map((receipt) => `- ${receipt.stepId}: ${receipt.summary}`)
+        .join('\n');
+      const retryContext = [
+        '',
+        '',
+        'Retry context — the following planned steps were satisfied in a prior attempt and MUST NOT be re-executed:',
+        satisfiedLines,
+        'Only execute the remaining unsatisfied steps in this attempt.',
+      ].join('\n');
+      
+      const firstMsg = llmMessages[0];
+      if (firstMsg?.role === 'system') {
+        firstMsg.content += retryContext;
+      } else {
+        llmMessages.unshift({
+          role: 'system',
+          content: retryContext.trim(),
+        });
+      }
+    }
+    const exactFileReferenceGuidance = buildExactFileReferenceGuidance(taskContract);
+    if (exactFileReferenceGuidance) {
+      const firstMsg = llmMessages[0];
+      if (firstMsg?.role === 'system') {
+        firstMsg.content += `\n\n${exactFileReferenceGuidance}`;
+      } else {
+        llmMessages.unshift({
+          role: 'system',
+          content: exactFileReferenceGuidance,
+        });
+      }
+    }
     const recordDelegatedToolEvent = (event: LlmLoopToolEvent): void => {
-      delegatedEvents.push(buildToolExecutionEvent(event));
-      const receipt = buildToolReceipt(event);
+      const resolvedStepId = resolveToolStepId(event, taskContract, toolCallStepIds, matchedStepIds);
+      const enrichedEvent = resolvedStepId ? { ...event, stepId: resolvedStepId } : event;
+      if (resolvedStepId) {
+        toolCallStepIds.set(event.toolCall.id, resolvedStepId);
+        matchedStepIds.add(resolvedStepId);
+      }
+      delegatedEvents.push(buildToolExecutionEvent(enrichedEvent));
+      const receipt = buildToolReceipt(enrichedEvent);
       if (receipt) {
         evidenceReceipts.set(receipt.receiptId, receipt);
+        if (resolvedStepId) {
+          toolReceiptStepIds.set(receipt.receiptId, resolvedStepId);
+        }
       }
     };
 
@@ -2031,8 +2397,8 @@ export class BrokeredWorkerSession {
           return runResult as unknown as ToolRunResponse;
         },
       },
-      30,
-      selectedExecutionProfile?.contextBudget ?? 80_000,
+      workerLoopBudget.maxRounds,
+      workerLoopBudget.contextBudget,
       (toolCall, toolResult) => {
         if (toolResult.status === 'pending_approval' && typeof toolResult.approvalId === 'string' && typeof toolResult.jobId === 'string') {
           pendingTools.push({
@@ -2052,8 +2418,9 @@ export class BrokeredWorkerSession {
         surfaceId: message.surfaceId,
         ...(codeContext ? { codeContext } : {}),
         allowModelMemoryMutation,
-        preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest),
-        answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),
+        preferAnswerFirst,
+        allowAnswerFirstCompletionWithToolExecutionCorrection: preferAnswerFirst,
+        answerFirstCorrectionPrompt,
         answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, answerFirstOriginalRequest),
         answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(
           params.activeSkills,
@@ -2061,6 +2428,7 @@ export class BrokeredWorkerSession {
           answerFirstOriginalRequest,
         ),
         toolExecutionCorrectionPrompt,
+        plannedTask: taskContract.plan,
         onToolEvent: recordDelegatedToolEvent,
       },
     );
@@ -2111,17 +2479,15 @@ export class BrokeredWorkerSession {
         ? formatPendingApprovalMessage(pendingApprovalMeta)
         : 'This action needs approval before I can continue.';
       const envelope = buildDelegatedResultEnvelope({
-        intentDecision,
+        taskContract,
         operatorSummary: pendingContent,
         events: [...delegatedEvents, ...interruptionEvents],
         receipts: [...evidenceReceipts.values()],
+        toolReceiptStepIds,
         interruptions,
         responseSource,
         selectedExecutionProfile,
-        verificationHints: buildDelegatedVerificationHints(result.outcome, {
-          completionReason: 'approval_pending',
-          responseQuality: 'final',
-        }),
+        stopReason: result.outcome.stopReason,
       });
       return {
         content: pendingContent,
@@ -2151,7 +2517,7 @@ export class BrokeredWorkerSession {
         prompt,
       }];
       const envelope = buildDelegatedResultEnvelope({
-        intentDecision,
+        taskContract,
         operatorSummary: prompt,
         events: [
           ...delegatedEvents,
@@ -2166,10 +2532,11 @@ export class BrokeredWorkerSession {
           },
         ],
         receipts: [...evidenceReceipts.values()],
+        toolReceiptStepIds,
         interruptions,
         responseSource,
         selectedExecutionProfile,
-        verificationHints: buildDelegatedVerificationHints(result.outcome),
+        stopReason: result.outcome.stopReason,
       });
       return {
         content: prompt,
@@ -2183,29 +2550,30 @@ export class BrokeredWorkerSession {
     const finalContent = phantomApproval
       ? 'I did not create a real approval request for that action. Please try again.'
       : result.finalContent;
-    const completionEvent: ExecutionEvent = {
-      eventId: randomUUID(),
-      type: 'claim_emitted',
-      timestamp: Date.now(),
-      payload: {
-        kind: 'answer',
-        content: finalContent,
-      },
-    };
+    const finalTaskContract = shouldPromoteAnswerOnlyTaskContract(
+      result.outcome,
+      preferAnswerFirst,
+    )
+      ? buildAnswerOnlyTaskContract(taskContract, answerFirstOriginalRequest || finalContent)
+      : taskContract;
     const envelope = buildDelegatedResultEnvelope({
-      intentDecision,
-      finalUserAnswer: phantomApproval ? undefined : finalContent,
+      taskContract: finalTaskContract,
+      ...(phantomApproval ? {} : { finalAnswerCandidate: finalContent }),
       operatorSummary: finalContent,
-      events: [...delegatedEvents, completionEvent],
+      events: delegatedEvents,
       receipts: [...evidenceReceipts.values()],
+      toolReceiptStepIds,
       responseSource,
       selectedExecutionProfile,
-      verificationHints: buildDelegatedVerificationHints(result.outcome, { phantomApproval }),
+      stopReason: result.outcome.stopReason,
     });
     return {
       content: finalContent,
       metadata: {
-        ...buildToolLoopExecutionMetadata(result.outcome, { phantomApproval }),
+        ...buildToolLoopExecutionMetadata(result.outcome, {
+          phantomApproval,
+          runStatus: envelope.runStatus,
+        }),
         ...buildDelegatedExecutionMetadata(envelope),
         ...(responseSource ? { responseSource } : {}),
       },

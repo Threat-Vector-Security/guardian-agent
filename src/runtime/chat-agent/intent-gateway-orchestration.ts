@@ -263,12 +263,14 @@ export function buildGatewayClarificationResponse(
 
   if (decision.resolution === 'needs_clarification') {
     const prompt = sanitizePendingActionPrompt(decision.summary, 'clarification');
+    const clarificationField = resolveSingleClarificationField(missingFields);
     const pendingActionResult = deps.setClarificationPendingAction(
       input.surfaceUserId,
       input.surfaceChannel,
       input.surfaceId,
       {
         blockerKind: 'clarification',
+        ...(clarificationField ? { field: clarificationField } : {}),
         prompt,
         originalUserContent: input.message.content,
         route: decision.route,
@@ -299,6 +301,17 @@ export function buildGatewayClarificationResponse(
   }
 
   return null;
+}
+
+function resolveSingleClarificationField(
+  missingFields: ReadonlySet<string>,
+): string | undefined {
+  if (missingFields.size !== 1) {
+    return undefined;
+  }
+  const [field] = [...missingFields];
+  const normalized = field?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function buildClarificationResponseMetadata(

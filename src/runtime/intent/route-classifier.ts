@@ -100,6 +100,38 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
         enum: ['direct', 'tool_loop', 'chat_synthesis'],
       },
+      planned_steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['tool_call', 'write', 'read', 'search', 'memory_save', 'answer'],
+            },
+            summary: {
+              type: 'string',
+            },
+            expectedToolCategories: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+            required: {
+              type: 'boolean',
+            },
+            dependsOn: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          },
+          required: ['kind', 'summary'],
+        },
+      },
       automationName: {
         type: 'string',
       },
@@ -209,6 +241,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Only use pending action context when the current turn is clearly resolving, continuing, correcting, approving, denying, switching, or clarifying that same blocked request.',
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
+  'When the request is a concrete sequence of actions, emit planned_steps with one entry per required action in order.',
+  'Use planned_steps kinds: tool_call, write, read, search, memory_save, or answer.',
+  'planned_steps is optional for simple direct answers, but required for multi-step execution requests.',
   'If the request is genuinely ambiguous between two top-level routes, do not guess. Set resolution=needs_clarification, include missingFields=["intent_route"], keep route set to the most plausible candidate, lower confidence to low or medium, and make summary a short user-facing clarification question.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
   'Also classify the workload metadata: executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, requireExactFileReferences, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
@@ -365,6 +400,7 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
+  'When the request is a concrete sequence of actions, emit planned_steps with one entry per required action in order.',
   'If the request is genuinely ambiguous between two top-level routes, do not guess. Set resolution=needs_clarification, include missingFields=["intent_route"], keep route set to the most plausible candidate, lower confidence to low or medium, and make summary a short user-facing clarification question.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
   'Also classify executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, requireExactFileReferences, expectedContextPressure, simpleVsComplex, and preferredAnswerPath.',
@@ -505,12 +541,13 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
 const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
   'Classify the user request using a minimal JSON object only. Do not explain anything and do not call tools.',
-  'Return exactly one JSON object with only these keys: route, operation, confidence, summary, turnRelation, resolution.',
+  'Return exactly one JSON object with only these keys: route, operation, confidence, summary, turnRelation, resolution, planned_steps.',
   'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, complex_planning_task, general_assistant, channel_delivery, unknown.',
   'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
   'Use only these exact confidence values: high, medium, low.',
   'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
   'Use only these exact resolution values: ready, needs_clarification.',
+  'When the request is a concrete sequence of actions, include planned_steps with one entry per required action in order. Otherwise use an empty array.',
   'If the request is ambiguous between top-level routes, do not guess. Keep route set to the most plausible candidate, set confidence to low or medium, set resolution=needs_clarification, and make summary a short user-facing clarification question.',
   'Prefer coding_session_control for switching, attaching, detaching, listing, or inspecting coding workspaces or sessions.',
   'Prefer coding_task for code work inside a workspace, repo inspection, implementation, review, environment setup (e.g. npm/pip install), or explicit coding-backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',

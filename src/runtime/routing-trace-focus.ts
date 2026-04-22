@@ -101,6 +101,8 @@ export function pickRoutingTraceFocusItem(
     case 'delegated_worker_completed':
     case 'delegated_worker_failed':
     case 'delegated_verification_decided':
+    case 'delegated_worker_contract_reconciled':
+    case 'delegated_job_wait_expired':
       return toFocusItem(completedHandoffItem ?? delegatedWorkingItem ?? latestItem);
     case 'delegated_tool_call_started':
     case 'delegated_interruption_requested':

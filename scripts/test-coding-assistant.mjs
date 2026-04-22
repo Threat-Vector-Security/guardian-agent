@@ -60,6 +60,17 @@ function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+function readJsonLines(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+  return fs.readFileSync(filePath, 'utf-8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 async function getPrivilegedTicket(baseUrl, token, action) {
   const response = await requestJson(baseUrl, token, 'POST', '/api/auth/ticket', { action });
   assert.equal(typeof response?.ticket, 'string');
@@ -428,6 +439,66 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         sendResponse({
           model: 'coding-harness-model',
           content: `I found \`${searchQuery}\` in \`${responsePath}\` inside the active coding workspace.`,
+        });
+        return;
+      }
+
+      if (/delegated worker completion contract|run timeline rendering/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'inspect-find-tools',
+              name: 'find_tools',
+              arguments: JSON.stringify({
+                query: 'repo inspect search read symbols delegated worker timeline rendering',
+                maxResults: 10,
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 1) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'inspect-search-contract',
+              name: 'fs_search',
+              arguments: JSON.stringify({
+                path: workspaceRoot,
+                query: 'delegated worker completion contract',
+                mode: 'content',
+                maxResults: 10,
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 2) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'inspect-search-timeline',
+              name: 'code_symbol_search',
+              arguments: JSON.stringify({
+                path: workspaceRoot,
+                query: 'run timeline rendering',
+                mode: 'content',
+                maxResults: 10,
+              }),
+            }],
+          });
+          return;
+        }
+
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'The delegated worker completion contract is grounded in src/runtime/execution/task-plan.ts and src/runtime/execution/metadata.ts, and run timeline rendering is grounded in web/public/js/chat-panel.js.',
         });
         return;
       }
@@ -1561,6 +1632,41 @@ guardian:
         groundedAttachedAnswer || guardianSurfaceJobs.some((job) => acceptableAttachedToolNames.has(job.toolName)),
         `Expected either a grounded direct coding answer or a coding tool call from the attached Guardian chat surface flow, got content=${JSON.stringify(guardianSurfaceMessageResponse.content)} jobs=${JSON.stringify(guardianSurfaceJobs)}`,
       );
+    }
+
+    const delegatedInspectionResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: codeSessionMessageMetadata,
+    });
+    assert.ok(
+      String(delegatedInspectionResponse.content ?? '').trim().length > 0,
+      `Expected non-empty delegated inspection response: ${JSON.stringify(delegatedInspectionResponse)}`,
+    );
+
+    if (provider.mode === 'fake') {
+      const routingTrace = readJsonLines(path.join(tmpDir, '.guardianagent', 'routing', 'intent-routing.jsonl'));
+      const delegatedPlanTrace = [...routingTrace].reverse().find((entry) => (
+        entry?.stage === 'delegated_worker_started'
+        && String(entry?.contentPreview ?? '').includes('Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.')
+      ));
+      if (delegatedPlanTrace) {
+        assert.ok(
+          Number(delegatedPlanTrace?.details?.taskContractPlanStepCount ?? 0) >= 2,
+          `Expected delegated inspection to keep a multi-step completion plan. Trace: ${JSON.stringify(delegatedPlanTrace)}`,
+        );
+      } else {
+        const routedInspectionTrace = [...routingTrace].reverse().find((entry) => (
+          entry?.stage === 'gateway_classified'
+          && String(entry?.contentPreview ?? '').includes('Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.')
+        ));
+        assert.equal(
+          routedInspectionTrace?.details?.route,
+          'coding_task',
+          `Expected the repo inspection request to stay in coding_task when the fake harness resolves it locally. Trace: ${JSON.stringify(routingTrace.slice(-20))}`,
+        );
+      }
     }
 
     const guardianChatSwitchTool = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {

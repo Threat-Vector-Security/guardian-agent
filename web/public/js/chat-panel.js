@@ -1434,18 +1434,24 @@ function updateThinkingEl(el, run) {
   const activityEl = el.querySelector('.chat-live-activity');
   if (!labelEl || !activityEl) return;
 
-  const summary = summarizeTimelineRun(run);
+  const summary = summarizeTimelineRun(run, { suppressTerminalStatus: true });
   labelEl.textContent = summary.label;
   renderLiveActivityEl(activityEl, summary);
 }
 
-function summarizeTimelineRun(run) {
+function summarizeTimelineRun(run, options = {}) {
+  const suppressTerminalStatus = options?.suppressTerminalStatus === true;
+  const status = String(run?.summary?.status || '').trim();
   const liveSummary = run?.liveSummary;
-  const liveSummaryItems = normalizeActivitySummaryItems(liveSummary?.items, CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS);
+  let liveSummaryItems = normalizeActivitySummaryItems(liveSummary?.items, CHAT_LIVE_ACTIVITY_VISIBLE_ITEMS);
   const liveSummaryLabel = String(liveSummary?.label || '').trim();
+  if (suppressTerminalStatus && (status === 'completed' || status === 'failed')) {
+    liveSummaryItems = liveSummaryItems.filter((item) => !isPrematureTerminalLiveSummaryItem(item, status));
+  }
   if (liveSummaryItems.length > 0 || liveSummaryLabel) {
     return {
-      label: liveSummaryItems[liveSummaryItems.length - 1]?.title || liveSummaryLabel || 'Working…',
+      label: liveSummaryItems[liveSummaryItems.length - 1]?.title
+        || (suppressTerminalStatus && isTerminalTimelineStatus(status) ? 'Finalizing…' : liveSummaryLabel || 'Working…'),
       items: liveSummaryItems,
     };
   }
@@ -1466,19 +1472,25 @@ function summarizeTimelineRun(run) {
     recentItems.unshift(normalized);
     lastKey = key;
   }
-  const status = String(run?.summary?.status || '').trim();
   if (isTerminalTimelineStatus(status)) {
     while (recentItems.length > 0 && isGenericWorkingTimelineItem(recentItems[recentItems.length - 1])) {
       recentItems.pop();
     }
+    if (suppressTerminalStatus && (status === 'completed' || status === 'failed')) {
+      while (recentItems.length > 0 && isPrematureTerminalLiveSummaryItem(recentItems[recentItems.length - 1], status)) {
+        recentItems.pop();
+      }
+    }
     if (recentItems.length === 0) {
       recentItems.push({
-        title: humanizeTimelineStatus(status),
+        title: suppressTerminalStatus && (status === 'completed' || status === 'failed')
+          ? 'Finalizing…'
+          : humanizeTimelineStatus(status),
         detail: '',
       });
     } else if (status === 'completed') {
       const completedLabel = humanizeTimelineStatus(status);
-      if (recentItems[recentItems.length - 1]?.title !== completedLabel) {
+      if (!suppressTerminalStatus && recentItems[recentItems.length - 1]?.title !== completedLabel) {
         recentItems.push({
           title: completedLabel,
           detail: '',
@@ -1536,6 +1548,19 @@ function isGenericWorkingTimelineItem(item) {
 function isTerminalSummaryLabel(title) {
   const normalized = String(title || '').trim().toLowerCase();
   return normalized === 'completed' || normalized === 'failed' || normalized === 'blocked';
+}
+
+function isPrematureTerminalLiveSummaryItem(item, status) {
+  const normalizedTitle = String(item?.title || '').trim().toLowerCase();
+  if (!normalizedTitle) return false;
+  if (normalizedTitle === humanizeTimelineStatus(status).toLowerCase()) return true;
+  if (status === 'completed') {
+    return normalizedTitle.endsWith(' completed');
+  }
+  if (status === 'failed') {
+    return normalizedTitle.endsWith(' failed');
+  }
+  return false;
 }
 
 function isMeaningfulLiveItem(item) {
