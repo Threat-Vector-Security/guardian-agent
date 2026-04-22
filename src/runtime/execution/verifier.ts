@@ -353,19 +353,33 @@ function finalAnswerCitesFileReference(answer: string, fileClaims: Claim[]): boo
   if (!answer.trim()) return false;
   const normalizedAnswer = normalizeFileReferenceText(answer);
   return fileClaims.some((claim) => {
-    const subject = normalizeFileReferenceText(claim.subject);
-    const value = normalizeFileReferenceText(claim.value);
-
-    const isGeneric = (valueToCheck: string) => {
-      if (!valueToCheck || valueToCheck.length <= 2) return true;
-      return ['src', 'docs', 'lib', 'test', 'tests', 'bin', 'public', 'root'].includes(valueToCheck);
-    };
-
-    return (!isGeneric(subject) && normalizedAnswer.includes(subject))
-      || (!isGeneric(value) && normalizedAnswer.includes(value));
+    return buildComparableFileReferenceVariants(claim.subject).some((variant) => normalizedAnswer.includes(variant))
+      || buildComparableFileReferenceVariants(claim.value).some((variant) => normalizedAnswer.includes(variant));
   });
 }
 
 function normalizeFileReferenceText(value: string | undefined): string {
   return value?.trim().replaceAll('\\', '/').toLowerCase() ?? '';
+}
+
+function buildComparableFileReferenceVariants(value: string | undefined): string[] {
+  const normalized = normalizeFileReferenceText(value);
+  if (!normalized) return [];
+  const variants = new Set<string>();
+  const segments = normalized.split('/').filter((segment) => segment.length > 0);
+  for (let index = 0; index < segments.length; index += 1) {
+    const candidate = segments.slice(index).join('/');
+    if (isGenericFileReferenceCandidate(candidate)) continue;
+    if (candidate.split('/').length < 2) continue;
+    variants.add(candidate);
+  }
+  if (!isGenericFileReferenceCandidate(normalized)) {
+    variants.add(normalized);
+  }
+  return [...variants];
+}
+
+function isGenericFileReferenceCandidate(value: string): boolean {
+  if (!value || value.length <= 2) return true;
+  return ['src', 'docs', 'lib', 'test', 'tests', 'bin', 'public', 'root'].includes(value);
 }

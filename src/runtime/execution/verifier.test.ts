@@ -279,6 +279,52 @@ describe('verifyDelegatedResult', () => {
     expect(decision.reasons[0]).toContain('did not cite');
   });
 
+  it('accepts repo-relative citations when successful file claims use absolute workspace paths', () => {
+    const taskContract = buildRepoInspectionTaskContract({
+      requireExactFileReferences: true,
+      summary: 'Inspect the repository and return the exact files.',
+    });
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: 'The delegated worker progress lives in `src/supervisor/worker-manager.ts`.',
+        operatorSummary: 'The delegated worker progress lives in `src/supervisor/worker-manager.ts`.',
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: index === 1 ? ['receipt-1'] : index === 2 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [{
+          receiptId: 'receipt-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_read',
+          status: 'succeeded',
+          refs: ['S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts'],
+          summary: 'Read S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        claims: [{
+          claimId: 'claim-file-absolute-1',
+          kind: 'file_reference',
+          subject: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+          value: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+          evidenceReceiptIds: ['receipt-1'],
+          confidence: 0.8,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('does not accept discovery-only success as execution evidence for command runs', () => {
     const decision = verifyDelegatedResult({
       envelope: buildEnvelope({

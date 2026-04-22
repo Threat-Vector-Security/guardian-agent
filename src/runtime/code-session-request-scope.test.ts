@@ -39,7 +39,7 @@ describe('shouldAttachCodeSessionForRequest', () => {
     })).toBe(true);
   });
 
-  it('keeps local surface attachments even for non-code requests', () => {
+  it('drops classified non-code requests from the local surface attachment', () => {
     expect(shouldAttachCodeSessionForRequest({
       content: 'hello',
       channel: 'web',
@@ -49,6 +49,6 @@ describe('shouldAttachCodeSessionForRequest', () => {
         route: 'general_assistant',
         requiresRepoGrounding: false,
       },
-    })).toBe(true);
+    })).toBe(false);
   });
 });

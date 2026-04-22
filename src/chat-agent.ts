@@ -3760,13 +3760,16 @@ type DirectIntentShadowCandidate =
       }
     }
 
+    const delegatedOrchestration = inferDelegatedOrchestrationDescriptor(
+      earlyGateway?.decision,
+    );
     const handleDirectAssistantInline = this.shouldHandleDirectAssistantInline({
       gateway: earlyGateway,
       selectedExecutionProfile,
       currentProviderName: ctx.llm?.name,
     });
 
-    if (workerManager && !handleDirectAssistantInline) {
+    if (workerManager && delegatedOrchestration && !handleDirectAssistantInline) {
       try {
         const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
@@ -3788,10 +3791,6 @@ type DirectIntentShadowCandidate =
         if (!skillPromptMaterial && workerSkillPromptMaterial) {
           this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, workerSkillPromptMaterial);
         }
-        const delegatedOrchestration = inferDelegatedOrchestrationDescriptor(
-          earlyGateway?.decision,
-          { hasCodeSession: !!resolvedCodeSession?.session.id },
-        );
         const currentConfig = this.readConfig?.();
         const workerExecutionProfile = currentConfig
           ? (

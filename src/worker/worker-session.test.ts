@@ -816,7 +816,7 @@ describe('BrokeredWorkerSession automation control', () => {
           toolCalls: [{
             id: 'call-read-1',
             name: 'fs_read',
-            arguments: JSON.stringify({ path: 'src/supervisor/worker-manager.ts' }),
+            arguments: JSON.stringify({ path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts' }),
           }],
           providerLocality: 'external',
           providerName: 'openai',
@@ -978,6 +978,207 @@ describe('BrokeredWorkerSession automation control', () => {
     const fileClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'file_reference') ?? [];
     expect(fileClaims.some((claim) => claim.subject === 'src/supervisor/worker-manager.ts')).toBe(true);
     expect(fileClaims.some((claim) => claim.subject === 'S:\\Development\\GuardianAgent')).toBe(false);
+  });
+
+  it('emits exact file claims from search-only repo inspections when tool results are wrapped under nested output objects', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed repo inspections should not reclassify the turn.');
+      }
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-2') {
+        return {
+          content: [
+            'Delegated worker progress is implemented in `src/supervisor/worker-manager.ts`.',
+            'Run timeline rendering is implemented in `web/public/js/chat-panel.js`.',
+          ].join('\n'),
+          model: 'test-model',
+          finishReason: 'stop',
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-search-2',
+            name: 'fs_search',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent',
+              query: 'run timeline rendering',
+              mode: 'content',
+              maxResults: 10,
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_search')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-search-1',
+            name: 'fs_search',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent',
+              query: 'delegated worker progress',
+              mode: 'content',
+              maxResults: 10,
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 120) : 'unknown'}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string; args?: { query?: string } }) => {
+      if (request.toolName !== 'fs_search') {
+        throw new Error(`Unexpected tool ${request.toolName}`);
+      }
+      if (request.args?.query === 'delegated worker progress') {
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'Tool \'fs_search\' completed.',
+          output: {
+            success: true,
+            status: 'succeeded',
+            jobId: 'job-search-1',
+            message: 'Tool \'fs_search\' completed.',
+            output: {
+              root: 'S:\\Development\\GuardianAgent',
+              query: 'delegated worker progress',
+              mode: 'content',
+              truncated: false,
+              matches: [{
+                path: 'S:\\Development\\GuardianAgent\\src\\worker\\worker-session.test.ts',
+                relativePath: 'src/worker/worker-session.test.ts',
+                matchType: 'content',
+              }],
+            },
+          },
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Tool \'fs_search\' completed.',
+        output: {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-search-2',
+          message: 'Tool \'fs_search\' completed.',
+          output: {
+            root: 'S:\\Development\\GuardianAgent',
+            query: 'run timeline rendering',
+            mode: 'content',
+            truncated: false,
+            matches: [{
+              path: 'S:\\Development\\GuardianAgent\\web\\public\\js\\chat-panel.js',
+              relativePath: 'web/public/js/chat-panel.js',
+              matchType: 'content',
+            }],
+          },
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_search',
+          description: 'Search files for a pattern.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              query: { type: 'string' },
+              mode: { type: 'string' },
+              maxResults: { type: 'number' },
+            },
+            required: ['query'],
+          },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test search-only exact-file repo inspection profile',
+      },
+      message: {
+        id: 'msg-search-only-exact-file-refs',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: 'S:\\Development\\GuardianAgent',
+            sessionId: 'code-1',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo to identify files implementing delegated worker progress and run timeline rendering without editing.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const delegatedResult = result.metadata?.delegatedResult as { claims?: Array<{ kind?: string; subject?: string }> } | undefined;
+    const fileClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'file_reference') ?? [];
+    expect(fileClaims.some((claim) => claim.subject === 'src/worker/worker-session.test.ts')).toBe(true);
+    expect(fileClaims.some((claim) => claim.subject === 'web/public/js/chat-panel.js')).toBe(true);
   });
 
   it('does not silently switch delegated worker providers when the selected model fails', async () => {
