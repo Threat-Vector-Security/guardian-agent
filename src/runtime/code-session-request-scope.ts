@@ -72,16 +72,14 @@ export function shouldAttachCodeSessionForRequest(
   }
 
   const workspaceRoot = input.resolvedCodeSession.session.resolvedRoot?.trim();
-  if (!isSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId)) {
-    return true;
-  }
+  const sharedAttachment = isSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId);
   if (hasExplicitPathOutsideWorkspace(input.content, workspaceRoot)) {
     return false;
   }
 
   const gatewayDecision = input.gatewayDecision;
   if (!gatewayDecision) {
-    return true;
+    return !sharedAttachment;
   }
   if (gatewayDecision.requiresRepoGrounding) {
     return true;

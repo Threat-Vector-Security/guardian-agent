@@ -151,7 +151,7 @@ describe('orchestration role contracts', () => {
     });
   });
 
-  it('keeps direct general-assistant turns on the coordinator role even when a code session is attached', () => {
+  it('keeps direct general-assistant turns out of delegated orchestration even when a code session is attached', () => {
     const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
       route: 'general_assistant',
       operation: 'read',
@@ -160,11 +160,27 @@ describe('orchestration role contracts', () => {
       requiresToolSynthesis: false,
       expectedContextPressure: 'low',
       preferredAnswerPath: 'direct',
-    }), { hasCodeSession: true });
+    }));
+
+    expect(descriptor).toBeUndefined();
+  });
+
+  it('still infers provider-specialist roles for provider CRUD workloads routed through general assistant', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'general_assistant',
+      operation: 'read',
+      executionClass: 'provider_crud',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+    }));
 
     expect(descriptor).toEqual({
-      role: 'coordinator',
-      label: 'Guardian Coordinator',
+      role: 'explorer',
+      label: 'Provider Explorer',
+      lenses: ['provider-admin'],
     });
   });
 });

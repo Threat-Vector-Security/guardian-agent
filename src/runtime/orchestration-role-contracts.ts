@@ -173,12 +173,10 @@ export function constrainCapabilitiesToOrchestrationRole(
 
 export function inferDelegatedOrchestrationDescriptor(
   decision: IntentGatewayDecision | null | undefined,
-  options: { hasCodeSession?: boolean } = {},
 ): OrchestrationRoleDescriptor | undefined {
   if (!decision) return undefined;
 
   const readLike = isReadLikeOperation(decision.operation);
-  const hasCodeSession = options.hasCodeSession === true;
   const isRepoGrounded = decision.requiresRepoGrounding
     || decision.executionClass === 'repo_grounded';
   const isProviderCrud = decision.executionClass === 'provider_crud';
@@ -216,11 +214,5 @@ export function inferDelegatedOrchestrationDescriptor(
     return buildRoleDescriptor('coordinator', 'Guardian Coordinator');
   }
 
-  if (decision.route === 'general_assistant') {
-    return buildRoleDescriptor('coordinator', 'Guardian Coordinator');
-  }
-
-  return hasCodeSession
-    ? buildRoleDescriptor('coordinator', 'Guardian Coordinator')
-    : undefined;
+  return undefined;
 }

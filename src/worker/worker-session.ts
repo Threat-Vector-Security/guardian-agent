@@ -89,6 +89,7 @@ import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
 import {
   formatToolResultForLLM,
+  getCodeSessionPromptRelativePath,
   stripLeadingContextPrefix,
   toLLMToolDef,
 } from '../chat-agent-helpers.js';
@@ -473,7 +474,8 @@ function extractRefsFromUnknown(value: unknown): string[] {
   const refs: string[] = [];
   for (const [key, entry] of Object.entries(value)) {
     if (
-      key === 'path'
+      key === 'output'
+      || key === 'path'
       || key === 'file'
       || key === 'files'
       || key === 'paths'
@@ -553,7 +555,39 @@ function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMes
   return 'succeeded';
 }
 
-function buildToolReceipt(event: LlmLoopToolEvent): EvidenceReceipt | null {
+function canonicalizeEvidenceRef(
+  value: string,
+  workspaceRoot: string | undefined,
+): string | null {
+  const normalized = normalizeEvidenceRef(value);
+  if (!normalized) return null;
+  if (workspaceRoot) {
+    const relativePath = getCodeSessionPromptRelativePath(normalized, workspaceRoot);
+    if (relativePath && relativePath !== '.') {
+      return relativePath;
+    }
+  }
+  return normalized.replace(/\\/g, '/');
+}
+
+function canonicalizeEvidenceRefs(
+  refs: string[],
+  workspaceRoot: string | undefined,
+): string[] {
+  const canonicalRefs = new Set<string>();
+  for (const ref of refs) {
+    const canonical = canonicalizeEvidenceRef(ref, workspaceRoot);
+    if (canonical) {
+      canonicalRefs.add(canonical);
+    }
+  }
+  return [...canonicalRefs];
+}
+
+function buildToolReceipt(
+  event: LlmLoopToolEvent,
+  workspaceRoot: string | undefined,
+): EvidenceReceipt | null {
   if (event.phase !== 'completed') return null;
   const includeArgumentRefs = event.toolCall.name !== 'fs_search'
     && event.toolCall.name !== 'code_symbol_search';
@@ -562,11 +596,11 @@ function buildToolReceipt(event: LlmLoopToolEvent): EvidenceReceipt | null {
     sourceType: 'tool_call',
     toolName: event.toolCall.name,
     status: mapEvidenceStatus(event.result, event.errorMessage),
-    refs: [...new Set([
+    refs: canonicalizeEvidenceRefs([
       ...(includeArgumentRefs ? extractRefsFromUnknown(event.args) : []),
       ...extractRefsFromUnknown(event.result?.output),
       ...extractRefsFromUnknown(event.result),
-    ])],
+    ], workspaceRoot),
     summary: buildEvidenceSummary(event.toolCall.name, event.result, event.errorMessage),
     startedAt: event.startedAt,
     endedAt: event.endedAt ?? event.startedAt,
@@ -2346,7 +2380,7 @@ export class BrokeredWorkerSession {
         matchedStepIds.add(resolvedStepId);
       }
       delegatedEvents.push(buildToolExecutionEvent(enrichedEvent));
-      const receipt = buildToolReceipt(enrichedEvent);
+      const receipt = buildToolReceipt(enrichedEvent, codeContext?.workspaceRoot);
       if (receipt) {
         evidenceReceipts.set(receipt.receiptId, receipt);
         if (resolvedStepId) {

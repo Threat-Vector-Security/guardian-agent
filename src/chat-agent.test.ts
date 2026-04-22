@@ -7617,4 +7617,202 @@ describe('LLMChatAgent direct intent metadata', () => {
       },
     });
   });
+
+  it('keeps classified non-coding general-assistant turns inline even when a worker manager and coding session are present', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-inline-general-assistant.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const localChat = vi.fn(async () => ({
+      content: 'Inline answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated work failed.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-inline-general-assistant',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Summarize why request-scoped provider overrides matter.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Summarize the request directly.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'chat_synthesis',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Inline answer.');
+    expect(localChat).toHaveBeenCalledOnce();
+    expect(workerManager.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('still delegates explicit coding workloads when a coding session is attached', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-delegated-coding-boundary.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const localChat = vi.fn(async () => ({
+      content: 'Inline answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated repo answer.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-delegated-coding-boundary',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Inspect this repo and tell me which files implement delegated worker progress.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect the repository and report grounded findings.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Delegated repo answer.');
+    expect(workerManager.handleMessage).toHaveBeenCalledOnce();
+    expect(localChat).not.toHaveBeenCalled();
+  });
 });
