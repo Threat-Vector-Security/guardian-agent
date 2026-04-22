@@ -371,6 +371,46 @@ describe('intent-gateway-orchestration', () => {
     expect(pendingActionInputs[0]?.summary).toBe('No classification summary provided.');
   });
 
+  it('preserves a single generic clarification field so later answers can satisfy it', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const gateway = makeGatewayRecord({
+      route: 'filesystem_task',
+      operation: 'create',
+      resolution: 'needs_clarification',
+      missingFields: ['path'],
+      summary: 'Which external path should I use?',
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Create brokered-test.txt in the requested external directory.'),
+        activeSkills: [],
+      },
+      {
+        enabledManagedProviders: new Set(['gws', 'm365']),
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toBe('Which external path should I use?');
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'path',
+      route: 'filesystem_task',
+      operation: 'create',
+      missingFields: ['path'],
+    });
+  });
+
   it('rewrites correction turns against the last actionable request', () => {
     const gateway = makeGatewayRecord({
       turnRelation: 'correction',
@@ -709,5 +749,26 @@ describe('intent-gateway-orchestration', () => {
       }).decision,
       pendingAction,
     )).toBe(false);
+
+    const pathPendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'path',
+      },
+      intent: {
+        route: 'filesystem_task',
+      },
+    });
+
+    expect(shouldClearPendingActionAfterTurn(
+      makeGatewayRecord({
+        route: 'filesystem_task',
+        turnRelation: 'clarification_answer',
+        entities: {
+          path: 'tmp/brokered-test.txt',
+        },
+      }).decision,
+      pathPendingAction,
+    )).toBe(true);
   });
 });

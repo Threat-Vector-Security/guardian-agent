@@ -1,16 +1,20 @@
 export type WorkerExecutionLifecycle = 'completed' | 'blocked' | 'failed';
 export type WorkerExecutionSource = 'tool_loop' | 'planner';
-export type WorkerExecutionResponseQuality = 'final' | 'intermediate' | 'degraded';
+export type WorkerExecutionResponseQuality = 'final' | 'degraded';
+export type WorkerExecutionTerminationReason =
+  | 'clean_exit'
+  | 'max_rounds'
+  | 'max_wall_clock'
+  | 'provider_error'
+  | 'disconnect'
+  | 'watchdog_kill';
 export type WorkerExecutionCompletionReason =
   | 'answer_first_response'
   | 'model_response'
   | 'fallback_model_response'
-  | 'tool_result_recovery'
-  | 'tool_result_summary_fallback'
   | 'answer_first_fallback'
   | 'approval_pending'
   | 'phantom_approval_response'
-  | 'intermediate_response'
   | 'degraded_response'
   | 'empty_response_fallback'
   | 'planner_completed'
@@ -23,6 +27,7 @@ export interface WorkerExecutionMetadata {
   source: WorkerExecutionSource;
   completionReason: WorkerExecutionCompletionReason;
   responseQuality?: WorkerExecutionResponseQuality;
+  terminationReason?: WorkerExecutionTerminationReason;
   blockerKind?: string;
   roundCount?: number;
   toolCallCount?: number;
@@ -40,6 +45,7 @@ export function buildWorkerExecutionMetadata(
       source: metadata.source,
       completionReason: metadata.completionReason,
       ...(metadata.responseQuality ? { responseQuality: metadata.responseQuality } : {}),
+      ...(metadata.terminationReason ? { terminationReason: metadata.terminationReason } : {}),
       ...(metadata.blockerKind ? { blockerKind: metadata.blockerKind } : {}),
       ...(typeof metadata.roundCount === 'number' ? { roundCount: metadata.roundCount } : {}),
       ...(typeof metadata.toolCallCount === 'number' ? { toolCallCount: metadata.toolCallCount } : {}),
@@ -68,6 +74,9 @@ export function readWorkerExecutionMetadata(
     ...(isWorkerExecutionResponseQuality(workerExecution.responseQuality)
       ? { responseQuality: workerExecution.responseQuality }
       : {}),
+    ...(isWorkerExecutionTerminationReason(workerExecution.terminationReason)
+      ? { terminationReason: workerExecution.terminationReason }
+      : {}),
     ...(typeof workerExecution.blockerKind === 'string' && workerExecution.blockerKind.trim().length > 0
       ? { blockerKind: workerExecution.blockerKind.trim() }
       : {}),
@@ -92,19 +101,25 @@ function isWorkerExecutionSource(value: unknown): value is WorkerExecutionSource
 }
 
 function isWorkerExecutionResponseQuality(value: unknown): value is WorkerExecutionResponseQuality {
-  return value === 'final' || value === 'intermediate' || value === 'degraded';
+  return value === 'final' || value === 'degraded';
+}
+
+function isWorkerExecutionTerminationReason(value: unknown): value is WorkerExecutionTerminationReason {
+  return value === 'clean_exit'
+    || value === 'max_rounds'
+    || value === 'max_wall_clock'
+    || value === 'provider_error'
+    || value === 'disconnect'
+    || value === 'watchdog_kill';
 }
 
 function isWorkerExecutionCompletionReason(value: unknown): value is WorkerExecutionCompletionReason {
   return value === 'answer_first_response'
     || value === 'model_response'
     || value === 'fallback_model_response'
-    || value === 'tool_result_recovery'
-    || value === 'tool_result_summary_fallback'
     || value === 'answer_first_fallback'
     || value === 'approval_pending'
     || value === 'phantom_approval_response'
-    || value === 'intermediate_response'
     || value === 'degraded_response'
     || value === 'empty_response_fallback'
     || value === 'planner_completed'

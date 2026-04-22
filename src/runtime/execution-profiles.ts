@@ -594,11 +594,16 @@ function deriveDelegatedExecutionDecision(input: {
   const basePreferredAnswerPath = gatewayDecision?.preferredAnswerPath ?? 'tool_loop';
   const baseSimpleVsComplex = gatewayDecision?.simpleVsComplex ?? 'simple';
 
+  const originalSummary = gatewayDecision?.summary?.trim();
+  const originalPlannedSteps = Array.isArray(gatewayDecision?.plannedSteps)
+    ? gatewayDecision.plannedSteps
+    : undefined;
+
   const base: IntentGatewayDecision = {
     route: baseRoute,
     confidence: 'high',
     operation: baseOperation,
-    summary: gatewayDecision?.summary ?? 'Delegated workload.',
+    summary: originalSummary ?? 'Delegated workload.',
     turnRelation: gatewayDecision?.turnRelation ?? 'follow_up',
     resolution: 'ready',
     missingFields: [],
@@ -617,6 +622,9 @@ function deriveDelegatedExecutionDecision(input: {
     },
     ...(gatewayDecision?.resolvedContent ? { resolvedContent: gatewayDecision.resolvedContent } : {}),
     ...(gatewayDecision?.provenance ? { provenance: { ...gatewayDecision.provenance } } : {}),
+    ...(originalPlannedSteps && originalPlannedSteps.length > 0
+      ? { plannedSteps: originalPlannedSteps.map((step) => ({ ...step })) }
+      : {}),
   };
 
   const descriptorLabel = descriptor.label?.trim() || descriptor.role;
@@ -626,15 +634,21 @@ function deriveDelegatedExecutionDecision(input: {
   const preferredDirectTier = base.preferredTier
     ?? input.parentProfile?.requestedTier
     ?? 'local';
+  const derivedSummary = originalSummary && originalSummary.length > 0
+    ? `${originalSummary} (${descriptorLabel} workload)`
+    : `${descriptorLabel} delegated workload.`;
   const withDerivedWorkload = (
     overrides: Partial<IntentGatewayDecision>,
   ): IntentGatewayDecision => ({
     ...base,
     confidence: 'high',
-    summary: `${descriptorLabel} delegated workload.`,
+    summary: derivedSummary,
     turnRelation: gatewayDecision?.turnRelation ?? 'follow_up',
     resolution: 'ready',
     missingFields: [],
+    ...(base.plannedSteps && base.plannedSteps.length > 0
+      ? { plannedSteps: base.plannedSteps.map((step) => ({ ...step })) }
+      : {}),
     ...overrides,
     entities: {
       ...base.entities,

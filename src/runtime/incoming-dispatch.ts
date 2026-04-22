@@ -492,7 +492,7 @@ export function createIncomingDispatchPreparer(args: {
         const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
         const decision = resolvedChannelDefault
           ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
-          : gateway?.available && hasRoles
+          : gateway && hasRoles
             ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
             : hasRoles
               ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
@@ -521,7 +521,7 @@ export function createIncomingDispatchPreparer(args: {
       const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
       const decision = resolvedChannelDefault
         ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
-        : gateway?.available && hasRoles
+        : gateway && hasRoles
           ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
           : hasRoles
             ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
@@ -564,7 +564,7 @@ export function createIncomingDispatchPreparer(args: {
     const gateway = await getGateway();
     const forcedDecision = resolveForcedProviderDecision(requestedChatProvider);
     const decision = forcedDecision
-      ?? (gateway?.available && hasRoles
+      ?? (gateway && hasRoles
         ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
         : hasRoles
           ? args.router.routeWithTier(normalizedContent, tierMode, threshold)

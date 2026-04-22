@@ -23,9 +23,14 @@ import {
   normalizeSimpleVsComplex,
   normalizeTurnRelation,
 } from './normalization.js';
-import { requestNeedsExactFileReferences } from './request-patterns.js';
+import { collapseIntentGatewayWhitespace } from './text.js';
+import {
+  isExplicitRepoInspectionRequest,
+  requestNeedsExactFileReferences,
+} from './request-patterns.js';
 import type {
   IntentGatewayDecision,
+  IntentGatewayPlannedStep,
   IntentGatewayProvenanceSource,
   IntentGatewayRepairContext,
   IntentGatewayRecord,
@@ -39,6 +44,7 @@ export function parseIntentGatewayDecision(
   options?: { mode?: IntentGatewayRecord['mode'] },
 ): { decision: IntentGatewayDecision; available: boolean; rawStructuredDecision?: Record<string, unknown> } {
   const classifierSource = classifierProvenanceSourceForMode(options?.mode ?? 'primary');
+  const unstructuredClarificationPrompt = extractUnstructuredClarificationPrompt(response.content);
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content)
     ?? recoverMalformedStructuredContent(response);
@@ -50,7 +56,7 @@ export function parseIntentGatewayDecision(
     );
     if (repaired) {
       return {
-        decision: repaired,
+        decision: applyUnstructuredClarificationIfNeeded(repaired, unstructuredClarificationPrompt),
         available: true,
       };
     }
@@ -88,7 +94,7 @@ export function parseIntentGatewayDecision(
     );
     if (repaired) {
       return {
-        decision: repaired,
+        decision: applyUnstructuredClarificationIfNeeded(repaired, unstructuredClarificationPrompt),
         available: true,
       };
     }
@@ -135,6 +141,91 @@ function recoverStructuredGatewayPreview(content: string | undefined): Record<st
   return Object.keys(recovered).length > 0 ? recovered : null;
 }
 
+function applyUnstructuredClarificationIfNeeded(
+  decision: IntentGatewayDecision,
+  clarificationPrompt: string | null,
+): IntentGatewayDecision {
+  if (!clarificationPrompt) {
+    return decision;
+  }
+  const missingFields = new Set(decision.missingFields);
+  for (const field of inferMissingFieldsFromClarificationPrompt(clarificationPrompt, decision.route)) {
+    missingFields.add(field);
+  }
+  return {
+    ...decision,
+    confidence: decision.confidence === 'high' ? 'medium' : decision.confidence,
+    resolution: 'needs_clarification',
+    summary: clarificationPrompt,
+    missingFields: [...missingFields],
+  };
+}
+
+function extractUnstructuredClarificationPrompt(content: string | undefined): string | null {
+  const normalized = collapseIntentGatewayWhitespace(content ?? '');
+  if (!normalized) {
+    return null;
+  }
+  const lower = normalized.toLowerCase();
+  const asksForMissingDetail = /\b(?:please tell me|which|what|where|who|do you want me to|would you like me to|should i use|can you clarify|before i can)\b/.test(lower)
+    || /\b(?:exact path|external path|full file path|which directory|which provider|which automation|which workspace|which session)\b/.test(lower);
+  if (!asksForMissingDetail) {
+    return null;
+  }
+  if (!normalized.includes('?') && !/\bbefore i can\b/.test(lower)) {
+    return null;
+  }
+  if (/\b(?:what else can i help with|let me know if|if you want,? i can)\b/.test(lower)) {
+    return null;
+  }
+  return normalized;
+}
+
+function inferMissingFieldsFromClarificationPrompt(
+  prompt: string,
+  route: IntentGatewayDecision['route'],
+): string[] {
+  const normalized = prompt.toLowerCase();
+  const inferred = new Set<string>();
+  if (/\b(?:exact\s+external\s+path|external\s+path|full\s+file\s+path|file\s+path|path|directory|folder|location|workspace root|project root|repo root)\b/.test(normalized)) {
+    inferred.add('path');
+  }
+  if (/\b(?:gmail|outlook|google workspace|microsoft 365|email provider|mail provider)\b/.test(normalized)) {
+    inferred.add('email_provider');
+  }
+  if (/\b(?:automation|workflow|routine)\b/.test(normalized) && /\b(?:which|what|name)\b/.test(normalized)) {
+    inferred.add('automation_name');
+  }
+  if (/\b(?:coding backend|codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/.test(normalized)) {
+    inferred.add('coding_backend');
+  }
+  if (/\b(?:workspace|session)\b/.test(normalized) && /\b(?:which|what|target|use)\b/.test(normalized)) {
+    inferred.add('session_target');
+  }
+  if (
+    /\b(?:guardian page|external website|repo|repository|workspace\/session|new or existing|create or update)\b/.test(normalized)
+    && /\bor\b/.test(normalized)
+  ) {
+    inferred.add('intent_route');
+  }
+  if (inferred.size === 0) {
+    switch (route) {
+      case 'filesystem_task':
+        inferred.add('path');
+        break;
+      case 'email_task':
+        inferred.add('email_provider');
+        break;
+      case 'automation_control':
+        inferred.add('automation_name');
+        break;
+      default:
+        break;
+    }
+  }
+  return [...inferred];
+}
+
 function parseRecoveredStructuredScalar(rawValue: string): unknown {
   try {
     return JSON.parse(rawValue) as unknown;
@@ -163,6 +254,9 @@ export function normalizeIntentGatewayDecision(
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
     ? parsed.summary.trim()
     : INTENT_GATEWAY_MISSING_SUMMARY;
+  const recoveryReason = typeof parsed.recoveryReason === 'string' && parsed.recoveryReason.trim()
+    ? parsed.recoveryReason.trim()
+    : undefined;
   const turnRelation = normalizeTurnRelation(parsed.turnRelation);
   const normalizedParsedRoute = normalizeRoute(parsed.route);
   const semanticallyRepairedRoute = repairStructuredIntentGatewayRoute(
@@ -235,6 +329,49 @@ export function normalizeIntentGatewayDecision(
     ?? derivedWorkload.preferredAnswerPath;
   const simpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex)
     ?? derivedWorkload.simpleVsComplex;
+  const rawPlannedSteps = Array.isArray(parsed.planned_steps)
+    ? parsed.planned_steps
+    : Array.isArray(parsed.plannedSteps)
+      ? parsed.plannedSteps
+      : [];
+  const plannedSteps = rawPlannedSteps
+    .filter((value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value))
+    .map((step) => {
+      const summary = typeof step.summary === 'string' ? step.summary.trim() : '';
+      const kind = normalizePlannedStepKind(step.kind);
+      if (!summary || !kind) return null;
+      const expectedToolCategories = Array.isArray(step.expectedToolCategories)
+        ? step.expectedToolCategories
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [];
+      const dependsOn = Array.isArray(step.dependsOn)
+        ? step.dependsOn
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [];
+      return {
+        kind,
+        summary,
+        ...(expectedToolCategories.length > 0 ? { expectedToolCategories } : {}),
+        ...(typeof step.required === 'boolean' ? { required: step.required } : {}),
+        ...(dependsOn.length > 0 ? { dependsOn } : {}),
+      };
+    })
+    .filter((step): step is IntentGatewayPlannedStep => !!step);
+  const synthesizedPlannedSteps = plannedSteps.length > 0
+    ? []
+    : synthesizeIntentGatewayPlannedSteps({
+        sourceContent: repairContext?.sourceContent,
+        route,
+        operation,
+        executionClass,
+        requireExactFileReferences,
+        requiresRepoGrounding,
+      });
+  const effectivePlannedSteps = plannedSteps.length > 0 ? plannedSteps : synthesizedPlannedSteps;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -298,6 +435,8 @@ export function normalizeIntentGatewayDecision(
     expectedContextPressure,
     preferredAnswerPath,
     simpleVsComplex,
+    ...(effectivePlannedSteps.length > 0 ? { plannedSteps: effectivePlannedSteps } : {}),
+    ...(recoveryReason ? { recoveryReason } : {}),
     provenance,
     ...(resolvedContent ? { resolvedContent } : {}),
     entities: entityResolution.entities,
@@ -309,4 +448,165 @@ export function buildRawResponsePreview(response: ChatResponse): string | undefi
   if (toolArguments) return toolArguments.slice(0, 200);
   const content = response.content.trim();
   return content ? content.slice(0, 200) : undefined;
+}
+
+function normalizePlannedStepKind(value: unknown): IntentGatewayPlannedStep['kind'] | null {
+  switch (value) {
+    case 'tool_call':
+    case 'write':
+    case 'read':
+    case 'search':
+    case 'memory_save':
+    case 'answer':
+      return value;
+    default:
+      return null;
+  }
+}
+
+function synthesizeIntentGatewayPlannedSteps(input: {
+  sourceContent?: string;
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+  executionClass: IntentGatewayDecision['executionClass'];
+  requireExactFileReferences: boolean;
+  requiresRepoGrounding: boolean;
+}): IntentGatewayPlannedStep[] {
+  const sourceContent = collapseIntentGatewayWhitespace(input.sourceContent ?? '');
+  if (!sourceContent) return [];
+
+  const sequentialClauses = splitSequentialRequestClauses(sourceContent);
+  if (sequentialClauses.length >= 2) {
+    return sequentialClauses.map((summary, index) => {
+      const kind = inferSynthesizedPlannedStepKind(summary, input.route, input.operation);
+      return {
+        kind,
+        summary,
+        required: true,
+        ...(index > 0 ? { dependsOn: [`step_${index}`] } : {}),
+        ...buildSynthesizedExpectedToolCategories(kind),
+      };
+    });
+  }
+
+  if (input.requiresRepoGrounding || input.executionClass === 'repo_grounded' || input.executionClass === 'security_analysis') {
+    const evidenceSummary = input.executionClass === 'security_analysis' || input.route === 'security_task'
+      ? 'Inspect the relevant repo files and collect grounded security evidence.'
+      : 'Inspect the relevant repo files and collect grounded repo evidence.';
+    const answerSummary = input.requireExactFileReferences
+      ? 'Answer with exact file names, file paths, and symbol names grounded in the repo evidence.'
+      : 'Answer with grounded findings from the inspected repo files.';
+    return [
+      {
+        kind: isExplicitRepoInspectionRequest(sourceContent) ? 'search' : 'read',
+        summary: evidenceSummary,
+        required: true,
+        expectedToolCategories: ['search', 'read'],
+      },
+      {
+        kind: 'answer',
+        summary: answerSummary,
+        required: true,
+        dependsOn: ['step_1'],
+      },
+    ];
+  }
+
+  return [];
+}
+
+const MODIFIER_CLAUSE_LEADERS = [
+  'cite',
+  'also',
+  'with ',
+  'without ',
+  'grounded in',
+  'backed by',
+  'using ',
+  'based on',
+  'relying on',
+  'including',
+  'specifically',
+  'in particular',
+  'do not ',
+  "don't ",
+  'ensure ',
+  'make sure ',
+  'please ',
+];
+
+function isModifierClause(clause: string): boolean {
+  const lower = clause.trim().toLowerCase();
+  if (!lower) return false;
+  return MODIFIER_CLAUSE_LEADERS.some((leader) => lower.startsWith(leader));
+}
+
+function splitSequentialRequestClauses(sourceContent: string): string[] {
+  const normalized = sourceContent
+    .replace(/\r\n/g, '\n')
+    .replace(/\b(?:then|next|after that|finally)\b[:,]?\s+/gi, '\n')
+    .replace(/\n+/g, '\n');
+  const rawClauses = normalized
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])|\n+/)
+    .map((value) => collapseIntentGatewayWhitespace(value))
+    .filter(Boolean);
+  if (rawClauses.length < 2) return [];
+
+  const merged: string[] = [];
+  for (const clause of rawClauses) {
+    if (merged.length > 0 && isModifierClause(clause)) {
+      merged[merged.length - 1] = `${merged[merged.length - 1]} ${clause}`.trim();
+      continue;
+    }
+    merged.push(clause);
+  }
+  if (merged.length < 2) return [];
+  return merged.slice(0, 6);
+}
+
+function inferSynthesizedPlannedStepKind(
+  summary: string,
+  route: IntentGatewayDecision['route'],
+  operation: IntentGatewayDecision['operation'],
+): IntentGatewayPlannedStep['kind'] {
+  const normalized = summary.toLowerCase();
+  if (/\b(?:write|create|update|edit|patch|modify|append|delete|remove|touch|save (?:a |the )?(?:file|summary|report|note))\b/.test(normalized)) {
+    return 'write';
+  }
+  if (/\b(?:remember|save to memory|store in memory|save (?:a |the )?(?:global |project )?memory)\b/.test(normalized)) {
+    return 'memory_save';
+  }
+  if (/\b(?:search|find|grep|scan|trace|locate)\b/.test(normalized)) {
+    return 'search';
+  }
+  if (/\b(?:read|open|inspect|review|check|look at)\b/.test(normalized)) {
+    return 'read';
+  }
+  if (/\b(?:tell me|report|answer|explain|summari[sz]e|return)\b/.test(normalized)) {
+    return 'answer';
+  }
+  if (route === 'filesystem_task' && operation !== 'read' && operation !== 'search' && operation !== 'inspect') {
+    return 'write';
+  }
+  if (route === 'coding_task' || route === 'security_task') {
+    return 'read';
+  }
+  return 'answer';
+}
+
+function buildSynthesizedExpectedToolCategories(
+  kind: IntentGatewayPlannedStep['kind'],
+): Partial<IntentGatewayPlannedStep> {
+  switch (kind) {
+    case 'write':
+      return { expectedToolCategories: ['write'] };
+    case 'read':
+      return { expectedToolCategories: ['read'] };
+    case 'search':
+      return { expectedToolCategories: ['search', 'read'] };
+    case 'memory_save':
+      return { expectedToolCategories: ['memory_save'] };
+    default:
+      return {};
+  }
 }

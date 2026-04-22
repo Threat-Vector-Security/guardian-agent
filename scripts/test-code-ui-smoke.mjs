@@ -1109,6 +1109,18 @@ guardian:
 
     await sendGuardianChatMessage('Give me a slow repo summary.');
     await page.waitForFunction(() => {
+      return !!document.querySelector('#chat-history .chat-message.is-thinking');
+    }, null, { timeout: 10000 });
+    const activeThinkingSummary = await page.evaluate(() => {
+      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+      return thinking?.textContent || '';
+    });
+    assert.equal(
+      /workspace (?:implementer|explorer) completed|(?:^|\s)completed(?:\s|$)/i.test(activeThinkingSummary),
+      false,
+      `Expected the live delegated bubble to avoid terminal completion wording before the final reply. Bubble: ${JSON.stringify(activeThinkingSummary)}`,
+    );
+    await page.waitForFunction(() => {
       const history = Array.from(document.querySelectorAll('#chat-history .chat-message'));
       const summaries = history.filter((node) => (node.textContent || '').includes('slow repo summary'));
       const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));

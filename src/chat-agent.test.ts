@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from './agent/types.js';
 import { createChatAgentClass } from './chat-agent.js';
+import { ModelFallbackChain } from './llm/model-fallback.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
@@ -7472,5 +7473,148 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(classify).toHaveBeenCalledTimes(1);
     expect((agent as any).tryDirectCodeSessionControlFromGateway).not.toHaveBeenCalled();
     expect(response.content).toBe('Reclassified retry request.');
+  });
+
+  it('keeps direct-assistant greeting turns in-process on the selected frontier provider even with an attached coding session', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-frontier-direct-greeting.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const localChat = vi.fn(async () => ({
+      content: 'Hello from local.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const frontierChat = vi.fn(async () => ({
+      content: 'Hello back.',
+      toolCalls: [],
+      model: 'gpt-4o',
+      finishReason: 'stop',
+    }));
+    const fallbackChain = new ModelFallbackChain(new Map([
+      ['ollama', { name: 'ollama', chat: localChat } as never],
+      ['openai', { name: 'openai', chat: frontierChat } as never],
+    ]), ['ollama', 'openai']);
+
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fallbackChain,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    (agent as any).intentGateway = {
+      classify: vi.fn(async () => ({
+        mode: 'json_fallback',
+        available: false,
+        model: 'unknown',
+        latencyMs: 1,
+        decision: {
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Intent gateway response was not structured.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {},
+        },
+      })),
+    };
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated work failed.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-frontier-direct-greeting',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Just reply hello back',
+      timestamp: Date.now(),
+      metadata: attachSelectedExecutionProfileMetadata(undefined, {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openai', 'ollama'],
+        reason: 'request-scoped provider override selected provider \'openai\'',
+        routingMode: 'auto',
+        selectionSource: 'request_override',
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Hello back.');
+    expect(workerManager.handleMessage).not.toHaveBeenCalled();
+    expect(frontierChat).toHaveBeenCalledOnce();
+    expect(localChat).not.toHaveBeenCalled();
+    expect(response.metadata).toMatchObject({
+      responseSource: {
+        providerName: 'openai',
+        model: 'gpt-4o',
+        locality: 'external',
+      },
+    });
   });
 });

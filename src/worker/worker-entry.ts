@@ -1,5 +1,32 @@
 import { BrokerClient } from '../broker/broker-client.js';
 import { BrokeredWorkerSession } from './worker-session.js';
+import { buildDelegatedExecutionMetadata, buildDelegatedProtocolFailureEnvelope } from '../runtime/execution/metadata.js';
+import { readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
+import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
+import { buildWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildProtocolFailureMetadata(params: unknown, errorMessage: string): Record<string, unknown> {
+  const message = isRecord(params) && isRecord(params.message) ? params.message : undefined;
+  const metadata = message && isRecord(message.metadata) ? message.metadata : undefined;
+  const gateway = readPreRoutedIntentGatewayMetadata(metadata);
+  const taskContract = buildDelegatedTaskContract(gateway?.decision);
+  return {
+    error: true,
+    ...buildWorkerExecutionMetadata({
+      lifecycle: 'failed',
+      source: 'tool_loop',
+      completionReason: 'degraded_response',
+      responseQuality: 'degraded',
+    }),
+    ...buildDelegatedExecutionMetadata(
+      buildDelegatedProtocolFailureEnvelope(taskContract, errorMessage),
+    ),
+  };
+}
 
 async function main(): Promise<void> {
   const client = new BrokerClient({
@@ -46,9 +73,10 @@ async function main(): Promise<void> {
           });
         })
         .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
           client.sendNotification('message.response', {
-            content: error instanceof Error ? error.message : String(error),
-            metadata: { error: true },
+            content: message,
+            metadata: buildProtocolFailureMetadata(notification.params, message),
           });
         });
     }

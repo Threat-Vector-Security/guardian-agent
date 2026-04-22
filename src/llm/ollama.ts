@@ -285,6 +285,7 @@ function toUnifiedChatResponse(response: OllamaSdkChatResponse): ChatResponse {
     usage: toUsage(response),
     model: response.model,
     finishReason: mapFinishReason(response.done_reason, toolCalls),
+    ...(response.done_reason ? { providerFinishReason: response.done_reason } : {}),
   };
 }
 

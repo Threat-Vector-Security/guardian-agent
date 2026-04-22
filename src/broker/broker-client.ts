@@ -1,6 +1,7 @@
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './types.js';
+import { stringifyJsonTransport, toJsonTransportValue } from './json-safe.js';
 
 export interface BrokerClientOptions {
   inputStream: NodeJS.ReadableStream;
@@ -57,9 +58,9 @@ export class BrokerClient {
     const notification: JsonRpcNotification = {
       jsonrpc: '2.0',
       method,
-      params,
+      params: toJsonTransportValue(params),
     };
-    this.outputStream.write(`${JSON.stringify(notification)}\n`);
+    this.outputStream.write(`${stringifyJsonTransport(notification)}\n`);
   }
 
   async listLoadedTools(input?: { codeContext?: { workspaceRoot: string; sessionId?: string } }): Promise<ToolDefinition[]> {
@@ -246,12 +247,12 @@ export class BrokerClient {
         jsonrpc: '2.0',
         id,
         method,
-        params: {
+        params: toJsonTransportValue({
           ...params,
           capabilityToken: this.capabilityToken,
-        },
+        }),
       };
-      this.outputStream.write(`${JSON.stringify(request)}\n`);
+      this.outputStream.write(`${stringifyJsonTransport(request)}\n`);
     });
   }
 }

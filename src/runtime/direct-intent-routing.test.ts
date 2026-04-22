@@ -11,10 +11,11 @@ function mockGateway(partial: {
   confidence?: string;
   turnRelation?: string;
   entities?: Record<string, unknown>;
+  available?: boolean;
 }): IntentGatewayRecord {
   return {
     mode: 'primary',
-    available: true,
+    available: partial.available ?? true,
     model: 'test-model',
     latencyMs: 10,
     decision: {
@@ -180,6 +181,16 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     );
     expect(result.candidates).toEqual(['memory_write']);
     expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('keeps degraded structured memory_task save routes on the memory_write candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'save', available: false }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['memory_write']);
+    expect(result.gatewayDirected).toBe(true);
+    expect(result.gatewayUnavailable).toBe(false);
   });
 
   it('maps memory_task read requests to the memory_read candidate', () => {

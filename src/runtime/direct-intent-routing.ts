@@ -15,7 +15,7 @@ export function resolveDirectIntentRoutingCandidates(
   gatewayUnavailable: boolean;
 } {
   const availableSet = new Set(available);
-  if (!gateway || gateway.available === false) {
+  if (!gateway) {
     return {
       candidates: [],
       gatewayDirected: false,

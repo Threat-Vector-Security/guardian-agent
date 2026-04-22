@@ -39,6 +39,8 @@ export type {
   IntentGatewayExpectedContextPressure,
   IntentGatewayInput,
   IntentGatewayOperation,
+  IntentGatewayPlannedStep,
+  IntentGatewayPlannedStepKind,
   IntentGatewayPreferredAnswerPath,
   IntentGatewayPreferredTier,
   IntentGatewayPromptProfile,
@@ -281,7 +283,9 @@ function buildSatisfiedClarificationResolvedContent(
     case 'session_target':
       return `Use ${decision.entities.sessionTarget} for this request: ${original}`;
     case 'path':
-      return original;
+      return decision.entities.path?.trim()
+        ? `Use path ${decision.entities.path.trim()} for this request: ${original}`
+        : original;
     case 'intent_route':
       return original;
     default:
@@ -497,6 +501,9 @@ export function toIntentGatewayClientMetadata(
     expectedContextPressure: record.decision.expectedContextPressure,
     ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
     preferredAnswerPath: record.decision.preferredAnswerPath,
+    ...(record.decision.plannedSteps?.length
+      ? { plannedSteps: cloneIntentGatewayPlannedSteps(record.decision.plannedSteps) }
+      : {}),
     ...(record.decision.provenance ? { provenance: record.decision.provenance } : {}),
     ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
     entities: record.decision.entities,
@@ -518,6 +525,7 @@ export function serializeIntentGatewayRecord(
       confidence: record.decision.confidence,
       operation: record.decision.operation,
       summary: record.decision.summary,
+      ...(record.decision.recoveryReason ? { recoveryReason: record.decision.recoveryReason } : {}),
       turnRelation: record.decision.turnRelation,
       resolution: record.decision.resolution,
       missingFields: [...record.decision.missingFields],
@@ -531,6 +539,9 @@ export function serializeIntentGatewayRecord(
       expectedContextPressure: record.decision.expectedContextPressure,
       ...(record.decision.simpleVsComplex ? { simpleVsComplex: record.decision.simpleVsComplex } : {}),
       preferredAnswerPath: record.decision.preferredAnswerPath,
+      ...(record.decision.plannedSteps?.length
+        ? { plannedSteps: cloneIntentGatewayPlannedSteps(record.decision.plannedSteps) }
+        : {}),
       ...(record.decision.provenance ? { provenance: record.decision.provenance } : {}),
       ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
       ...record.decision.entities,
@@ -610,7 +621,9 @@ export function detachPreRoutedIntentGatewayMetadata(
 export function shouldReusePreRoutedIntentGateway(
   record: IntentGatewayRecord | null | undefined,
 ): record is IntentGatewayRecord {
-  return !!record && record.available !== false;
+  // Preserve any structured gateway decision, including degraded fallback records.
+  // Downstream routing layers decide whether a low-confidence route is actionable.
+  return !!record;
 }
 
 export function shouldReusePreRoutedIntentGatewayForContent(
@@ -626,6 +639,20 @@ export function shouldReusePreRoutedIntentGatewayForContent(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneIntentGatewayPlannedSteps(
+  steps: NonNullable<IntentGatewayDecision['plannedSteps']>,
+): NonNullable<IntentGatewayDecision['plannedSteps']> {
+  return steps.map((step) => ({
+    kind: step.kind,
+    summary: step.summary,
+    ...(step.expectedToolCategories?.length
+      ? { expectedToolCategories: [...step.expectedToolCategories] }
+      : {}),
+    ...(typeof step.required === 'boolean' ? { required: step.required } : {}),
+    ...(step.dependsOn?.length ? { dependsOn: [...step.dependsOn] } : {}),
+  }));
 }
 
 function buildAutomationNameRepairMessages(

@@ -252,7 +252,6 @@ import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
-import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 
 import { getGuardianBaseDir } from './util/env.js';

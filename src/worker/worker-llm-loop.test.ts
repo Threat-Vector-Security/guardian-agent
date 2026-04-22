@@ -4,7 +4,7 @@ import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../
 import type { ToolCaller, ToolResult } from '../broker/types.js';
 
 describe('runLlmLoop', () => {
-  it('returns a tool-result summary when a post-tool LLM round produces empty content', async () => {
+  it('falls back to an explicit empty-response failure when a post-tool LLM round produces empty content', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Resolve the WHM hostname IP.' }];
     const responses: ChatResponse[] = [
       {
@@ -59,9 +59,10 @@ describe('runLlmLoop', () => {
       32_000,
     );
 
-    expect(result.finalContent).toBe('Completed net_dns_lookup.');
+    expect(result.finalContent).toBe('I could not generate a final response for that request.');
     expect(result.outcome).toMatchObject({
-      completionReason: 'tool_result_summary_fallback',
+      stopReason: 'end_turn',
+      completionReason: 'empty_response_fallback',
       responseQuality: 'final',
       toolCallCount: 1,
       toolResultCount: 1,
@@ -69,7 +70,7 @@ describe('runLlmLoop', () => {
     });
   });
 
-  it('classifies narration-only replies as non-terminal loop outcomes', async () => {
+  it('returns narration-only replies as normal terminal model responses', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect the repo and start fixing the bug.' }];
 
     const result = await runLlmLoop(
@@ -96,8 +97,9 @@ describe('runLlmLoop', () => {
 
     expect(result.finalContent).toContain('inspect the repository first');
     expect(result.outcome).toEqual({
-      completionReason: 'intermediate_response',
-      responseQuality: 'intermediate',
+      stopReason: 'end_turn',
+      completionReason: 'model_response',
+      responseQuality: 'final',
       roundCount: 0,
       toolCallCount: 0,
       toolResultCount: 0,
@@ -249,7 +251,7 @@ describe('runLlmLoop', () => {
     });
   });
 
-  it('tries one tool-free recovery round before falling back to a raw tool summary', async () => {
+  it('does not fabricate a raw tool summary when a post-tool round stays empty', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect the repo and give me an implementation plan.' }];
     const responses: ChatResponse[] = [
       {
@@ -310,10 +312,9 @@ describe('runLlmLoop', () => {
       32_000,
     );
 
-    expect(chatCalls).toHaveLength(3);
-    expect(chatCalls[2]?.options?.tools).toEqual([]);
-    expect(result.finalContent).toContain('Acceptance Gates');
-    expect(result.finalContent).not.toBe('Completed fs_list.');
+    expect(chatCalls).toHaveLength(2);
+    expect(result.finalContent).toBe('I could not generate a final response for that request.');
+    expect(result.outcome.completionReason).toBe('empty_response_fallback');
   });
 
   it('re-prompts repo/file turns to use tools before narrating the work', async () => {
@@ -888,7 +889,9 @@ describe('runLlmLoop', () => {
     );
 
     expect(calledTools).toEqual(['update_tool_policy']);
-    expect(result.finalContent).toContain('Waiting for approval');
+    expect(result.hasPendingApprovals).toBe(true);
+    expect(result.outcome.completionReason).toBe('approval_pending');
+    expect(result.finalContent).toBe('');
   });
 
   it('re-prompts after a policy-blocked tool round instead of accepting a claimed filesystem success', async () => {
@@ -989,17 +992,17 @@ describe('runLlmLoop', () => {
     );
 
     expect(calledTools).toEqual(['fs_write', 'update_tool_policy']);
-    expect(chatCalls).toHaveLength(4);
+    expect(chatCalls).toHaveLength(3);
     expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
       role: 'user',
       content: expect.stringContaining('previous tool call did not complete because tool policy blocked it'),
     });
     expect(result.hasPendingApprovals).toBe(true);
     expect(result.outcome.completionReason).toBe('approval_pending');
-    expect(result.finalContent).toContain('Waiting for approval to add C:\\Sensitive to allowed paths.');
+    expect(result.finalContent).toBe('');
   });
 
-  it('continues the tool loop when a post-tool reply is only an intermediate progress update', async () => {
+  it('does not infer additional tool work from a post-tool progress update', async () => {
     const messages: ChatMessage[] = [
       { role: 'user', content: 'Write a two-line report to D:\\GuardianApprovalSmokeRound4\\round4.txt and continue once approval is granted.' },
     ];
@@ -1086,13 +1089,9 @@ describe('runLlmLoop', () => {
       32_000,
     );
 
-    expect(calledTools).toEqual(['update_tool_policy', 'fs_write']);
-    expect(chatCalls).toHaveLength(4);
-    expect(chatCalls[2]?.messages.at(-1)).toMatchObject({
-      role: 'user',
-      content: expect.stringContaining('intermediate progress update'),
-    });
-    expect(result.finalContent).toContain('Wrote D:\\GuardianApprovalSmokeRound4\\round4.txt');
+    expect(calledTools).toEqual(['update_tool_policy']);
+    expect(chatCalls).toHaveLength(2);
+    expect(result.finalContent).toContain("Path added. Now I'll write the two-line report.");
   });
 
   it('recovers tool calls when the model emits JSON in content instead of native tool calls', async () => {

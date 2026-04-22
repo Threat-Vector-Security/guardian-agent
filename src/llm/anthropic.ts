@@ -94,6 +94,7 @@ export class AnthropicProvider implements LLMProvider {
       },
       model: response.model,
       finishReason: response.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+      ...(response.stop_reason ? { providerFinishReason: response.stop_reason } : {}),
     };
   }
 
