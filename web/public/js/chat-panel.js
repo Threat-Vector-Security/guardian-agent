@@ -1232,6 +1232,7 @@ function createThinkingEl(initialLabel = 'Starting…') {
   const el = document.createElement('div');
   el.className = 'chat-message agent is-thinking';
   el.innerHTML = `
+    <div class="msg-header">Guardian</div>
     <div class="msg-body">
       <div class="chat-thinking">
         <span class="chat-spinner" aria-hidden="true"></span>
@@ -1579,12 +1580,19 @@ function isMeaningfulLiveItem(item) {
  */
 function createMessageEl(role, content, opts) {
   const msg = document.createElement('div');
-  msg.className = `chat-message ${role === 'error' ? 'agent' : role}`;
-  msg.style.marginBottom = '0.5rem';
+  const normalizedRole = role === 'error' ? 'agent is-error' : role;
+  msg.className = `chat-message ${normalizedRole}`;
+
+  const header = document.createElement('div');
+  header.className = 'msg-header';
+  header.textContent = role === 'user'
+    ? 'You'
+    : role === 'error'
+      ? 'Guardian error'
+      : 'Guardian';
 
   const body = document.createElement('div');
   body.className = 'msg-body';
-  body.style.cssText = `padding:0.5rem;font-size:0.75rem;${role === 'error' ? 'color:var(--error);' : ''}`;
 
   const contentEl = document.createElement('div');
   contentEl.className = 'chat-msg-content';
@@ -1611,6 +1619,7 @@ function createMessageEl(role, content, opts) {
     body.appendChild(buildPendingActionClearControls(opts.pendingAction, opts.onClearPending));
   }
 
+  msg.appendChild(header);
   msg.appendChild(body);
   return msg;
 }
