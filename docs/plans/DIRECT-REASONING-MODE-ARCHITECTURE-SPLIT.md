@@ -1,6 +1,6 @@
 # Direct Reasoning Mode Architecture Split
 
-**Status:** Phase 1+2 complete; brokered-isolation hardening complete; Phase 3 (progressive output) in design
+**Status:** Phase 1+2 complete; brokered-isolation hardening complete; Hybrid execution manager complete; Phase 3 (progressive output) in design
 **Date:** 2026-04-23
 **Supersedes:** Workstream 3 Phase 3A in INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md
 
@@ -26,8 +26,21 @@ Repo-inspection and coding tasks (e.g., "Inspect this repo and tell me which fil
 
 ### Delegated Orchestration Mode (existing)
 - Continues to handle write/search/write, multi-step tasks, approval-gated operations
-- No changes to existing pipeline
+- Uses the worker result envelope plus supervisor-owned tool job evidence during verification, so degraded worker text cannot drop already-observed successful tool receipts
 - Still gets frontier preference via `preferFrontierForRepoGrounded` when applicable
+
+### Hybrid Phased Execution Mode (new)
+- Handles requests that require both repo exploration and side effects, for example "Search `src/runtime` for X, then write a summary file"
+- The supervisor acts as the execution-mode manager:
+  1. Classify once through the Intent Gateway
+  2. Build the delegated task contract from the gateway decision
+  3. Detect read/search steps followed by write/tool steps
+  4. Run an internal direct-reasoning exploration phase with read-only tools
+  5. Reconcile the supervisor-owned tool job ledger into satisfied `StepReceipt`s
+  6. Dispatch delegated orchestration with `priorSatisfiedStepReceipts` and a concise exploration handoff
+- The direct phase is not user-visible final output. It is evidence-gathering for the delegated phase.
+- The delegated phase remains the only phase allowed to write, request approvals, mutate files, or produce the final user-facing completion.
+- Verification remains supervisor-owned: the final delegated envelope is reconciled with all tool jobs observed under the request id, including read/search jobs from the direct phase and write jobs from the delegated phase.
 
 ### Routing decision
 1. The Intent Gateway classifies repo-inspection as `executionClass: 'repo_grounded'`, `operation: 'inspect'`
@@ -40,6 +53,34 @@ Repo-inspection and coding tasks (e.g., "Inspect this repo and tell me which fil
 4. ChatAgent marks the worker request with `directReasoning: true`
 5. WorkerManager dispatches that explicit direct-reasoning request to the brokered worker instead of starting a delegated job
 6. If direct reasoning fails or times out, the response is a controlled direct-reasoning failure, not an automatic delegated retry
+
+For hybrid requests, step 4 does not set `directReasoning: true` as the terminal mode. Instead, WorkerManager keeps the delegated job as the owner and inserts a read-only direct-reasoning phase before the delegated write phase. This is deliberate: writes need the orchestration contract, approvals, run timeline, and verifier; large-repo exploration needs the iterative direct reasoning loop.
+
+### Execution Mode Manager
+
+WorkerManager owns execution-mode composition because it is the first layer that has all required context in one place:
+
+- The Intent Gateway decision and delegated task contract
+- The selected execution profile and explicit provider override
+- Brokered worker dispatch
+- Delegated job lifecycle, run timeline, audit logging, and verification
+- The supervisor-owned tool job ledger used for evidence reconciliation
+
+The manager chooses one of three shapes:
+
+| Shape | Condition | Execution |
+|-------|-----------|-----------|
+| Pure direct reasoning | Read-only repo-grounded inspection/search | Brokered direct reasoning loop, final answer returned directly |
+| Pure delegated orchestration | Mutations, approvals, security, automation, or ordinary planned tool execution | Delegated worker pipeline with verifier |
+| Hybrid phased execution | Required read/search exploration plus required write/tool side effects | Direct reasoning read phase, then delegated mutation phase with carried-forward receipts |
+
+The hybrid phase must preserve the security boundary:
+
+- Direct reasoning keeps the read-only tool set (`fs_search`, `fs_read`, `fs_list`)
+- The supervisor derives satisfied read/search receipts from observed tool jobs, not from model prose
+- Delegated orchestration receives only dependency-satisfied receipts; answer steps are not carried forward
+- The delegated worker still has to execute the remaining write/approval/tool steps and return a typed envelope
+- A degraded worker envelope cannot erase successful supervisor-observed tool evidence
 
 ### Execution-mode-aware tier selection (key architecture)
 
@@ -100,6 +141,15 @@ The key guarantee: **automatic tier selection routes direct reasoning tasks to m
 - ChatAgent only selects the route and passes an explicit direct-reasoning flag to WorkerManager; the old supervisor-side implementation was removed
 - 150-second overall time budget and 60-second per-call budget to stay below the 300-second agent budget timeout
 - **Files:** `src/runtime/direct-reasoning-mode.ts`, `src/chat-agent.ts`, `src/worker/worker-session.ts`, `src/supervisor/worker-manager.ts`, `src/broker/broker-client.ts`, `src/broker/broker-server.ts`, `src/runtime/intent-routing-trace.ts`
+
+### Phase 2B: Hybrid Execution Manager ✅
+- WorkerManager detects delegated task contracts containing required read/search steps plus required write/tool steps
+- The manager derives a read-only gateway record for the direct-reasoning exploration phase without reclassifying the user request
+- The direct phase runs inside the brokered worker with the same isolation guarantees as pure direct reasoning
+- After the direct phase, WorkerManager drains the request's tool job ledger and converts successful read/search jobs into `priorSatisfiedStepReceipts`
+- The delegated write phase receives those receipts plus a "Hybrid Direct Reasoning Handoff" context section, so it can write from grounded evidence instead of repeating large-repo discovery
+- Final verification reconciles the delegated envelope with all observed tool jobs under the request id
+- **Files:** `src/supervisor/worker-manager.ts`, `src/supervisor/worker-manager.test.ts`
 
 ### Phase 3: Progressive Output (in design)
 - **Goal:** Stream tool-call progress during the direct reasoning loop so the user sees live activity instead of a blank screen during multi-turn search/read cycles
@@ -189,7 +239,7 @@ The `SSEEvent` type already includes `chat.thinking` and `chat.tool_call` in its
 
 1. **Answer constraints as prompt guidance, not verification gates.** The direct reasoning mode injects `requiresImplementationFiles`, `requiresSymbolNames`, and `readonly` as behavioral instructions in the system prompt. The lightweight quality check after the loop appends warnings but does not block the response.
 
-2. **No automatic direct-to-delegated fallback.** A direct-reasoning budget failure is terminal for that turn and is reported as a direct-reasoning failure. This avoids the previous slow path where a timed-out direct run kept working and then started delegated orchestration.
+2. **No automatic direct-to-delegated fallback for pure direct turns.** A pure direct-reasoning budget failure is terminal for that turn and is reported as a direct-reasoning failure. Hybrid phased execution is different: it is selected up front from the task contract, so the delegated phase is not a fallback after direct failure; it is the planned mutation phase.
 
 3. **Provider selection is stable.** Direct reasoning uses the selected execution profile and does not run delegated escalation logic. Automatic tier selection still favors managed cloud for this mode, while explicit provider selection still wins.
 
@@ -205,11 +255,13 @@ The `SSEEvent` type already includes `chat.thinking` and `chat.tool_call` in its
 
 9. **Time budgets and turn limits.** The iterative loop is capped at 8 turns with a 150-second overall time budget and a 60-second per-call budget. This prevents the 300-second agent budget timeout from killing repo-inspection requests. The limit is enforced before each LLM call, and the LLM call receives an abort signal where the provider supports it.
 
-11. **Brokered isolation boundary.** Direct reasoning is an execution mode inside the brokered worker, not a supervisor-side tool shortcut. The worker has no direct `Runtime`, `ToolExecutor`, or channel-adapter access. It calls `llm.chat` and read-only tools over broker RPC, and it sends trace events back through `trace.record`.
+10. **Brokered isolation boundary.** Direct reasoning is an execution mode inside the brokered worker, not a supervisor-side tool shortcut. The worker has no direct `Runtime`, `ToolExecutor`, or channel-adapter access. It calls `llm.chat` and read-only tools over broker RPC, and it sends trace events back through `trace.record`.
 
-10. **Progressive output via dependencies, not AgentContext.** The `onProgress` callback pattern on `DirectReasoningDependencies` is the correct approach for progressive output, not threading `emitSSE` through `AgentContext`. This keeps the runtime layer channel-agnostic and lets each channel (web/CLI) adapt progress events to its own rendering model. The dashboard callbacks layer already receives `emitSSE` from `onStreamDispatch` and can wrap it into an `onProgress` callback without polluting any shared interfaces.
+11. **Progressive output via dependencies, not AgentContext.** The `onProgress` callback pattern on `DirectReasoningDependencies` is the correct approach for progressive output, not threading `emitSSE` through `AgentContext`. This keeps the runtime layer channel-agnostic and lets each channel (web/CLI) adapt progress events to its own rendering model. The dashboard callbacks layer already receives `emitSSE` from `onStreamDispatch` and can wrap it into an `onProgress` callback without polluting any shared interfaces.
 
-## Completed Changes — Phase 1 & 2
+12. **Hybrid manager instead of binary routing.** The split is not "direct reasoning or orchestration forever." The correct abstraction is an execution-mode manager that can compose read-only direct reasoning with delegated mutation under one request id, one audit/timeline flow, and one final verifier. This preserves the reason the split exists (iterative repo exploration) without weakening the orchestration controls needed for writes.
+
+## Completed Changes — Phase 1, 2, And 2B
 
 Files modified/created:
 
@@ -225,6 +277,7 @@ Files modified/created:
 | `src/chat-agent.ts` | Selects direct reasoning and passes an explicit flag to WorkerManager; removed the old supervisor-side direct loop |
 | `src/worker/worker-session.ts` | Runs direct reasoning inside the brokered worker with brokered LLM/tool dependencies |
 | `src/supervisor/worker-manager.ts` | Dispatches explicit direct-reasoning worker requests without delegated job verification/retry |
+| `src/supervisor/worker-manager.ts` | Adds hybrid phased execution for read/search plus write/tool requests |
 | `src/broker/broker-client.ts` / `src/broker/broker-server.ts` | Added worker-to-supervisor trace forwarding and preserved tool request context such as `surfaceId`, `activeSkills`, and `toolContextMode` |
 | `docs/plans/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md` | This document |
 | `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md` | Updated 3 sections to note direct reasoning mode bypasses frontier |
