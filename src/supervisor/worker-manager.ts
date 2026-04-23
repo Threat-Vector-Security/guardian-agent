@@ -57,6 +57,7 @@ import {
 import {
   buildStepReceipts,
   collectMissingEvidenceKinds,
+  computeWorkerRunStatus,
   filterDependencySatisfiedStepReceipts,
   matchPlannedStepForTool,
   readUnsatisfiedRequiredSteps,
@@ -97,6 +98,23 @@ function clonePlannedStepsFromTaskContract(
     ...(step.required === false ? { required: false } : {}),
     ...(step.dependsOn?.length ? { dependsOn: [...step.dependsOn] } : {}),
   }));
+}
+
+function cloneReadOnlyPlannedStepsFromTaskContract(
+  taskContract: DelegatedResultEnvelope['taskContract'],
+): NonNullable<IntentGatewayDecision['plannedSteps']> | undefined {
+  const readOnlySteps = taskContract.plan.steps
+    .filter((step) => isHybridReadStep(step))
+    .map((step) => ({
+      kind: step.kind,
+      summary: step.summary,
+      ...(step.expectedToolCategories?.length
+        ? { expectedToolCategories: [...step.expectedToolCategories] }
+        : {}),
+      ...(step.required === false ? { required: false } : {}),
+      ...(step.dependsOn?.length ? { dependsOn: [...step.dependsOn] } : {}),
+    }));
+  return readOnlySteps.length > 0 ? readOnlySteps : undefined;
 }
 
 function shouldAdoptDelegatedTaskContract(
@@ -152,6 +170,55 @@ function buildDelegatedRetryIntentGatewayRecord(input: {
       ...(input.taskContract.summary?.trim() ? { summary: input.taskContract.summary.trim() } : {}),
       requireExactFileReferences: input.taskContract.requireExactFileReferences,
       plannedSteps,
+    },
+  };
+}
+
+function buildHybridDirectReasoningIntentGatewayRecord(input: {
+  baseRecord: IntentGatewayRecord | null | undefined;
+  baseDecision: IntentGatewayDecision | undefined;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  originalRequest: string;
+}): IntentGatewayRecord | null {
+  const plannedSteps = cloneReadOnlyPlannedStepsFromTaskContract(input.taskContract);
+  if (!plannedSteps || plannedSteps.length <= 0) {
+    return null;
+  }
+  const baseDecision = input.baseDecision ?? input.baseRecord?.decision;
+  if (!baseDecision) {
+    return null;
+  }
+  const readOnlySummary = `Read-only exploration for delegated task: ${input.taskContract.summary?.trim() || baseDecision.summary}`;
+  return {
+    mode: input.baseRecord?.mode ?? 'confirmation',
+    available: input.baseRecord?.available ?? true,
+    model: input.baseRecord?.model ?? 'hybrid.direct-reasoning',
+    latencyMs: input.baseRecord?.latencyMs ?? 0,
+    ...(input.baseRecord?.promptProfile ? { promptProfile: input.baseRecord.promptProfile } : {}),
+    decision: {
+      ...baseDecision,
+      operation: plannedSteps.some((step) => step.kind === 'search') ? 'search' : 'inspect',
+      summary: readOnlySummary,
+      resolvedContent: buildHybridDirectReasoningPrompt({
+        originalRequest: input.originalRequest,
+        taskContract: input.taskContract,
+      }),
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: input.taskContract.requireExactFileReferences,
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps,
+      provenance: {
+        ...(baseDecision.provenance ?? {}),
+        operation: 'derived.workload',
+        resolvedContent: 'derived.workload',
+        executionClass: 'derived.workload',
+        requiresRepoGrounding: 'derived.workload',
+        requiresToolSynthesis: 'derived.workload',
+        preferredAnswerPath: 'derived.workload',
+      },
     },
   };
 }
@@ -215,6 +282,7 @@ interface DelegatedResultSufficiencyFailure {
   retryReason: string;
   unsatisfiedSteps: Array<{
     stepId: string;
+    kind?: string;
     summary: string;
     status: 'missing' | 'failed' | 'blocked';
     reason?: string;
@@ -236,6 +304,13 @@ interface DelegatedJobSnapshot {
   argsPreview?: string;
   resultPreview?: string;
   error?: string;
+}
+
+type DelegatedTaskPlanStep = DelegatedResultEnvelope['taskContract']['plan']['steps'][number];
+
+interface HybridDirectReasoningPhaseResult {
+  additionalSection?: PromptAssemblyAdditionalSection;
+  priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
 }
 
 export interface WorkerProcess {
@@ -409,6 +484,155 @@ export class WorkerManager {
     }
   }
 
+  private async runHybridDirectReasoningPhase(input: {
+    request: WorkerMessageRequest;
+    worker: WorkerProcess;
+    target: ResolvedDelegatedTargetMetadata;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    preRoutedGateway: IntentGatewayRecord | null | undefined;
+    effectiveIntentDecision: IntentGatewayDecision | undefined;
+    requestId: string;
+    taskRunId: string;
+    additionalSections: PromptAssemblyAdditionalSection[];
+    hasFallbackProvider: boolean;
+  }): Promise<HybridDirectReasoningPhaseResult | null> {
+    if (!shouldUseHybridDirectReasoningPhase({
+      taskContract: input.taskContract,
+      decision: input.effectiveIntentDecision,
+      executionProfile: input.request.executionProfile,
+    })) {
+      return null;
+    }
+
+    const hybridGatewayRecord = buildHybridDirectReasoningIntentGatewayRecord({
+      baseRecord: input.preRoutedGateway,
+      baseDecision: input.effectiveIntentDecision,
+      taskContract: input.taskContract,
+      originalRequest: input.request.message.content,
+    });
+    if (!hybridGatewayRecord) {
+      return null;
+    }
+
+    const directPrompt = buildHybridDirectReasoningPrompt({
+      originalRequest: input.request.message.content,
+      taskContract: input.taskContract,
+    });
+    const directMessage: UserMessage = {
+      ...input.request.message,
+      content: directPrompt,
+      metadata: attachPreRoutedIntentGatewayMetadata(
+        input.request.message.metadata,
+        hybridGatewayRecord,
+      ),
+    };
+    const traceContext: DirectReasoningTraceContext = {
+      requestId: input.requestId,
+      messageId: input.request.message.id,
+      userId: input.request.userId,
+      channel: input.request.message.channel,
+      agentId: input.target.agentId,
+      contentPreview: input.request.message.content,
+      ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+      ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+      taskExecutionId: input.taskRunId,
+      ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+    };
+
+    this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
+      lifecycle: 'running',
+      workerId: input.worker.id,
+      taskContract: input.taskContract,
+      additionalSections: input.additionalSections,
+      reason: 'Hybrid execution manager starting read-only direct reasoning exploration before delegated mutation.',
+    });
+
+    let directResult: { content: string; metadata?: Record<string, unknown> } | null = null;
+    try {
+      directResult = await this.dispatchToWorker(input.worker, {
+        message: directMessage,
+        systemPrompt: input.request.systemPrompt,
+        history: input.request.history,
+        knowledgeBases: input.request.knowledgeBases ?? [],
+        activeSkills: input.request.activeSkills ?? [],
+        additionalSections: input.additionalSections,
+        toolContext: input.request.toolContext ?? '',
+        runtimeNotices: input.request.runtimeNotices ?? [],
+        executionProfile: input.request.executionProfile,
+        continuity: input.request.continuity,
+        pendingAction: input.request.pendingAction,
+        pendingApprovalNotice: input.request.pendingApprovalNotice,
+        hasFallbackProvider: input.hasFallbackProvider,
+        directReasoning: true,
+        directReasoningTrace: traceContext,
+      });
+    } catch (error) {
+      this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
+        requestId: input.requestId,
+        taskRunId: input.taskRunId,
+        lifecycle: 'running',
+        workerId: input.worker.id,
+        taskContract: input.taskContract,
+        reason: `Hybrid direct reasoning exploration failed; continuing delegated orchestration: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+
+    const drain = await awaitPendingDelegatedJobs(this.tools, input.requestId);
+    if (drain.inFlightRemaining > 0) {
+      this.recordDelegatedWorkerTrace('delegated_job_wait_expired', input.request, input.target, {
+        requestId: input.requestId,
+        taskRunId: input.taskRunId,
+        lifecycle: 'running',
+        taskContract: input.taskContract,
+        reason: `${drain.inFlightRemaining} hybrid direct reasoning job(s) remained in flight after ${drain.waitedMs}ms drain`,
+      });
+    }
+
+    const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(
+      input.taskContract,
+      drain.snapshots,
+    );
+    const readStepIds = new Set(
+      input.taskContract.plan.steps
+        .filter((step) => isHybridReadStep(step))
+        .map((step) => step.stepId),
+    );
+    const priorSatisfiedStepReceipts = filterDependencySatisfiedStepReceipts(
+      input.taskContract.plan,
+      synthesized.stepReceipts,
+    )
+      .filter((receipt) => receipt.status === 'satisfied' && readStepIds.has(receipt.stepId));
+
+    const directFailed = directResult?.metadata?.directReasoningFailed === true;
+    const resultContent = directResult?.content?.trim() ?? '';
+    if (priorSatisfiedStepReceipts.length === 0) {
+      return null;
+    }
+
+    const additionalSection = buildHybridDirectReasoningHandoffSection({
+      taskContract: input.taskContract,
+      directResultContent: resultContent,
+      priorSatisfiedStepReceipts,
+      directFailed,
+    });
+    this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
+      lifecycle: 'running',
+      workerId: input.worker.id,
+      taskContract: input.taskContract,
+      additionalSections: appendPromptAdditionalSection(input.additionalSections, additionalSection),
+      reason: `Hybrid direct reasoning exploration completed with ${priorSatisfiedStepReceipts.length} carried-forward read/search step(s).`,
+    });
+
+    return {
+      additionalSection,
+      ...(priorSatisfiedStepReceipts.length > 0 ? { priorSatisfiedStepReceipts } : {}),
+    };
+  }
+
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
     if (approvalResponse) return approvalResponse;
@@ -497,10 +721,44 @@ export class WorkerManager {
       // LLM calls are proxied through the broker — the worker no longer needs the provider config.
       // We only tell the worker whether a fallback provider exists for quality-based retry.
       const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
-      const additionalSections = appendPromptAdditionalSection(
+      let additionalSections = appendPromptAdditionalSection(
         input.additionalSections ?? [],
         this.buildCodeSessionRegistrySection(input),
       );
+      let effectiveInput = input;
+      if (preRoutedGateway && effectiveIntentDecision && effectiveIntentDecision !== intentDecision) {
+        effectiveInput = {
+          ...input,
+          message: {
+            ...input.message,
+            metadata: attachPreRoutedIntentGatewayMetadata(
+              input.message.metadata,
+              {
+                ...preRoutedGateway,
+                decision: effectiveIntentDecision,
+              }
+            ),
+          },
+        };
+      }
+      let effectiveExecutionProfile = input.executionProfile;
+      const hybridPhase = await this.runHybridDirectReasoningPhase({
+        request: effectiveInput,
+        worker,
+        target: delegatedTarget,
+        taskContract: effectiveTaskContract,
+        preRoutedGateway,
+        effectiveIntentDecision: effectiveIntentDecision ?? undefined,
+        requestId,
+        taskRunId: delegatedTaskRunId,
+        additionalSections,
+        hasFallbackProvider,
+      });
+      let initialPriorSatisfiedStepReceipts: DelegatedResultEnvelope['stepReceipts'] | undefined;
+      if (hybridPhase?.additionalSection) {
+        additionalSections = appendPromptAdditionalSection(additionalSections, hybridPhase.additionalSection);
+        initialPriorSatisfiedStepReceipts = hybridPhase.priorSatisfiedStepReceipts;
+      }
       const delegatedWorkerRunningDetail = buildDelegatedWorkerRunningDetail(
         describeDelegatedTarget(delegatedTarget),
         input.executionProfile,
@@ -524,24 +782,6 @@ export class WorkerManager {
         detail: delegatedWorkerRunningDetail,
       });
 
-      let effectiveInput = input;
-      if (preRoutedGateway && effectiveIntentDecision && effectiveIntentDecision !== intentDecision) {
-        effectiveInput = {
-          ...input,
-          message: {
-            ...input.message,
-            metadata: attachPreRoutedIntentGatewayMetadata(
-              input.message.metadata,
-              {
-                ...preRoutedGateway,
-                decision: effectiveIntentDecision,
-              }
-            ),
-          },
-        };
-      }
-      let effectiveExecutionProfile = input.executionProfile;
-
       const baseDispatchParams = {
         message: effectiveInput.message,
         systemPrompt: effectiveInput.systemPrompt,
@@ -556,6 +796,9 @@ export class WorkerManager {
         pendingAction: effectiveInput.pendingAction,
         pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
         hasFallbackProvider,
+        ...(initialPriorSatisfiedStepReceipts?.length
+          ? { priorSatisfiedStepReceipts: initialPriorSatisfiedStepReceipts }
+          : {}),
       };
 
       let result = await this.dispatchToWorker(worker, baseDispatchParams);
@@ -2350,6 +2593,37 @@ function appendDelegatedRetrySection(
   const satisfiedRefLines = insufficiency.satisfiedSteps
     .filter((step) => Array.isArray(step.refs) && step.refs.length > 0)
     .map((step) => `- ${step.stepId}: ${step.refs?.join(', ')}`);
+  const hasUnsatisfiedWriteStep = missingEvidenceKinds.includes('write')
+    || insufficiency.unsatisfiedSteps.some((step) => step.kind === 'write');
+  if (hasUnsatisfiedWriteStep) {
+    return [
+      ...sections,
+      {
+        section: 'Delegated Retry Directive',
+        mode: 'plain',
+        content: [
+          'The previous delegated attempt did not complete the requested filesystem write.',
+          `Failure mode: ${insufficiency.failureSummary}`,
+          'Unsatisfied required steps:',
+          ...unsatisfiedLines,
+          `Already satisfied steps: ${satisfiedSummary}`,
+          ...(satisfiedRefLines.length > 0
+            ? [
+                'Grounded file/path candidates from already satisfied steps:',
+                ...satisfiedRefLines,
+                'Reuse those grounded candidates before starting any new speculative search.',
+              ]
+            : []),
+          retryInstruction,
+          'This retry is not a repo-inspection answer. It is a filesystem mutation retry.',
+          'For each unsatisfied write step, call the matching filesystem mutation tool now. For a file create/update/write, use fs_write.',
+          'Do not re-run satisfied search or read steps unless the remaining write step cannot be completed from the already satisfied evidence.',
+          'After the filesystem write tool succeeds, end with a concise completion message.',
+          'Only pause if a real tool result returns pending_approval or another real blocker.',
+        ].join('\n'),
+      },
+    ];
+  }
   if (missingEvidenceKinds.includes('execution_evidence')) {
     return [
       ...sections,
@@ -2409,6 +2683,96 @@ function appendDelegatedRetrySection(
       ].join('\n'),
     },
   ];
+}
+
+function isHybridReadStep(step: DelegatedTaskPlanStep): boolean {
+  return step.required !== false && (step.kind === 'search' || step.kind === 'read');
+}
+
+function isHybridWriteStep(step: DelegatedTaskPlanStep): boolean {
+  return step.required !== false && step.kind === 'write';
+}
+
+function shouldUseHybridDirectReasoningPhase(input: {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  decision: IntentGatewayDecision | undefined;
+  executionProfile?: SelectedExecutionProfile;
+}): boolean {
+  if (!input.executionProfile || input.executionProfile.providerTier === 'local') {
+    return false;
+  }
+  if (input.decision?.executionClass === 'security_analysis') {
+    return false;
+  }
+  const requiredSteps = input.taskContract.plan.steps.filter((step) => step.required !== false);
+  const hasReadPhase = requiredSteps.some((step) => isHybridReadStep(step));
+  const hasWritePhase = requiredSteps.some((step) => isHybridWriteStep(step));
+  return hasReadPhase && hasWritePhase;
+}
+
+function buildHybridDirectReasoningPrompt(input: {
+  originalRequest: string;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+}): string {
+  const readSteps = input.taskContract.plan.steps
+    .filter((step) => isHybridReadStep(step))
+    .map((step) => `- ${step.stepId}: ${step.summary}`);
+  const writeSteps = input.taskContract.plan.steps
+    .filter((step) => isHybridWriteStep(step))
+    .map((step) => `- ${step.stepId}: ${step.summary}`);
+  return [
+    'Read-only exploration phase for a later delegated write.',
+    'Do not create, edit, delete, rename, patch, or run shell commands.',
+    '',
+    `Original request: ${input.originalRequest}`,
+    '',
+    'Explore these required read/search steps:',
+    ...(readSteps.length > 0 ? readSteps : ['- None']),
+    '',
+    'The later delegated orchestration phase will perform these write steps:',
+    ...(writeSteps.length > 0 ? writeSteps : ['- None']),
+    '',
+    'Return a concise evidence summary for the delegated write phase. Include the files, symbols, matches, and constraints it should use.',
+  ].join('\n');
+}
+
+function buildHybridDirectReasoningHandoffSection(input: {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  directResultContent: string;
+  priorSatisfiedStepReceipts: DelegatedResultEnvelope['stepReceipts'];
+  directFailed: boolean;
+}): PromptAssemblyAdditionalSection {
+  const satisfiedLines = input.priorSatisfiedStepReceipts.length > 0
+    ? input.priorSatisfiedStepReceipts
+        .map((receipt) => `- ${receipt.stepId}: ${receipt.summary}`)
+        .join('\n')
+    : '- No read/search steps were proven satisfied by the tool ledger.';
+  const remainingWriteSteps = input.taskContract.plan.steps
+    .filter((step) => isHybridWriteStep(step))
+    .map((step) => `- ${step.stepId}: ${step.summary}`)
+    .join('\n');
+  const directSummary = input.directResultContent
+    ? truncateInlineText(input.directResultContent, 2400)
+    : 'The direct reasoning phase did not return a usable summary.';
+  return {
+    section: 'Hybrid Direct Reasoning Handoff',
+    mode: 'hybrid_direct_reasoning',
+    itemCount: input.priorSatisfiedStepReceipts.length,
+    content: [
+      'This delegated turn has a read/search phase followed by a write phase.',
+      'A brokered direct-reasoning pass already ran with read-only tools. Use the satisfied read/search receipts below as dependency evidence, then execute only the remaining write/mutation steps unless the evidence is contradictory.',
+      '',
+      'Satisfied read/search steps:',
+      satisfiedLines,
+      '',
+      'Remaining write steps:',
+      remainingWriteSteps || '- None',
+      '',
+      `Direct phase status: ${input.directFailed ? 'failed_or_partial' : 'completed'}`,
+      'Direct phase evidence summary:',
+      directSummary,
+    ].join('\n'),
+  };
 }
 
 function buildDelegatedInsufficientResultHandoff(
@@ -2517,6 +2881,7 @@ function collectDelegatedUnsatisfiedSteps(
     const fallbackReason = receipt?.summary?.trim();
     return {
       stepId,
+      ...(step?.kind ? { kind: step.kind } : {}),
       summary: step?.summary ?? fallbackReason ?? stepId,
       status: receipt?.status === 'blocked'
         ? 'blocked'
@@ -2587,7 +2952,18 @@ function verifyDelegatedWorkerResult(input: {
   decision: VerificationDecision;
 } {
   const envelope = readDelegatedResultEnvelope(input.metadata);
-  if (!envelope) {
+  if (envelope) {
+    const reconciledEnvelope = reconcileDelegatedEnvelopeWithJobSnapshots(envelope, input.jobSnapshots);
+    return {
+      envelope: reconciledEnvelope,
+      decision: verifyDelegatedResult({
+        envelope: reconciledEnvelope,
+        gatewayDecision: input.intentDecision,
+        executionProfile: input.executionProfile,
+      }),
+    };
+  }
+  {
     const workerExecution = readWorkerExecutionMetadata(input.metadata);
     const partialEnvelope = buildSyntheticDelegatedEnvelopeFromJobs({
       taskContract: input.taskContract,
@@ -2633,13 +3009,56 @@ function verifyDelegatedWorkerResult(input: {
       },
     };
   }
+}
+
+function reconcileDelegatedEnvelopeWithJobSnapshots(
+  envelope: DelegatedResultEnvelope,
+  jobSnapshots: DelegatedJobSnapshot[],
+): DelegatedResultEnvelope {
+  if (jobSnapshots.length === 0) {
+    return envelope;
+  }
+  const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(envelope.taskContract, jobSnapshots);
+  if (synthesized.evidenceReceipts.length === 0) {
+    return envelope;
+  }
+
+  const evidenceReceipts = [...envelope.evidenceReceipts];
+  const evidenceReceiptIds = new Set(evidenceReceipts.map((receipt) => receipt.receiptId));
+  const toolReceiptStepIds = new Map<string, string>();
+  for (const stepReceipt of envelope.stepReceipts) {
+    for (const receiptId of stepReceipt.evidenceReceiptIds) {
+      toolReceiptStepIds.set(receiptId, stepReceipt.stepId);
+    }
+  }
+  for (const [receiptId, stepId] of synthesized.toolReceiptStepIds) {
+    toolReceiptStepIds.set(receiptId, stepId);
+  }
+  for (const receipt of synthesized.evidenceReceipts) {
+    if (evidenceReceiptIds.has(receipt.receiptId)) {
+      continue;
+    }
+    evidenceReceipts.push(receipt);
+    evidenceReceiptIds.add(receipt.receiptId);
+  }
+
+  const stepReceipts = buildStepReceipts({
+    plannedTask: envelope.taskContract.plan,
+    evidenceReceipts,
+    toolReceiptStepIds,
+    interruptions: envelope.interruptions,
+  });
+  const runStatus = computeWorkerRunStatus(
+    envelope.taskContract.plan,
+    stepReceipts,
+    envelope.interruptions,
+    envelope.stopReason,
+  );
   return {
-    envelope,
-    decision: verifyDelegatedResult({
-      envelope,
-      gatewayDecision: input.intentDecision,
-      executionProfile: input.executionProfile,
-    }),
+    ...envelope,
+    runStatus,
+    stepReceipts,
+    evidenceReceipts,
   };
 }
 
@@ -2661,10 +3080,17 @@ function buildSyntheticDelegatedEnvelopeFromJobs(input: {
     return null;
   }
   const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(input.taskContract, input.jobSnapshots);
+  const stopReason = budgetExhausted ? 'max_rounds' : 'end_turn';
+  const runStatus = computeWorkerRunStatus(
+    input.taskContract.plan,
+    synthesized.stepReceipts,
+    [],
+    stopReason,
+  );
   return buildDelegatedSyntheticEnvelope({
     taskContract: input.taskContract,
-    runStatus: budgetExhausted ? 'max_turns' : 'incomplete',
-    stopReason: budgetExhausted ? 'max_rounds' : 'error',
+    runStatus,
+    stopReason,
     operatorSummary: budgetExhausted
       ? 'Delegated worker exhausted its step budget before returning a typed result envelope.'
       : 'Delegated worker stopped after partial progress before returning a typed result envelope.',
@@ -2679,6 +3105,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
 ): {
   evidenceReceipts: DelegatedResultEnvelope['evidenceReceipts'];
   stepReceipts: DelegatedResultEnvelope['stepReceipts'];
+  toolReceiptStepIds: Map<string, string>;
 } {
   const evidenceReceipts: DelegatedResultEnvelope['evidenceReceipts'] = [];
   const toolReceiptStepIds = new Map<string, string>();
@@ -2718,6 +3145,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
   }
   return {
     evidenceReceipts,
+    toolReceiptStepIds,
     stepReceipts: buildStepReceipts({
       plannedTask: taskContract.plan,
       evidenceReceipts,
