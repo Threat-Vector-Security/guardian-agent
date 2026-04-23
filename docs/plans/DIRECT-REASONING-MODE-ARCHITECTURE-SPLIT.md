@@ -1,6 +1,6 @@
 # Direct Reasoning Mode Architecture Split
 
-**Status:** In progress — Phase 2 implementation complete, not yet committed
+**Status:** Phase 1+2 complete; brokered-isolation hardening complete; Phase 3 (progressive output) in design
 **Date:** 2026-04-23
 **Supersedes:** Workstream 3 Phase 3A in INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md
 
@@ -11,8 +11,7 @@ Repo-inspection and coding tasks (e.g., "Inspect this repo and tell me which fil
 1. The model gets a single shot at the answer after a fixed search→read→answer sequence
 2. The verifier can check structural correctness (file references exist, symbols are named) but cannot verify *semantic* correctness (the cited files are actually the implementation, not just search hits)
 3. "Do not edit anything" was misclassified as a required step rather than an answer constraint
-
-The right architecture for repo-inspection is an **iterative tool loop** (like OpenClaude), not a delegated worker contract.
+4. `shouldPreferFrontier` promoted repo-grounded tasks to frontier (gpt-4o), making managed cloud models (GLM 5.1) unavailable even though the iterative tool loop makes them perfectly capable
 
 ## Architecture Split
 
@@ -21,106 +20,239 @@ The right architecture for repo-inspection is an **iterative tool loop** (like O
 - Model has access to `fs_search`, `fs_read`, `fs_list` and can call them multiple times
 - Answer constraints (`requiresImplementationFiles`, `requiresSymbolNames`, `readonly`) are injected into the system prompt as behavioral guidance
 - Progressive output: model produces final text answer after iterative exploration
-- Automatic retry escalation: if a stronger provider profile is configured, retry with it automatically
+- Runs inside the brokered worker by default; LLM calls and tools are reached only through broker RPC
+- Uses the execution profile selected by the supervisor, including explicit provider overrides
+- Fails closed for the direct-reasoning turn when the loop exhausts its budget instead of falling through to delegated orchestration
 
 ### Delegated Orchestration Mode (existing)
 - Continues to handle write/search/write, multi-step tasks, approval-gated operations
 - No changes to existing pipeline
+- Still gets frontier preference via `preferFrontierForRepoGrounded` when applicable
 
 ### Routing decision
-- `shouldHandleDirectReasoningMode` checks the gateway decision:
-  - `executionClass === 'repo_grounded'` or `operation === 'inspect'`
-  - Tier is not `'local'` (local models use delegated pipeline)
-  - Not already handled by direct-assistant inline path
-- Falls through to delegated orchestration if direct reasoning fails
+1. The Intent Gateway classifies repo-inspection as `executionClass: 'repo_grounded'`, `operation: 'inspect'`
+2. `selectExecutionProfile` calls `shouldPreferFrontier` → `wouldUseDirectReasoningMode()` → returns `true` → **skips frontier preference** → selects managed cloud tier
+3. `shouldHandleDirectReasoningMode` checks the gateway decision:
+   - `executionClass === 'repo_grounded'` or `operation === 'inspect'` on `coding_task` route
+   - Not mutations (`create`/`update`), security analysis, or tool orchestration
+   - Tier is not `'local'` (local models use delegated pipeline)
+   - Not already handled by direct-assistant inline path
+4. ChatAgent marks the worker request with `directReasoning: true`
+5. WorkerManager dispatches that explicit direct-reasoning request to the brokered worker instead of starting a delegated job
+6. If direct reasoning fails or times out, the response is a controlled direct-reasoning failure, not an automatic delegated retry
+
+### Execution-mode-aware tier selection (key architecture)
+
+The tier selection pipeline:
+
+```
+incoming-dispatch.ts
+  → selectExecutionProfile({ gatewayDecision, mode: 'auto' })
+    → resolveSelectedTier()
+      → chooseExternalTier()
+        → shouldPreferFrontier()
+          → wouldUseDirectReasoningMode(decision)?
+            → yes: return false (skip frontier, use managed cloud)
+            → no: check preferFrontierForRepoGrounded, security, quality_first...
+        → if not frontier: shouldPreferManagedCloud() or default to managed_cloud
+  → ctx.llm = managed cloud provider (e.g., GLM 5.1 on ollama-cloud)
+```
+
+The `wouldUseDirectReasoningMode()` function mirrors the logic in `shouldHandleDirectReasoningMode` but without the tier check (since tier isn't resolved yet at this point). It determines the execution mode from the gateway decision:
+- Repo-grounded + read-like operation → direct reasoning → skip frontier
+- Mutations, security analysis, tool orchestration → delegated pipeline → frontier preference applies
+
+**Why not use `preferredAnswerPath` for this?** `preferredAnswerPath` describes answer structure (how the result is presented), not execution strategy (how the model arrives at the result). Conflating them means every new execution mode pollutes the gateway type. Computing execution mode locally in `chooseExternalTier` keeps the concerns separated — the gateway classifies intent, the profile resolver determines tier based on that intent and the execution mode it implies.
+
+### Config override behavior
+
+| Config | Effect on direct reasoning | Effect on delegated pipeline |
+|--------|---------------------------|----------------------------|
+| `preferFrontierForRepoGrounded: true` (default) | **No effect** — `wouldUseDirectReasoningMode` returns false before this flag is checked | Frontier preference applies normally |
+| `preferFrontierForRepoGrounded: false` | No effect (already not frontier) | No frontier preference for repo-grounded tasks |
+| `autoPolicy: 'quality_first'` | **No effect** — direct reasoning tasks bypass quality_first escalation | Quality-first forces frontier for high-pressure synthesis |
+| Provider dropdown: explicit provider | **Always wins** — `forcedProviderName` bypasses `selectExecutionProfile` entirely | Same — explicit choice always wins |
+| `preferFrontierForSecurity: true` | **No effect** — security analysis never routes through direct reasoning | Frontier preference for security tasks |
+
+The key guarantee: **automatic tier selection routes direct reasoning tasks to managed cloud, but explicit user choice (provider dropdown) always wins.**
 
 ## Implementation Phases
 
 ### Phase 1: Routing ✅
-- Added `shouldHandleDirectReasoningMode` method in `chat-agent.ts`
-- Exported `isReadLikeOperation` from `orchestration-role-contracts.ts`
+- Added `shouldHandleDirectReasoningMode` function (now in `direct-reasoning-mode.ts`)
+- Exported `isReadLikeOperation` from `orchestration-role-contracts.ts` with null guard
 - Added routing check in main dispatch before delegated worker
-- **Files:** `src/chat-agent.ts`, `src/runtime/orchestration-role-contracts.ts`
+- Added `wouldUseDirectReasoningMode()` in `execution-profiles.ts` to make tier selection execution-mode-aware
+- Updated `shouldPreferFrontier` to skip frontier preference for direct reasoning tasks
+- Updated 3 test files to reflect managed_cloud routing for repo-inspection
+- **Files:** `src/runtime/direct-reasoning-mode.ts`, `src/runtime/orchestration-role-contracts.ts`, `src/runtime/execution-profiles.ts`, `src/runtime/execution-profiles.test.ts`, `src/runtime/incoming-dispatch.test.ts`, `src/runtime/runtime.test.ts`
 
 ### Phase 2: Direct Reasoning Loop ✅
-- Added `handleDirectReasoningMode` — orchestrates system prompt, tool set, loop execution, quality check
-- Added `buildDirectReasoningSystemPrompt` — builds a repo-inspection system prompt with answer-constraint guidance (implementation files, symbol names, readonly) and knowledge-base context
-- Added `buildDirectReasoningToolSet` — provides `fs_search`, `fs_read`, `fs_list` as `ToolDefinition[]`
-- Added `executeDirectReasoningLoop` — iterative tool-call loop (up to 20 turns) with provider fallback
-- Added `executeDirectReasoningToolCall` — executes a single tool call via `ToolExecutor.executeModelTool`
-- Added `runDirectReasoningQualityCheck` — lightweight structural verification using `deriveAnswerConstraints`
-- Added `resolveExecutionProfileProviderOrder` — resolves fallback provider order from `SelectedExecutionProfile`
-- Added trace stages: `direct_reasoning_started`, `direct_reasoning_tool_call`, `direct_reasoning_completed` in `IntentRoutingTraceStage`
-- **Files:** `src/chat-agent.ts`, `src/runtime/intent-routing-trace.ts`
+- Extracted all direct reasoning methods to `src/runtime/direct-reasoning-mode.ts`
+- `handleDirectReasoningMode` — orchestrates system prompt, tool set, loop execution, quality check
+- `buildDirectReasoningSystemPrompt` — builds repo-inspection system prompt with answer-constraint guidance and explicit search→read→answer process
+- `buildDirectReasoningToolSet` — provides `fs_search`, `fs_read`, `fs_list` as `ToolDefinition[]`
+- `executeDirectReasoningLoop` — iterative brokered tool-call loop (up to 8 turns) using injected chat/tool dependencies
+- `executeDirectReasoningToolCall` — executes tool calls, formats `output` data readably for model consumption
+- `runDirectReasoningQualityCheck` — lightweight structural verification using `deriveAnswerConstraints`
+- Added trace stages: `direct_reasoning_started`, `direct_reasoning_tool_call`, `direct_reasoning_completed`, `direct_reasoning_failed`
+- Worker-side execution delegates to the extracted module via `DirectReasoningDependencies`
+- ChatAgent only selects the route and passes an explicit direct-reasoning flag to WorkerManager; the old supervisor-side implementation was removed
+- 150-second overall time budget and 60-second per-call budget to stay below the 300-second agent budget timeout
+- **Files:** `src/runtime/direct-reasoning-mode.ts`, `src/chat-agent.ts`, `src/worker/worker-session.ts`, `src/supervisor/worker-manager.ts`, `src/broker/broker-client.ts`, `src/broker/broker-server.ts`, `src/runtime/intent-routing-trace.ts`
 
-### Phase 2 Type Fixes ✅
-All type errors from initial scaffolding resolved:
-- `ChatTool` → `ToolDefinition` (inline import removed, proper import added)
-- `ToolCall.function.name/arguments` → `ToolCall.name/arguments` (flat fields, not nested)
-- `ChatMessage.tool_calls` → `ChatMessage.toolCalls` / `tool_call_id` → `toolCallId`
-- `CodeSessionInfo` → `ResolvedCodeSessionContext`
-- `ScopedMessage` → `UserMessage`
-- `AgentResult` → `AgentResponse`
-- `this.tools.executeTool()` → `this.tools!.executeModelTool()`
-- `FallbackResult` → `.response` extraction from `chatWithFallback`/`chatWithProviderOrder`
-- `this.emitRoutingTrace?.()` → `this.intentRoutingTrace?.record()`
-- `this.logError?.()` → `log.error()`
-- `SelectedExecutionProfile.providerFallbackOrder` → `.fallbackProviderOrder`, `.tier` → `.providerTier`
-- `promptKnowledge: string[]` → structured knowledge-base object
-- `message` (UserMessage) → `message.content` for string parameter
-- `isReadLikeOperation` null guard for `undefined` argument
-- Tool definitions: OpenAI nested format → flat `ToolDefinition` format
-- `buildDirectReasoningToolSet` unused `input` parameter prefixed with `_`
+### Phase 3: Progressive Output (in design)
+- **Goal:** Stream tool-call progress during the direct reasoning loop so the user sees live activity instead of a blank screen during multi-turn search/read cycles
+- **Discovery:** The initial attempt to wire `emitSSE` through `AgentContext` was reverted. Here's why and what was learned:
 
-### Phase 3: Progressive Output (not started)
-- Stream tool-call progress to web UI during direct reasoning loop
-- Add `direct_reasoning_tool_call` events to `run-timeline.ts`
-- Render progressive tool results in `chat-panel.js`
-- Make output look like OpenClaude's progressive display
+#### What was attempted
+Added `emitSSE` to `AgentContext`, passed it through `DirectReasoningDependencies`, and called it from the loop body to emit `chat.thinking` events after each tool call and before composing the final answer.
 
-### Phase 4: Documentation (not started)
-- Update `INTENT-GATEWAY-ROUTING-DESIGN.md` with direct reasoning mode routing
-- Update `TOOLS-CONTROL-PLANE-DESIGN.md` with tool visibility for direct reasoning
-- Update `INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md` status snapshot
+#### Why it was reverted
+1. **Type impedance:** The dashboard callbacks `emitSSE` is typed `(event: SSEEvent) => void` where `SSEEvent.type` is a strict string union. The `AgentContext` (used by all channels including CLI) can't depend on web-specific SSE types without creating a circular dependency or a leaky abstraction.
+2. **Coupling across layers:** Adding `emitSSE` to `AgentContext` means the agent layer depends on the web dashboard layer's event types. This violates the architecture — `AgentContext` is a runtime-level interface, not a channel-level one.
+3. **Channel divergence:** CLI and web have very different rendering capabilities. CLI could use `console.log` or spinner updates; web uses SSE events. Neither should dictate the other's interface.
+4. **The function exists but is unused:** `getActiveSSEEmitter()` was added inside `dashboard-runtime-callbacks.ts` closure to access the active stream's SSE emitter, but it's not exported or wired. It was the right intuition (the dispatch layer has the emitter) but the threading was wrong.
+
+#### Architecture for progressive output (planned)
+
+The correct approach follows the existing pattern for `onStreamDispatch`:
+
+```
+onStreamDispatch receives emitSSE at the dashboard callbacks layer
+  → dispatchDashboardMessage calls into ChatAgent.handleDirectReasoningMode
+    → handleDirectReasoningMode runs the loop
+    → Loop emits progress via a callback/channel-level interface
+  → The callback is wired at the dispatch layer, not injected through AgentContext
+```
+
+**Option A: Channel-agnostic callback on DirectReasoningDependencies**
+Add an `onProgress` callback to `DirectReasoningDependencies`:
+```typescript
+interface DirectReasoningDependencies {
+  // ... existing fields ...
+  onProgress?: (event: DirectReasoningProgressEvent) => void;
+}
+
+type DirectReasoningProgressEvent =
+  | { type: 'tool_call_start'; tool: string; args: Record<string, unknown>; turn: number }
+  | { type: 'tool_call_result'; tool: string; resultPreview: string; turn: number }
+  | { type: 'composing_answer'; turn: number };
+```
+The dashboard callbacks layer adapts `onProgress` to `emitSSE`; the CLI adapts it to `console.log` or spinner updates. No web types leak into the runtime.
+
+**Option B: Use the existing routing trace for real-time events**
+The `IntentRoutingTraceLog` already exists in the dependencies. Add streaming event emission alongside trace recording, and have the dashboard callbacks layer subscribe to trace events. Less clean — trace is diagnostic, not UX.
+
+**Recommended: Option A** — the `onProgress` callback keeps dependencies clean, makes channel adaptation explicit, and doesn't pollute either `AgentContext` or the trace system with UX events. The `DirectReasoningDependencies` interface is already the injection point for channel-specific behavior.
+
+#### Wiring path (web UI)
+
+```
+dashboard-runtime-callbacks.ts onStreamDispatch
+  → receives emitSSE parameter
+  → ChatAgent.handleDirectReasoningMode deps include:
+      onProgress: (event) => {
+        const sseType = progressEventToSSEType(event.type);
+        emitSSE({ type: sseType, data: { requestId, ...event } });
+      }
+  → executeDirectReasoningLoop calls deps.onProgress after each tool call
+  → web chat-panel.js renders chat.thinking / chat.tool_call events
+```
+
+#### Wiring path (CLI)
+
+```
+channels/cli.ts dispatch path
+  → creates a CLI-specific onProgress that prints to stdout
+  → e.g., tool_call_start → "🔍 Searching: query=..."
+  → e.g., tool_call_result → "📄 Read: src/runtime/execution-profiles.ts"
+  → composing_answer → "✍️ Composing answer..."
+```
+
+#### Frontend rendering (web UI)
+
+The web chat panel already handles `chat.thinking` and `chat.done` SSE events. The progressive events would extend this:
+- `chat.thinking` with `detail: "Searching: fs_search(query=...)"` — shown as a thinking indicator with tool description
+- `chat.tool_call` with tool name and result preview — shown as a collapsible tool-result card
+- `chat.thinking` with `detail: "Composing final answer..."` — shown before the final response arrives
+
+The `SSEEvent` type already includes `chat.thinking` and `chat.tool_call` in its type union, so no web-types changes are needed. The `direct_reasoning_tool_call` trace stage can also be rendered in the system tab's run timeline.
+
+### Phase 4: Documentation ✅
+- Updated `INTENT-GATEWAY-ROUTING-DESIGN.md` with direct reasoning mode routing
+- Updated `TOOLS-CONTROL-PLANE-DESIGN.md` with direct reasoning mode tool set visibility
+- Updated web UI config hint for `preferFrontierForRepoGrounded`
+- Updated `reference-guide.ts` to mention repo inspection uses managed cloud with iterative loop
 
 ## Key Design Decisions
 
 1. **Answer constraints as prompt guidance, not verification gates.** The direct reasoning mode injects `requiresImplementationFiles`, `requiresSymbolNames`, and `readonly` as behavioral instructions in the system prompt. The lightweight quality check after the loop appends warnings but does not block the response.
 
-2. **Automatic provider escalation.** When frontier models are configured, the system automatically retries with the stronger provider if the first attempt fails or produces a low-quality answer. No user prompting required.
+2. **No automatic direct-to-delegated fallback.** A direct-reasoning budget failure is terminal for that turn and is reported as a direct-reasoning failure. This avoids the previous slow path where a timed-out direct run kept working and then started delegated orchestration.
 
-3. **Fallback to delegated orchestration.** If the direct reasoning loop crashes or cannot produce a response, the system falls back to the existing delegated worker pipeline. This preserves existing behavior as a safety net.
+3. **Provider selection is stable.** Direct reasoning uses the selected execution profile and does not run delegated escalation logic. Automatic tier selection still favors managed cloud for this mode, while explicit provider selection still wins.
 
 4. **Read-only tool set.** The direct reasoning tool set (`fs_search`, `fs_read`, `fs_list`) is intentionally read-only. This matches the `readonly` answer constraint for repo-inspection tasks and prevents the model from making changes during an inspection request.
 
 5. **Knowledge base injection.** The system prompt includes `globalContent`, `codingMemoryContent`, and knowledge-base material from `loadPromptKnowledgeBases`, giving the model the same context that the delegated pipeline uses.
 
-## Uncommitted Changes (Phase 2)
+6. **Execution-mode-aware tier selection.** `shouldPreferFrontier` calls `wouldUseDirectReasoningMode()` which computes the execution mode from the gateway decision. Direct reasoning tasks (iterative tool loop) skip frontier preference and use managed cloud — the loop compensates for model capability. Delegated tasks (one-shot contract) still get frontier preference where configured. This avoids conflating `preferredAnswerPath` (answer structure) with execution mode (routing strategy).
 
-```
- docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md |   2 +
- src/chat-agent.ts                                  | 481 +++++++++++++++++++-
- src/runtime/intent-routing-trace.ts                |   5 +-
- src/runtime/orchestration-role-contracts.ts        |   4 +-
-```
+7. **Tool result formatting.** Tool outputs from `executeModelTool` are formatted as human-readable text (file paths, content, directory listings) instead of raw JSON. This lets the model reason over structured data like search matches and file contents, not opaque JSON blobs. The model was previously getting `undefined` from `result.message` — the correct field is `result.output`, which contains structured data that must be formatted per tool type.
 
-- `src/chat-agent.ts`: All direct reasoning mode methods (routing, system prompt, tool set, loop, quality check, provider order)
-- `src/runtime/intent-routing-trace.ts`: Added `direct_reasoning_started`, `direct_reasoning_tool_call`, `direct_reasoning_completed` trace stages
-- `src/runtime/orchestration-role-contracts.ts`: Exported `isReadLikeOperation` with null guard
-- `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`: Unrelated doc change (2 lines)
+8. **Config overrides respect execution mode.** `preferFrontierForRepoGrounded` and `autoPolicy: 'quality_first'` do not affect direct reasoning tasks — the execution mode check at the top of `shouldPreferFrontier` short-circuits before those flags are evaluated. Explicit provider selection (dropdown override) always wins regardless.
+
+9. **Time budgets and turn limits.** The iterative loop is capped at 8 turns with a 150-second overall time budget and a 60-second per-call budget. This prevents the 300-second agent budget timeout from killing repo-inspection requests. The limit is enforced before each LLM call, and the LLM call receives an abort signal where the provider supports it.
+
+11. **Brokered isolation boundary.** Direct reasoning is an execution mode inside the brokered worker, not a supervisor-side tool shortcut. The worker has no direct `Runtime`, `ToolExecutor`, or channel-adapter access. It calls `llm.chat` and read-only tools over broker RPC, and it sends trace events back through `trace.record`.
+
+10. **Progressive output via dependencies, not AgentContext.** The `onProgress` callback pattern on `DirectReasoningDependencies` is the correct approach for progressive output, not threading `emitSSE` through `AgentContext`. This keeps the runtime layer channel-agnostic and lets each channel (web/CLI) adapt progress events to its own rendering model. The dashboard callbacks layer already receives `emitSSE` from `onStreamDispatch` and can wrap it into an `onProgress` callback without polluting any shared interfaces.
+
+## Completed Changes — Phase 1 & 2
+
+Files modified/created:
+
+| File | Change |
+|------|--------|
+| `src/runtime/direct-reasoning-mode.ts` | **New** — extracted broker-friendly module with all direct reasoning logic |
+| `src/runtime/orchestration-role-contracts.ts` | Exported `isReadLikeOperation` with null guard |
+| `src/runtime/execution-profiles.ts` | Added `wouldUseDirectReasoningMode()`, updated `shouldPreferFrontier` |
+| `src/runtime/execution-profiles.test.ts` | Updated tier expectations for repo-inspection (frontier→managed_cloud), added 2 new tests |
+| `src/runtime/incoming-dispatch.test.ts` | Updated 2 test expectations (frontier→managed_cloud) |
+| `src/runtime/runtime.test.ts` | Updated 1 test expectation (parentProfile frontier→managed_cloud) |
+| `src/runtime/intent-routing-trace.ts` | Added direct reasoning trace stages including failure |
+| `src/chat-agent.ts` | Selects direct reasoning and passes an explicit flag to WorkerManager; removed the old supervisor-side direct loop |
+| `src/worker/worker-session.ts` | Runs direct reasoning inside the brokered worker with brokered LLM/tool dependencies |
+| `src/supervisor/worker-manager.ts` | Dispatches explicit direct-reasoning worker requests without delegated job verification/retry |
+| `src/broker/broker-client.ts` / `src/broker/broker-server.ts` | Added worker-to-supervisor trace forwarding and preserved tool request context such as `surfaceId`, `activeSkills`, and `toolContextMode` |
+| `docs/plans/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md` | This document |
+| `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md` | Updated 3 sections to note direct reasoning mode bypasses frontier |
+| `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` | Added section on Direct Reasoning Mode tool set |
+| `web/public/js/pages/config.js` | Updated `preferFrontierForRepoGrounded` description |
+| `src/reference-guide.ts` | Updated auto-selection description for repo inspection |
+
+### Reverted changes (not shipped)
+- `AgentContext.emitSSE` — was added and reverted; progressive output will use `onProgress` on `DirectReasoningDependencies` instead
+- `dashboard-runtime-callbacks.ts getActiveSSEEmitter()` — was added and removed; the emitter will be passed through `onStreamDispatch` as a dependency instead
+- `DirectReasoningDependencies.emitSSE` and `requestId` — was added and reverted; will be replaced with `onProgress` callback
+- `summarizeToolArgs` helper — was added to direct-reasoning-mode.ts and removed; will be needed again for `onProgress` event payloads
 
 ## Manual Web Baseline
 
-After committing Phase 2, test these prompts in the web UI:
+Test these prompts in the web UI to verify the architecture:
 
 1. **Repo inspection (primary target):** "Inspect this repo and tell me which files and functions define the delegated worker completion contract. Cite exact file names and symbol names."
-   - Expected: Iterative search/read, then grounded answer citing implementation files with symbol names
+   - Expected: Uses managed cloud (GLM 5.1), iterative search/read loop, grounded answer with file paths and symbol names
 
 2. **Repo inspection with readonly constraint:** "Inspect this repo and tell me which files implement delegated worker progress and run-timeline rendering. Do not edit anything."
-   - Expected: Read-only exploration, no file modifications, answer with implementation file citations
+   - Expected: Uses managed cloud, read-only exploration, no file modifications
 
 3. **Simple chat (regression check):** "Just reply hello back"
    - Expected: Simple reply, no tool calls, no quality warnings
 
 4. **Multi-step orchestration (regression check):** "Write the current date and time to tmp/manual-web/current-time.txt. Search src/runtime for planned_steps. Write a short summary to tmp/manual-web/planned-steps-summary.txt."
    - Expected: Delegated worker pipeline, writes two files, remains stable
+
+5. **Explicit provider override:** Set the coding assistant dropdown to a specific provider (e.g., anthropic), then run: "Which files define the IntentGateway route classifier?"
+   - Expected: Uses the explicitly selected provider regardless of auto-tier logic

@@ -710,7 +710,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Auto mode only considers enabled provider profiles. Disabled profiles stay saved in the config UI but are ignored until you re-enable them.',
                   'Guardian still requires at least one enabled AI profile overall, so disabling the last remaining provider is rejected.',
                   'In Configuration > AI Providers > Model Auto Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
-                  'Balanced Auto can keep lighter external work on managed-cloud Ollama while escalating heavier repo-grounded or security-heavy work to the frontier default.',
+                  'Balanced Auto can keep lighter external work on managed-cloud Ollama while escalating heavier repo-grounded synthesis or security-heavy work to the frontier default. Basic repo inspection uses the managed-cloud model with an iterative search/read loop.',
                   'Provider changes propagate to the running web UI immediately.',
                 ],
               },

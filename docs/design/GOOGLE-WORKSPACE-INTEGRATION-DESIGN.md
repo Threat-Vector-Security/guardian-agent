@@ -4,6 +4,8 @@
 **Depends on:** Native Skills, ToolExecutor policy model, Guardian capabilities
 **Historical Runtime:** Google Workspace CLI (`gws`) via subprocess execution
 
+For the 2026 investigation of Google's official MCP offerings and the recommended migration path, see [`GOOGLE-WORKSPACE-OFFICIAL-MCP-MIGRATION-PLAN.md`](./GOOGLE-WORKSPACE-OFFICIAL-MCP-MIGRATION-PLAN.md).
+
 > This document is retained as background for the earlier CLI-backed Google Workspace design.
 > It is not the current as-built contract.
 > Current code uses `src/google/google-auth.ts`, `src/google/google-service.ts`, and `assistant.tools.google`.

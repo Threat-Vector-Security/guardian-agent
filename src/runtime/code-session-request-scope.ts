@@ -67,6 +67,10 @@ export function shouldAttachCodeSessionForRequest(
   input: ShouldAttachCodeSessionForRequestInput,
 ): boolean {
   if (!input.resolvedCodeSession) return false;
+  const gatewayDecision = input.gatewayDecision;
+  if (gatewayDecision?.route === 'coding_session_control') {
+    return false;
+  }
   if (input.requestedCodeContext?.sessionId || input.requestedCodeContext?.workspaceRoot) {
     return true;
   }
@@ -77,14 +81,13 @@ export function shouldAttachCodeSessionForRequest(
     return false;
   }
 
-  const gatewayDecision = input.gatewayDecision;
   if (!gatewayDecision) {
     return !sharedAttachment;
   }
   if (gatewayDecision.requiresRepoGrounding) {
     return true;
   }
-  if (gatewayDecision.route === 'coding_task' || gatewayDecision.route === 'coding_session_control') {
+  if (gatewayDecision.route === 'coding_task') {
     return true;
   }
   if (gatewayDecision.route === 'filesystem_task') {

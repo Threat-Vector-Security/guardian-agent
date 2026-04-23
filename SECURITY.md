@@ -22,7 +22,7 @@ GuardianAgent implements a security-focused runtime architecture with mandatory 
 GuardianAgent is an AI agent orchestration system where:
 
 - **Supervisor-side framework code is trusted** — Runtime, orchestration, approvals, and tool execution run in the supervisor process
-- **The built-in chat/planner loop is isolated from the supervisor** — it runs in a brokered worker and reaches tools and approvals through broker RPC
+- **The built-in chat/planner/direct-reasoning loops are isolated from the supervisor** — they run in a brokered worker and reach LLM providers, tools, trace events, and approvals through broker RPC
 - **Automation authoring is compiler-mediated** — clear "create a workflow/automation" requests are compiled into native control-plane mutations before the generic planner can drift into script generation
 - **Inter-agent delegation is contract-mediated** — orchestration handoffs are validated in runtime code before downstream agents receive filtered context, and core specialist roles narrow known capabilities through runtime-owned contracts instead of prompt-only labels
 - **LLM output is NOT trusted** — Models can hallucinate, leak secrets, or be prompt-injected
@@ -58,6 +58,7 @@ The as-built spec is the canonical current-state document for the defensive suit
 | Over-broad third-party MCP servers | MCP startup admission (`startupApproved`), MCP namespacing, Guardian/tool policy checks, conservative third-party risk defaults, risk-floor-only `trustLevel`, call limits, degraded-backend MCP block | Third-party MCP is restricted by default | MCP server code still runs as a local process when operators explicitly trust and enable it |
 | Manual PTY abuse in Code | session ownership checks plus degraded-backend terminal block | Disabled by default on degraded backends | PTY remains outside the assistant's repo-bound command validator if enabled |
 | Dangerous non-read-only tool actions | approval workflows, per-tool policies, Guardian Agent inline LLM evaluation, host/gateway containment hooks | `approve_each` by default for the main assistant | if operators switch to looser policy modes, more risk moves to runtime boundaries and approvals |
+| Read-only direct reasoning drift | direct reasoning runs inside the brokered worker, exposes only `fs_search`, `fs_read`, and `fs_list`, preserves brokered tool context, and fails closed on budget exhaustion | Enabled for eligible non-local repo-inspection turns | semantic correctness still depends on the model reading and citing the right evidence |
 | Memory poisoning / durable backdoors | trust-aware memory, quarantined memory status, provenance, low-trust writes quarantined by default | Enabled by default | reviewed but incorrect content can still be promoted by an operator |
 | Broken-tool overspend / runaway retries | per-chain tool budgets, repeated-failure suppression, schedule caps, auto-pause | Enabled by default | expensive but varied failure patterns can still consume approved budget |
 | Overlapping scheduled side effects | per-task active-run locks, approval expiry, principal binding, scope hash drift checks | Enabled by default | different schedules can still target overlapping real-world systems if operators configure them that way |

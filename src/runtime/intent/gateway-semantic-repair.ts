@@ -1,4 +1,5 @@
 import {
+  inferCodeSessionControlOperation,
   extractExplicitRemoteExecCommand,
   inferExplicitFilesystemTaskOperation,
   isExplicitRemoteSandboxTaskRequest,
@@ -23,6 +24,7 @@ import {
 } from './entity-resolvers/provider-config.js';
 import {
   isExplicitCodingExecutionRequest,
+  isExplicitCodingSessionControlRequest,
   isExplicitComplexPlanningRequest,
   isExplicitRepoInspectionRequest,
   isExplicitRepoPlanningRequest,
@@ -90,6 +92,9 @@ export function repairStructuredIntentGatewayRoute(
   if (route === 'unknown' && explicitCodingTaskRequest) {
     return 'coding_task';
   }
+  if (route === 'unknown' && isExplicitCodingSessionControlRequest(rawSourceContent)) {
+    return 'coding_session_control';
+  }
   const sourceContent = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
   if (mentionsAutomationControlTerms(sourceContent)) {
     return route;
@@ -132,6 +137,9 @@ export function repairStructuredIntentGatewayOperation(
   }
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
+  }
+  if (route === 'coding_session_control' && isExplicitCodingSessionControlRequest(rawSourceContent)) {
+    return inferCodeSessionControlOperation(normalizedSourceContent) ?? operation;
   }
   if (route === 'coding_task' && isExplicitRepoInspectionRequest(rawSourceContent)) {
     return /\bsearch\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalizedSourceContent)

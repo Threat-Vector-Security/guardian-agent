@@ -118,12 +118,13 @@ export class IntentGateway {
     record: IntentGatewayRecord,
     chat: IntentGatewayChatFn,
   ): Promise<IntentGatewayRecord> {
-    let decision = repairEmailProviderDecisionIfNeeded(input, record.decision);
+    let workingRecord = normalizeIntentGatewayRecordDecisionForInput(input, record);
+    let decision = repairEmailProviderDecisionIfNeeded(input, workingRecord.decision);
     decision = resolveSatisfiedClarificationIfNeeded(input, decision);
-    let workingRecord = decision === record.decision
-      ? record
+    workingRecord = decision === workingRecord.decision
+      ? workingRecord
       : {
-          ...record,
+          ...workingRecord,
           decision,
         };
     workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
@@ -154,6 +155,31 @@ export class IntentGateway {
       decision,
     };
   }
+}
+
+function normalizeIntentGatewayRecordDecisionForInput(
+  input: IntentGatewayInput,
+  record: IntentGatewayRecord,
+): IntentGatewayRecord {
+  if (record.decision.route !== 'unknown') {
+    return record;
+  }
+  const decision = normalizeIntentGatewayDecision(
+    {
+      ...record.decision,
+      ...record.decision.entities,
+    } as Record<string, unknown>,
+    {
+      sourceContent: input.content,
+      pendingAction: input.pendingAction,
+      continuity: input.continuity,
+    },
+    { classifierSource: classifierProvenanceSourceForMode(record.mode) },
+  );
+  return {
+    ...record,
+    decision,
+  };
 }
 
 function repairEmailProviderDecisionIfNeeded(

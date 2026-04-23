@@ -42,6 +42,11 @@ import {
   type SelectedExecutionProfile,
 } from '../runtime/execution-profiles.js';
 import {
+  handleDirectReasoningMode,
+  shouldHandleDirectReasoningMode,
+  type DirectReasoningTraceContext,
+} from '../runtime/direct-reasoning-mode.js';
+import {
   buildRoutedIntentAdditionalSection,
   buildToolExecutionCorrectionPrompt,
   prepareToolExecutionForIntent,
@@ -230,6 +235,9 @@ export interface WorkerMessageHandleParams {
   hasFallbackProvider?: boolean;
   /** Step receipts satisfied in a prior attempt; the worker should skip re-running them. */
   priorSatisfiedStepReceipts?: StepReceipt[];
+  /** Run this turn through the brokered direct-reasoning read-only loop. */
+  directReasoning?: boolean;
+  directReasoningTrace?: DirectReasoningTraceContext;
 }
 
 function buildApprovalPendingActionMetadata(
@@ -1619,6 +1627,84 @@ export class BrokeredWorkerSession {
     }
 
     const directIntent = await this.classifyIntentGateway(params.message, chatFn);
+    if (params.directReasoning) {
+      const traceContext: DirectReasoningTraceContext = params.directReasoningTrace ?? {
+        requestId: params.message.id,
+        messageId: params.message.id,
+        userId: params.message.userId,
+        channel: params.message.channel,
+        contentPreview: params.message.content,
+      };
+      if (!shouldHandleDirectReasoningMode({
+        gateway: directIntent,
+        selectedExecutionProfile,
+      })) {
+        this.client.recordTrace({
+          stage: 'direct_reasoning_failed',
+          requestId: traceContext.requestId,
+          messageId: traceContext.messageId,
+          userId: traceContext.userId,
+          channel: traceContext.channel,
+          agentId: traceContext.agentId,
+          contentPreview: traceContext.contentPreview ?? params.message.content,
+          details: {
+            route: directIntent?.decision.route,
+            operation: directIntent?.decision.operation,
+            executionClass: directIntent?.decision.executionClass,
+            providerName: selectedExecutionProfile?.providerName,
+            providerTier: selectedExecutionProfile?.providerTier,
+            reason: 'not_direct_reasoning_eligible',
+          },
+        });
+        return this.attachIntentGatewayMetadata({
+          content: 'Direct reasoning could not run because the routed intent is no longer eligible for the read-only direct reasoning path.',
+          metadata: {
+            executionProfile: selectedExecutionProfile ?? undefined,
+            directReasoning: true,
+            directReasoningMode: 'brokered_readonly',
+            directReasoningFailed: true,
+          },
+        }, directIntent);
+      }
+
+      const result = await handleDirectReasoningMode({
+        message: params.message.content,
+        gateway: directIntent,
+        selectedExecutionProfile,
+        promptKnowledge: {
+          knowledgeBases: params.knowledgeBases,
+          additionalSections: params.additionalSections,
+          toolContext: params.toolContext,
+          runtimeNotices: params.runtimeNotices,
+        },
+        workspaceRoot: codeContext?.workspaceRoot,
+        traceContext,
+        toolRequest: {
+          origin: 'assistant',
+          requestId: traceContext.requestId ?? params.message.id,
+          agentId: traceContext.agentId,
+          userId: params.message.userId,
+          surfaceId: params.message.surfaceId,
+          principalId: params.message.principalId ?? params.message.userId,
+          principalRole: params.message.principalRole ?? 'owner',
+          channel: params.message.channel,
+          codeContext,
+          toolContextMode: selectedExecutionProfile?.toolContextMode,
+          activeSkills: params.activeSkills.map((skill) => skill.id),
+        },
+      }, {
+        chat: chatFn,
+        executeTool: (toolName, args, request) => toolExecutor.executeModelTool(toolName, args, {
+          ...request,
+          origin: request.origin ?? 'assistant',
+        }),
+        trace: {
+          record: (entry) => this.client.recordTrace(entry as unknown as Record<string, unknown>),
+        },
+      });
+      this.rememberToolReportScope(params.message, codeContext, toolExecutor);
+      return this.attachIntentGatewayMetadata(result, directIntent);
+    }
     const directRouting = resolveDirectIntentRoutingCandidates(
       directIntent,
       ['automation', 'automation_control', 'automation_output', 'browser'],

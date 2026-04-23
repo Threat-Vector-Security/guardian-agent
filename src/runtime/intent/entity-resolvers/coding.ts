@@ -141,6 +141,7 @@ export function inferExplicitCodingBackendOperation(
 export function extractCodingWorkspaceTarget(rawContent: string): string | undefined {
   if (!rawContent) return undefined;
   const patterns = [
+    /\b(?:switch|attach|use|change\s+to|connect)\s+(?:this\s+chat\s+)?(?:to\s+)?(?:the\s+)?(?:coding\s+)?(?:workspace|session)\s+(?:for|named|called)\s+(.+?)$/i,
     /\b(?:in|within)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
     /\b(?:for|against)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
   ];
@@ -152,6 +153,31 @@ export function extractCodingWorkspaceTarget(rawContent: string): string | undef
     }
   }
   return undefined;
+}
+
+export function inferCodeSessionControlOperation(
+  normalized: string,
+): IntentGatewayOperation | null {
+  if (!normalized) return null;
+  if (/\b(?:switch|attach|use|change\s+to|connect)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\b(?:detach|disconnect|leave)\b/.test(normalized)) {
+    return 'delete';
+  }
+  if (/\b(?:create|new|start)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (
+    /\b(?:list|show|display|view)\b.*\b(?:coding\s+)?(?:sessions?|workspaces?)\b/.test(normalized)
+    || /\b(?:all|available|other)\b.*\b(?:coding\s+)?(?:sessions?|workspaces?)\b/.test(normalized)
+  ) {
+    return 'navigate';
+  }
+  if (/\b(?:current|active|attached|what|which)\b.*\b(?:coding\s+)?(?:session|workspace)\b/.test(normalized)) {
+    return 'inspect';
+  }
+  return null;
 }
 
 export function extractExplicitRepoFilePath(rawContent: string): string | undefined {
@@ -230,6 +256,13 @@ export function inferCodeSessionResource(
   if (!normalized) return undefined;
   if (/\bsandboxes?\b/.test(normalized)) {
     return 'managed_sandboxes';
+  }
+  if (
+    /\b(?:list|show|display|view)\b.*\b(?:coding\s+)?(?:sessions?|workspaces?)\b/.test(normalized)
+    || /\b(?:all|available|other)\b.*\b(?:coding\s+)?(?:sessions?|workspaces?)\b/.test(normalized)
+    || /\b(?:coding\s+)?(?:sessions?|workspaces?)\b.*\b(?:available|listed|there)\b/.test(normalized)
+  ) {
+    return 'session_list';
   }
   return undefined;
 }

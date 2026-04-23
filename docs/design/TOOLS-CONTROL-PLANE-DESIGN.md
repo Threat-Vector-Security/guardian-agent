@@ -84,6 +84,8 @@ The next uplift wave should improve discovery quality without breaking deferred 
 
 **Quality-based fallback:** When the local LLM produces a degraded response (empty, refusal, or "I could not generate"), the system automatically retries the request through the fallback chain (typically an external provider like OpenAI). A fallback chain is auto-configured when multiple LLM providers are available, or can be explicitly set via `config.fallbacks`.
 
+**Direct Reasoning Mode tool set:** Repo-inspection requests (read-like `inspect`/`read`/`search` on repo-grounded decisions) use Direct Reasoning Mode with a dedicated read-only tool set (`fs_search`, `fs_read`, `fs_list`) provided directly to the model's tool-use API. These tools bypass the deferred loading mechanism entirely — they are always available in the direct reasoning loop. The loop runs on the managed-cloud provider (not frontier) because the iterative search→read→refine process compensates for model capability.
+
 **Per-tool provider routing:** Users can route specific tools or entire tool categories to a preferred LLM provider (`local` or `external`). This controls which model *synthesizes the tool result* — the model that processes the output and generates the user-facing response after a tool executes. The routing decision happens per-round in the tool loop:
 
 1. Tool(s) execute and results are appended to the message history

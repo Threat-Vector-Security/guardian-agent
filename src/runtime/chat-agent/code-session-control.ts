@@ -595,7 +595,7 @@ export async function tryDirectCodeSessionControlFromGateway(input: {
     }
   }
 
-  if (operation === 'navigate' || operation === 'search' || operation === 'read') {
+  if (resource === 'session_list' || operation === 'navigate' || operation === 'search' || operation === 'read') {
     return handleCodeSessionList(input);
   }
   if (operation === 'inspect') {

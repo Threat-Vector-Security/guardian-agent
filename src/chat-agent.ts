@@ -4,7 +4,7 @@ import type { Logger } from 'pino';
 
 import { BaseAgent } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage } from './agent/types.js';
-import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider, ToolCall, ToolDefinition } from './llm/types.js';
+import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import {
@@ -272,13 +272,15 @@ import {
   selectDelegatedExecutionProfile,
   type SelectedExecutionProfile,
 } from './runtime/execution-profiles.js';
+import {
+  handleDirectReasoningMode as handleDirectReasoningModeRuntime,
+  shouldHandleDirectReasoningMode as shouldHandleDirectReasoningModeRuntime,
+} from './runtime/direct-reasoning-mode.js';
 import { readExecutionIdentityMetadata } from './runtime/execution-identity.js';
 import {
   constrainCapabilitiesToOrchestrationRole,
   inferDelegatedOrchestrationDescriptor,
-  isReadLikeOperation,
 } from './runtime/orchestration-role-contracts.js';
-import { deriveAnswerConstraints } from './runtime/intent/request-patterns.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
 import { getProviderLocality, getProviderTier } from './llm/provider-metadata.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
@@ -2473,21 +2475,6 @@ type DirectIntentShadowCandidate =
     return normalized.length > 0 ? normalized : undefined;
   }
 
-  private resolveExecutionProfileProviderOrder(
-    selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
-  ): string[] | undefined {
-    if (!selectedExecutionProfile) return undefined;
-    const providerOrder = selectedExecutionProfile.fallbackProviderOrder;
-    if (Array.isArray(providerOrder) && providerOrder.length > 0) {
-      return providerOrder;
-    }
-    const providerName = selectedExecutionProfile.providerName?.trim();
-    if (providerName && providerName.length > 0) {
-      return [providerName];
-    }
-    return undefined;
-  }
-
   private shouldStartChatWithPreferredProvider(
     primaryProviderName: string | undefined,
     preferredProviderOrder: string[] | undefined,
@@ -2520,439 +2507,6 @@ type DirectIntentShadowCandidate =
     }
     return requestedProviderName === (input.currentProviderName?.trim() || '')
       || !!this.fallbackChain;
-  }
-
-  /**
-   * Determine whether a request should be handled in Direct Reasoning Mode
-   * instead of delegated orchestration or inline assistant mode.
-   *
-   * Direct Reasoning Mode is for repo inspection and coding/reasoning tasks
-   * where the model needs iterative tool access (search, read, search again)
-   * rather than a fixed step-by-step contract. This replaces the delegated
-   * worker pipeline with an inline tool loop that gives the model direct
-   * access to filesystem and search tools.
-   */
-  private shouldHandleDirectReasoningMode(input: {
-    gateway: IntentGatewayRecord | null | undefined;
-    selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
-    currentProviderName?: string;
-  }): boolean {
-    const decision = input.gateway?.decision;
-    if (!decision) return false;
-
-    // Direct reasoning mode applies to repo-grounded inspect/read operations
-    // where the model needs to explore iteratively, not follow a fixed contract.
-    const isRepoGrounded = decision.requiresRepoGrounding === true
-      || decision.executionClass === 'repo_grounded';
-    const isInspectLike = isReadLikeOperation(decision.operation);
-    const isRepoInspectionRoute = decision.route === 'coding_task' && isInspectLike;
-
-    if (!isRepoGrounded && !isRepoInspectionRoute) return false;
-
-    // Mutations (create/update) always go through delegated orchestration
-    if (decision.operation === 'create' || decision.operation === 'update') return false;
-
-    // Security analysis always goes through delegated orchestration for strict verification
-    if (decision.executionClass === 'security_analysis') return false;
-
-    // Complex planning always goes through delegated orchestration
-    if (decision.executionClass === 'tool_orchestration') return false;
-
-    // Direct reasoning needs a capable model with tool access.
-    // Check that the selected profile supports a tool loop.
-    const profile = input.selectedExecutionProfile;
-    if (!profile) return false;
-
-    // Direct reasoning mode requires an external or managed model capable of
-    // iterative tool use. Local-only models may not have enough capability
-    // for reliable repo inspection reasoning.
-    const tier = profile.providerTier;
-    if (tier === 'local') return false;
-
-    return true;
-  }
-
-  /**
-   * Handle a request in Direct Reasoning Mode.
-   *
-   * This gives the model direct tool access (fs_search, fs_read, fs_list,
-   * code_symbol_search) with an iterative loop, instead of routing through
-   * the delegated worker contract pipeline. The model can search broadly,
-   * read implementation files, refine its search, and produce a grounded answer
-   * — similar to how OpenClaude handles repo-inspection tasks.
-   *
-   * Quality notes from structural verification are surfaced to the user
-   * when the answer has partial quality (e.g., only cited search-hit files,
-   * not implementation files).
-   */
-  private async handleDirectReasoningMode(input: {
-    ctx: AgentContext;
-    message: string;
-    routedScopedMessage: UserMessage;
-    gateway: IntentGatewayRecord | null | undefined;
-    selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
-    promptKnowledge: {
-      knowledgeBases: PromptAssemblyKnowledgeBase[];
-      globalContent: string;
-      globalSelection?: MemoryContextLoadResult;
-      codingMemoryContent: string;
-      codingMemorySelection?: MemoryContextLoadResult;
-      queryPreview?: string;
-    };
-    resolvedCodeSession: ResolvedCodeSessionContext | null | undefined;
-  }): Promise<AgentResponse | null> {
-    const { ctx, message, gateway, selectedExecutionProfile, promptKnowledge, resolvedCodeSession } = input;
-    const decision = gateway?.decision;
-    if (!decision) return null;
-
-    // Build the direct reasoning system prompt with repo-inspection guidance
-    const directReasoningPrompt = this.buildDirectReasoningSystemPrompt({
-      decision,
-      promptKnowledge,
-      resolvedCodeSession,
-    });
-
-    // Set up iterative tool-call loop with read-oriented tools
-    const directReasoningTools = this.buildDirectReasoningToolSet({
-      decision,
-      resolvedCodeSession,
-    });
-
-    // Execute the direct reasoning loop
-    const loopResult = await this.executeDirectReasoningLoop({
-      ctx,
-      systemPrompt: directReasoningPrompt,
-      userMessage: message,
-      tools: directReasoningTools,
-      maxTurns: 20,
-      selectedExecutionProfile,
-    });
-
-    if (!loopResult) return null;
-
-    // Run lightweight structural verification on the result
-    const qualityNotes = this.runDirectReasoningQualityCheck({
-      result: loopResult,
-      decision,
-    });
-
-    // Build the response with optional quality notes
-    const responseContent = loopResult.content;
-    const finalContent = qualityNotes && qualityNotes.length > 0
-      ? `${responseContent}\n\n⚠️ ${qualityNotes.join(' ')}`
-      : responseContent;
-
-    // Emit trace event
-    this.intentRoutingTrace?.record({
-      stage: 'direct_reasoning_completed',
-      requestId: undefined,
-      details: {
-        decision: decision.route,
-        executionClass: decision.executionClass,
-        operation: decision.operation,
-        qualityNotes,
-        providerName: ctx.llm?.name,
-        tier: selectedExecutionProfile?.providerTier,
-      },
-    });
-
-    return {
-      content: finalContent,
-      metadata: {
-        executionProfile: selectedExecutionProfile ?? undefined,
-        directReasoning: true,
-        qualityNotes: qualityNotes?.length ? qualityNotes : undefined,
-      },
-    };
-  }
-
-  /**
-   * Build the system prompt for Direct Reasoning Mode.
-   * Includes repo-inspection guidance from the answer constraints.
-   */
-  private buildDirectReasoningSystemPrompt(input: {
-    decision: IntentGatewayDecision;
-    promptKnowledge: {
-      knowledgeBases: PromptAssemblyKnowledgeBase[];
-      globalContent: string;
-      globalSelection?: MemoryContextLoadResult;
-      codingMemoryContent: string;
-      codingMemorySelection?: MemoryContextLoadResult;
-      queryPreview?: string;
-    };
-    resolvedCodeSession: ResolvedCodeSessionContext | null | undefined;
-  }): string {
-    const { decision, promptKnowledge, resolvedCodeSession } = input;
-    const parts: string[] = [];
-
-    parts.push('You are a direct reasoning agent with full access to search and read tools in this workspace.');
-    parts.push('Your task is to inspect the repository and answer the user\'s question accurately.');
-    parts.push('');
-
-    // Add answer constraints from the gateway decision
-    const answerConstraints = deriveAnswerConstraints(decision.resolvedContent);
-    if (answerConstraints.requiresImplementationFiles) {
-      parts.push('You MUST identify and read the actual implementation files, not just files that match the search query.');
-      parts.push('Search broadly first (e.g., across src/runtime, src/worker, src/supervisor) then narrow by reading the most promising files. Do not stop at the first search result.');
-      parts.push('An implementation file is one that contains the primary logic for the requested functionality — not a test, not a type-only re-export, not a helper that merely imports the real implementation.');
-    }
-    if (answerConstraints.requiresSymbolNames) {
-      parts.push('You MUST include the exact function names, type names, or symbol names that implement the requested functionality. Use backtick formatting for code identifiers like `functionName` or `TypeName`.');
-    }
-    if (answerConstraints.readonly) {
-      parts.push('This is a read-only inspection. Do not write, create, or modify any files.');
-    }
-
-    parts.push('');
-    parts.push('Search and read tools are available. Start by searching broadly for relevant files, then read the most promising ones to understand the implementation. When you have identified the right files and symbols, provide your answer.');
-
-    // Add code session context if available
-    if (resolvedCodeSession?.session?.workspaceRoot) {
-      parts.push('');
-      parts.push(`Workspace root: ${resolvedCodeSession.session.workspaceRoot}`);
-    }
-
-    // Add knowledge base context if available
-    const knowledgeParts: string[] = [];
-    if (promptKnowledge.globalContent) {
-      knowledgeParts.push(promptKnowledge.globalContent);
-    }
-    if (promptKnowledge.codingMemoryContent) {
-      knowledgeParts.push(promptKnowledge.codingMemoryContent);
-    }
-    for (const kb of promptKnowledge.knowledgeBases) {
-      if (kb.content) {
-        knowledgeParts.push(kb.content);
-      }
-    }
-    if (knowledgeParts.length > 0) {
-      parts.push('');
-      parts.push('Relevant knowledge:');
-      for (const part of knowledgeParts) {
-        parts.push(part);
-      }
-    }
-
-    return parts.join('\n');
-  }
-
-  /**
-   * Build the tool set for Direct Reasoning Mode.
-   * Provides read-oriented tools: fs_search, fs_read, fs_list, code_symbol_search.
-   */
-  private buildDirectReasoningToolSet(_input: {
-    decision: IntentGatewayDecision;
-    resolvedCodeSession: ResolvedCodeSessionContext | null | undefined;
-  }): ToolDefinition[] {
-    // Direct reasoning mode provides read-oriented tools for iterative exploration.
-    // These are the same tools available to the normal assistant, but filtered
-    // to read-only operations for repo inspection.
-    const tools: ToolDefinition[] = [];
-
-    tools.push({
-      name: 'fs_search',
-      description: 'Search for files matching a pattern. Returns file paths and brief content snippets.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Search query' },
-          path: { type: 'string', description: 'Root directory to search in (optional)' },
-        },
-        required: ['query'],
-      },
-    });
-
-    tools.push({
-      name: 'fs_read',
-      description: 'Read the full content of a file. Use this to examine implementation files found by search.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'File path to read' },
-        },
-        required: ['path'],
-      },
-    });
-
-    tools.push({
-      name: 'fs_list',
-      description: 'List files in a directory. Useful for exploring directory structure.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Directory path to list' },
-        },
-        required: ['path'],
-      },
-    });
-
-    return tools;
-  }
-
-  /**
-   * Execute the Direct Reasoning Mode tool loop.
-   * This runs an iterative LLM conversation where the model can call tools
-   * (search, read, list) up to maxTurns times, then returns the final answer.
-   */
-  private async executeDirectReasoningLoop(input: {
-    ctx: AgentContext;
-    systemPrompt: string;
-    userMessage: string;
-    tools: ToolDefinition[];
-    maxTurns: number;
-    selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
-  }): Promise<{ content: string } | null> {
-    const { ctx, systemPrompt, userMessage, tools, maxTurns } = input;
-
-    // Build the conversation history starting with the system prompt and user message
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ];
-
-    let turns = 0;
-    let finalContent = '';
-
-    while (turns < maxTurns) {
-      turns++;
-
-      // Call the LLM with the current conversation and tools
-      const chatOptions: ChatOptions = {
-        tools: tools as ToolDefinition[],
-      };
-
-      let chatResponse: ChatResponse;
-      try {
-        if (this.fallbackChain) {
-          const preferredOrder = this.resolvePreferredProviderOrder(
-            this.resolveExecutionProfileProviderOrder(input.selectedExecutionProfile),
-          );
-          if (preferredOrder && preferredOrder.length > 0) {
-            chatResponse = (await this.fallbackChain.chatWithProviderOrder(preferredOrder, messages, chatOptions)).response;
-          } else {
-            chatResponse = (await this.fallbackChain.chatWithFallback(messages, chatOptions)).response;
-          }
-        } else {
-          chatResponse = await ctx.llm!.chat(messages, chatOptions);
-        }
-      } catch (err) {
-        log.error(`Direct reasoning LLM call failed: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      }
-
-      // If the model didn't call any tools, return its final answer
-      if (!chatResponse.toolCalls || chatResponse.toolCalls.length === 0) {
-        finalContent = chatResponse.content ?? '';
-        break;
-      }
-
-      // Process each tool call
-      const toolResults: ChatMessage[] = [];
-      for (const toolCall of chatResponse.toolCalls) {
-        const result = await this.executeDirectReasoningToolCall({
-          ctx,
-          toolCall,
-        });
-        toolResults.push({
-          role: 'tool' as const,
-          content: result,
-          toolCallId: toolCall.id,
-        });
-
-        // Emit trace event for the tool call
-        this.intentRoutingTrace?.record({
-          stage: 'direct_reasoning_tool_call',
-          requestId: undefined,
-          details: {
-            tool: toolCall.name,
-            turns,
-          },
-        });
-      }
-
-      // Add the assistant message and tool results to the conversation
-      messages.push({
-        role: 'assistant',
-        content: chatResponse.content ?? '',
-        toolCalls: chatResponse.toolCalls,
-      });
-      messages.push(...toolResults);
-    }
-
-    return finalContent ? { content: finalContent } : null;
-  }
-
-  /**
-   * Execute a single tool call from the Direct Reasoning Mode loop.
-   * Delegates to the existing tool executor for fs_search, fs_read, fs_list.
-   */
-  private async executeDirectReasoningToolCall(input: {
-    ctx: AgentContext;
-    toolCall: ToolCall;
-  }): Promise<string> {
-    const { toolCall } = input;
-    const toolName = toolCall.name;
-    let toolArgs: Record<string, unknown>;
-    try {
-      toolArgs = JSON.parse(toolCall.arguments);
-    } catch {
-      return `Error: Invalid JSON arguments for tool ${toolName}`;
-    }
-
-    // Use the tool executor for filesystem read operations
-    if (toolName === 'fs_search' || toolName === 'fs_read' || toolName === 'fs_list') {
-      try {
-        const result = await this.tools!.executeModelTool(toolName, toolArgs, {
-          origin: 'assistant',
-          requestId: `direct_reasoning_${Date.now()}`,
-          principalId: 'direct_reasoning',
-        });
-        const message = typeof result.message === 'string' ? result.message : JSON.stringify(result);
-        return message;
-      } catch (err) {
-        return `Error executing ${toolName}: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-
-    return `Tool "${toolName}" is not available in direct reasoning mode. Available tools: fs_search, fs_read, fs_list.`;
-  }
-
-  /**
-   * Run lightweight structural quality checks on the direct reasoning result.
-   * Uses the same deriveAnswerConstraints logic but as a post-hoc check,
-   * not a contract enforcement mechanism.
-   */
-  private runDirectReasoningQualityCheck(input: {
-    result: { content: string };
-    decision: IntentGatewayDecision;
-  }): string[] | null {
-    const { result, decision } = input;
-    const constraints = deriveAnswerConstraints(decision.resolvedContent);
-    if (!constraints || Object.keys(constraints).length === 0) return null;
-
-    const notes: string[] = [];
-    const answer = result.content;
-
-    // Check if the answer includes backtick-quoted code identifiers or PascalCase names
-    // This is a lightweight heuristic, not a full verifier
-    if (constraints.requiresSymbolNames) {
-      const backtickPattern = /`([^`]+)`/g;
-      const symbolMatches = answer.match(backtickPattern);
-      if (!symbolMatches || symbolMatches.length === 0) {
-        notes.push('The answer does not include backtick-quoted code identifiers (function/type names). The response may be incomplete — consider asking for specific symbol names.');
-      }
-    }
-
-    if (constraints.requiresImplementationFiles) {
-      // Check if the answer includes file paths in typical code patterns
-      const filePathPattern = /(?:src\/|lib\/|pkg\/|internal\/)[\w/.-]+\.(ts|js|go|py|rs)/g;
-      const fileMatches = answer.match(filePathPattern);
-      if (!fileMatches || fileMatches.length <= 2) {
-        notes.push(`The answer cites ${fileMatches?.length ?? 0} implementation file(s). For a thorough repo inspection, more files may be relevant — consider asking for a more specific investigation.`);
-      }
-    }
-
-    return notes.length > 0 ? notes : null;
   }
 
   /**
@@ -4218,33 +3772,104 @@ type DirectIntentShadowCandidate =
       selectedExecutionProfile,
       currentProviderName: ctx.llm?.name,
     });
-    const handleDirectReasoning = this.shouldHandleDirectReasoningMode({
+    const handleDirectReasoning = shouldHandleDirectReasoningModeRuntime({
       gateway: earlyGateway,
       selectedExecutionProfile,
-      currentProviderName: ctx.llm?.name,
     });
 
-    // Direct reasoning mode: repo-inspection and coding/reasoning tasks
-    // use an iterative tool loop instead of the delegated worker contract.
-    // This gives the model direct tool access for search/read/answer exploration.
-    if (handleDirectReasoning && !handleDirectAssistantInline) {
+    // Direct reasoning normally runs inside the brokered worker. This supervisor
+    // fallback only exists for runtimes that have no WorkerManager configured.
+    if (handleDirectReasoning && !handleDirectAssistantInline && !workerManager) {
       try {
+        if (!ctx.llm || !this.tools) {
+          throw new Error('Direct reasoning requires an LLM provider and tool executor.');
+        }
         const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
-        const directReasoningResult = await this.handleDirectReasoningMode({
-          ctx,
+        const directToolContext = this.tools.getToolContext({
+          userId: conversationUserId,
+          principalId: message.principalId ?? conversationUserId,
+          channel: conversationChannel,
+          codeContext: effectiveCodeContext,
+          requestText: routedScopedMessage.content,
+          ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
+        });
+        const directRuntimeNotices = this.tools.getRuntimeNotices()
+          .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
+        const directReasoningResult = await handleDirectReasoningModeRuntime({
           message: message.content,
-          routedScopedMessage: routedScopedMessage,
           gateway: earlyGateway,
           selectedExecutionProfile,
-          promptKnowledge,
-          resolvedCodeSession,
+          promptKnowledge: {
+            ...promptKnowledge,
+            toolContext: directToolContext,
+            runtimeNotices: directRuntimeNotices,
+          },
+          workspaceRoot: effectiveCodeContext?.workspaceRoot ?? resolvedCodeSession?.session.workspaceRoot,
+          traceContext: {
+            requestId: message.id,
+            messageId: message.id,
+            userId: conversationUserId,
+            channel: conversationChannel,
+            agentId: this.id,
+            contentPreview: message.content,
+            executionId: executionIdentity.executionId,
+            rootExecutionId: executionIdentity.rootExecutionId,
+            codeSessionId: effectiveCodeContext?.sessionId,
+          },
+          toolRequest: {
+            origin: 'assistant',
+            requestId: message.id,
+            agentId: this.id,
+            userId: conversationUserId,
+            surfaceId: message.surfaceId,
+            principalId: message.principalId ?? conversationUserId,
+            principalRole: message.principalRole ?? 'owner',
+            channel: conversationChannel,
+            agentContext: { checkAction: ctx.checkAction },
+            codeContext: effectiveCodeContext,
+            toolContextMode: selectedExecutionProfile?.toolContextMode,
+            activeSkills: activeSkills.map((skill) => skill.id),
+            requestText: stripLeadingContextPrefix(routedScopedMessage.content),
+          },
+        }, {
+          chat: (messagesForProvider, options) => ctx.llm!.chat(messagesForProvider, options),
+          executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, {
+            ...request,
+            origin: request.origin ?? 'assistant',
+          }),
+          trace: this.intentRoutingTrace,
+          logger: log,
         });
-        if (directReasoningResult) {
-          return directReasoningResult;
-        }
+        return directReasoningResult;
       } catch (directReasoningError) {
-        log.error(`Direct reasoning mode failed, falling back to delegated orchestration: ${directReasoningError instanceof Error ? directReasoningError.message : String(directReasoningError)}`);
-        // Fall through to delegated orchestration or normal chat
+        const errorMessage = directReasoningError instanceof Error
+          ? directReasoningError.message
+          : String(directReasoningError);
+        log.error(`Direct reasoning mode failed: ${errorMessage}`);
+        this.intentRoutingTrace?.record({
+          stage: 'direct_reasoning_failed',
+          requestId: message.id,
+          messageId: message.id,
+          userId: conversationUserId,
+          channel: conversationChannel,
+          agentId: this.id,
+          contentPreview: message.content,
+          details: {
+            executionId: executionIdentity.executionId,
+            rootExecutionId: executionIdentity.rootExecutionId,
+            codeSessionId: effectiveCodeContext?.sessionId,
+            error: errorMessage,
+          },
+        });
+        return {
+          content: 'Direct reasoning failed before it could produce a grounded answer.',
+          metadata: {
+            executionProfile: selectedExecutionProfile ?? undefined,
+            directReasoning: true,
+            directReasoningMode: 'supervisor_readonly_fallback',
+            directReasoningFailed: true,
+          },
+        };
       }
     }
 
@@ -4271,7 +3896,9 @@ type DirectIntentShadowCandidate =
           this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, workerSkillPromptMaterial);
         }
         const currentConfig = this.readConfig?.();
-        const workerExecutionProfile = currentConfig
+        const workerExecutionProfile = handleDirectReasoning
+          ? selectedExecutionProfile
+          : currentConfig
           ? (
             selectDelegatedExecutionProfile({
               config: currentConfig,
@@ -4348,6 +3975,7 @@ type DirectIntentShadowCandidate =
           continuity: continuitySummary,
           pendingAction: this.buildPendingActionPromptContext(pendingAction),
           pendingApprovalNotice,
+          directReasoning: handleDirectReasoning,
           delegation: {
             requestId: message.id,
             ...(executionIdentity?.executionId ? { executionId: executionIdentity.executionId } : {}),
