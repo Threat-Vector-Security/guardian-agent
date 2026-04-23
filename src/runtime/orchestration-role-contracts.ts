@@ -104,8 +104,8 @@ function dedupeLenses(values: readonly string[]): string[] {
   return [...new Set(values.filter((value) => typeof value === 'string' && value.trim().length > 0))];
 }
 
-function isReadLikeOperation(operation: IntentGatewayOperation): boolean {
-  return READ_LIKE_OPERATIONS.has(operation);
+export function isReadLikeOperation(operation: IntentGatewayOperation | undefined): boolean {
+  return operation != null && READ_LIKE_OPERATIONS.has(operation);
 }
 
 function normalizeCapabilities(values: readonly string[]): string[] {

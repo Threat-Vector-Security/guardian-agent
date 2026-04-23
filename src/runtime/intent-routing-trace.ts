@@ -41,7 +41,10 @@ export type IntentRoutingTraceStage =
   | 'direct_intent_response'
   | 'dispatch_response'
   | 'approval_decision_resolved'
-  | 'approval_continuation_resolved';
+  | 'approval_continuation_resolved'
+  | 'direct_reasoning_started'
+  | 'direct_reasoning_tool_call'
+  | 'direct_reasoning_completed';
 
 export interface IntentRoutingTraceEntry {
   id: string;
