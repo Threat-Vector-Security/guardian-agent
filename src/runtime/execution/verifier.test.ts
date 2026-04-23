@@ -61,6 +61,33 @@ function buildToolExecutionTaskContract(overrides: Partial<DelegatedTaskContract
   };
 }
 
+function buildFilesystemMutationTaskContract(overrides: Partial<DelegatedTaskContract> = {}): DelegatedTaskContract {
+  return {
+    ...buildDelegatedTaskContract({
+      route: 'filesystem_task',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Create tmp/manual-web/flag.txt containing test.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'read', summary: 'Inspect the relevant repo files and collect grounded repo evidence.', required: true },
+        { kind: 'answer', summary: 'Answer with grounded findings from the inspected repo files.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    }),
+    ...overrides,
+  };
+}
+
 function buildEnvelope(input?: {
   taskContract?: DelegatedTaskContract;
   finalUserAnswer?: string;
@@ -406,7 +433,7 @@ describe('verifyDelegatedResult', () => {
         evidenceReceipts: [{
           receiptId: 'receipt-1',
           sourceType: 'tool_call',
-          toolName: 'code_remote_exec',
+          toolName: 'fs_search',
           status: 'failed',
           refs: [],
           summary: 'Remote sandbox command failed on Daytona Main. stderr: Request failed with status code 502',
@@ -420,7 +447,7 @@ describe('verifyDelegatedResult', () => {
       decision: 'contradicted',
       retryable: true,
       requiredNextAction: expect.stringContaining('step_1'),
-      unsatisfiedStepIds: ['step_1'],
+      unsatisfiedStepIds: ['step_1', 'step_2'],
     });
     expect(decision.reasons[0]).toContain('Remote sandbox command failed on Daytona Main');
   });
@@ -433,8 +460,17 @@ describe('verifyDelegatedResult', () => {
     const decision = verifyDelegatedResult({
       envelope: buildEnvelope({
         taskContract,
+        runStatus: 'completed',
         finalUserAnswer: 'I found the delegated worker progress and run timeline implementation after inspecting the repo.',
         operatorSummary: 'I found the delegated worker progress and run timeline implementation after inspecting the repo.',
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: index === 1 ? ['receipt-1'] : index === 2 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
         evidenceReceipts: [{
           receiptId: 'receipt-1',
           sourceType: 'tool_call',
@@ -536,6 +572,119 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('uses a filesystem mutation plan when gateway planned steps are stale read-only evidence steps', () => {
+    const taskContract = buildFilesystemMutationTaskContract();
+
+    expect(taskContract.kind).toBe('filesystem_mutation');
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['write']);
+    expect(taskContract.plan.steps[0]?.summary).toBe('Create tmp/manual-web/flag.txt containing test.');
+    expect(taskContract.plan.steps[0]?.expectedToolCategories).toEqual(['fs_write']);
+  });
+
+  it('verifies filesystem mutation receipts against the mutation contract instead of stale repo evidence steps', () => {
+    const taskContract = buildFilesystemMutationTaskContract();
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        finalUserAnswer: 'Created tmp/manual-web/flag.txt.',
+        operatorSummary: 'Created tmp/manual-web/flag.txt.',
+        evidenceReceipts: [{
+          receiptId: 'receipt-write-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          refs: ['tmp/manual-web/flag.txt'],
+          summary: 'Wrote tmp/manual-web/flag.txt.',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
+  it('requires a real fs_write receipt for file-targeted filesystem mutation write steps', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'filesystem_task',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search src/runtime for planned_steps.', required: true },
+        { kind: 'write', summary: 'Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.', required: true },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.plan.steps).toMatchObject([
+      { kind: 'search', expectedToolCategories: ['fs_search', 'code_symbol_search'] },
+      { kind: 'write', expectedToolCategories: ['fs_write'] },
+    ]);
+
+    expect(matchPlannedStepForTool({
+      hintStepId: 'step_2',
+      plannedTask: taskContract.plan,
+      toolName: 'fs_search',
+      args: {
+        path: 'src/runtime',
+        query: 'planned_steps',
+      },
+    })).toBe('step_1');
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        operatorSummary: 'Now I have the summary. Let me write it.',
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-search-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: [
+              'src/runtime/intent/route-classifier.ts',
+              'src/runtime/intent/structured-recovery.ts',
+            ],
+            summary: 'Searched src/runtime for planned_steps.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-mkdir-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_mkdir',
+            status: 'succeeded',
+            refs: ['tmp/manual-web'],
+            summary: 'Created tmp/manual-web.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      unsatisfiedStepIds: ['step_2'],
+      missingEvidenceKinds: ['write'],
+    });
+  });
+
   it('accepts OpenAI dated snapshot ids when they match the selected alias model', () => {
     const taskContract = buildRepoInspectionTaskContract();
     const decision = verifyDelegatedResult({
@@ -558,14 +707,14 @@ describe('verifyDelegatedResult', () => {
       envelope: buildEnvelope({
         taskContract,
         runStatus: 'completed',
-        stepReceipts: [{
-          stepId: taskContract.plan.steps[0]!.stepId,
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
           status: 'satisfied',
-          evidenceReceiptIds: ['receipt-1'],
-          summary: 'Read the relevant repo file.',
-          startedAt: 1,
-          endedAt: 2,
-        }],
+          evidenceReceiptIds: index === 0 ? ['receipt-1'] : index === 1 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
         evidenceReceipts: [{
           receiptId: 'receipt-1',
           sourceType: 'tool_call',

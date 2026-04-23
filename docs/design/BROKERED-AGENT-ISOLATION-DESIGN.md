@@ -20,6 +20,7 @@ The worker process owns:
 - prompt assembly
 - conversation-context assembly from supervisor-provided state
 - the LLM chat/tool loop
+- the read-only direct-reasoning loop for repo-inspection/coding analysis turns
 - bounded suspended tool-loop state for approval-backed resumes
 - post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
 
@@ -44,6 +45,7 @@ Channel -> Runtime.dispatchMessage()
         -> brokered worker process
              -> LLM provider call
              -> broker RPC tool.call / approval.*
+             -> brokered direct reasoning for read-only repo inspection
         -> worker returns final response
         -> OutputGuardian final scan
         -> channel response
@@ -124,6 +126,17 @@ Implemented:
 - `worker.ready`
 - `worker.heartbeat`
 - `message.response`
+- `trace.record` — brokered workers can publish routing/diagnostic trace events such as direct-reasoning start, tool-call, completion, and failure without gaining direct access to supervisor observability internals
+
+## Direct Reasoning Boundary
+
+Read-only direct reasoning is an execution mode inside the brokered worker, not a supervisor-side shortcut. The supervisor still owns intent routing, execution-profile selection, capability tokens, audit logging, approvals, and tool execution. The worker receives an explicit `directReasoning` dispatch flag and then uses injected broker-backed dependencies:
+
+- LLM calls go through `llm.chat`
+- filesystem inspection goes through `tool.call` for the read-only allowlist `fs_search`, `fs_read`, and `fs_list`
+- diagnostic events go through `trace.record`
+
+Direct reasoning must not call supervisor `ToolExecutor` or provider objects directly when brokered isolation is enabled. If the read-only loop exhausts its budget, the direct turn fails closed instead of automatically falling into delegated orchestration.
 
 ## Capability Tokens
 

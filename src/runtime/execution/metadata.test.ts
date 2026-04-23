@@ -32,13 +32,14 @@ describe('delegated execution metadata', () => {
 
     expect(envelope.runStatus).toBe('failed');
     expect(envelope.stopReason).toBe('error');
-    expect(envelope.stepReceipts).toEqual([
-      expect.objectContaining({
-        stepId: taskContract.plan.steps[0]?.stepId,
+    expect(envelope.stepReceipts).toEqual(
+      taskContract.plan.steps.map((step) => expect.objectContaining({
+        stepId: step.stepId,
         status: 'failed',
         evidenceReceiptIds: [],
-      }),
-    ]);
+        summary: step.summary,
+      })),
+    );
   });
 
   it('rejects incomplete delegated result metadata that is missing typed envelope fields', () => {

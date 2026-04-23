@@ -149,4 +149,65 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     expect(result?.content).toContain('No managed sandboxes are currently attached to this coding session.');
     expect(result?.content).not.toContain('Available coding workspaces:');
   });
+
+  it('lists sessions when the resource entity says session_list even if the operation is inspect', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'code_session_list') {
+        return {
+          success: true,
+          output: {
+            sessions: [
+              {
+                id: 'session-1',
+                title: 'Harness Session',
+                workspaceRoot: 'S:\\Harness',
+                resolvedRoot: 'S:\\Harness',
+              },
+              {
+                id: 'session-2',
+                title: 'Scoped Session',
+                workspaceRoot: 'S:\\Scoped',
+                resolvedRoot: 'S:\\Scoped',
+              },
+            ],
+          },
+        };
+      }
+      if (toolName === 'code_session_current') {
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-1',
+              title: 'Harness Session',
+              workspaceRoot: 'S:\\Harness',
+              resolvedRoot: 'S:\\Harness',
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({ content: 'List the coding sessions.' }),
+      ctx: createCtx(),
+      decision: createDecision({
+        operation: 'inspect',
+        entities: {
+          codeSessionResource: 'session_list',
+        },
+      }),
+    });
+
+    expect(result?.content).toContain('Available coding workspaces:');
+    expect(result?.content).toContain('CURRENT: Harness Session');
+    expect(result?.content).toContain('Scoped Session');
+  });
 });

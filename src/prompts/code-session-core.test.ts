@@ -38,6 +38,7 @@ describe('code-session-core prompt', () => {
     expect(prompt).toContain('Do not infer from the folder name');
     expect(prompt).toContain('instead of making extra tool calls');
     expect(prompt).toContain('README.md, package.json');
+    expect(prompt).toContain('product/domain category');
     expect(prompt).toContain('outside the allowed paths');
     expect(prompt).toContain('ignore the stale workspace reference');
   });

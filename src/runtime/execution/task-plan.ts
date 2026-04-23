@@ -43,10 +43,13 @@ export function buildPlannedTask(
     answerConstraints?: AnswerConstraints;
   },
 ): PlannedTask {
-  const gatewaySteps = Array.isArray(decision?.plannedSteps)
+  const normalizedGatewaySteps = Array.isArray(decision?.plannedSteps)
     ? decision.plannedSteps
         .map((step, index) => normalizeGatewayPlannedStep(step, index))
         .filter((step): step is PlannedStep => !!step)
+    : [];
+  const gatewaySteps = shouldUseGatewayPlannedSteps(normalizedGatewaySteps, contract)
+    ? normalizedGatewaySteps.map((step) => applyDefaultExpectedToolCategories(step, contract))
     : [];
 
   if (gatewaySteps.length > 0) {
@@ -74,17 +77,94 @@ export function buildPlannedTask(
     };
   }
 
-  const steps = ensureExactFileReferenceReadStep([{
+  if (contract.kind === 'repo_inspection') {
+    const needsExactFileRead = contract.requireExactFileReferences === true;
+    const answerDependsOn = needsExactFileRead ? ['step_1', 'step_2'] : ['step_1'];
+    const answerSummary = enrichAnswerSummaryForConstraints(
+      contract.summary?.trim() || 'Answer with grounded findings from the inspected repo files.',
+      contract.answerConstraints,
+    );
+    const repoSteps: PlannedStep[] = [
+      {
+        stepId: 'step_1',
+        kind: 'search',
+        summary: 'Search the repo for the relevant implementation files.',
+        required: true,
+      },
+      ...(needsExactFileRead
+        ? [{
+            stepId: 'step_2',
+            kind: 'read' as const,
+            summary: 'Read the specific implementation files needed to ground the exact file references.',
+            required: true,
+            dependsOn: ['step_1'],
+          }]
+        : []),
+      {
+        stepId: needsExactFileRead ? 'step_3' : 'step_2',
+        kind: 'answer',
+        summary: answerSummary,
+        required: true,
+        dependsOn: answerDependsOn,
+      },
+    ];
+    const steps = repoSteps.map((step) => applyDefaultExpectedToolCategories(step, contract));
+    return {
+      planId: buildPlanId(contract.route, contract.operation, steps.length),
+      steps,
+      allowAdditionalSteps: true,
+    };
+  }
+
+  const steps = ensureExactFileReferenceReadStep([applyDefaultExpectedToolCategories({
     stepId: 'step_1',
     kind: inferDefaultPlannedStepKind(contract.kind, contract.operation),
     summary: contract.summary?.trim() || 'Complete the requested work.',
     required: true,
-  }], contract);
+  }, contract)], contract);
   return {
     planId: buildPlanId(contract.route, contract.operation, steps.length),
     steps,
     allowAdditionalSteps: true,
   };
+}
+
+function shouldUseGatewayPlannedSteps(
+  steps: PlannedStep[],
+  contract: {
+    kind: DelegatedTaskContractKind;
+  },
+): boolean {
+  if (steps.length === 0) return false;
+  switch (contract.kind) {
+    case 'filesystem_mutation':
+      return steps.some((step) => step.kind === 'write'
+        || step.expectedToolCategories?.some(isWriteToolCategory));
+    case 'tool_execution':
+      return steps.some((step) => step.kind === 'tool_call'
+        || step.expectedToolCategories?.some(isExecutionToolCategory));
+    case 'general_answer':
+    case 'repo_inspection':
+    case 'security_analysis':
+      return true;
+  }
+}
+
+function isWriteToolCategory(value: string): boolean {
+  return value === 'write'
+    || value === 'fs_write'
+    || value === 'fs_mkdir'
+    || value === 'fs_delete'
+    || value === 'fs_move'
+    || value === 'fs_copy';
+}
+
+function isExecutionToolCategory(value: string): boolean {
+  return value === 'tool_call'
+    || value === 'code_remote_exec'
+    || value === 'execute_code'
+    || value === 'shell'
+    || value === 'command';
 }
 
 function ensureExactFileReferenceReadStep(
@@ -486,15 +566,109 @@ function inferDefaultPlannedStepKind(
   operation: string | undefined,
 ): PlannedStepKind {
   if (contractKind === 'general_answer') return 'answer';
+  if (contractKind === 'filesystem_mutation') return 'write';
   if (operation === 'search') return 'search';
   if (operation === 'read' || operation === 'inspect') return 'read';
   if (operation === 'save' || operation === 'update' || operation === 'create' || operation === 'delete') {
     return 'write';
   }
   if (operation === 'run') return 'tool_call';
-  if (contractKind === 'filesystem_mutation') return 'write';
   if (contractKind === 'repo_inspection') return 'read';
   return 'tool_call';
+}
+
+function applyDefaultExpectedToolCategories(
+  step: PlannedStep,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    route?: string;
+    operation?: string;
+  },
+): PlannedStep {
+  if (step.expectedToolCategories?.length) {
+    return step;
+  }
+  const expectedToolCategories = inferExpectedToolCategories(step, contract);
+  return expectedToolCategories.length > 0
+    ? { ...step, expectedToolCategories }
+    : step;
+}
+
+function inferExpectedToolCategories(
+  step: PlannedStep,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    route?: string;
+    operation?: string;
+  },
+): string[] {
+  switch (step.kind) {
+    case 'search':
+      return inferSearchToolCategories(contract);
+    case 'read':
+      return inferReadToolCategories(contract);
+    case 'write':
+      return inferWriteToolCategories(step.summary);
+    case 'memory_save':
+      return ['memory_save'];
+    case 'tool_call':
+      return inferToolCallCategories(contract);
+    case 'answer':
+      return [];
+  }
+}
+
+function inferSearchToolCategories(
+  contract: {
+    route?: string;
+  },
+): string[] {
+  if (contract.route === 'browser_task' || contract.route === 'search_task') {
+    return ['web_search', 'fs_search', 'code_symbol_search'];
+  }
+  return ['fs_search', 'code_symbol_search'];
+}
+
+function inferReadToolCategories(
+  contract: {
+    route?: string;
+  },
+): string[] {
+  if (contract.route === 'browser_task' || contract.route === 'search_task') {
+    return ['web_fetch', 'fs_read', 'fs_list'];
+  }
+  return ['fs_read', 'fs_list'];
+}
+
+function inferToolCallCategories(
+  contract: {
+    kind: DelegatedTaskContractKind;
+    operation?: string;
+  },
+): string[] {
+  if (contract.kind === 'tool_execution' || contract.operation === 'run') {
+    return ['code_remote_exec', 'execute_code', 'shell', 'command'];
+  }
+  return [];
+}
+
+function inferWriteToolCategories(summary: string | undefined): string[] {
+  const normalized = summary?.trim().toLowerCase() ?? '';
+  if (/\b(delete|remove|unlink)\b/.test(normalized)) {
+    return ['fs_delete'];
+  }
+  if (/\b(move|rename)\b/.test(normalized)) {
+    return ['fs_move'];
+  }
+  if (/\b(copy|duplicate)\b/.test(normalized)) {
+    return ['fs_copy'];
+  }
+  const directoryOnly = /\b(directory|folder|mkdir)\b/.test(normalized)
+    && !/\b(file|write|save|content|contents|containing|text|summary)\b/.test(normalized);
+  if (directoryOnly) {
+    return ['fs_mkdir'];
+  }
+  return ['fs_write'];
 }
 
 function inferStepKindFromToolName(toolName: string): PlannedStepKind {
@@ -517,7 +691,9 @@ function toolNameSatisfiesStep(
   inferredToolKind: PlannedStepKind = inferStepKindFromToolName(toolName),
 ): boolean {
   if (!step.expectedToolCategories?.length) {
-    return true;
+    return step.kind === 'tool_call'
+      ? inferredToolKind === 'tool_call'
+      : step.kind === inferredToolKind;
   }
   return step.expectedToolCategories.some((value) => value === toolName || value === inferredToolKind);
 }

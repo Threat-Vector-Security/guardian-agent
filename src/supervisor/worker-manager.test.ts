@@ -1544,7 +1544,7 @@ describe('WorkerManager', () => {
           lifecycle: 'failed',
           handoff: {
             reportingMode: 'inline_response',
-            nextAction: 'Inspect the delegated worker failure details before retrying.',
+            nextAction: expect.stringContaining('step_1'),
           },
         },
       },
@@ -1570,7 +1570,7 @@ describe('WorkerManager', () => {
         lifecycle: 'failed',
         reason: 'Delegated worker stopped before satisfying every required planned step.',
         handoffSummary: 'Delegated worker stopped before satisfying every required planned step.',
-        handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
+        handoffNextAction: expect.stringContaining('step_1'),
       },
     });
 
@@ -1666,7 +1666,7 @@ describe('WorkerManager', () => {
     });
 
     expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('Delegated worker stopped before satisfying every required planned step.');
+    expect(result.content).toContain('Delegated worker did not return the exact file references requested after repo inspection.');
 
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
       'delegated_worker_started',
@@ -1684,9 +1684,9 @@ describe('WorkerManager', () => {
       requestId: 'm-repo-grounding-failed',
       details: {
         lifecycle: 'failed',
-        reason: 'Delegated worker stopped before satisfying every required planned step.',
-        handoffSummary: 'Delegated worker stopped before satisfying every required planned step.',
-        handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
+        reason: 'Delegated worker did not return the exact file references requested after repo inspection.',
+        handoffSummary: 'Delegated worker did not return the exact file references requested after repo inspection.',
+        handoffNextAction: expect.stringContaining('step_1'),
         workerExecutionCompletionReason: 'answer_first_response',
         workerExecutionToolCallCount: 0,
         workerExecutionToolResultCount: 0,
@@ -1696,7 +1696,7 @@ describe('WorkerManager', () => {
     expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
       kind: 'failed',
       requestId: 'm-repo-grounding-failed',
-      detail: 'Delegated worker stopped before satisfying every required planned step.',
+      detail: 'Delegated worker did not return the exact file references requested after repo inspection.',
     });
 
     manager.shutdown();

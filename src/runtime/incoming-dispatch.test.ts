@@ -302,8 +302,8 @@ describe('createIncomingDispatchPreparer', () => {
       tier: 'external',
     });
     expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
-      providerTier: 'frontier',
-      id: 'frontier_deep',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
     });
   });
 
@@ -519,17 +519,15 @@ describe('createIncomingDispatchPreparer', () => {
     });
 
     expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
-      id: 'frontier_deep',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
       preferredAnswerPath: 'chat_synthesis',
     });
+    // Repo-inspection now routes through direct reasoning mode (iterative tool loop),
+    // so managed cloud is sufficient — no need for frontier.
     expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'profile_selection_decided',
       details: expect.objectContaining({
-        providerType: 'anthropic',
-        providerModel: 'claude-opus-4.6',
-        providerTier: 'frontier',
         selectionSource: 'auto',
         routingMode: 'auto',
       }),
@@ -537,9 +535,7 @@ describe('createIncomingDispatchPreparer', () => {
     expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'pre_routed_metadata_attached',
       details: expect.objectContaining({
-        selectedProviderType: 'anthropic',
-        selectedProviderModel: 'claude-opus-4.6',
-        selectedProviderTier: 'frontier',
+        selectedProviderTier: 'managed_cloud',
       }),
     }));
   });

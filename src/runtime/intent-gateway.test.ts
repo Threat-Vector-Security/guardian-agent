@@ -2720,6 +2720,65 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Temp install test');
   });
 
+  it('repairs unknown classifier output for explicit coding-session switches', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Switch this chat to the coding workspace for Temp install test.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'No direct route.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.sessionTarget).toBe('Temp install test');
+  });
+
+  it('repairs unavailable classifier output for explicit coding-session switches', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Switch this chat to the coding workspace for Temp install test.',
+        channel: 'web',
+      },
+      async () => {
+        throw new Error('classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.sessionTarget).toBe('Temp install test');
+  });
+
+  it('repairs unavailable classifier output for explicit coding-session detaches', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Detach this chat from the current coding workspace.',
+        channel: 'web',
+      },
+      async () => {
+        throw new Error('classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('delete');
+  });
+
   it('classifies actual code execution as coding_task, not coding_session_control', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

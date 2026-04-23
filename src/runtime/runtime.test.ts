@@ -423,8 +423,7 @@ describe('Runtime', () => {
       });
 
       expect(parentProfile).toMatchObject({
-        providerName: 'anthropic',
-        providerTier: 'frontier',
+        providerTier: 'managed_cloud',
       });
       expect(response.content).toBe('Provider: ollama_cloud');
       expect(agent.providerNames).toEqual(['ollama_cloud']);

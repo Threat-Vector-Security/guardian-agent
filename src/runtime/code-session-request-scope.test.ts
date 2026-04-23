@@ -39,6 +39,22 @@ describe('shouldAttachCodeSessionForRequest', () => {
     })).toBe(true);
   });
 
+  it('does not scope coding-session control into the current workspace attachment', () => {
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Detach this chat from the current coding workspace.',
+      channel: 'web',
+      surfaceId: 'code-panel',
+      requestedCodeContext: {
+        sessionId: 'session-current',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'coding_session_control',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(false);
+  });
+
   it('drops classified non-code requests from the local surface attachment', () => {
     expect(shouldAttachCodeSessionForRequest({
       content: 'hello',

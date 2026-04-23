@@ -126,6 +126,36 @@ describe('resolveIntentGatewayEntities', () => {
     expect(result.entities.sessionTarget).toBe('Guardian project');
   });
 
+  it('infers coding-session targets from switch-to-workspace-for phrasing', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Switch this chat to the coding workspace for Temp install test.' },
+      'coding_session_control',
+      'update',
+      'classifier.primary',
+    );
+
+    expect(result.entities.sessionTarget).toBe('Temp install test');
+    expect(result.provenance).toMatchObject({
+      sessionTarget: 'resolver.coding',
+    });
+  });
+
+  it('infers coding-session list resources when the classifier keeps operation as inspect', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'List the coding sessions.' },
+      'coding_session_control',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.codeSessionResource).toBe('session_list');
+    expect(result.provenance).toMatchObject({
+      codeSessionResource: 'resolver.coding',
+    });
+  });
+
   it('preserves remote sandbox commands as coding-task entities', () => {
     expect(resolveIntentGatewayEntities(
       {},

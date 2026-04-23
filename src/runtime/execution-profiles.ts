@@ -321,6 +321,13 @@ function shouldPreferFrontier(
   policy: AssistantModelSelectionConfig,
 ): boolean {
   if (!decision) return false;
+  // Direct reasoning mode uses an iterative tool loop — managed cloud is
+  // adequate because the model can explore, read files, and refine its
+  // answer over multiple turns. Compute the execution mode from the same
+  // signals as shouldHandleDirectReasoningMode in direct-reasoning-mode.ts.
+  if (wouldUseDirectReasoningMode(decision)) {
+    return false;
+  }
   if (decision.executionClass === 'security_analysis' && policy.preferFrontierForSecurity) {
     return true;
   }
@@ -342,6 +349,36 @@ function shouldPreferFrontier(
     return true;
   }
   return false;
+}
+
+/**
+ * Determine whether a gateway decision would be handled by Direct Reasoning
+ * Mode (iterative tool loop) rather than Delegated Orchestration (contract
+ * pipeline). This mirrors shouldHandleDirectReasoningMode in
+ * direct-reasoning-mode.ts, but without the tier check (tier isn't resolved
+ * yet when this is called during execution profile selection).
+ *
+ * The key insight: direct reasoning mode is used for read-like repo-grounded
+ * operations, NOT for mutations, security analysis, or complex planning.
+ * These all go through the delegated pipeline where frontier preference
+ * still applies.
+ */
+function wouldUseDirectReasoningMode(decision: IntentGatewayDecision): boolean {
+  if (!decision) return false;
+  const isRepoGrounded = decision.requiresRepoGrounding === true
+    || decision.executionClass === 'repo_grounded';
+  const isInspectLike = isReadLikeOperation(decision.operation);
+  const isRepoInspectionRoute = decision.route === 'coding_task' && isInspectLike;
+
+  if (!isInspectLike) return false;
+  if (!isRepoGrounded && !isRepoInspectionRoute) return false;
+  // Mutations always go through delegated orchestration.
+  if (decision.operation === 'create' || decision.operation === 'update' || decision.operation === 'delete') return false;
+  // Security analysis always goes through delegated orchestration
+  if (decision.executionClass === 'security_analysis') return false;
+  // Complex planning always goes through delegated orchestration
+  if (decision.executionClass === 'tool_orchestration') return false;
+  return true;
 }
 
 function shouldPreferManagedCloud(

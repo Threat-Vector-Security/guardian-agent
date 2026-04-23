@@ -2044,7 +2044,7 @@ function createProviderSelectionPolicyPanel(config, panel) {
           <input id="cfg-model-selection-repo" type="checkbox"${preferFrontierForRepoGrounded ? ' checked' : ''}>
           <span>
             <strong>Prefer frontier for heavier repo-grounded synthesis</strong><br>
-            <span style="font-size:0.72rem;color:var(--text-muted);">Escalate deeper repo review, regression analysis, and higher-pressure grounded coding requests to the frontier default when available.</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Escalate deeper repo review, regression analysis, and higher-pressure grounded coding requests to the frontier default when available. Does not apply to basic repo inspection (which uses the managed-cloud model with an iterative search/read loop).</span>
           </span>
         </label>
       </div>

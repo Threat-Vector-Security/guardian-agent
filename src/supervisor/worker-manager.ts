@@ -65,6 +65,7 @@ import {
   buildDelegatedTaskContract,
   verifyDelegatedResult,
 } from '../runtime/execution/verifier.js';
+import type { DirectReasoningTraceContext } from '../runtime/direct-reasoning-mode.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -149,6 +150,7 @@ function buildDelegatedRetryIntentGatewayRecord(input: {
       ...(input.taskContract.route ? { route: input.taskContract.route as IntentGatewayDecision['route'] } : {}),
       ...(input.taskContract.operation ? { operation: input.taskContract.operation as IntentGatewayDecision['operation'] } : {}),
       ...(input.taskContract.summary?.trim() ? { summary: input.taskContract.summary.trim() } : {}),
+      requireExactFileReferences: input.taskContract.requireExactFileReferences,
       plannedSteps,
     },
   };
@@ -176,6 +178,8 @@ export interface WorkerMessageRequest {
   pendingAction?: PromptAssemblyPendingAction | null;
   pendingApprovalNotice?: string;
   delegation?: WorkerDelegationMetadata;
+  directReasoning?: boolean;
+  directReasoningTrace?: DirectReasoningTraceContext;
 }
 
 export interface WorkerDelegationMetadata {
@@ -338,6 +342,73 @@ export class WorkerManager {
     });
   }
 
+  private async handleDirectReasoningMessage(
+    input: WorkerMessageRequest,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const requestId = input.delegation?.requestId ?? input.message.id;
+    const codeContext = input.message.metadata?.codeContext as import('../tools/types.js').ToolExecutionRequest['codeContext'] | undefined;
+    const traceContext: DirectReasoningTraceContext = {
+      requestId,
+      messageId: input.message.id,
+      userId: input.userId,
+      channel: input.message.channel,
+      agentId: input.agentId,
+      contentPreview: input.message.content,
+      ...(input.delegation?.executionId ? { executionId: input.delegation.executionId } : {}),
+      ...(input.delegation?.rootExecutionId ? { rootExecutionId: input.delegation.rootExecutionId } : {}),
+      ...(input.delegation?.codeSessionId ?? codeContext?.sessionId
+        ? { codeSessionId: input.delegation?.codeSessionId ?? codeContext?.sessionId }
+        : {}),
+    };
+    try {
+      const worker = await this.getOrSpawnWorker(
+        input.sessionId,
+        input.agentId,
+        input.userId,
+        input.message.channel,
+        input.grantedCapabilities,
+      );
+      const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
+      return await this.dispatchToWorker(worker, {
+        message: input.message,
+        systemPrompt: input.systemPrompt,
+        history: input.history,
+        knowledgeBases: input.knowledgeBases ?? [],
+        activeSkills: input.activeSkills ?? [],
+        additionalSections: appendPromptAdditionalSection(
+          input.additionalSections ?? [],
+          this.buildCodeSessionRegistrySection(input),
+        ),
+        toolContext: input.toolContext ?? '',
+        runtimeNotices: input.runtimeNotices ?? [],
+        executionProfile: input.executionProfile,
+        continuity: input.continuity,
+        pendingAction: input.pendingAction,
+        pendingApprovalNotice: input.pendingApprovalNotice,
+        hasFallbackProvider,
+        directReasoning: true,
+        directReasoningTrace: traceContext,
+      });
+    } catch (error) {
+      this.observability.intentRoutingTrace?.record({
+        stage: 'direct_reasoning_failed',
+        requestId,
+        messageId: input.message.id,
+        userId: input.userId,
+        channel: input.message.channel,
+        agentId: input.agentId,
+        contentPreview: input.message.content,
+        details: {
+          ...(traceContext.executionId ? { executionId: traceContext.executionId } : {}),
+          ...(traceContext.rootExecutionId ? { rootExecutionId: traceContext.rootExecutionId } : {}),
+          ...(traceContext.codeSessionId ? { codeSessionId: traceContext.codeSessionId } : {}),
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+  }
+
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
     if (approvalResponse) return approvalResponse;
@@ -358,6 +429,10 @@ export class WorkerManager {
         intentDecision,
       });
       if (directAutomation) return directAutomation;
+    }
+
+    if (input.directReasoning === true) {
+      return this.handleDirectReasoningMessage(input);
     }
 
     const requestId = input.delegation?.requestId ?? input.message.id;
@@ -1624,6 +1699,20 @@ export class WorkerManager {
           worker.pendingMessageReject = undefined;
           return;
         }
+
+        if (notification.method === 'trace.record' && isRecord(notification.params)) {
+          this.observability.intentRoutingTrace?.record({
+            stage: String(notification.params.stage ?? '') as IntentRoutingTraceStage,
+            requestId: typeof notification.params.requestId === 'string' ? notification.params.requestId : undefined,
+            messageId: typeof notification.params.messageId === 'string' ? notification.params.messageId : undefined,
+            userId: typeof notification.params.userId === 'string' ? notification.params.userId : undefined,
+            channel: typeof notification.params.channel === 'string' ? notification.params.channel : undefined,
+            agentId: typeof notification.params.agentId === 'string' ? notification.params.agentId : undefined,
+            contentPreview: typeof notification.params.contentPreview === 'string' ? notification.params.contentPreview : undefined,
+            details: isRecord(notification.params.details) ? notification.params.details : undefined,
+          });
+          return;
+        }
       },
     });
 
@@ -1727,6 +1816,8 @@ export class WorkerManager {
       pendingApprovalNotice?: string;
       hasFallbackProvider?: boolean;
       priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
+      directReasoning?: boolean;
+      directReasoningTrace?: DirectReasoningTraceContext;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const queuedDispatch = worker.dispatchQueue.then(() => this.dispatchToWorkerNow(worker, params));
@@ -1751,6 +1842,8 @@ export class WorkerManager {
       pendingApprovalNotice?: string;
       hasFallbackProvider?: boolean;
       priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
+      directReasoning?: boolean;
+      directReasoningTrace?: DirectReasoningTraceContext;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (!this.workers.has(worker.id) || worker.status !== 'ready') {
@@ -2325,7 +2418,8 @@ function buildDelegatedInsufficientResultHandoff(
   return {
     summary: insufficiency.failureSummary,
     runClass: normalizeDelegatedRunClass(runClassInput),
-    nextAction: 'Inspect the delegated worker failure details before retrying.',
+    nextAction: insufficiency.decision.requiredNextAction
+      ?? 'Inspect the delegated worker failure details before retrying.',
     reportingMode: 'inline_response',
   };
 }
@@ -2340,11 +2434,25 @@ function buildDelegatedRetryableFailure(
   const satisfiedSteps = collectDelegatedSatisfiedSteps(envelope);
   return {
     decision,
-    failureSummary: decision.reasons[0]?.trim() || 'Delegated worker did not satisfy the task contract.',
+    failureSummary: buildDelegatedFailureSummaryFromDecision(decision, envelope, unsatisfiedSteps),
     retryReason: buildDelegatedRetryReason(decision, unsatisfiedSteps),
     unsatisfiedSteps,
     satisfiedSteps,
   };
+}
+
+function buildDelegatedFailureSummaryFromDecision(
+  decision: VerificationDecision,
+  envelope: DelegatedResultEnvelope,
+  unsatisfiedSteps: DelegatedResultSufficiencyFailure['unsatisfiedSteps'],
+): string {
+  if (
+    envelope.taskContract.requireExactFileReferences
+    && unsatisfiedSteps.some((step) => /\bread\b/i.test(step.summary))
+  ) {
+    return 'Delegated worker did not return the exact file references requested after repo inspection.';
+  }
+  return decision.reasons[0]?.trim() || 'Delegated worker did not satisfy the task contract.';
 }
 
 function buildDelegatedRetryReason(

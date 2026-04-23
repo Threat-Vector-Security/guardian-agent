@@ -12,6 +12,12 @@ export interface BrokerClientOptions {
 
 type NotificationHandler = (notification: JsonRpcNotification) => void;
 
+export function toBrokerTransportChatOptions(options?: ChatOptions): Omit<ChatOptions, 'signal'> | undefined {
+  if (!options) return undefined;
+  const { signal: _signal, ...transportOptions } = options;
+  return transportOptions;
+}
+
 export class BrokerClient {
   private readonly inputStream: NodeJS.ReadableStream;
   private readonly outputStream: NodeJS.WritableStream;
@@ -63,6 +69,10 @@ export class BrokerClient {
     this.outputStream.write(`${stringifyJsonTransport(notification)}\n`);
   }
 
+  recordTrace(params: Record<string, unknown>): void {
+    this.sendNotification('trace.record', params);
+  }
+
   async listLoadedTools(input?: { codeContext?: { workspaceRoot: string; sessionId?: string } }): Promise<ToolDefinition[]> {
     const result = await this.sendRequest<{ tools: ToolDefinition[] }>('tool.listLoaded', {
       ...(input?.codeContext ? { codeContext: input.codeContext } : {}),
@@ -83,8 +93,11 @@ export class BrokerClient {
       toolName: request.toolName,
       args: request.args,
       requestId: request.requestId,
+      requestText: request.requestText,
       agentId: request.agentId,
       userId: request.userId,
+      channel: request.channel,
+      surfaceId: request.surfaceId,
       principalId: request.principalId,
       principalRole: request.principalRole,
       contentTrustLevel: request.contentTrustLevel,
@@ -92,7 +105,10 @@ export class BrokerClient {
       derivedFromTaintedContent: request.derivedFromTaintedContent,
       allowModelMemoryMutation: request.allowModelMemoryMutation,
       scheduleId: request.scheduleId,
+      dryRun: request.dryRun,
+      activeSkills: request.activeSkills,
       codeContext: request.codeContext,
+      toolContextMode: request.toolContextMode,
     });
     return result;
   }
@@ -106,7 +122,7 @@ export class BrokerClient {
     // LLM calls can take up to 120s; use extended timeout
     return this.sendRequest<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }>('llm.chat', {
       messages,
-      options: options ?? {},
+      options: toBrokerTransportChatOptions(options) ?? {},
       useFallback: opts?.useFallback ?? false,
       ...(typeof opts?.providerName === 'string' && opts.providerName.trim() ? { providerName: opts.providerName.trim() } : {}),
       ...(Array.isArray(opts?.fallbackProviderOrder) && opts.fallbackProviderOrder.length > 0

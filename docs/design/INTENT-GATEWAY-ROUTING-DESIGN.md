@@ -380,7 +380,7 @@ Rules:
 - an explicit web chat provider selection is a request-scoped hard override to one enabled provider profile and does not persist back into global routing config
 - forced chat modes remain hard overrides for `local`, `managed cloud`, and `frontier`
 - disabled provider profiles are ignored by default derivation, managed-cloud role selection, execution-profile selection, and per-request fallback order
-- in `auto`, Guardian may choose `frontier` as the first execution profile for harder repo-grounded or security-heavy work instead of always trying managed cloud first
+- in `auto`, Guardian may choose `frontier` as the first execution profile for harder repo-grounded synthesis or security-heavy work instead of always trying managed cloud first; however, repo-inspection operations (read-like `inspect`/`read`/`search` on repo-grounded decisions) use Direct Reasoning Mode with an iterative tool loop on the managed-cloud provider, bypassing frontier preference — the loop compensates for model capability
 - when `managed cloud` is selected, provider choice inside that tier may use operator-managed role bindings for direct answers, tool loops, managed-cloud coding, and general fallback
 - direct-assistant routes such as `personal_assistant_task`, `memory_task`, `ui_control`, and `coding_session_control` should prefer the managed-cloud `direct` role when they must leave the local tier instead of inheriting a tools profile solely from `preferredAnswerPath=tool_loop`
 - low-confidence `unknown` or `general_assistant` gateway outcomes should avoid over-specialized managed-cloud role selection and prefer the managed-cloud `general` profile when available
@@ -388,7 +388,7 @@ Rules:
 - child dispatch and brokered worker handoff may derive a delegated execution profile from the parent profile, pre-routed gateway metadata, and the target orchestration role descriptor without reclassifying the user turn
 - explicit request-scoped provider overrides remain sticky across delegated profile selection
 - when the request is in normal auto-selection mode, different delegated child roles may run on different enabled provider profiles at the same time if their structured workloads differ
-- in normal auto-selection mode, a repo-grounded delegated child may be retried once on a stronger eligible profile when the first completed answer admits truncation or uncertainty instead of returning the exact file citations required by the routed ask; explicit provider overrides and forced chat modes remain hard ceilings for that retry
+- in normal auto-selection mode, a repo-grounded delegated child may be retried once on a stronger eligible profile when the first completed answer admits truncation or uncertainty instead of returning the exact file citations required by the routed ask; explicit provider overrides and forced chat modes remain hard ceilings for that retry; this retry path applies to delegated orchestration only — direct reasoning mode handles repo-inspection directly on the managed-cloud provider without delegation
 - request-scoped explicit-provider turns still use the shared orchestration path, gateway trace, execution-profile metadata, and fallback-order machinery instead of bypassing dispatch
 - explicit-agent web chat dispatch still prepares and carries that execution-profile metadata so direct-handler replies can show the exact routed managed-cloud profile and model instead of collapsing to only the provider family
 
@@ -462,7 +462,7 @@ External-preferred routes:
 
 Coding-task policy:
 - generic `coding_task` work should prefer the external tier in Auto mode so the managed-cloud coding profile can handle the first pass when it is configured
-- heavier repo-grounded synthesis can still escalate from managed cloud to frontier through deterministic execution-profile selection
+- heavier repo-grounded synthesis can still escalate from managed cloud to frontier through deterministic execution-profile selection when `preferFrontierForRepoGrounded` is enabled, but basic repo-inspection (read-like operations: `inspect`, `read`, `search`) uses Direct Reasoning Mode on the managed-cloud provider instead, bypassing frontier escalation — the iterative tool loop compensates for model capability
 - explicit CLI backend delegation such as `Use Codex ...` or `Use Claude Code ...` remains local-preferred because Guardian is orchestrating a local backend rather than acting as the coding model itself
 
 Special case:

@@ -117,7 +117,10 @@ describe('execution profiles', () => {
     ]);
   });
 
-  it('prefers frontier for heavier repo-grounded synthesis in balanced auto mode', () => {
+  it('direct reasoning tasks use managed cloud instead of frontier in balanced auto mode', () => {
+    // Repo-inspection with inspect operation uses direct reasoning mode
+    // (iterative tool loop), so managed cloud is adequate — no frontier
+    // preference needed.
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: { tier: 'external' },
@@ -126,23 +129,33 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
-      id: 'frontier_deep',
-      preferredAnswerPath: 'chat_synthesis',
+      providerTier: 'managed_cloud',
       expectedContextPressure: 'high',
     });
-    expect(profile?.fallbackProviderOrder).toEqual([
-      'anthropic',
-      'ollama-cloud-general',
-      'ollama-cloud-coding',
-      'ollama-cloud-direct',
-      'ollama-cloud-tools',
-      'ollama',
-    ]);
   });
 
-  it('still prefers frontier for low-confidence repo-grounded coding inspection in balanced auto mode', () => {
+  it('prefers frontier for non-inspect repo-grounded chat_synthesis in balanced auto mode', () => {
+    // When a repo-grounded task goes through the delegated pipeline (e.g.,
+    // chat_synthesis without inspect operation), frontier preference applies.
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+    });
+  });
+
+  it('still uses managed cloud for low-confidence repo-grounded coding inspection in balanced auto mode', () => {
+    // Even with low confidence, inspect operations use direct reasoning
+    // mode (iterative tool loop), so managed cloud is sufficient.
     const profile = selectExecutionProfile({
       config: createConfig(),
       routeDecision: { tier: 'external' },
@@ -153,11 +166,45 @@ describe('execution profiles', () => {
     });
 
     expect(profile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
-      id: 'frontier_deep',
-      preferredAnswerPath: 'chat_synthesis',
+      providerTier: 'managed_cloud',
       expectedContextPressure: 'high',
+    });
+  });
+
+  it('does not prefer frontier for repo-inspection (direct reasoning) in balanced auto mode', () => {
+    // Repo-inspection uses direct reasoning mode (iterative tool loop),
+    // so managed cloud is adequate — no need to escalate to frontier.
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        operation: 'inspect',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerTier: 'managed_cloud',
+    });
+  });
+
+  it('still prefers frontier for delegated repo-grounded tasks with chat_synthesis answer path', () => {
+    // Non-inspect repo-grounded tasks (e.g., security analysis) still
+    // go through the delegated pipeline and should still prefer frontier.
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        executionClass: 'security_analysis',
+        requiresRepoGrounding: true,
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerTier: 'frontier',
     });
   });
 
@@ -419,9 +466,10 @@ describe('execution profiles', () => {
       },
     });
 
+    // Inspect operations now route through direct reasoning mode, so
+    // the parent profile uses managed_cloud instead of frontier.
     expect(parentProfile).toMatchObject({
-      providerName: 'anthropic',
-      providerTier: 'frontier',
+      providerTier: 'managed_cloud',
     });
     expect(profile).toMatchObject({
       providerName: 'ollama-cloud-coding',

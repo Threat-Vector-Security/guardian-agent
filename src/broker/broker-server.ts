@@ -140,7 +140,9 @@ export class BrokerServer {
             toolName,
             args,
             agentId: token.agentId,
+            requestText: typeof request.params.requestText === 'string' ? request.params.requestText : undefined,
             userId: typeof request.params.userId === 'string' ? request.params.userId : token.authorizedBy,
+            surfaceId: typeof request.params.surfaceId === 'string' ? request.params.surfaceId : undefined,
             principalId: typeof request.params.principalId === 'string' ? request.params.principalId : token.authorizedBy,
             principalRole: request.params.principalRole === 'approver'
               ? 'approver'
@@ -162,8 +164,15 @@ export class BrokerServer {
             derivedFromTaintedContent: request.params.derivedFromTaintedContent === true,
             allowModelMemoryMutation: request.params.allowModelMemoryMutation === true,
             scheduleId: typeof request.params.scheduleId === 'string' ? request.params.scheduleId : undefined,
+            dryRun: request.params.dryRun === true,
+            activeSkills: Array.isArray(request.params.activeSkills)
+              ? request.params.activeSkills.filter((value): value is string => typeof value === 'string')
+              : undefined,
             ...(request.params.codeContext && typeof request.params.codeContext === 'object'
               ? { codeContext: request.params.codeContext as { workspaceRoot: string; sessionId?: string } }
+              : {}),
+            ...(request.params.toolContextMode === 'tight' || request.params.toolContextMode === 'standard'
+              ? { toolContextMode: request.params.toolContextMode }
               : {}),
           };
 
