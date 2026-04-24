@@ -5,6 +5,7 @@ import { formatPendingApprovalMessage } from './pending-approval-copy.js';
 import { normalizeIntentGatewayDecisionProvenance } from './intent/provenance.js';
 import { normalizeUserFacingIntentGatewaySummary } from './intent/summary.js';
 import type { IntentGatewayDecisionProvenance } from './intent/types.js';
+import type { ExecutionArtifactRef, ExecutionNodeKind } from './execution-graph/types.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 import {
   hasSQLiteDriver,
@@ -33,7 +34,8 @@ export type PendingActionBlockerKind =
 export type PendingActionResumeKind =
   | 'direct_route'
   | 'tool_loop'
-  | 'playbook_run';
+  | 'playbook_run'
+  | 'execution_graph';
 
 export type PendingActionTransferPolicy =
   | 'origin_surface_only'
@@ -96,6 +98,14 @@ export interface PendingActionResume {
   payload: Record<string, unknown>;
 }
 
+export interface PendingActionGraphInterrupt {
+  graphId: string;
+  nodeId: string;
+  nodeKind?: ExecutionNodeKind;
+  resumeToken: string;
+  artifactRefs: ExecutionArtifactRef[];
+}
+
 export interface PendingActionRecord {
   id: string;
   scope: PendingActionScope;
@@ -104,6 +114,7 @@ export interface PendingActionRecord {
   blocker: PendingActionBlocker;
   intent: PendingActionIntent;
   resume?: PendingActionResume;
+  graphInterrupt?: PendingActionGraphInterrupt;
   executionId?: string;
   rootExecutionId?: string;
   codeSessionId?: string;
@@ -161,8 +172,22 @@ function cloneRecord(record: PendingActionRecord): PendingActionRecord {
           },
         }
       : {}),
+    ...(record.graphInterrupt ? { graphInterrupt: cloneGraphInterrupt(record.graphInterrupt) } : {}),
     ...(record.executionId ? { executionId: record.executionId } : {}),
     ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
+  };
+}
+
+function cloneGraphInterrupt(interrupt: PendingActionGraphInterrupt): PendingActionGraphInterrupt {
+  return {
+    graphId: interrupt.graphId,
+    nodeId: interrupt.nodeId,
+    ...(interrupt.nodeKind ? { nodeKind: interrupt.nodeKind } : {}),
+    resumeToken: interrupt.resumeToken,
+    artifactRefs: interrupt.artifactRefs.map((artifact) => ({
+      ...artifact,
+      ...(artifact.taintReasons ? { taintReasons: [...artifact.taintReasons] } : {}),
+    })),
   };
 }
 
@@ -232,10 +257,83 @@ function normalizeResumeKind(value: unknown): PendingActionResumeKind | undefine
     case 'direct_route':
     case 'tool_loop':
     case 'playbook_run':
+    case 'execution_graph':
       return value;
     default:
       return undefined;
   }
+}
+
+function normalizeExecutionNodeKind(value: unknown): ExecutionNodeKind | undefined {
+  switch (value) {
+    case 'classify':
+    case 'plan':
+    case 'explore_readonly':
+    case 'synthesize':
+    case 'mutate':
+    case 'approval_interrupt':
+    case 'delegated_worker':
+    case 'verify':
+    case 'recover':
+    case 'finalize':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeExecutionArtifactRef(value: unknown): ExecutionArtifactRef | null {
+  if (!isRecord(value)) return null;
+  const artifactId = typeof value.artifactId === 'string' ? value.artifactId.trim() : '';
+  const graphId = typeof value.graphId === 'string' ? value.graphId.trim() : '';
+  const nodeId = typeof value.nodeId === 'string' ? value.nodeId.trim() : '';
+  const artifactType = typeof value.artifactType === 'string' ? value.artifactType.trim() : '';
+  const label = typeof value.label === 'string' ? value.label.trim() : '';
+  const createdAt = typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : 0;
+  if (!artifactId || !graphId || !nodeId || !artifactType || !label || createdAt <= 0) return null;
+  return {
+    artifactId,
+    graphId,
+    nodeId,
+    artifactType: artifactType as ExecutionArtifactRef['artifactType'],
+    label,
+    ...(typeof value.preview === 'string' && value.preview.trim() ? { preview: value.preview.trim() } : {}),
+    ...(value.trustLevel === 'trusted' || value.trustLevel === 'low_trust' || value.trustLevel === 'quarantined'
+      ? { trustLevel: value.trustLevel }
+      : {}),
+    ...(Array.isArray(value.taintReasons)
+      ? {
+          taintReasons: value.taintReasons
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean),
+        }
+      : {}),
+    ...(typeof value.redactionPolicy === 'string' && value.redactionPolicy.trim()
+      ? { redactionPolicy: value.redactionPolicy.trim() }
+      : {}),
+    createdAt,
+  };
+}
+
+function normalizeGraphInterrupt(value: unknown): PendingActionGraphInterrupt | undefined {
+  if (!isRecord(value)) return undefined;
+  const graphId = typeof value.graphId === 'string' ? value.graphId.trim() : '';
+  const nodeId = typeof value.nodeId === 'string' ? value.nodeId.trim() : '';
+  const resumeToken = typeof value.resumeToken === 'string' ? value.resumeToken.trim() : '';
+  if (!graphId || !nodeId || !resumeToken) return undefined;
+  const artifactRefs = Array.isArray(value.artifactRefs)
+    ? value.artifactRefs
+      .map(normalizeExecutionArtifactRef)
+      .filter((item): item is ExecutionArtifactRef => !!item)
+    : [];
+  return {
+    graphId,
+    nodeId,
+    ...(normalizeExecutionNodeKind(value.nodeKind) ? { nodeKind: normalizeExecutionNodeKind(value.nodeKind) } : {}),
+    resumeToken,
+    artifactRefs,
+  };
 }
 
 export function defaultPendingActionTransferPolicy(
@@ -418,6 +516,7 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
           },
         }
       : {}),
+    ...(normalizeGraphInterrupt(value.graphInterrupt) ? { graphInterrupt: normalizeGraphInterrupt(value.graphInterrupt) } : {}),
     ...(typeof value.executionId === 'string' && value.executionId.trim() ? { executionId: value.executionId.trim() } : {}),
     ...(typeof value.rootExecutionId === 'string' && value.rootExecutionId.trim() ? { rootExecutionId: value.rootExecutionId.trim() } : {}),
     ...(typeof value.codeSessionId === 'string' && value.codeSessionId.trim() ? { codeSessionId: value.codeSessionId.trim() } : {}),
@@ -447,6 +546,7 @@ export function summarizePendingActionForGateway(
   field?: string;
   executionId?: string;
   rootExecutionId?: string;
+  graphInterrupt?: PendingActionGraphInterrupt;
 } | null {
   if (!record || !isPendingActionActive(record.status)) return null;
   const prompt = sanitizePendingActionPrompt(record.blocker.prompt, record.blocker.kind);
@@ -469,6 +569,7 @@ export function summarizePendingActionForGateway(
     ...(record.blocker.field ? { field: record.blocker.field } : {}),
     ...(record.executionId ? { executionId: record.executionId } : {}),
     ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
+    ...(record.graphInterrupt ? { graphInterrupt: cloneGraphInterrupt(record.graphInterrupt) } : {}),
   };
 }
 
@@ -490,6 +591,7 @@ export function toPendingActionClientMetadata(
     ...(record.executionId ? { executionId: record.executionId } : {}),
     ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),
     ...(record.codeSessionId ? { codeSessionId: record.codeSessionId } : {}),
+    ...(record.graphInterrupt ? { graphInterrupt: cloneGraphInterrupt(record.graphInterrupt) } : {}),
     blocker: {
       kind: record.blocker.kind,
       prompt,
@@ -838,6 +940,9 @@ export class PendingActionStore {
     if (input.resume) {
       record.resume = { kind: input.resume.kind, payload: { ...input.resume.payload } };
     }
+    if (input.graphInterrupt) {
+      record.graphInterrupt = cloneGraphInterrupt(input.graphInterrupt);
+    }
     if (input.executionId?.trim()) {
       record.executionId = input.executionId.trim();
     }
@@ -870,6 +975,9 @@ export class PendingActionStore {
               ? { resume: { kind: patch.resume.kind, payload: { ...patch.resume.payload } } }
               : { resume: undefined })
           }
+        : {}),
+      ...(patch.graphInterrupt !== undefined
+        ? (patch.graphInterrupt ? { graphInterrupt: cloneGraphInterrupt(patch.graphInterrupt) } : { graphInterrupt: undefined })
         : {}),
       ...(patch.executionId !== undefined
         ? (patch.executionId ? { executionId: patch.executionId } : { executionId: undefined })

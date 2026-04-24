@@ -212,6 +212,13 @@ export async function handleApprovalMessage(input: {
       approvalResult?: ToolApprovalDecisionResult;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
+  resumeStoredExecutionGraphPendingAction?: (
+    pendingAction: PendingActionRecord,
+    options?: {
+      approvalId?: string;
+      approvalResult?: ToolApprovalDecisionResult;
+    },
+  ) => Promise<ApprovalOrchestrationResponse | null>;
   normalizeDirectRouteContinuationResponse: (
     response: ApprovalOrchestrationResponse,
     userId: string,
@@ -440,6 +447,32 @@ export async function handleApprovalMessage(input: {
         pendingAction,
         { approvalResult },
       );
+    if (resumedResponse) {
+      const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
+        resumedResponse,
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      );
+      const leadingResults = results.filter((line) => !isGenericSuccessfulToolCompletionMessage(line));
+      return {
+        content: [
+          leadingResults.join('\n'),
+          normalizedResponse.content,
+        ].filter(Boolean).join('\n\n'),
+        metadata: normalizedResponse.metadata,
+      };
+    }
+  }
+
+  if (decision === 'approved' && pendingAction?.resume?.kind === 'execution_graph' && input.resumeStoredExecutionGraphPendingAction) {
+    const approvalResult = targetIds.length === 1
+      ? approvalDecisionResults.get(targetIds[0])
+      : undefined;
+    const resumedResponse = await input.resumeStoredExecutionGraphPendingAction(
+      pendingAction,
+      { approvalId: targetIds[0], approvalResult },
+    );
     if (resumedResponse) {
       const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
         resumedResponse,
