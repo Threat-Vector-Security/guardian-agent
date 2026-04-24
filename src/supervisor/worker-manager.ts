@@ -47,7 +47,15 @@ import {
 } from '../runtime/intent-gateway.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
-import { isExecutionGraphEvent } from '../runtime/execution-graph/graph-events.js';
+import {
+  isExecutionGraphEvent,
+  type ExecutionGraphEvent,
+} from '../runtime/execution-graph/graph-events.js';
+import {
+  executeRecoveryProposalNode,
+  type RecoveryGraphPatch,
+} from '../runtime/execution-graph/node-recovery.js';
+import type { ExecutionNode as DurableExecutionNode } from '../runtime/execution-graph/types.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
@@ -69,7 +77,7 @@ import {
 } from '../runtime/execution/verifier.js';
 import {
   buildDeterministicRecoveryAdvice,
-  buildRecoveryAdvisorAdditionalSection,
+  buildGraphRecoveryProposalCandidateFromAdvice,
   validateRecoveryAdvisorProposal,
   type RecoveryAdvisorAction,
   type RecoveryAdvisorJobSnapshot,
@@ -327,6 +335,13 @@ type DelegatedTaskPlanStep = DelegatedResultEnvelope['taskContract']['plan']['st
 interface HybridDirectReasoningPhaseResult {
   additionalSection?: PromptAssemblyAdditionalSection;
   priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
+}
+
+interface RecoveryAdvisorGraphResult {
+  proposalArtifactId: string;
+  patch: RecoveryGraphPatch;
+  events: ExecutionGraphEvent[];
+  adviceSource: 'llm' | 'deterministic';
 }
 
 export interface WorkerProcess {
@@ -674,7 +689,7 @@ export class WorkerManager {
       pendingApprovalNotice?: string;
       hasFallbackProvider?: boolean;
     };
-  }): Promise<PromptAssemblyAdditionalSection | null> {
+  }): Promise<RecoveryAdvisorGraphResult | null> {
     const advisorRequest: RecoveryAdvisorRequest = {
       originalRequest: input.request.message.content,
       taskContract: input.taskContract,
@@ -729,6 +744,65 @@ export class WorkerManager {
       return null;
     }
 
+    const graphId = `execution-graph:${input.taskRunId}:recovery`;
+    const failedNode: DurableExecutionNode = {
+      nodeId: `node:${input.taskRunId}:delegated_worker`,
+      graphId,
+      kind: 'delegated_worker',
+      status: 'failed',
+      title: 'Delegated worker verification failure',
+      requiredInputIds: [],
+      outputArtifactTypes: ['VerificationResult'],
+      allowedToolCategories: [],
+      retryLimit: 1,
+      completedAt: this.observability.now?.() ?? Date.now(),
+      terminalReason: input.verification.reasons[0] ?? 'Delegated worker failed deterministic verification.',
+    };
+    const recovery = executeRecoveryProposalNode({
+      graph: {
+        graphId,
+        nodes: [failedNode],
+        artifacts: [],
+      },
+      failedNode,
+      context: {
+        graphId,
+        executionId: input.taskRunId,
+        rootExecutionId: input.request.delegation?.rootExecutionId ?? input.taskRunId,
+        ...(input.request.delegation?.executionId ? { parentExecutionId: input.request.delegation.executionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        nodeId: `node:${input.taskRunId}:recover`,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        now: this.observability.now,
+      },
+      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, failedNode.nodeId),
+    });
+    for (const event of recovery.events) {
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+    }
+    if (recovery.status !== 'proposed' || !recovery.proposalArtifact || !recovery.patch) {
+      this.observability.intentRoutingTrace?.record({
+        stage: 'recovery_advisor_rejected',
+        requestId: input.requestId,
+        messageId: input.request.message.id,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        contentPreview: input.request.message.content,
+        details: {
+          ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+          ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+          taskExecutionId: input.taskRunId,
+          reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
+        },
+      });
+      return null;
+    }
+
     this.observability.intentRoutingTrace?.record({
       stage: 'recovery_advisor_completed',
       requestId: input.requestId,
@@ -742,6 +816,8 @@ export class WorkerManager {
         ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
         taskExecutionId: input.taskRunId,
         adviceSource,
+        proposalArtifactId: recovery.proposalArtifact.artifactId,
+        recoveryActionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
         actionCount: advice.actions.length,
         actions: advice.actions.map((action) => ({
           stepId: action.stepId,
@@ -751,7 +827,12 @@ export class WorkerManager {
       },
     });
 
-    return buildRecoveryAdvisorAdditionalSection(advice, input.taskContract);
+    return {
+      proposalArtifactId: recovery.proposalArtifact.artifactId,
+      patch: recovery.patch,
+      events: recovery.events,
+      adviceSource,
+    };
   }
 
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -1057,7 +1138,7 @@ export class WorkerManager {
         }
       }
       if (insufficiency) {
-        const recoverySection = await this.requestRecoveryAdvisorGuidance({
+        const recoveryProposal = await this.requestRecoveryAdvisorGuidance({
           request: effectiveInput,
           worker,
           target: delegatedTarget,
@@ -1081,61 +1162,26 @@ export class WorkerManager {
             pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
           },
         });
-        if (recoverySection) {
-          const recoveryAdditionalSections = appendPromptAdditionalSection(
-            baseDispatchParams.additionalSections,
-            recoverySection,
-          );
-          this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+        if (recoveryProposal) {
+          this.recordDelegatedWorkerTrace('delegated_worker_running', effectiveInput, delegatedTarget, {
             requestId,
             taskRunId: delegatedTaskRunId,
             lifecycle: 'running',
             workerId: worker.id,
             taskContract: effectiveTaskContract,
-            additionalSections: recoveryAdditionalSections,
-            reason: 'Retrying delegated worker with validated Recovery Manager guidance after deterministic verification failed.',
+            reason: 'Recovery proposal recorded as advisory graph state; delegated verification failure remains authoritative.',
           });
-          result = await this.dispatchToWorker(worker, {
-            ...baseDispatchParams,
-            message: effectiveInput.message,
-            systemPrompt: effectiveInput.systemPrompt,
-            history: effectiveInput.history,
-            knowledgeBases: effectiveInput.knowledgeBases ?? [],
-            activeSkills: effectiveInput.activeSkills ?? [],
-            toolContext: effectiveInput.toolContext ?? '',
-            runtimeNotices: effectiveInput.runtimeNotices ?? [],
-            additionalSections: recoveryAdditionalSections,
-            executionProfile: effectiveExecutionProfile,
-            continuity: effectiveInput.continuity,
-            pendingAction: effectiveInput.pendingAction,
-            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
-            priorSatisfiedStepReceipts: filterDependencySatisfiedStepReceipts(
-              effectiveTaskContract.plan,
-              verifiedResult.envelope.stepReceipts,
-            ),
-          });
-          const recoveryDrain = await awaitPendingDelegatedJobs(this.tools, requestId);
-          if (recoveryDrain.inFlightRemaining > 0) {
-            this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
-              requestId,
-              taskRunId: delegatedTaskRunId,
-              lifecycle: 'running',
-              taskContract: effectiveTaskContract,
-              reason: `${recoveryDrain.inFlightRemaining} delegated job(s) remained in flight after ${recoveryDrain.waitedMs}ms drain (recovery)`,
-            });
-          }
-          jobSnapshots = recoveryDrain.snapshots;
-          verifiedResult = verifyDelegatedWorkerResult({
-            metadata: result.metadata,
-            intentDecision: effectiveIntentDecision ?? undefined,
-            executionProfile: effectiveExecutionProfile,
-            taskContract: effectiveTaskContract,
-            jobSnapshots,
-          });
-          if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
-            effectiveTaskContract = verifiedResult.envelope.taskContract;
-          }
-          insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
+          result = {
+            content: result.content,
+            metadata: {
+              ...(result.metadata ?? {}),
+              executionGraphRecovery: {
+                proposalArtifactId: recoveryProposal.proposalArtifactId,
+                adviceSource: recoveryProposal.adviceSource,
+                actionKinds: recoveryProposal.patch.operations.map((operation) => operation.kind),
+              },
+            },
+          };
         }
       }
       const verifiedEnvelope = attachDelegatedVerificationDecision(
