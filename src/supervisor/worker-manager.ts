@@ -4,11 +4,13 @@ import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ChatMessage, ChatOptions } from '../llm/types.js';
 import { sandboxedSpawn, detectSandboxHealth, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import { createLogger } from '../util/logging.js';
 import { BrokerServer } from '../broker/broker-server.js';
 import { CapabilityTokenManager } from '../broker/capability-token.js';
-import type { ToolExecutor } from '../tools/executor.js';
+import type { ToolApprovalDecisionResult, ToolExecutor } from '../tools/executor.js';
+import type { ToolExecutionRequest } from '../tools/types.js';
 import type { Runtime } from '../runtime/runtime.js';
 import type { AgentIsolationConfig } from '../config/types.js';
 import type { UserMessage } from '../agent/types.js';
@@ -49,8 +51,34 @@ import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
 import {
   isExecutionGraphEvent,
+  createExecutionGraphEvent,
   type ExecutionGraphEvent,
 } from '../runtime/execution-graph/graph-events.js';
+import {
+  artifactRefFromArtifact,
+  buildWriteSpecArtifact,
+  type EvidenceLedgerContent,
+  type ExecutionArtifact,
+  type WriteSpecContent,
+} from '../runtime/execution-graph/graph-artifacts.js';
+import {
+  buildDirectReasoningGraphContext,
+  type DirectReasoningGraphContext,
+} from '../runtime/execution-graph/direct-reasoning-node.js';
+import {
+  buildGroundedSynthesisLedgerArtifact,
+  buildGroundedSynthesisMessages,
+  createGroundedSynthesisDraftArtifact,
+} from '../runtime/execution-graph/synthesis-node.js';
+import {
+  executeWriteSpecMutationNode,
+  resumeWriteSpecMutationNodeAfterApproval,
+  type MutationNodeExecutionContext,
+} from '../runtime/execution-graph/mutation-node.js';
+import {
+  readExecutionGraphResumePayload,
+  recordGraphPendingActionInterrupt,
+} from '../runtime/execution-graph/pending-action-adapter.js';
 import {
   executeRecoveryProposalNode,
   type RecoveryGraphPatch,
@@ -85,6 +113,12 @@ import {
   type RecoveryAdvisorRequest,
 } from '../runtime/execution/recovery-advisor.js';
 import type { DirectReasoningTraceContext } from '../runtime/direct-reasoning-mode.js';
+import {
+  toPendingActionClientMetadata,
+  type PendingActionRecord,
+  type PendingActionScope,
+  type PendingActionStore,
+} from '../runtime/pending-actions.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -122,7 +156,7 @@ function cloneReadOnlyPlannedStepsFromTaskContract(
   taskContract: DelegatedResultEnvelope['taskContract'],
 ): NonNullable<IntentGatewayDecision['plannedSteps']> | undefined {
   const readOnlySteps = taskContract.plan.steps
-    .filter((step) => isHybridReadStep(step))
+    .filter((step) => isGraphReadStep(step))
     .map((step) => ({
       kind: step.kind,
       summary: step.summary,
@@ -192,7 +226,7 @@ function buildDelegatedRetryIntentGatewayRecord(input: {
   };
 }
 
-function buildHybridDirectReasoningIntentGatewayRecord(input: {
+function buildGraphReadOnlyIntentGatewayRecord(input: {
   baseRecord: IntentGatewayRecord | null | undefined;
   baseDecision: IntentGatewayDecision | undefined;
   taskContract: DelegatedResultEnvelope['taskContract'];
@@ -206,18 +240,18 @@ function buildHybridDirectReasoningIntentGatewayRecord(input: {
   if (!baseDecision) {
     return null;
   }
-  const readOnlySummary = `Read-only exploration for delegated task: ${input.taskContract.summary?.trim() || baseDecision.summary}`;
+  const readOnlySummary = `Read-only exploration for graph-controlled task: ${input.taskContract.summary?.trim() || baseDecision.summary}`;
   return {
     mode: input.baseRecord?.mode ?? 'confirmation',
     available: input.baseRecord?.available ?? true,
-    model: input.baseRecord?.model ?? 'hybrid.direct-reasoning',
+    model: input.baseRecord?.model ?? 'execution-graph.readonly',
     latencyMs: input.baseRecord?.latencyMs ?? 0,
     ...(input.baseRecord?.promptProfile ? { promptProfile: input.baseRecord.promptProfile } : {}),
     decision: {
       ...baseDecision,
       operation: plannedSteps.some((step) => step.kind === 'search') ? 'search' : 'inspect',
       summary: readOnlySummary,
-      resolvedContent: buildHybridDirectReasoningPrompt({
+      resolvedContent: buildGraphReadOnlyExplorationPrompt({
         originalRequest: input.originalRequest,
         taskContract: input.taskContract,
       }),
@@ -285,6 +319,7 @@ export interface WorkerDelegationMetadata {
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
+  pendingActionStore?: Pick<PendingActionStore, 'replaceActive'>;
   now?: () => number;
 }
 
@@ -326,15 +361,29 @@ interface DelegatedJobSnapshot {
 
 const DELEGATED_REQUEST_JOB_LOOKUP_LIMIT = 500;
 const DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT = 120;
-const HYBRID_HANDOFF_JOB_LINE_LIMIT = 12;
-const HYBRID_HANDOFF_REF_LIMIT = 8;
-const HYBRID_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:src|docs|web|scripts|config|tmp|policies|skills|native)(?:\\\\|\\|\/)[^"',\]\s}]+/gi;
+const DELEGATED_EVIDENCE_REF_LIMIT = 8;
+const DELEGATED_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:src|docs|web|scripts|config|tmp|policies|skills|native)(?:\\\\|\\|\/)[^"',\]\s}]+/gi;
 
 type DelegatedTaskPlanStep = DelegatedResultEnvelope['taskContract']['plan']['steps'][number];
 
-interface HybridDirectReasoningPhaseResult {
-  additionalSection?: PromptAssemblyAdditionalSection;
-  priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
+interface GraphControlledExecutionSuspension {
+  graphId: string;
+  nodeId: string;
+  resumeToken: string;
+  approvalId: string;
+  request: WorkerMessageRequest;
+  writeSpec: ExecutionArtifact<WriteSpecContent>;
+  mutationContext: MutationNodeExecutionContext;
+  toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
+  artifactIds: string[];
+  expiresAt: number;
+}
+
+interface GraphWriteSpecCandidate {
+  path: string;
+  content: string;
+  append: boolean;
+  summary?: string;
 }
 
 interface RecoveryAdvisorGraphResult {
@@ -396,6 +445,7 @@ export class WorkerManager {
   private readonly directAutomationContinuations = new Map<string, DirectAutomationContinuation>();
   private readonly workerSuspendedApprovalsBySession = new Map<string, WorkerSuspendedApprovalState>();
   private readonly workerSuspendedApprovalToSession = new Map<string, string>();
+  private readonly executionGraphSuspensions = new Map<string, GraphControlledExecutionSuspension>();
   private readonly delegatedFollowUpPayloads = new Map<string, {
     content: string;
     agentId: string;
@@ -515,19 +565,37 @@ export class WorkerManager {
     }
   }
 
-  private async runHybridDirectReasoningPhase(input: {
+  private buildGraphControlledFailureResponse(
+    input: {
+      request: WorkerMessageRequest;
+      effectiveIntentDecision?: IntentGatewayDecision;
+    },
+    reason: string,
+    graphId?: string,
+  ): { content: string; metadata?: Record<string, unknown> } {
+    return {
+      content: `Execution graph could not complete the request: ${reason}`,
+      metadata: {
+        executionProfile: input.request.executionProfile ?? undefined,
+        executionGraph: {
+          ...(graphId ? { graphId } : {}),
+          status: 'failed',
+          reason,
+        },
+      },
+    };
+  }
+
+  private async runGraphControlledExecution(input: {
     request: WorkerMessageRequest;
-    worker: WorkerProcess;
     target: ResolvedDelegatedTargetMetadata;
     taskContract: DelegatedResultEnvelope['taskContract'];
     preRoutedGateway: IntentGatewayRecord | null | undefined;
     effectiveIntentDecision: IntentGatewayDecision | undefined;
     requestId: string;
     taskRunId: string;
-    additionalSections: PromptAssemblyAdditionalSection[];
-    hasFallbackProvider: boolean;
-  }): Promise<HybridDirectReasoningPhaseResult | null> {
-    if (!shouldUseHybridDirectReasoningPhase({
+  }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!shouldUseGraphControlledExecution({
       taskContract: input.taskContract,
       decision: input.effectiveIntentDecision,
       executionProfile: input.request.executionProfile,
@@ -535,133 +603,569 @@ export class WorkerManager {
       return null;
     }
 
-    const hybridGatewayRecord = buildHybridDirectReasoningIntentGatewayRecord({
+    const gatewayRecord = buildGraphReadOnlyIntentGatewayRecord({
       baseRecord: input.preRoutedGateway,
       baseDecision: input.effectiveIntentDecision,
       taskContract: input.taskContract,
       originalRequest: input.request.message.content,
     });
-    if (!hybridGatewayRecord) {
-      return null;
+    if (!gatewayRecord) {
+      return this.buildGraphControlledFailureResponse(input, 'Graph-controlled execution could not derive a read-only routing decision.');
     }
 
-    const directPrompt = buildHybridDirectReasoningPrompt({
-      originalRequest: input.request.message.content,
-      taskContract: input.taskContract,
-    });
-    const directMessage: UserMessage = {
-      ...input.request.message,
-      content: directPrompt,
-      metadata: attachPreRoutedIntentGatewayMetadata(
-        input.request.message.metadata,
-        hybridGatewayRecord,
-      ),
+    const now = this.observability.now ?? Date.now;
+    const graphId = `graph:${input.taskRunId}`;
+    const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
+    const parentExecutionId = input.request.delegation?.executionId;
+    const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
+    const codeSessionId = input.request.delegation?.codeSessionId ?? codeContext?.sessionId;
+    let sequence = 0;
+    const emitGraphEvent = (
+      kind: ExecutionGraphEvent['kind'],
+      payload: Record<string, unknown>,
+      eventKey: string,
+      options: {
+        nodeId?: string;
+        nodeKind?: ExecutionGraphEvent['nodeKind'];
+        producer?: ExecutionGraphEvent['producer'];
+      } = {},
+    ): ExecutionGraphEvent => {
+      sequence += 1;
+      const event = createExecutionGraphEvent({
+        eventId: `${graphId}:${eventKey}:${sequence}`,
+        graphId,
+        executionId: input.taskRunId,
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        ...(options.nodeId ? { nodeId: options.nodeId } : {}),
+        ...(options.nodeKind ? { nodeKind: options.nodeKind } : {}),
+        kind,
+        timestamp: now(),
+        sequence,
+        producer: options.producer ?? 'supervisor',
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        ...(codeSessionId ? { codeSessionId } : {}),
+        payload,
+      });
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      return event;
     };
-    const traceContext: DirectReasoningTraceContext = {
-      requestId: input.requestId,
-      messageId: input.request.message.id,
-      userId: input.request.userId,
-      channel: input.request.message.channel,
-      agentId: input.target.agentId,
-      contentPreview: input.request.message.content,
-      ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
-      ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
-      taskExecutionId: input.taskRunId,
-      ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+    const emitArtifact = (
+      artifact: ExecutionArtifact,
+      nodeId: string,
+      nodeKind: ExecutionGraphEvent['nodeKind'],
+    ): ExecutionGraphEvent => {
+      const ref = artifactRefFromArtifact(artifact);
+      return emitGraphEvent('artifact_created', {
+        artifactId: ref.artifactId,
+        artifactType: ref.artifactType,
+        label: ref.label,
+        ...(ref.preview ? { preview: ref.preview } : {}),
+        ...(ref.trustLevel ? { trustLevel: ref.trustLevel } : {}),
+        ...(ref.taintReasons ? { taintReasons: ref.taintReasons } : {}),
+        ...(ref.redactionPolicy ? { redactionPolicy: ref.redactionPolicy } : {}),
+      }, `artifact:${artifact.artifactId}`, { nodeId, nodeKind });
+    };
+    const failGraph = (reason: string, nodeId?: string, nodeKind?: ExecutionGraphEvent['nodeKind']) => {
+      if (nodeId && nodeKind) {
+        emitGraphEvent('node_failed', { reason }, `${nodeId}:failed`, { nodeId, nodeKind });
+      }
+      emitGraphEvent('graph_failed', { reason }, 'graph:failed');
+      return this.buildGraphControlledFailureResponse(input, reason, graphId);
     };
 
-    this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
-      requestId: input.requestId,
-      taskRunId: input.taskRunId,
-      lifecycle: 'running',
-      workerId: input.worker.id,
-      taskContract: input.taskContract,
-      additionalSections: input.additionalSections,
-      reason: 'Hybrid execution manager starting read-only direct reasoning exploration before delegated mutation.',
-    });
+    emitGraphEvent('graph_started', {
+      route: input.effectiveIntentDecision?.route,
+      operation: input.effectiveIntentDecision?.operation,
+      executionClass: input.effectiveIntentDecision?.executionClass,
+      controller: 'execution_graph',
+    }, 'graph:started');
 
-    let directResult: { content: string; metadata?: Record<string, unknown> } | null = null;
     try {
-      directResult = await this.dispatchToWorker(input.worker, {
-        message: directMessage,
+      const worker = await this.getOrSpawnWorker(
+        input.request.sessionId,
+        input.request.agentId,
+        input.request.userId,
+        input.request.message.channel,
+        input.request.grantedCapabilities,
+      );
+      const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.request.agentId);
+      const graphExecutionProfile = selectGraphControllerExecutionProfile({
+        runtime: this.runtime,
+        target: input.target,
+        decision: input.effectiveIntentDecision,
+        currentProfile: input.request.executionProfile,
+      });
+      const additionalSections = appendPromptAdditionalSection(
+        input.request.additionalSections ?? [],
+        this.buildCodeSessionRegistrySection(input.request),
+      );
+      const readNodeId = `node:${input.taskRunId}:explore`;
+      const readGraphContext: DirectReasoningGraphContext = buildDirectReasoningGraphContext({
+        graphId,
+        nodeId: readNodeId,
+        requestId: input.requestId,
+        executionId: input.taskRunId,
+        rootExecutionId,
+        parentExecutionId,
+        taskExecutionId: input.taskRunId,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        codeSessionId,
+        decision: gatewayRecord.decision,
+      });
+      const readMessage: UserMessage = {
+        ...input.request.message,
+        content: gatewayRecord.decision.resolvedContent ?? input.request.message.content,
+        metadata: attachPreRoutedIntentGatewayMetadata(input.request.message.metadata, gatewayRecord),
+      };
+      const directResult = await this.dispatchToWorker(worker, {
+        message: readMessage,
         systemPrompt: input.request.systemPrompt,
         history: input.request.history,
         knowledgeBases: input.request.knowledgeBases ?? [],
         activeSkills: input.request.activeSkills ?? [],
-        additionalSections: input.additionalSections,
+        additionalSections,
         toolContext: input.request.toolContext ?? '',
         runtimeNotices: input.request.runtimeNotices ?? [],
-        executionProfile: input.request.executionProfile,
+        executionProfile: graphExecutionProfile,
         continuity: input.request.continuity,
         pendingAction: input.request.pendingAction,
         pendingApprovalNotice: input.request.pendingApprovalNotice,
-        hasFallbackProvider: input.hasFallbackProvider,
+        hasFallbackProvider,
         directReasoning: true,
-        directReasoningTrace: traceContext,
+        directReasoningTrace: {
+          requestId: input.requestId,
+          messageId: input.request.message.id,
+          userId: input.request.userId,
+          channel: input.request.message.channel,
+          agentId: input.target.agentId,
+          contentPreview: input.request.message.content,
+          ...(parentExecutionId ? { executionId: parentExecutionId } : {}),
+          rootExecutionId,
+          taskExecutionId: input.taskRunId,
+          ...(codeSessionId ? { codeSessionId } : {}),
+        },
+        directReasoningGraphContext: readGraphContext,
+        directReasoningGraphLifecycle: 'node_only',
+        returnExecutionGraphArtifacts: true,
       });
+      const sourceArtifacts = readExecutionGraphArtifactsFromMetadata(directResult.metadata);
+      if (directResult.metadata?.directReasoningFailed === true || sourceArtifacts.length === 0) {
+        return failGraph('Read-only graph node did not produce typed evidence artifacts.', readNodeId, 'explore_readonly');
+      }
+
+      const synthesisNodeId = `node:${input.taskRunId}:synthesize`;
+      emitGraphEvent('node_started', {
+        evidenceArtifactCount: sourceArtifacts.length,
+        purpose: 'write_spec_candidate',
+      }, `${synthesisNodeId}:started`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
+      const ledgerArtifact = buildGroundedSynthesisLedgerArtifact({
+        graphId,
+        nodeId: synthesisNodeId,
+        artifactId: `${graphId}:${synthesisNodeId}:evidence-ledger`,
+        sourceArtifacts,
+        createdAt: now(),
+      });
+      if (ledgerArtifact) {
+        emitArtifact(ledgerArtifact, synthesisNodeId, 'synthesize');
+      }
+      const synthesisMessages = buildGraphWriteSpecSynthesisMessages({
+        request: input.request.message.content,
+        decision: input.effectiveIntentDecision ?? gatewayRecord.decision,
+        workspaceRoot: codeContext?.workspaceRoot,
+        sourceArtifacts,
+        ledgerArtifact,
+      });
+      emitGraphEvent('llm_call_started', {
+        phase: 'write_spec_synthesis',
+        evidenceArtifactCount: sourceArtifacts.length,
+      }, `${synthesisNodeId}:llm:started`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
+      const synthesisResult = await this.dispatchToWorker(worker, {
+        message: input.request.message,
+        systemPrompt: input.request.systemPrompt,
+        history: input.request.history,
+        knowledgeBases: input.request.knowledgeBases ?? [],
+        activeSkills: input.request.activeSkills ?? [],
+        additionalSections,
+        toolContext: input.request.toolContext ?? '',
+        runtimeNotices: input.request.runtimeNotices ?? [],
+        executionProfile: graphExecutionProfile,
+        continuity: input.request.continuity,
+        pendingAction: input.request.pendingAction,
+        pendingApprovalNotice: input.request.pendingApprovalNotice,
+        hasFallbackProvider,
+        groundedSynthesis: {
+          messages: synthesisMessages,
+          responseFormat: {
+            type: 'json_schema',
+            name: 'graph_write_spec_candidate',
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+                append: { type: 'boolean' },
+                summary: { type: 'string' },
+              },
+              required: ['path', 'content', 'append'],
+            },
+          },
+          maxTokens: 4_000,
+          temperature: 0,
+        },
+      });
+      emitGraphEvent('llm_call_completed', {
+        phase: 'write_spec_synthesis',
+        resultStatus: synthesisResult.content.trim() ? 'succeeded' : 'failed',
+      }, `${synthesisNodeId}:llm:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
+      const candidate = parseGraphWriteSpecCandidate(synthesisResult.content);
+      if (!candidate) {
+        return failGraph('Synthesis node did not produce a valid write specification.', synthesisNodeId, 'synthesize');
+      }
+      const draft = createGroundedSynthesisDraftArtifact({
+        graphId,
+        nodeId: synthesisNodeId,
+        artifactId: `${graphId}:${synthesisNodeId}:draft`,
+        content: candidate.summary ?? `Write ${candidate.path}.`,
+        sourceArtifacts: [
+          ...sourceArtifacts,
+          ...(ledgerArtifact ? [ledgerArtifact] : []),
+        ],
+        createdAt: now(),
+      });
+      emitArtifact(draft.artifact, synthesisNodeId, 'synthesize');
+      const writeSpec = buildWriteSpecArtifact({
+        graphId,
+        nodeId: synthesisNodeId,
+        artifactId: `${graphId}:${synthesisNodeId}:write-spec`,
+        path: candidate.path,
+        content: candidate.content,
+        append: candidate.append,
+        sourceArtifacts: [
+          ...sourceArtifacts,
+          ...(ledgerArtifact ? [ledgerArtifact] : []),
+          draft.artifact,
+        ],
+        redactionPolicy: 'no_secret_values',
+        createdAt: now(),
+      });
+      emitArtifact(writeSpec, synthesisNodeId, 'synthesize');
+      emitGraphEvent('node_completed', {
+        draftArtifactId: draft.artifact.artifactId,
+        writeSpecArtifactId: writeSpec.artifactId,
+      }, `${synthesisNodeId}:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
+
+      const mutationNodeId = `node:${input.taskRunId}:mutate`;
+      const toolRequest = buildGraphMutationToolRequest(input.request, input.requestId, codeContext, graphExecutionProfile);
+      const mutationContext: MutationNodeExecutionContext = {
+        graphId,
+        executionId: input.taskRunId,
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        nodeId: mutationNodeId,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        ...(codeSessionId ? { codeSessionId } : {}),
+        sequenceStart: sequence,
+        now,
+        emit: (event) => {
+          sequence = Math.max(sequence, event.sequence);
+          this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+        },
+      };
+      const mutationResult = await executeWriteSpecMutationNode({
+        writeSpec,
+        executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
+        toolRequest,
+        context: mutationContext,
+      });
+      sequence = Math.max(sequence, ...mutationResult.events.map((event) => event.sequence));
+      const artifactIds = [
+        ...sourceArtifacts.map((artifact) => artifact.artifactId),
+        ...(ledgerArtifact ? [ledgerArtifact.artifactId] : []),
+        draft.artifact.artifactId,
+        writeSpec.artifactId,
+        ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
+        ...(mutationResult.verificationArtifact ? [mutationResult.verificationArtifact.artifactId] : []),
+      ];
+
+      if (mutationResult.status === 'awaiting_approval' && mutationResult.receiptArtifact) {
+        const approvalEvent = mutationResult.events.find((event) => event.kind === 'approval_requested');
+        const approvalId = mutationResult.receiptArtifact.content.approvalId;
+        if (!approvalEvent || !approvalId) {
+          return failGraph('Mutation node requested approval without a resumable approval id.', mutationNodeId, 'mutate');
+        }
+        const resumeToken = `${approvalEvent.graphId}:${approvalEvent.nodeId ?? mutationNodeId}:${approvalEvent.sequence}`;
+        this.executionGraphSuspensions.set(resumeToken, {
+          graphId,
+          nodeId: mutationNodeId,
+          resumeToken,
+          approvalId,
+          request: input.request,
+          writeSpec,
+          mutationContext: {
+            ...mutationContext,
+            sequenceStart: sequence,
+          },
+          toolRequest,
+          artifactIds,
+          expiresAt: now() + PENDING_APPROVAL_TTL_MS,
+        });
+        this.executionGraphSuspensions.set(approvalId, this.executionGraphSuspensions.get(resumeToken)!);
+        const approvalSummary = {
+          id: approvalId,
+          toolName: 'fs_write',
+          argsPreview: JSON.stringify({
+            path: writeSpec.content.path,
+            append: writeSpec.content.append,
+          }),
+          actionLabel: 'approve file write',
+          requestId: input.requestId,
+          ...(codeSessionId ? { codeSessionId } : {}),
+        };
+        const pendingScope: PendingActionScope = {
+          agentId: input.request.agentId,
+          userId: input.request.userId,
+          channel: input.request.message.channel,
+          surfaceId: input.request.message.surfaceId?.trim() || input.request.message.channel,
+        };
+        const pendingRecord = this.observability.pendingActionStore
+          ? recordGraphPendingActionInterrupt({
+              store: this.observability.pendingActionStore,
+              scope: pendingScope,
+              event: approvalEvent,
+              originalUserContent: input.request.message.content,
+              intent: {
+                route: input.effectiveIntentDecision?.route,
+                operation: input.effectiveIntentDecision?.operation,
+                summary: input.effectiveIntentDecision?.summary,
+                resolvedContent: input.effectiveIntentDecision?.resolvedContent,
+              },
+              artifactRefs: [writeSpec, mutationResult.receiptArtifact].map(artifactRefFromArtifact),
+              approvalSummaries: [approvalSummary],
+              nowMs: now(),
+            })
+          : null;
+        return {
+          content: formatPendingApprovalMessage([approvalSummary]),
+          metadata: {
+            executionProfile: graphExecutionProfile ?? undefined,
+            executionGraph: {
+              graphId,
+              status: 'awaiting_approval',
+              artifactIds,
+              writeSpecArtifactId: writeSpec.artifactId,
+              receiptArtifactId: mutationResult.receiptArtifact.artifactId,
+            },
+            ...(pendingRecord ? { pendingAction: toPendingActionClientMetadata(pendingRecord) } : {}),
+            continueConversationAfterApproval: true,
+          },
+        };
+      }
+
+      if (mutationResult.status !== 'succeeded' || !mutationResult.verificationArtifact) {
+        return failGraph('Mutation node failed before verification completed.', mutationNodeId, 'mutate');
+      }
+      emitGraphEvent('graph_completed', {
+        status: 'succeeded',
+        artifactIds,
+        writeSpecArtifactId: writeSpec.artifactId,
+        receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
+        verificationArtifactId: mutationResult.verificationArtifact.artifactId,
+      }, 'graph:completed');
+      return {
+        content: `Wrote ${writeSpec.content.path} and verified the contents.`,
+        metadata: {
+          executionProfile: graphExecutionProfile ?? undefined,
+          executionGraph: {
+            graphId,
+            status: 'succeeded',
+            artifactIds,
+            writeSpecArtifactId: writeSpec.artifactId,
+            receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
+            verificationArtifactId: mutationResult.verificationArtifact.artifactId,
+          },
+        },
+      };
     } catch (error) {
-      this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
-        requestId: input.requestId,
-        taskRunId: input.taskRunId,
-        lifecycle: 'running',
-        workerId: input.worker.id,
-        taskContract: input.taskContract,
-        reason: `Hybrid direct reasoning exploration failed; continuing delegated orchestration: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      return failGraph(error instanceof Error ? error.message : String(error));
     }
+  }
 
-    const drain = await awaitPendingDelegatedJobs(this.tools, input.requestId);
-    if (drain.inFlightRemaining > 0) {
-      this.recordDelegatedWorkerTrace('delegated_job_wait_expired', input.request, input.target, {
-        requestId: input.requestId,
-        taskRunId: input.taskRunId,
-        lifecycle: 'running',
-        taskContract: input.taskContract,
-        reason: `${drain.inFlightRemaining} hybrid direct reasoning job(s) remained in flight after ${drain.waitedMs}ms drain`,
-      });
-    }
-
-    const synthesized = synthesizeDelegatedEvidenceReceiptsFromJobs(
-      input.taskContract,
-      drain.snapshots,
-    );
-    const readStepIds = new Set(
-      input.taskContract.plan.steps
-        .filter((step) => isHybridReadStep(step))
-        .map((step) => step.stepId),
-    );
-    const priorSatisfiedStepReceipts = filterDependencySatisfiedStepReceipts(
-      input.taskContract.plan,
-      synthesized.stepReceipts,
-    )
-      .filter((receipt) => receipt.status === 'satisfied' && readStepIds.has(receipt.stepId));
-
-    const directFailed = directResult?.metadata?.directReasoningFailed === true;
-    const resultContent = directResult?.content?.trim() ?? '';
-    if (priorSatisfiedStepReceipts.length === 0) {
+  async resumeExecutionGraphPendingAction(
+    pendingAction: PendingActionRecord,
+    options: {
+      approvalId: string;
+      approvalResult: ToolApprovalDecisionResult;
+    },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const payload = readExecutionGraphResumePayload(pendingAction.resume?.payload);
+    if (!payload) {
       return null;
     }
+    const suspension = this.executionGraphSuspensions.get(payload.resumeToken)
+      ?? this.executionGraphSuspensions.get(options.approvalId);
+    if (!suspension) {
+      return {
+        content: 'Execution graph approval was resolved, but the suspended graph state is no longer available. Please retry the request.',
+        metadata: {
+          executionGraph: {
+            graphId: payload.graphId,
+            status: 'failed',
+            reason: 'suspended_graph_state_missing',
+          },
+        },
+      };
+    }
+    const now = this.observability.now ?? Date.now;
+    if (suspension.expiresAt <= now()) {
+      this.executionGraphSuspensions.delete(suspension.resumeToken);
+      this.executionGraphSuspensions.delete(suspension.approvalId);
+      return {
+        content: 'Execution graph approval was resolved, but the suspended graph state expired. Please retry the request.',
+        metadata: {
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            reason: 'suspended_graph_state_expired',
+          },
+        },
+      };
+    }
 
-    const additionalSection = buildHybridDirectReasoningHandoffSection({
-      taskContract: input.taskContract,
-      directResultContent: resultContent,
-      priorSatisfiedStepReceipts,
-      jobSnapshots: drain.snapshots,
-      directFailed,
-    });
-    this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
-      requestId: input.requestId,
-      taskRunId: input.taskRunId,
-      lifecycle: 'running',
-      workerId: input.worker.id,
-      taskContract: input.taskContract,
-      additionalSections: appendPromptAdditionalSection(input.additionalSections, additionalSection),
-      reason: `Hybrid direct reasoning exploration completed with ${priorSatisfiedStepReceipts.length} carried-forward read/search step(s).`,
-    });
+    let sequence = suspension.mutationContext.sequenceStart ?? 0;
+    const emitGraphEvent = (
+      kind: ExecutionGraphEvent['kind'],
+      payloadDetails: Record<string, unknown>,
+      eventKey: string,
+      optionsForEvent: {
+        nodeId?: string;
+        nodeKind?: ExecutionGraphEvent['nodeKind'];
+        producer?: ExecutionGraphEvent['producer'];
+      } = {},
+    ): ExecutionGraphEvent => {
+      sequence += 1;
+      const event = createExecutionGraphEvent({
+        eventId: `${suspension.graphId}:resume:${eventKey}:${sequence}`,
+        graphId: suspension.graphId,
+        executionId: suspension.mutationContext.executionId,
+        rootExecutionId: suspension.mutationContext.rootExecutionId,
+        ...(suspension.mutationContext.parentExecutionId ? { parentExecutionId: suspension.mutationContext.parentExecutionId } : {}),
+        requestId: suspension.mutationContext.requestId,
+        ...(suspension.mutationContext.runId ? { runId: suspension.mutationContext.runId } : {}),
+        ...(optionsForEvent.nodeId ? { nodeId: optionsForEvent.nodeId } : {}),
+        ...(optionsForEvent.nodeKind ? { nodeKind: optionsForEvent.nodeKind } : {}),
+        kind,
+        timestamp: now(),
+        sequence,
+        producer: optionsForEvent.producer ?? 'supervisor',
+        ...(suspension.mutationContext.channel ? { channel: suspension.mutationContext.channel } : {}),
+        ...(suspension.mutationContext.agentId ? { agentId: suspension.mutationContext.agentId } : {}),
+        ...(suspension.mutationContext.userId ? { userId: suspension.mutationContext.userId } : {}),
+        ...(suspension.mutationContext.codeSessionId ? { codeSessionId: suspension.mutationContext.codeSessionId } : {}),
+        payload: payloadDetails,
+      });
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      return event;
+    };
 
+    if (!options.approvalResult.approved) {
+      emitGraphEvent('approval_resolved', {
+        approvalId: options.approvalId,
+        toolName: 'fs_write',
+        resultStatus: 'denied',
+        writeSpecArtifactId: suspension.writeSpec.artifactId,
+      }, 'approval-denied', { nodeId: suspension.nodeId, nodeKind: 'mutate' });
+      emitGraphEvent('node_failed', {
+        reason: options.approvalResult.message || 'Approval denied.',
+        writeSpecArtifactId: suspension.writeSpec.artifactId,
+      }, 'node-denied', { nodeId: suspension.nodeId, nodeKind: 'mutate' });
+      emitGraphEvent('graph_failed', {
+        reason: options.approvalResult.message || 'Approval denied.',
+      }, 'graph-denied');
+      this.executionGraphSuspensions.delete(suspension.resumeToken);
+      this.executionGraphSuspensions.delete(suspension.approvalId);
+      return {
+        content: options.approvalResult.message || 'Approval denied. I did not make the requested change.',
+        metadata: {
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            reason: 'approval_denied',
+          },
+        },
+      };
+    }
+
+    const mutationResult = await resumeWriteSpecMutationNodeAfterApproval({
+      writeSpec: suspension.writeSpec,
+      approvedToolResult: buildToolResultFromApprovalDecision(options.approvalId, options.approvalResult),
+      executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
+      toolRequest: suspension.toolRequest,
+      context: {
+        ...suspension.mutationContext,
+        sequenceStart: sequence,
+        now,
+        emit: (event) => {
+          sequence = Math.max(sequence, event.sequence);
+          this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+        },
+      },
+      approvalId: options.approvalId,
+    });
+    sequence = Math.max(sequence, ...mutationResult.events.map((event) => event.sequence));
+    this.executionGraphSuspensions.delete(suspension.resumeToken);
+    this.executionGraphSuspensions.delete(suspension.approvalId);
+    const artifactIds = [
+      ...suspension.artifactIds,
+      ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
+      ...(mutationResult.verificationArtifact ? [mutationResult.verificationArtifact.artifactId] : []),
+    ];
+    if (mutationResult.status !== 'succeeded' || !mutationResult.verificationArtifact) {
+      emitGraphEvent('graph_failed', {
+        reason: 'Mutation verification failed after approval.',
+        artifactIds,
+      }, 'graph-failed-after-approval');
+      return {
+        content: 'Approval was applied, but execution graph verification failed after the write.',
+        metadata: {
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            artifactIds,
+          },
+        },
+      };
+    }
+    emitGraphEvent('graph_completed', {
+      status: 'succeeded',
+      artifactIds,
+      writeSpecArtifactId: suspension.writeSpec.artifactId,
+      receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
+      verificationArtifactId: mutationResult.verificationArtifact.artifactId,
+    }, 'graph-completed-after-approval');
     return {
-      additionalSection,
-      ...(priorSatisfiedStepReceipts.length > 0 ? { priorSatisfiedStepReceipts } : {}),
+      content: `Wrote ${suspension.writeSpec.content.path} and verified the contents.`,
+      metadata: {
+        executionGraph: {
+          graphId: suspension.graphId,
+          status: 'succeeded',
+          artifactIds,
+          writeSpecArtifactId: suspension.writeSpec.artifactId,
+          receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
+          verificationArtifactId: mutationResult.verificationArtifact.artifactId,
+        },
+      },
     };
   }
 
@@ -868,6 +1372,19 @@ export class WorkerManager {
     );
     let effectiveTaskContract = taskContract;
 
+    const graphControlledResult = await this.runGraphControlledExecution({
+      request: input,
+      target: delegatedTarget,
+      taskContract: effectiveTaskContract,
+      preRoutedGateway,
+      effectiveIntentDecision: effectiveIntentDecision ?? undefined,
+      requestId,
+      taskRunId: buildGraphControlledTaskRunId(requestId),
+    });
+    if (graphControlledResult) {
+      return graphControlledResult;
+    }
+
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
       source: 'system',
@@ -944,23 +1461,6 @@ export class WorkerManager {
         };
       }
       let effectiveExecutionProfile = input.executionProfile;
-      const hybridPhase = await this.runHybridDirectReasoningPhase({
-        request: effectiveInput,
-        worker,
-        target: delegatedTarget,
-        taskContract: effectiveTaskContract,
-        preRoutedGateway,
-        effectiveIntentDecision: effectiveIntentDecision ?? undefined,
-        requestId,
-        taskRunId: delegatedTaskRunId,
-        additionalSections,
-        hasFallbackProvider,
-      });
-      let initialPriorSatisfiedStepReceipts: DelegatedResultEnvelope['stepReceipts'] | undefined;
-      if (hybridPhase?.additionalSection) {
-        additionalSections = appendPromptAdditionalSection(additionalSections, hybridPhase.additionalSection);
-        initialPriorSatisfiedStepReceipts = hybridPhase.priorSatisfiedStepReceipts;
-      }
       const delegatedWorkerRunningDetail = buildDelegatedWorkerRunningDetail(
         describeDelegatedTarget(delegatedTarget),
         input.executionProfile,
@@ -998,9 +1498,6 @@ export class WorkerManager {
         pendingAction: effectiveInput.pendingAction,
         pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
         hasFallbackProvider,
-        ...(initialPriorSatisfiedStepReceipts?.length
-          ? { priorSatisfiedStepReceipts: initialPriorSatisfiedStepReceipts }
-          : {}),
       };
 
       let result = await this.dispatchToWorker(worker, baseDispatchParams);
@@ -1108,10 +1605,6 @@ export class WorkerManager {
             continuity: effectiveInput.continuity,
             pendingAction: effectiveInput.pendingAction,
             pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
-            priorSatisfiedStepReceipts: filterDependencySatisfiedStepReceipts(
-              effectiveTaskContract.plan,
-              verifiedResult.envelope.stepReceipts,
-            ),
           });
           const retryDrain = await awaitPendingDelegatedJobs(this.tools, requestId);
           if (retryDrain.inFlightRemaining > 0) {
@@ -2309,9 +2802,17 @@ export class WorkerManager {
       pendingAction?: PromptAssemblyPendingAction | null;
       pendingApprovalNotice?: string;
       hasFallbackProvider?: boolean;
-      priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
       directReasoning?: boolean;
       directReasoningTrace?: DirectReasoningTraceContext;
+      directReasoningGraphContext?: DirectReasoningGraphContext;
+      directReasoningGraphLifecycle?: 'standalone' | 'node_only';
+      returnExecutionGraphArtifacts?: boolean;
+      groundedSynthesis?: {
+        messages: ChatMessage[];
+        responseFormat?: ChatOptions['responseFormat'];
+        maxTokens?: number;
+        temperature?: number;
+      };
       recoveryAdvisor?: RecoveryAdvisorRequest;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -2336,9 +2837,17 @@ export class WorkerManager {
       pendingAction?: PromptAssemblyPendingAction | null;
       pendingApprovalNotice?: string;
       hasFallbackProvider?: boolean;
-      priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
       directReasoning?: boolean;
       directReasoningTrace?: DirectReasoningTraceContext;
+      directReasoningGraphContext?: DirectReasoningGraphContext;
+      directReasoningGraphLifecycle?: 'standalone' | 'node_only';
+      returnExecutionGraphArtifacts?: boolean;
+      groundedSynthesis?: {
+        messages: ChatMessage[];
+        responseFormat?: ChatOptions['responseFormat'];
+        maxTokens?: number;
+        temperature?: number;
+      };
       recoveryAdvisor?: RecoveryAdvisorRequest;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -2938,43 +3447,64 @@ function appendDelegatedRetrySection(
   ];
 }
 
-function isHybridReadStep(step: DelegatedTaskPlanStep): boolean {
+function isGraphReadStep(step: DelegatedTaskPlanStep): boolean {
   return step.required !== false && (step.kind === 'search' || step.kind === 'read');
 }
 
-function isHybridWriteStep(step: DelegatedTaskPlanStep): boolean {
+function isGraphWriteStep(step: DelegatedTaskPlanStep): boolean {
   return step.required !== false && step.kind === 'write';
 }
 
-function shouldUseHybridDirectReasoningPhase(input: {
+function shouldUseGraphControlledExecution(input: {
   taskContract: DelegatedResultEnvelope['taskContract'];
   decision: IntentGatewayDecision | undefined;
   executionProfile?: SelectedExecutionProfile;
 }): boolean {
-  if (!input.executionProfile || input.executionProfile.providerTier === 'local') {
+  if (!input.executionProfile) {
     return false;
   }
   if (input.decision?.executionClass === 'security_analysis') {
     return false;
   }
   const requiredSteps = input.taskContract.plan.steps.filter((step) => step.required !== false);
-  const hasReadPhase = requiredSteps.some((step) => isHybridReadStep(step));
-  const hasWritePhase = requiredSteps.some((step) => isHybridWriteStep(step));
+  const hasReadPhase = requiredSteps.some((step) => isGraphReadStep(step));
+  const hasWritePhase = requiredSteps.some((step) => isGraphWriteStep(step));
   return hasReadPhase && hasWritePhase;
 }
 
-function buildHybridDirectReasoningPrompt(input: {
+function selectGraphControllerExecutionProfile(input: {
+  runtime: Runtime;
+  target: ResolvedDelegatedTargetMetadata;
+  decision: IntentGatewayDecision | undefined;
+  currentProfile?: SelectedExecutionProfile;
+}): SelectedExecutionProfile | undefined {
+  const currentProfile = input.currentProfile;
+  if (currentProfile && currentProfile.providerTier !== 'local') {
+    return currentProfile;
+  }
+  const escalated = selectEscalatedDelegatedExecutionProfile({
+    config: input.runtime.getConfigSnapshot(),
+    currentProfile,
+    parentProfile: currentProfile,
+    gatewayDecision: input.decision,
+    orchestration: input.target.orchestration,
+    mode: currentProfile?.routingMode ?? 'auto',
+  });
+  return escalated ?? currentProfile;
+}
+
+function buildGraphReadOnlyExplorationPrompt(input: {
   originalRequest: string;
   taskContract: DelegatedResultEnvelope['taskContract'];
 }): string {
   const readSteps = input.taskContract.plan.steps
-    .filter((step) => isHybridReadStep(step))
+    .filter((step) => isGraphReadStep(step))
     .map((step) => `- ${step.stepId}: ${step.summary}`);
   const writeSteps = input.taskContract.plan.steps
-    .filter((step) => isHybridWriteStep(step))
+    .filter((step) => isGraphWriteStep(step))
     .map((step) => `- ${step.stepId}: ${step.summary}`);
   return [
-    'Read-only exploration phase for a later delegated write.',
+    'Read-only execution graph exploration node.',
     'Do not create, edit, delete, rename, patch, or run shell commands.',
     '',
     `Original request: ${input.originalRequest}`,
@@ -2982,124 +3512,150 @@ function buildHybridDirectReasoningPrompt(input: {
     'Explore these required read/search steps:',
     ...(readSteps.length > 0 ? readSteps : ['- None']),
     '',
-    'The later delegated orchestration phase will perform these write steps:',
+    'The graph controller will decide and perform these write steps after grounded synthesis:',
     ...(writeSteps.length > 0 ? writeSteps : ['- None']),
     '',
-    'Return a concise evidence summary for the delegated write phase. Include the files, symbols, matches, and constraints it should use.',
+    'Return a concise evidence summary for the graph synthesis node. Include the files, symbols, matches, and constraints it should use.',
   ].join('\n');
 }
 
-function buildHybridDirectReasoningHandoffSection(input: {
-  taskContract: DelegatedResultEnvelope['taskContract'];
-  directResultContent: string;
-  priorSatisfiedStepReceipts: DelegatedResultEnvelope['stepReceipts'];
-  jobSnapshots: DelegatedJobSnapshot[];
-  directFailed: boolean;
-}): PromptAssemblyAdditionalSection {
-  const satisfiedLines = input.priorSatisfiedStepReceipts.length > 0
-    ? input.priorSatisfiedStepReceipts
-        .map((receipt) => `- ${receipt.stepId}: ${receipt.summary}`)
-        .join('\n')
-    : '- No read/search steps were proven satisfied by the tool ledger.';
-  const remainingWriteSteps = input.taskContract.plan.steps
-    .filter((step) => isHybridWriteStep(step))
-    .map((step) => `- ${step.stepId}: ${step.summary}`)
-    .join('\n');
-  const directSummary = input.directResultContent
-    ? truncateInlineText(input.directResultContent, 2400)
-    : 'The direct reasoning phase did not return a usable summary.';
-  const ledgerSummary = buildHybridDirectToolLedgerSummary(input.jobSnapshots);
+function buildGraphWriteSpecSynthesisMessages(input: {
+  request: string;
+  decision?: IntentGatewayDecision | null;
+  workspaceRoot?: string;
+  sourceArtifacts: ExecutionArtifact[];
+  ledgerArtifact?: ExecutionArtifact<EvidenceLedgerContent> | null;
+}): ChatMessage[] {
+  const messages = buildGroundedSynthesisMessages({
+    request: input.request,
+    decision: input.decision ?? null,
+    workspaceRoot: input.workspaceRoot,
+    completedToolCalls: input.sourceArtifacts.length,
+    sourceArtifacts: input.sourceArtifacts,
+    ledgerArtifact: input.ledgerArtifact ?? null,
+    purpose: 'write_spec_candidate',
+  });
+  const finalMessage = messages[messages.length - 1];
+  if (finalMessage?.role === 'user') {
+    finalMessage.content = [
+      finalMessage.content,
+      '',
+      'Return only a JSON object with this exact shape:',
+      '{ "path": "relative/path", "content": "complete file contents to write", "append": false, "summary": "brief grounded rationale" }',
+      'The JSON must describe the mutation candidate only. Do not say the write has happened.',
+    ].join('\n');
+  }
+  return messages;
+}
+
+function parseGraphWriteSpecCandidate(content: string): GraphWriteSpecCandidate | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.trim());
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  const path = typeof record.path === 'string' ? record.path.trim() : '';
+  const writeContent = typeof record.content === 'string' ? record.content : '';
+  const append = record.append === true;
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : undefined;
+  if (!path || !writeContent) {
+    return null;
+  }
   return {
-    section: 'Hybrid Direct Reasoning Handoff',
-    mode: 'hybrid_direct_reasoning',
-    itemCount: input.priorSatisfiedStepReceipts.length,
-    content: [
-      'This delegated turn has a read/search phase followed by a write phase.',
-      'A brokered direct-reasoning pass already ran with read-only tools. Use the satisfied read/search receipts and server tool ledger below as dependency evidence, then execute only the remaining write/mutation steps unless the evidence is contradictory.',
-      'Your immediate job is the remaining write step. For a file write, call fs_write before sending a final response.',
-      'If the direct phase failed to produce prose, write a concise summary from the server tool ledger instead of re-running the completed search.',
-      '',
-      'Satisfied read/search steps:',
-      satisfiedLines,
-      '',
-      'Remaining write steps:',
-      remainingWriteSteps || '- None',
-      '',
-      `Direct phase status: ${input.directFailed ? 'failed_or_partial' : 'completed'}`,
-      'Direct phase evidence summary:',
-      directSummary,
-      '',
-      'Server tool ledger evidence:',
-      ledgerSummary,
-    ].join('\n'),
+    path,
+    content: writeContent,
+    append,
+    ...(summary ? { summary } : {}),
   };
 }
 
-function buildHybridDirectToolLedgerSummary(jobSnapshots: DelegatedJobSnapshot[]): string {
-  const sortedSnapshots = [...jobSnapshots]
-    .filter((snapshot) => isSuccessfulHybridReadJob(snapshot))
-    .sort((left, right) => (
-      (left.startedAt ?? left.createdAt ?? 0) - (right.startedAt ?? right.createdAt ?? 0)
-    ));
-  const lines: string[] = [];
-  const refs = new Set<string>();
+function buildGraphMutationToolRequest(
+  request: WorkerMessageRequest,
+  requestId: string,
+  codeContext: ToolExecutionRequest['codeContext'] | undefined,
+  executionProfile: SelectedExecutionProfile | undefined,
+): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
+  return {
+    origin: 'assistant',
+    requestId,
+    agentId: request.agentId,
+    userId: request.userId,
+    surfaceId: request.message.surfaceId,
+    principalId: request.message.principalId ?? request.userId,
+    principalRole: request.message.principalRole ?? 'owner',
+    channel: request.message.channel,
+    ...(codeContext ? { codeContext } : {}),
+    toolContextMode: executionProfile?.toolContextMode,
+    activeSkills: request.activeSkills?.map((skill) => skill.id) ?? [],
+  };
+}
 
-  for (const snapshot of sortedSnapshots) {
-    if (lines.length >= HYBRID_HANDOFF_JOB_LINE_LIMIT) {
-      break;
-    }
-    const args = parseDelegatedJobArgsPreview(snapshot.argsPreview);
-    const lineRefs = extractHybridEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview);
-    for (const ref of lineRefs) {
-      if (refs.size >= HYBRID_HANDOFF_REF_LIMIT) break;
-      refs.add(ref);
-    }
-    lines.push(describeHybridEvidenceJob(snapshot, args, lineRefs));
+function buildToolResultFromApprovalDecision(
+  approvalId: string,
+  result: ToolApprovalDecisionResult,
+): Record<string, unknown> {
+  const executionSucceeded = result.executionSucceeded
+    ?? result.result?.success
+    ?? (result.job?.status === 'succeeded');
+  return {
+    success: executionSucceeded === true,
+    status: executionSucceeded === true ? 'succeeded' : (result.job?.status ?? 'failed'),
+    approvalId,
+    ...(result.job?.id ? { jobId: result.job.id } : {}),
+    message: result.message,
+    ...(result.result?.output !== undefined ? { output: result.result.output } : {}),
+    ...(result.result?.error ? { error: result.result.error } : {}),
+  };
+}
+
+function buildGraphControlledTaskRunId(requestId: string): string {
+  return `graph-run:${requestId || randomUUID()}`;
+}
+
+function readExecutionGraphArtifactsFromMetadata(metadata: Record<string, unknown> | undefined): ExecutionArtifact[] {
+  const artifacts = metadata?.executionGraphArtifacts;
+  if (!Array.isArray(artifacts)) {
+    return [];
   }
+  return artifacts
+    .map((artifact) => normalizeExecutionArtifact(artifact))
+    .filter((artifact): artifact is ExecutionArtifact => !!artifact);
+}
 
-  if (lines.length === 0) {
-    return 'No successful read/search tool receipts were available from the server ledger.';
+function normalizeExecutionArtifact(value: unknown): ExecutionArtifact | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
   }
-
-  return [
-    ...lines,
-    ...(refs.size > 0 ? [`Key evidence paths: ${[...refs].join(', ')}`] : []),
-  ].join('\n');
+  const artifact = value as Record<string, unknown>;
+  if (
+    typeof artifact.artifactId !== 'string'
+    || typeof artifact.graphId !== 'string'
+    || typeof artifact.nodeId !== 'string'
+    || typeof artifact.artifactType !== 'string'
+    || typeof artifact.label !== 'string'
+    || typeof artifact.content !== 'object'
+    || artifact.content === null
+  ) {
+    return null;
+  }
+  return artifact as unknown as ExecutionArtifact;
 }
 
-function isSuccessfulHybridReadJob(snapshot: DelegatedJobSnapshot): boolean {
-  const status = snapshot.status.trim().toLowerCase();
-  return status === 'succeeded'
-    && (snapshot.toolName === 'fs_search' || snapshot.toolName === 'fs_read' || snapshot.toolName === 'fs_list');
-}
-
-function describeHybridEvidenceJob(
-  snapshot: DelegatedJobSnapshot,
-  args: Record<string, unknown>,
-  refs: string[],
-): string {
-  const query = typeof args.query === 'string' && args.query.trim()
-    ? ` query="${truncateInlineText(args.query, 80)}"`
-    : '';
-  const path = typeof args.path === 'string' && args.path.trim()
-    ? ` path="${truncateInlineText(normalizeHybridEvidenceRef(args.path) ?? args.path, 120)}"`
-    : '';
-  const refSummary = refs.length > 0
-    ? ` -> ${refs.slice(0, 4).join(', ')}`
-    : '';
-  return `- ${snapshot.toolName}${query}${path}${refSummary}`;
-}
-
-function extractHybridEvidenceRefs(...values: Array<string | undefined>): string[] {
+function extractDelegatedEvidenceRefs(...values: Array<string | undefined>): string[] {
   const refs = new Set<string>();
   for (const value of values) {
     if (!value) continue;
-    const matches = value.match(HYBRID_EVIDENCE_PATH_PATTERN) ?? [];
+    const matches = value.match(DELEGATED_EVIDENCE_PATH_PATTERN) ?? [];
     for (const match of matches) {
-      const normalized = normalizeHybridEvidenceRef(match);
+      const normalized = normalizeDelegatedEvidenceRef(match);
       if (!normalized) continue;
       refs.add(normalized);
-      if (refs.size >= HYBRID_HANDOFF_REF_LIMIT) {
+      if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
         return [...refs];
       }
     }
@@ -3107,7 +3663,7 @@ function extractHybridEvidenceRefs(...values: Array<string | undefined>): string
   return [...refs];
 }
 
-function normalizeHybridEvidenceRef(value: string | undefined): string | null {
+function normalizeDelegatedEvidenceRef(value: string | undefined): string | null {
   let normalized = value?.trim().replace(/\\\\/g, '/').replace(/\\/g, '/').replace(/^["']|["']$/g, '') ?? '';
   normalized = normalized.replace(/\/+/g, '/').replace(/\.\.\.$/, '').trim();
   if (!normalized) return null;
@@ -3478,7 +4034,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
       sourceType: 'tool_call',
       toolName: snapshot.toolName,
       status: receiptStatus,
-      refs: extractHybridEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview),
+      refs: extractDelegatedEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview),
       summary: snapshot.error?.trim()
         || snapshot.resultPreview?.trim()
         || `${snapshot.toolName} ${snapshot.status}.`,

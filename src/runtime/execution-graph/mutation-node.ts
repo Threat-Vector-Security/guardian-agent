@@ -49,6 +49,16 @@ export interface ExecuteWriteSpecMutationNodeResult {
   events: ExecutionGraphEvent[];
 }
 
+export interface ResumeWriteSpecMutationNodeAfterApprovalInput {
+  writeSpec: ExecutionArtifact<WriteSpecContent>;
+  approvedToolResult: Record<string, unknown>;
+  executeTool: SupervisorToolExecutor;
+  toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
+  context: MutationNodeExecutionContext;
+  verifyReadBack?: boolean;
+  approvalId?: string;
+}
+
 export async function executeWriteSpecMutationNode(
   input: ExecuteWriteSpecMutationNodeInput,
 ): Promise<ExecuteWriteSpecMutationNodeResult> {
@@ -198,6 +208,131 @@ export async function executeWriteSpecMutationNode(
   if (!verificationArtifact.content.valid) {
     emit('node_failed', {
       reason: 'Mutation verification failed.',
+      verificationArtifactId: verificationArtifact.artifactId,
+    }, 'node-failed');
+    return { status: 'failed', receiptArtifact, verificationArtifact, events };
+  }
+
+  emit('node_completed', {
+    receiptArtifactId: receiptArtifact.artifactId,
+    verificationArtifactId: verificationArtifact.artifactId,
+    path: input.writeSpec.content.path,
+  }, 'node-completed');
+  return { status: 'succeeded', receiptArtifact, verificationArtifact, events };
+}
+
+export async function resumeWriteSpecMutationNodeAfterApproval(
+  input: ResumeWriteSpecMutationNodeAfterApprovalInput,
+): Promise<ExecuteWriteSpecMutationNodeResult> {
+  const events: ExecutionGraphEvent[] = [];
+  let sequence = input.context.sequenceStart ?? 0;
+  const now = input.context.now ?? Date.now;
+  const emit = (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string): ExecutionGraphEvent => {
+    sequence += 1;
+    const event = createExecutionGraphEvent({
+      ...baseEventContext(input.context),
+      eventId: `${input.context.graphId}:${input.context.nodeId}:${eventKey}:${sequence}`,
+      nodeId: input.context.nodeId,
+      nodeKind: 'mutate',
+      kind,
+      timestamp: now(),
+      sequence,
+      producer: 'supervisor',
+      payload,
+    });
+    events.push(event);
+    input.context.emit?.(event);
+    return event;
+  };
+  const emitArtifact = (artifact: ExecutionArtifact): ExecutionGraphEvent => {
+    sequence += 1;
+    const artifactRef = artifactRefFromArtifact(artifact);
+    const event = createExecutionGraphEvent({
+      ...baseEventContext(input.context),
+      eventId: `${input.context.graphId}:${input.context.nodeId}:artifact:${artifact.artifactId}:${sequence}`,
+      nodeId: input.context.nodeId,
+      nodeKind: 'mutate',
+      kind: 'artifact_created',
+      timestamp: now(),
+      sequence,
+      producer: 'supervisor',
+      payload: {
+        artifactId: artifactRef.artifactId,
+        artifactType: artifactRef.artifactType,
+        label: artifactRef.label,
+        ...(artifactRef.preview ? { preview: artifactRef.preview } : {}),
+        ...(artifactRef.trustLevel ? { trustLevel: artifactRef.trustLevel } : {}),
+        ...(artifactRef.taintReasons ? { taintReasons: artifactRef.taintReasons } : {}),
+        ...(artifactRef.redactionPolicy ? { redactionPolicy: artifactRef.redactionPolicy } : {}),
+      },
+    });
+    events.push(event);
+    input.context.emit?.(event);
+    return event;
+  };
+
+  emit('approval_resolved', {
+    approvalId: input.approvalId,
+    toolName: 'fs_write',
+    writeSpecArtifactId: input.writeSpec.artifactId,
+    path: input.writeSpec.content.path,
+    resultStatus: stringValue(input.approvedToolResult.status)
+      || (input.approvedToolResult.success === true ? 'succeeded' : 'failed'),
+  }, 'approval-resolved');
+
+  const receiptArtifact = buildMutationReceiptArtifact({
+    graphId: input.context.graphId,
+    nodeId: input.context.nodeId,
+    artifactId: `${input.context.graphId}:${input.context.nodeId}:mutation-receipt`,
+    writeSpec: input.writeSpec,
+    toolResult: input.approvedToolResult,
+    createdAt: now(),
+  });
+  emitArtifact(receiptArtifact);
+
+  if (!receiptArtifact.content.success || receiptArtifact.content.status !== 'succeeded') {
+    emit('node_failed', {
+      reason: receiptArtifact.content.error || receiptArtifact.content.message || 'Approved mutation did not complete successfully.',
+      receiptArtifactId: receiptArtifact.artifactId,
+    }, 'node-failed');
+    return { status: 'failed', receiptArtifact, events };
+  }
+
+  const executionInput: ExecuteWriteSpecMutationNodeInput = {
+    writeSpec: input.writeSpec,
+    executeTool: input.executeTool,
+    toolRequest: input.toolRequest,
+    context: input.context,
+    verifyReadBack: input.verifyReadBack,
+  };
+  const readBackResult = input.verifyReadBack === false
+    ? null
+    : await executeReadBack({
+        input: executionInput,
+        emit,
+      });
+  const verificationArtifact = buildWriteMutationVerificationArtifact({
+    graphId: input.context.graphId,
+    nodeId: input.context.nodeId,
+    artifactId: `${input.context.graphId}:${input.context.nodeId}:verification`,
+    writeSpec: input.writeSpec,
+    receipt: receiptArtifact,
+    readBackResult,
+    createdAt: now(),
+  });
+  emitArtifact(verificationArtifact);
+  emit('verification_completed', {
+    verificationArtifactId: verificationArtifact.artifactId,
+    valid: verificationArtifact.content.valid,
+    checkCount: verificationArtifact.content.checks.length,
+    failedChecks: verificationArtifact.content.checks
+      .filter((check) => check.status === 'failed')
+      .map((check) => check.name),
+  }, 'verification-completed');
+
+  if (!verificationArtifact.content.valid) {
+    emit('node_failed', {
+      reason: 'Mutation verification failed after approval.',
       verificationArtifactId: verificationArtifact.artifactId,
     }, 'node-failed');
     return { status: 'failed', receiptArtifact, verificationArtifact, events };

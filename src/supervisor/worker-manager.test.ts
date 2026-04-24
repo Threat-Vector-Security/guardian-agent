@@ -7,6 +7,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { buildDelegatedExecutionMetadata } from '../runtime/execution/metadata.js';
 import {
+  buildFileReadSetArtifact,
+  buildSearchResultSetArtifact,
+} from '../runtime/execution-graph/graph-artifacts.js';
+import {
   buildStepReceipts,
   computeWorkerRunStatus,
   findAnswerStepId,
@@ -3503,20 +3507,13 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('does not carry a dependent answer step forward as satisfied on exact-file retries', async () => {
+  it('keeps delegated retry guidance advisory without carrying prior receipts into the worker', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
-    const retrySatisfiedStepIds: string[][] = [];
     const retryDirectives: string[] = [];
     let dispatchCount = 0;
     workerMessageHandler = (params) => {
       dispatchCount += 1;
-      const carriedForward = Array.isArray(params.priorSatisfiedStepReceipts)
-        ? (params.priorSatisfiedStepReceipts as Array<{ stepId?: string }>)
-            .map((receipt) => typeof receipt.stepId === 'string' ? receipt.stepId : '')
-            .filter(Boolean)
-        : [];
-      retrySatisfiedStepIds.push(carriedForward);
       const retryDirective = Array.isArray(params.additionalSections)
         ? (params.additionalSections as Array<{ section?: string; content?: string }>)
             .find((section) => section.section === 'Delegated Retry Directive')?.content ?? ''
@@ -3704,7 +3701,6 @@ describe('WorkerManager', () => {
 
     expect(result.content).toContain('src/supervisor/worker-manager.ts');
     expect(result.content).toContain('web/public/js/chat-panel.js');
-    expect(retrySatisfiedStepIds).toEqual([[], ['step_1']]);
     expect(retryDirectives[1]).toContain('Grounded file/path candidates from already satisfied steps:');
     expect(retryDirectives[1]).toContain('src/supervisor/worker-manager.ts');
     expect(retryDirectives[1]).toContain('src/runtime/run-timeline.ts');
@@ -3712,213 +3708,6 @@ describe('WorkerManager', () => {
     expect(retryDirectives[1]).toContain('Reuse those grounded candidates before starting any new speculative search.');
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
       stage: 'delegated_worker_retrying',
-    });
-
-    manager.shutdown();
-  });
-
-  it('reconciles degraded retry envelopes with server tool jobs for search then write tasks', async () => {
-    const { WorkerManager } = await import('./worker-manager.js');
-
-    const retryDirectives: string[] = [];
-    let dispatchCount = 0;
-    workerMessageHandler = (params) => {
-      dispatchCount += 1;
-      const retryDirective = Array.isArray(params.additionalSections)
-        ? (params.additionalSections as Array<{ section?: string; content?: string }>)
-            .find((section) => section.section === 'Delegated Retry Directive')?.content ?? ''
-        : '';
-      retryDirectives.push(retryDirective);
-
-      const gatewayDecision = readPreRoutedIntentGatewayMetadata(filesystemSearchWriteMetadata())?.decision;
-      const taskContract = buildDelegatedTaskContract(gatewayDecision);
-      if (dispatchCount === 1) {
-        return {
-          content: 'I searched src/runtime for planned_steps but did not write the summary file.',
-          metadata: buildDelegatedExecutionMetadata({
-            taskContract,
-            runStatus: 'incomplete',
-            stopReason: 'end_turn',
-            stepReceipts: [
-              {
-                stepId: 'step_1',
-                status: 'satisfied',
-                evidenceReceiptIds: ['receipt-search'],
-                summary: 'Searched src/runtime for planned_steps.',
-                startedAt: 1,
-                endedAt: 2,
-              },
-              {
-                stepId: 'step_2',
-                status: 'failed',
-                evidenceReceiptIds: [],
-                summary: 'Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
-                startedAt: 0,
-                endedAt: 0,
-              },
-            ],
-            operatorSummary: 'I searched src/runtime for planned_steps but did not write the summary file.',
-            claims: [],
-            evidenceReceipts: [
-              {
-                receiptId: 'receipt-search',
-                sourceType: 'tool_call',
-                toolName: 'fs_search',
-                status: 'succeeded',
-                refs: ['src/runtime/intent/route-classifier.ts'],
-                summary: 'Searched src/runtime for planned_steps.',
-                startedAt: 1,
-                endedAt: 2,
-              },
-            ],
-            interruptions: [],
-            artifacts: [],
-            events: [],
-          }),
-        };
-      }
-
-      return {
-        content: 'The retry degraded before writing the file.',
-        metadata: buildDelegatedExecutionMetadata({
-          taskContract,
-          runStatus: 'failed',
-          stopReason: 'error',
-          stepReceipts: taskContract.plan.steps.map((step) => ({
-            stepId: step.stepId,
-            status: 'failed' as const,
-            evidenceReceiptIds: [],
-            summary: step.summary,
-            startedAt: 0,
-            endedAt: 0,
-          })),
-          operatorSummary: 'The retry degraded before writing the file.',
-          claims: [],
-          evidenceReceipts: [],
-          interruptions: [],
-          artifacts: [],
-          events: [],
-        }),
-      };
-    };
-
-    const intentRoutingTrace = {
-      record: vi.fn(),
-    };
-    const manager = new WorkerManager(
-      {
-        listAlwaysLoadedDefinitions: () => [],
-        listJobs: vi.fn(() => [
-          {
-            id: 'job-planned-steps-search',
-            toolName: 'fs_search',
-            status: 'succeeded',
-            requestId: 'm-search-write-retry',
-            argsPreview: '{"path":"src/runtime","query":"planned_steps","mode":"content"}',
-            resultPreview: '{"matches":[{"path":"src/runtime/intent/route-classifier.ts"}]}',
-            createdAt: 10,
-            startedAt: 20,
-            completedAt: 30,
-          },
-        ]),
-      } as never,
-      {
-        getFallbackProviderConfig: () => undefined,
-        getConfigSnapshot: () => createExecutionProfileTestConfig(),
-        auditLog: { record: vi.fn() },
-        registry: {
-          get: (agentId: string) => agentId === 'local'
-            ? {
-                agent: { name: 'Guardian Agent' },
-                definition: {
-                  orchestration: {
-                    role: 'implementer',
-                    label: 'Workspace Implementer',
-                    lenses: ['coding-workspace'],
-                  },
-                },
-              }
-            : undefined,
-        },
-      } as never,
-      {
-        workerEntryPoint: 'src/worker/worker-entry.ts',
-        workerMaxMemoryMb: 2048,
-        workerIdleTimeoutMs: 300_000,
-        workerShutdownGracePeriodMs: 10,
-        capabilityTokenTtlMs: 600_000,
-        capabilityTokenMaxToolCalls: 0,
-      } as never,
-      undefined,
-      {
-        intentRoutingTrace,
-        now: () => 999_000,
-      },
-    );
-
-    const result = await manager.handleMessage({
-      sessionId: 'tester:web',
-      agentId: 'local',
-      userId: 'tester',
-      grantedCapabilities: [],
-      message: {
-        id: 'm-search-write-retry',
-        userId: 'tester',
-        channel: 'web',
-        content: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
-        metadata: filesystemSearchWriteMetadata(),
-        timestamp: Date.now(),
-      },
-      systemPrompt: 'system',
-      history: [],
-      knowledgeBases: [],
-      activeSkills: [],
-      additionalSections: [],
-      toolContext: '',
-      runtimeNotices: [],
-      executionProfile: {
-        id: 'managed_cloud_tool',
-        providerName: 'ollama-cloud-coding',
-        providerType: 'ollama_cloud',
-        providerModel: 'glm-5.1',
-        providerLocality: 'external',
-        providerTier: 'managed_cloud',
-        requestedTier: 'external',
-        preferredAnswerPath: 'tool_loop',
-        expectedContextPressure: 'high',
-        contextBudget: 32_000,
-        toolContextMode: 'tight',
-        maxAdditionalSections: 2,
-        maxRuntimeNotices: 2,
-        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
-        reason: 'delegated coding role selected managed-cloud coding profile',
-        routingMode: 'auto',
-        selectionSource: 'delegated_role',
-      },
-      delegation: {
-        requestId: 'm-search-write-retry',
-        executionId: 'exec-search-write-retry',
-        rootExecutionId: 'exec-search-write-root',
-        originChannel: 'web',
-        orchestration: {
-          role: 'implementer',
-          label: 'Workspace Implementer',
-          lenses: ['coding-workspace'],
-        },
-      },
-    });
-
-    const retryDirective = retryDirectives.find((directive) => directive.includes('filesystem mutation retry')) ?? '';
-    expect(retryDirective).toContain('filesystem mutation retry');
-    expect(retryDirective).toContain('use fs_write');
-    expect(result.content).toContain('Delegated work failed.');
-    expect(result.content).toContain('Failed to satisfy step: Write a short summary');
-    expect(result.content).not.toContain('Failed to satisfy step: Search src/runtime for planned_steps.');
-    expect(intentRoutingTrace.record.mock.calls.find(([entry]) => entry.stage === 'delegated_verification_decided')?.[0]).toMatchObject({
-      details: {
-        unsatisfiedStepIds: ['step_2'],
-        missingEvidenceKinds: ['write'],
-      },
     });
 
     manager.shutdown();
@@ -4125,15 +3914,14 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('runs hybrid direct reasoning exploration before delegated write tasks', async () => {
+  it('runs read/write repo tasks through the graph controller without delegated handoff', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const dispatchModes: string[] = [];
-    const carriedStepIds: string[][] = [];
-    const handoffSections: string[] = [];
     workerMessageHandler = (params) => {
       const directReasoning = params.directReasoning === true;
-      dispatchModes.push(directReasoning ? 'direct' : 'delegated');
+      const groundedSynthesis = !!params.groundedSynthesis;
+      dispatchModes.push(directReasoning ? 'direct' : groundedSynthesis ? 'synthesis' : 'delegated');
       const gateway = readPreRoutedIntentGatewayMetadata(
         (params.message as { metadata?: Record<string, unknown> } | undefined)?.metadata,
       );
@@ -4141,87 +3929,93 @@ describe('WorkerManager', () => {
       if (directReasoning) {
         expect(gateway?.decision.operation).toBe('search');
         expect(gateway?.decision.executionClass).toBe('repo_grounded');
-        expect((params.message as { content?: string } | undefined)?.content).toContain('Read-only exploration phase');
+        expect((params.message as { content?: string } | undefined)?.content).toContain('Read-only execution graph exploration node');
+        const context = params.directReasoningGraphContext as { graphId: string; nodeId: string };
         return {
           content: 'Found planned_steps references in src/runtime/intent/route-classifier.ts.',
           metadata: {
             skipTestDelegatedEnvelope: true,
             directReasoning: true,
             directReasoningMode: 'brokered_readonly',
+            executionGraphArtifacts: [
+              buildSearchResultSetArtifact({
+                graphId: context.graphId,
+                nodeId: context.nodeId,
+                query: 'planned_steps',
+                matches: [{ path: 'src/runtime/intent/route-classifier.ts', line: 42, snippet: 'planned_steps' }],
+                createdAt: 1_111_000,
+              }),
+              buildFileReadSetArtifact({
+                graphId: context.graphId,
+                nodeId: context.nodeId,
+                path: 'src/runtime/intent/route-classifier.ts',
+                content: 'planned_steps appears in src/runtime/intent/route-classifier.ts.\n',
+                createdAt: 1_111_000,
+              }),
+            ],
           },
         };
       }
 
-      carriedStepIds.push(
-        Array.isArray(params.priorSatisfiedStepReceipts)
-          ? (params.priorSatisfiedStepReceipts as Array<{ stepId?: string }>)
-              .map((receipt) => typeof receipt.stepId === 'string' ? receipt.stepId : '')
-              .filter(Boolean)
-          : [],
-      );
-      const handoff = Array.isArray(params.additionalSections)
-        ? (params.additionalSections as Array<{ section?: string; content?: string }>)
-            .find((section) => section.section === 'Hybrid Direct Reasoning Handoff')?.content ?? ''
-        : '';
-      handoffSections.push(handoff);
+      if (groundedSynthesis) {
+        expect(params.groundedSynthesis).toMatchObject({
+          responseFormat: {
+            type: 'json_schema',
+            name: 'graph_write_spec_candidate',
+          },
+        });
+        return {
+          content: JSON.stringify({
+            path: 'tmp/manual-web/planned-steps-summary.txt',
+            content: 'planned_steps appears in src/runtime/intent/route-classifier.ts.\n',
+            append: false,
+            summary: 'Summarize grounded planned_steps evidence.',
+          }),
+          metadata: {
+            skipTestDelegatedEnvelope: true,
+            groundedSynthesis: { available: true },
+          },
+        };
+      }
 
-      const gatewayDecision = readPreRoutedIntentGatewayMetadata(filesystemSearchWriteMetadata())?.decision;
-      const taskContract = buildDelegatedTaskContract(gatewayDecision);
-      return {
-        content: 'Wrote tmp/manual-web/planned-steps-summary.txt.',
-        metadata: buildDelegatedExecutionMetadata({
-          taskContract,
-          runStatus: 'incomplete',
-          stopReason: 'end_turn',
-          stepReceipts: taskContract.plan.steps.map((step) => ({
-            stepId: step.stepId,
-            status: 'failed' as const,
-            evidenceReceiptIds: [],
-            summary: step.summary,
-            startedAt: 0,
-            endedAt: 0,
-          })),
-          operatorSummary: 'Wrote tmp/manual-web/planned-steps-summary.txt.',
-          claims: [],
-          evidenceReceipts: [],
-          interruptions: [],
-          artifacts: [],
-          events: [],
-        }),
-      };
+      throw new Error('Delegated worker path should not run for graph-controlled read/write tasks.');
     };
 
     const intentRoutingTrace = {
       record: vi.fn(),
     };
-    const jobs = [
-      {
-        id: 'job-hybrid-search',
-        toolName: 'fs_search',
-        status: 'succeeded',
-        requestId: 'm-search-write-hybrid',
-        argsPreview: '{"path":"src/runtime","query":"planned_steps","mode":"content"}',
-        resultPreview: '{"matches":[{"path":"src/runtime/intent/route-classifier.ts"}]}',
-        createdAt: 10,
-        startedAt: 20,
-        completedAt: 30,
-      },
-      {
-        id: 'job-hybrid-write',
-        toolName: 'fs_write',
-        status: 'succeeded',
-        requestId: 'm-search-write-hybrid',
-        argsPreview: '{"path":"tmp/manual-web/planned-steps-summary.txt","content":"planned_steps summary"}',
-        resultPreview: '{"path":"tmp/manual-web/planned-steps-summary.txt","bytesWritten":21}',
-        createdAt: 40,
-        startedAt: 50,
-        completedAt: 60,
-      },
-    ];
+    const runTimeline = {
+      ingestExecutionGraphEvent: vi.fn(),
+    };
+    const executeModelTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'fs_write') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-graph-write',
+          message: 'Tool fs_write completed.',
+          output: { path: args.path },
+        };
+      }
+      if (toolName === 'fs_read') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-graph-readback',
+          message: 'Tool fs_read completed.',
+          output: {
+            path: args.path,
+            content: 'planned_steps appears in src/runtime/intent/route-classifier.ts.\n',
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
-        listJobs: vi.fn(() => dispatchModes.includes('delegated') ? jobs : jobs.slice(0, 1)),
+        listJobs: vi.fn(() => []),
+        executeModelTool,
       } as never,
       {
         getFallbackProviderConfig: () => undefined,
@@ -4253,6 +4047,7 @@ describe('WorkerManager', () => {
       undefined,
       {
         intentRoutingTrace,
+        runTimeline,
         now: () => 1_111_000,
       },
     );
@@ -4263,7 +4058,7 @@ describe('WorkerManager', () => {
       userId: 'tester',
       grantedCapabilities: [],
       message: {
-        id: 'm-search-write-hybrid',
+        id: 'm-search-write-graph',
         userId: 'tester',
         channel: 'web',
         content: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
@@ -4297,8 +4092,8 @@ describe('WorkerManager', () => {
         selectionSource: 'delegated_role',
       },
       delegation: {
-        requestId: 'm-search-write-hybrid',
-        executionId: 'exec-search-write-hybrid',
+        requestId: 'm-search-write-graph',
+        executionId: 'exec-search-write-graph',
         rootExecutionId: 'exec-search-write-root',
         originChannel: 'web',
         orchestration: {
@@ -4309,113 +4104,100 @@ describe('WorkerManager', () => {
       },
     });
 
-    expect(dispatchModes).toEqual(['direct', 'delegated']);
-    expect(carriedStepIds).toEqual([['step_1']]);
-    expect(handoffSections[0]).toContain('This delegated turn has a read/search phase followed by a write phase.');
-    expect(handoffSections[0]).toContain('Found planned_steps references');
-    expect(result.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt.');
-    expect(result.content).not.toContain('Delegated work failed.');
+    expect(dispatchModes).toEqual(['direct', 'synthesis']);
+    expect(executeModelTool.mock.calls.map(([toolName]) => toolName)).toEqual(['fs_write', 'fs_read']);
+    expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual(expect.arrayContaining([
+      'graph_started',
+      'node_started',
+      'tool_call_started',
+      'verification_completed',
+      'graph_completed',
+    ]));
+    expect(result.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt and verified');
+    expect(result.metadata?.executionGraph).toMatchObject({
+      status: 'succeeded',
+      writeSpecArtifactId: expect.stringContaining('write-spec'),
+      verificationArtifactId: expect.stringContaining('verification'),
+    });
 
     manager.shutdown();
   });
 
-  it('hands off server ledger evidence when hybrid direct reasoning cannot produce a final summary', async () => {
+  it('pauses graph-controlled mutation with an execution-graph pending action when approval is required', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const dispatchModes: string[] = [];
-    const handoffSections: string[] = [];
     workerMessageHandler = (params) => {
       const directReasoning = params.directReasoning === true;
-      dispatchModes.push(directReasoning ? 'direct' : 'delegated');
-
+      const groundedSynthesis = !!params.groundedSynthesis;
+      dispatchModes.push(directReasoning ? 'direct' : groundedSynthesis ? 'synthesis' : 'delegated');
       if (directReasoning) {
+        const context = params.directReasoningGraphContext as { graphId: string; nodeId: string };
         return {
-          content: 'Direct reasoning did not produce a final grounded answer within its read-only execution budget.',
+          content: 'Found planned_steps references in src/runtime/intent/route-classifier.ts.',
           metadata: {
+            skipTestDelegatedEnvelope: true,
             directReasoning: true,
             directReasoningMode: 'brokered_readonly',
-            directReasoningFailed: true,
+            executionGraphArtifacts: [
+              buildSearchResultSetArtifact({
+                graphId: context.graphId,
+                nodeId: context.nodeId,
+                query: 'planned_steps',
+                matches: [{ path: 'src/runtime/intent/route-classifier.ts', line: 42, snippet: 'planned_steps' }],
+                createdAt: 1_112_000,
+              }),
+            ],
           },
         };
       }
-
-      const handoff = Array.isArray(params.additionalSections)
-        ? (params.additionalSections as Array<{ section?: string; content?: string }>)
-            .find((section) => section.section === 'Hybrid Direct Reasoning Handoff')?.content ?? ''
-        : '';
-      handoffSections.push(handoff);
-      expect(handoff).toContain('Server tool ledger evidence:');
-      expect(handoff).toContain('fs_write');
-      expect(handoff).toContain('src/runtime/intent/route-classifier.ts');
-
-      const gatewayDecision = readPreRoutedIntentGatewayMetadata(filesystemSearchWriteMetadata())?.decision;
-      const taskContract = buildDelegatedTaskContract(gatewayDecision);
-      return {
-        content: 'Wrote tmp/manual-web/planned-steps-summary.txt from the carried-forward ledger evidence.',
-        metadata: buildDelegatedExecutionMetadata({
-          taskContract,
-          runStatus: 'incomplete',
-          stopReason: 'end_turn',
-          stepReceipts: taskContract.plan.steps.map((step) => ({
-            stepId: step.stepId,
-            status: 'failed' as const,
-            evidenceReceiptIds: [],
-            summary: step.summary,
-            startedAt: 0,
-            endedAt: 0,
-          })),
-          operatorSummary: 'Wrote tmp/manual-web/planned-steps-summary.txt from the carried-forward ledger evidence.',
-          claims: [],
-          evidenceReceipts: [],
-          interruptions: [],
-          artifacts: [],
-          events: [],
-        }),
-      };
+      if (groundedSynthesis) {
+        return {
+          content: JSON.stringify({
+            path: 'tmp/manual-web/planned-steps-summary.txt',
+            content: 'planned_steps appears in src/runtime/intent/route-classifier.ts.\n',
+            append: false,
+            summary: 'Summarize grounded planned_steps evidence.',
+          }),
+          metadata: {
+            skipTestDelegatedEnvelope: true,
+            groundedSynthesis: { available: true },
+          },
+        };
+      }
+      throw new Error('Delegated worker path should not run for graph-controlled approval pauses.');
     };
 
-    const readJobs = [
-      {
-        id: 'job-hybrid-failed-direct-search',
-        toolName: 'fs_search',
-        status: 'succeeded',
-        requestId: 'm-search-write-hybrid-failed-direct',
-        argsPreview: '{"path":"src/runtime","query":"planned_steps","mode":"content"}',
-        resultPreview: '{"matches":[{"path":"S:\\\\Development\\\\GuardianAgent\\\\src\\\\runtime\\\\intent\\\\route-classifier.ts"},{"path":"S:\\\\Development\\\\GuardianAgent\\\\src\\\\runtime\\\\intent\\\\structured-recovery.ts"}]}',
-        createdAt: 10,
-        startedAt: 20,
-        completedAt: 30,
-      },
-      {
-        id: 'job-hybrid-failed-direct-read',
-        toolName: 'fs_read',
-        status: 'succeeded',
-        requestId: 'm-search-write-hybrid-failed-direct',
-        argsPreview: '{"path":"S:\\\\Development\\\\GuardianAgent\\\\src\\\\runtime\\\\intent\\\\route-classifier.ts"}',
-        resultPreview: '{"path":"S:\\\\Development\\\\GuardianAgent\\\\src\\\\runtime\\\\intent\\\\route-classifier.ts","bytes":1024,"truncated":false}',
-        createdAt: 40,
-        startedAt: 50,
-        completedAt: 60,
-      },
-    ];
-    const writeJob = {
-      id: 'job-hybrid-failed-direct-write',
-      toolName: 'fs_write',
-      status: 'succeeded',
-      requestId: 'm-search-write-hybrid-failed-direct',
-      argsPreview: '{"path":"tmp/manual-web/planned-steps-summary.txt","content":"planned_steps summary"}',
-      resultPreview: '{"path":"tmp/manual-web/planned-steps-summary.txt","bytesWritten":21}',
-      createdAt: 70,
-      startedAt: 80,
-      completedAt: 90,
-    };
     const intentRoutingTrace = {
       record: vi.fn(),
     };
+    const runTimeline = {
+      ingestExecutionGraphEvent: vi.fn(),
+    };
+    const pendingActionStore = {
+      replaceActive: vi.fn((_scope, draft) => ({
+        id: 'pending-graph-1',
+        scope: _scope,
+        ...draft,
+      })),
+    };
+    const executeModelTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'fs_write') {
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-graph-write',
+          jobId: 'job-graph-write',
+          message: 'Approval required.',
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
-        listJobs: vi.fn(() => dispatchModes.includes('delegated') ? [writeJob, ...readJobs] : readJobs),
+        listJobs: vi.fn(() => []),
+        executeModelTool,
       } as never,
       {
         getFallbackProviderConfig: () => undefined,
@@ -4447,6 +4229,8 @@ describe('WorkerManager', () => {
       undefined,
       {
         intentRoutingTrace,
+        runTimeline,
+        pendingActionStore,
         now: () => 1_112_000,
       },
     );
@@ -4457,7 +4241,7 @@ describe('WorkerManager', () => {
       userId: 'tester',
       grantedCapabilities: [],
       message: {
-        id: 'm-search-write-hybrid-failed-direct',
+        id: 'm-search-write-graph-approval',
         userId: 'tester',
         channel: 'web',
         content: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
@@ -4491,8 +4275,8 @@ describe('WorkerManager', () => {
         selectionSource: 'delegated_role',
       },
       delegation: {
-        requestId: 'm-search-write-hybrid-failed-direct',
-        executionId: 'exec-search-write-hybrid-failed-direct',
+        requestId: 'm-search-write-graph-approval',
+        executionId: 'exec-search-write-graph-approval',
         rootExecutionId: 'exec-search-write-root',
         originChannel: 'web',
         orchestration: {
@@ -4503,10 +4287,22 @@ describe('WorkerManager', () => {
       },
     });
 
-    expect(dispatchModes).toEqual(['direct', 'delegated']);
-    expect(handoffSections).toHaveLength(1);
-    expect(result.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt');
-    expect(result.content).not.toContain('Delegated work failed.');
+    expect(dispatchModes).toEqual(['direct', 'synthesis']);
+    expect(result.metadata?.executionGraph).toMatchObject({
+      status: 'awaiting_approval',
+      receiptArtifactId: expect.stringContaining('mutation-receipt'),
+    });
+    expect(result.metadata?.pendingAction).toMatchObject({
+      status: 'pending',
+      blocker: {
+        kind: 'approval',
+        approvalSummaries: [expect.objectContaining({ id: 'approval-graph-write', toolName: 'fs_write' })],
+      },
+    });
+    expect(pendingActionStore.replaceActive).toHaveBeenCalledOnce();
+    expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual(expect.arrayContaining([
+      'approval_requested',
+    ]));
 
     manager.shutdown();
   });

@@ -23,12 +23,14 @@ export interface DirectReasoningGraphContext {
 }
 
 export interface BuildDirectReasoningGraphContextInput {
+  graphId?: string;
   requestId?: string;
   runId?: string;
   executionId?: string;
   rootExecutionId?: string;
   parentExecutionId?: string;
   taskExecutionId?: string;
+  nodeId?: string;
   channel?: string;
   agentId?: string;
   userId?: string;
@@ -58,13 +60,13 @@ export function buildDirectReasoningGraphContext(
     ?? requestId;
   const rootExecutionId = normalizeText(input.rootExecutionId) ?? executionId;
   return {
-    graphId: `execution-graph:${executionId}:direct-reasoning`,
+    graphId: normalizeText(input.graphId) ?? `execution-graph:${executionId}:direct-reasoning`,
     executionId,
     rootExecutionId,
     ...(normalizeText(input.parentExecutionId) ? { parentExecutionId: normalizeText(input.parentExecutionId) } : {}),
     requestId,
     runId,
-    nodeId: `node:${executionId}:explore_readonly`,
+    nodeId: normalizeText(input.nodeId) ?? `node:${executionId}:explore_readonly`,
     nodeKind: 'explore_readonly',
     ...(normalizeText(input.channel) ? { channel: normalizeText(input.channel) } : {}),
     ...(normalizeText(input.agentId) ? { agentId: normalizeText(input.agentId) } : {}),

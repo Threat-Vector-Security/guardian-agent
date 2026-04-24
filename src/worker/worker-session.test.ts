@@ -796,6 +796,22 @@ describe('BrokeredWorkerSession automation control', () => {
         throw new Error('Pre-routed repo inspections should not reclassify the turn.');
       }
       const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-read-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
       if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-read-1') {
         return {
           content: [
@@ -1301,13 +1317,29 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(fileClaims.some((claim) => claim.subject === 'web/public/js/chat-panel.js')).toBe(true);
   });
 
-  it('preserves prior satisfied non-answer steps as compatible evidence on exact-file retries', async () => {
+  it('grounds exact-file retries with live evidence instead of prior receipt carry-forward', async () => {
     const llmChat = vi.fn(async (messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
       if (firstTool === 'route_intent') {
         throw new Error('Pre-routed repo inspections should not reclassify the turn.');
       }
       const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-read-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
       if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-read-1') {
         return {
           content: [
@@ -1326,10 +1358,12 @@ describe('BrokeredWorkerSession automation control', () => {
           model: 'test-model',
           finishReason: 'tool_calls',
           toolCalls: [{
-            id: 'call-read-1',
-            name: 'fs_read',
+            id: 'call-search-1',
+            name: 'fs_search',
             arguments: JSON.stringify({
-              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+              path: 'S:\\Development\\GuardianAgent',
+              query: 'delegated worker progress run timeline rendering',
+              mode: 'content',
             }),
           }],
           providerLocality: 'external',
@@ -1340,6 +1374,22 @@ describe('BrokeredWorkerSession automation control', () => {
     });
 
     const callTool = vi.fn(async (request: { toolName: string }) => {
+      if (request.toolName === 'fs_search') {
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'Tool \'fs_search\' completed.',
+          output: {
+            query: 'delegated worker progress run timeline rendering',
+            matches: [{
+              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+              relativePath: 'src/supervisor/worker-manager.ts',
+              line: 1,
+              snippet: 'delegated worker progress',
+            }],
+          },
+        };
+      }
       if (request.toolName !== 'fs_read') {
         throw new Error(`Unexpected tool ${request.toolName}`);
       }
@@ -1356,6 +1406,19 @@ describe('BrokeredWorkerSession automation control', () => {
 
     const session = new BrokeredWorkerSession({
       getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_search',
+          description: 'Search files.',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+              path: { type: 'string' },
+              mode: { type: 'string' },
+            },
+            required: ['query'],
+          },
+        },
         {
           name: 'fs_read',
           description: 'Read a file.',
@@ -1378,14 +1441,6 @@ describe('BrokeredWorkerSession automation control', () => {
 
     const result = await session.handleMessage({
       ...baseParams,
-      priorSatisfiedStepReceipts: [{
-        stepId: 'step_1',
-        status: 'satisfied',
-        evidenceReceiptIds: ['receipt-search'],
-        summary: 'Search found candidate files.',
-        startedAt: 1,
-        endedAt: 2,
-      }],
       executionProfile: {
         id: 'frontier_deep',
         providerName: 'openai',
@@ -1457,8 +1512,8 @@ describe('BrokeredWorkerSession automation control', () => {
       expect.objectContaining({ stepId: 'step_2', status: 'satisfied' }),
       expect.objectContaining({ stepId: 'step_3', status: 'satisfied' }),
     ]));
-    expect(delegatedResult?.evidenceReceipts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ receiptId: 'prior:step_1', toolName: 'fs_search' }),
+    expect(delegatedResult?.evidenceReceipts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ receiptId: 'prior:step_1' }),
     ]));
   });
 
