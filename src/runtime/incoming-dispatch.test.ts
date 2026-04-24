@@ -137,6 +137,47 @@ describe('createIncomingDispatchPreparer', () => {
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
+  it('keeps gateway metadata for explicit coding sessions even when a channel default agent is configured', async () => {
+    const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord()),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      readCodeRequestMetadata,
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: { id: 'session-1', agentId: 'pinned-worker', workspaceRoot: 'S:/Development/GuardianAgent' },
+        })),
+      },
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch('default', {
+      content: 'Inspect this repo and cite exact files. Do not edit anything.',
+      userId: 'alex',
+      channel: 'web',
+      metadata: { codeContext: { sessionId: 'session-1', workspaceRoot: 'S:/Development/GuardianAgent' } },
+    });
+
+    expect(result.decision).toEqual({
+      agentId: 'default-agent',
+      confidence: 'high',
+      reason: 'explicit attached coding session with gateway-first auto routing',
+    });
+    expect(result.gateway).toEqual(createGatewayRecord());
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)).toMatchObject({
+      mode: 'primary',
+      decision: {
+        route: 'coding_task',
+        operation: 'inspect',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+      },
+    });
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
   it('still attaches a forced provider profile when a coding session is active', async () => {
     const config = createConfig();
     config.llm.anthropic = {

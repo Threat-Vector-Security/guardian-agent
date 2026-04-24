@@ -755,6 +755,104 @@ describe('direct reasoning mode', () => {
     expect(traceEntries.map((entry) => entry.stage)).toContain('direct_reasoning_synthesis_completed');
   });
 
+  it('does not report timedOut when budget-limited exploration still completes grounded synthesis', async () => {
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'src/runtime/direct-reasoning-mode.ts' }),
+            },
+          ],
+        });
+      }
+      return chatResponse({
+        content: 'Grounded synthesis cites `src/runtime/direct-reasoning-mode.ts`.',
+      });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'src/runtime/direct-reasoning-mode.ts',
+        content: 'export async function handleDirectReasoningMode() {}',
+      },
+    }));
+    const nowValues = [0, 0, 4_500, 4_500, 4_500];
+    let nowIndex = 0;
+    const now = () => nowValues[Math.min(nowIndex++, nowValues.length - 1)];
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect this repo and cite direct reasoning implementation files. Do not edit anything.',
+      gateway: gateway({ operation: 'inspect' }),
+      selectedExecutionProfile: profile(),
+      maxTotalTimeMs: 5_000,
+    }, {
+      chat,
+      executeTool,
+      now,
+    });
+
+    expect(result.content).toContain('src/runtime/direct-reasoning-mode.ts');
+    expect(result.metadata?.directReasoningStats).toMatchObject({
+      toolCallCount: 1,
+      timedOut: false,
+      synthesized: true,
+    });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[1]?.tools).toEqual([]);
+  });
+
+  it('keeps timedOut when budget-limited exploration only produces deterministic fallback evidence', async () => {
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'src/runtime/direct-reasoning-mode.ts' }),
+            },
+          ],
+        });
+      }
+      return chatResponse({ content: '' });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'src/runtime/direct-reasoning-mode.ts',
+        content: 'export async function handleDirectReasoningMode() {}',
+      },
+    }));
+    const nowValues = [0, 0, 4_500, 4_500, 4_500];
+    let nowIndex = 0;
+    const now = () => nowValues[Math.min(nowIndex++, nowValues.length - 1)];
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect this repo and cite direct reasoning implementation files. Do not edit anything.',
+      gateway: gateway({ operation: 'inspect' }),
+      selectedExecutionProfile: profile(),
+      maxTotalTimeMs: 5_000,
+    }, {
+      chat,
+      executeTool,
+      now,
+    });
+
+    expect(result.content).toContain('Relevant implementation evidence found:');
+    expect(result.metadata?.directReasoningStats).toMatchObject({
+      toolCallCount: 1,
+      timedOut: true,
+      synthesized: false,
+    });
+  });
+
   it('replaces an unsupported exploration draft with the grounded synthesis answer', async () => {
     const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
       if (chat.mock.calls.length === 1) {
