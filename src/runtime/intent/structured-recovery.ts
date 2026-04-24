@@ -282,6 +282,7 @@ export function normalizeIntentGatewayDecision(
     turnRelation,
     repairContext,
   );
+  const routeOrOperationRepaired = route !== normalizedParsedRoute || operation !== parsedOperation;
   const resolution = normalizeResolution(parsed.resolution);
   const missingFields = Array.isArray(parsed.missingFields)
     ? parsed.missingFields
@@ -304,14 +305,18 @@ export function normalizeIntentGatewayDecision(
     ...entityResolution.entities,
   });
   const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);
-  const executionClass = normalizedExecutionClass ?? derivedWorkload.executionClass;
+  const executionClass = !routeOrOperationRepaired && normalizedExecutionClass
+    ? normalizedExecutionClass
+    : derivedWorkload.executionClass;
   const normalizedPreferredTier = normalizePreferredTier(parsed.preferredTier);
-  const preferredTier = normalizedPreferredTier ?? derivedWorkload.preferredTier;
-  const hasParsedRequiresRepoGrounding = typeof parsed.requiresRepoGrounding === 'boolean';
+  const preferredTier = !routeOrOperationRepaired && normalizedPreferredTier
+    ? normalizedPreferredTier
+    : derivedWorkload.preferredTier;
+  const hasParsedRequiresRepoGrounding = !routeOrOperationRepaired && typeof parsed.requiresRepoGrounding === 'boolean';
   const requiresRepoGrounding = hasParsedRequiresRepoGrounding
     ? parsed.requiresRepoGrounding as boolean
     : derivedWorkload.requiresRepoGrounding;
-  const hasParsedRequiresToolSynthesis = typeof parsed.requiresToolSynthesis === 'boolean';
+  const hasParsedRequiresToolSynthesis = !routeOrOperationRepaired && typeof parsed.requiresToolSynthesis === 'boolean';
   const requiresToolSynthesis = hasParsedRequiresToolSynthesis
     ? parsed.requiresToolSynthesis as boolean
     : derivedWorkload.requiresToolSynthesis;
@@ -323,12 +328,18 @@ export function normalizeIntentGatewayDecision(
   // Use the model's parsed value, but force it to true if the heuristic strongly believes it requires exact file references.
   const requireExactFileReferences = (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean)
     || heuristicRequiresExactFile;
-  const expectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure)
-    ?? derivedWorkload.expectedContextPressure;
-  const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
-    ?? derivedWorkload.preferredAnswerPath;
-  const simpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex)
-    ?? derivedWorkload.simpleVsComplex;
+  const normalizedExpectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure);
+  const expectedContextPressure = !routeOrOperationRepaired && normalizedExpectedContextPressure
+    ? normalizedExpectedContextPressure
+    : derivedWorkload.expectedContextPressure;
+  const normalizedPreferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath);
+  const preferredAnswerPath = !routeOrOperationRepaired && normalizedPreferredAnswerPath
+    ? normalizedPreferredAnswerPath
+    : derivedWorkload.preferredAnswerPath;
+  const normalizedSimpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex);
+  const simpleVsComplex = !routeOrOperationRepaired && normalizedSimpleVsComplex
+    ? normalizedSimpleVsComplex
+    : derivedWorkload.simpleVsComplex;
   const rawPlannedSteps = Array.isArray(parsed.planned_steps)
     ? parsed.planned_steps
     : Array.isArray(parsed.plannedSteps)
@@ -398,8 +409,8 @@ export function normalizeIntentGatewayDecision(
         ? 'repair.structured'
         : 'resolver.clarification',
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
-    executionClass: normalizedExecutionClass ? classifierSource : 'derived.workload',
-    preferredTier: normalizedPreferredTier ? classifierSource : 'derived.workload',
+    executionClass: (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
+    preferredTier: (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
     requiresRepoGrounding: hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
     requiresToolSynthesis: hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
     ...(hasParsedRequireExactFileReferences || requireExactFileReferences
@@ -409,13 +420,13 @@ export function normalizeIntentGatewayDecision(
             : 'derived.workload',
         }
       : {}),
-    expectedContextPressure: normalizeExpectedContextPressure(parsed.expectedContextPressure)
+    expectedContextPressure: (!routeOrOperationRepaired && normalizedExpectedContextPressure)
       ? classifierSource
       : 'derived.workload',
-    preferredAnswerPath: normalizePreferredAnswerPath(parsed.preferredAnswerPath)
+    preferredAnswerPath: (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
       ? classifierSource
       : 'derived.workload',
-    simpleVsComplex: normalizeSimpleVsComplex(parsed.simpleVsComplex)
+    simpleVsComplex: (!routeOrOperationRepaired && normalizedSimpleVsComplex)
       ? classifierSource
       : 'derived.workload',
     ...(entityResolution.provenance ? { entities: entityResolution.provenance } : {}),

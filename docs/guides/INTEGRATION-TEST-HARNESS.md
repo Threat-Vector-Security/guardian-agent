@@ -16,6 +16,82 @@ Before assuming a harness failure needs more verbose runtime logging, inspect Gu
 - These traces are always-on runtime artifacts and are more useful for agent debugging than the normal console log level.
 - This is distinct from harness temp logs such as `guardian.log` and `guardian.log.err`, and distinct from `runtime.logLevel`, which may still be set to `warn` on Windows-oriented dev flows.
 
+## Codex Web Preview + CLI Iteration Loop
+
+When debugging full-stack chat behavior from Codex Desktop, use the same path a web user uses and pair every manual result with a routing-trace inspection.
+
+1. Start Guardian with the repo startup script, not an ad hoc process:
+
+```powershell
+.\scripts\start-dev-windows.ps1 -StartOnly
+```
+
+Use `http://localhost:3000/` for the in-app browser. If the IPv6 preview URL `http://[::1]:3000/` refuses the connection during startup, retry with `localhost`.
+Do not require a generic `/api/health` route for this loop; some app builds do not expose one. Treat a listening port plus a successful `/api/message/stream` replay as the functional readiness check.
+
+2. Exercise the prompt in the Codex in-app browser first when the failure is UI-facing. The browser run confirms frontend payload shape, response rendering, input locking, SSE behavior, and run-timeline updates.
+
+3. Replay the same request from PowerShell when faster iteration is needed. Include the same hidden context prefix and code-session metadata that the web UI sends:
+
+```powershell
+$requestId = 'codex-cli-' + [guid]::NewGuid().ToString('N')
+$sessionId = '<active-code-session-id>'
+$body = @{
+  content = '[Context: User is currently viewing the second-brain panel] Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything.'
+  agentId = 'default'
+  userId = 'web-user'
+  channel = 'web'
+  surfaceId = 'web-guardian-chat'
+  requestId = $requestId
+  metadata = @{
+    codeContext = @{
+      sessionId = $sessionId
+      workspaceRoot = 'S:\Development\GuardianAgent'
+    }
+  }
+} | ConvertTo-Json -Depth 8
+
+$response = Invoke-RestMethod `
+  -Uri 'http://localhost:3000/api/message/stream' `
+  -Method Post `
+  -ContentType 'application/json' `
+  -Body $body `
+  -TimeoutSec 420
+```
+
+4. Inspect `~/.guardianagent/routing/intent-routing.jsonl` for the matching `requestId`. For direct-reasoning regressions, check these stages before changing code:
+
+- `direct_reasoning_started`
+- `direct_reasoning_llm_call_started`
+- `direct_reasoning_llm_call_completed`
+- `direct_reasoning_tool_call`
+- `direct_reasoning_evidence_hydration`
+- `direct_reasoning_synthesis_started`
+- `direct_reasoning_synthesis_coverage_revision`
+- `direct_reasoning_synthesis_completed`
+- `direct_reasoning_completed`
+
+If the trace shows the right evidence was collected but the answer omitted it, fix evidence selection, synthesis coverage, or artifact projection. Do not add pre-gateway keyword routes or prompt-specific intent interception. If the evidence was never collected, fix brokered read-tool execution, hydration, search/read canonicalization, or tool-result normalization. For read-only direct reasoning, keep all tools brokered and read-only.
+
+5. Keep a small manual regression ladder while iterating:
+
+```text
+Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything.
+Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything.
+```
+
+Expected for the second prompt: `web/public/js/pages/automations.js`, `web/public/js/pages/code.js`, and `web/public/js/pages/system.js`; omit the target component and generic `app.js` / `api.js` plumbing unless the user asks for routing or framework entry points.
+If a fully unavailable or route-only Intent Gateway response is repaired into a repo-grounded inspection route, confirm the repaired workload metadata is also repo-grounded. Stale direct-assistant workload metadata can otherwise preempt the brokered read-only path even when the repaired route is correct.
+
+6. After code changes, run the focused checks before replaying the web request again:
+
+```powershell
+npx vitest run src/runtime/direct-reasoning-mode.test.ts
+npx vitest run src/broker/broker-server.test.ts src/runtime/run-timeline.test.ts
+npm run check
+npm run build
+```
+
 ## Overview
 
 Most general chat harnesses send messages through the Web channel's `POST /api/message` endpoint. Code-session harnesses use the dedicated `/api/code/sessions/:id/*` routes. Together they validate functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).

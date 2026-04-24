@@ -9,10 +9,10 @@ const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|sy
 const CODING_BACKEND_SCOPE_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder)\b/;
 const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
 const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
-const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
+const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+(?:files?|pages?|modules?|components?)|what\s+(?:files?|pages?|modules?|components?)|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
 const EXACT_FILE_LOOKUP_VERB_PATTERN = /\b(?:which|what|exact|cite|name|list|identify|locate|show|enumerate)\b/i;
-const EXACT_FILE_TARGET_PATTERN = /\b(?:client-side\s+files?|files?|file\s+paths?|file\s+names?|functions?|code\s+paths?|client-side\s+code\s+paths?)\b/i;
-const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
+const EXACT_FILE_TARGET_PATTERN = /\b(?:web\s+pages?|client-side\s+files?|files?|file\s+paths?|file\s+names?|pages?|modules?|components?|functions?|code\s+paths?|client-side\s+code\s+paths?)\b/i;
+const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|consume|consumes|consumed|consumer|consumers|import|imports|imported|use|uses|used|using|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
 
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
@@ -151,7 +151,7 @@ export function isExplicitCodingExecutionRequest(content: string | undefined): b
 
 const SYMBOL_REQUEST_PATTERN = /\b(?:functions?|types?|classes?|symbols?|interfaces?|methods?|variables?|constants?|enums?)\b/i;
 const READONLY_MODIFIER_PATTERN = /\b(?:do\s+not\s+edit|don'?t\s+edit|without\s+editing|read[\s-]*only|no\s+(?:editing|modifications?|changes?|writes?))\b/i;
-const IMPLEMENTATION_QUEST_PATTERN = /\b(?:which|what)\s+.*\b(?:implement|define|defines|defined|render|renders|rendered|responsible|own|handles?)\b/i;
+const IMPLEMENTATION_QUEST_PATTERN = /\b(?:which|what)\s+.*\b(?:implement|define|defines|defined|render|renders|rendered|consume|consumes|consumer|consumers|import|imports|imported|use|uses|used|responsible|own|handles?)\b/i;
 
 export function deriveAnswerConstraints(content: string | undefined): AnswerConstraints {
   const normalized = normalizeIntentGatewayRepairText(content);
