@@ -54,6 +54,7 @@ function createRecord(overrides?: Partial<PendingActionRecord>): Omit<PendingAct
       ...(overrides.blocker ? { blocker: overrides.blocker } : {}),
       ...(overrides.intent ? { intent: overrides.intent } : {}),
       ...(overrides.resume ? { resume: overrides.resume } : {}),
+      ...(overrides.graphInterrupt ? { graphInterrupt: overrides.graphInterrupt } : {}),
       ...(overrides.executionId ? { executionId: overrides.executionId } : {}),
       ...(overrides.rootExecutionId ? { rootExecutionId: overrides.rootExecutionId } : {}),
       ...(overrides.codeSessionId ? { codeSessionId: overrides.codeSessionId } : {}),
@@ -92,6 +93,74 @@ describe('PendingActionStore', () => {
     expect(toPendingActionClientMetadata(created)).toMatchObject({
       executionId: 'exec-1',
       rootExecutionId: 'exec-root-1',
+    });
+  });
+
+  it('preserves execution graph interrupt metadata on stored pending actions', () => {
+    const store = createStore();
+    const scope = createScope();
+
+    const created = store.replaceActive(scope, createRecord({
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-1',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-1',
+          artifactIds: ['write-spec-1'],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-1',
+        nodeId: 'node-mutate',
+        nodeKind: 'mutate',
+        resumeToken: 'resume-1',
+        artifactRefs: [{
+          artifactId: 'write-spec-1',
+          graphId: 'graph-1',
+          nodeId: 'node-synthesize',
+          artifactType: 'WriteSpec',
+          label: 'Write spec',
+          preview: 'Write tmp/report.txt.',
+          trustLevel: 'trusted',
+          redactionPolicy: 'exact_content_not_for_timeline',
+          createdAt: 123,
+        }],
+      },
+    }));
+
+    expect(store.get(created.id)).toMatchObject({
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-1',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-1',
+          artifactIds: ['write-spec-1'],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-1',
+        nodeId: 'node-mutate',
+        nodeKind: 'mutate',
+        resumeToken: 'resume-1',
+        artifactRefs: [{ artifactId: 'write-spec-1', artifactType: 'WriteSpec' }],
+      },
+    });
+    expect(toPendingActionClientMetadata(created)).toMatchObject({
+      graphInterrupt: {
+        graphId: 'graph-1',
+        nodeId: 'node-mutate',
+        resumeToken: 'resume-1',
+        artifactRefs: [{ artifactId: 'write-spec-1', artifactType: 'WriteSpec' }],
+      },
+    });
+    expect(summarizePendingActionForGateway(created)).toMatchObject({
+      graphInterrupt: {
+        graphId: 'graph-1',
+        nodeId: 'node-mutate',
+        resumeToken: 'resume-1',
+      },
     });
   });
 

@@ -191,4 +191,102 @@ describe('approval-orchestration', () => {
       }),
     );
   });
+
+  it('resumes execution graph pending actions after the final approval resolves', async () => {
+    const pendingAction = {
+      id: 'pending-graph-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve graph write',
+        approvalIds: ['approval-graph-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Write the redacted scan output.',
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-1',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-1',
+          artifactIds: ['write-spec-1'],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-1',
+        nodeId: 'node-mutate',
+        nodeKind: 'mutate',
+        resumeToken: 'resume-1',
+        artifactRefs: [],
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    } as const;
+    const resumeStoredExecutionGraphPendingAction = vi.fn(async () => ({
+      content: 'Graph mutation resumed and verified.',
+      metadata: { graphId: 'graph-1' },
+    }));
+
+    const result = await handleApprovalMessage({
+      message: {
+        id: 'msg-graph',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'approve',
+        timestamp: Date.now(),
+      },
+      ctx: {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      tools: {
+        decideApproval: vi.fn(async () => ({
+          success: true,
+          message: "Tool 'fs_write' completed.",
+        })),
+        getApprovalSummaries: vi.fn(() => new Map()),
+        listPendingApprovalIdsForUser: vi.fn(() => []),
+      },
+      getPendingApprovalAction: vi.fn(() => pendingAction as never),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: pendingAction })),
+      completePendingAction: vi.fn(),
+      takeApprovalFollowUp: vi.fn(() => null),
+      clearApprovalFollowUp: vi.fn(),
+      getAutomationApprovalContinuation: vi.fn(() => null),
+      setAutomationApprovalContinuation: vi.fn(),
+      clearAutomationApprovalContinuation: vi.fn(),
+      tryDirectAutomationAuthoring: vi.fn(async () => null),
+      resumeStoredToolLoopPendingAction: vi.fn(async () => null),
+      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredExecutionGraphPendingAction,
+      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
+      resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-graph-1'], errors: [] })),
+    });
+
+    expect(result).toEqual({
+      content: 'Graph mutation resumed and verified.',
+      metadata: { graphId: 'graph-1' },
+    });
+    expect(resumeStoredExecutionGraphPendingAction).toHaveBeenCalledWith(
+      pendingAction,
+      expect.objectContaining({ approvalId: 'approval-graph-1' }),
+    );
+  });
 });
