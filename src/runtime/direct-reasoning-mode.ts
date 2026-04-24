@@ -749,6 +749,7 @@ export async function executeDirectReasoningLoop(input: {
         }
 
         finalContent = synthesisContent;
+        timedOut = false;
         synthesized = true;
         const draftArtifact = createDirectReasoningSynthesisDraftArtifact(artifactState, finalContent, now());
         input.graphEmitter?.emit(

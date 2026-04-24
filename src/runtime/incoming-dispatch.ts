@@ -298,15 +298,16 @@ export function createIncomingDispatchPreparer(args: {
       touchAttachment: false,
     });
     let classifiedGatewayPromise: Promise<IntentGatewayRecord | null> | null = null;
-    const getGateway = (): Promise<IntentGatewayRecord | null> => {
+    const getGateway = (options: { force?: boolean } = {}): Promise<IntentGatewayRecord | null> => {
+      if (resolvedChannelDefault && options.force !== true) {
+        return Promise.resolve(null);
+      }
       if (!classifiedGatewayPromise) {
-        classifiedGatewayPromise = resolvedChannelDefault
-          ? Promise.resolve(null)
-          : classifyIntentForRouting(
-            msg,
-            resolveRoutingStateAgentId(resolvedChannelDefault),
-            requestedChatProvider?.providerName,
-          );
+        classifiedGatewayPromise = classifyIntentForRouting(
+          msg,
+          resolveRoutingStateAgentId(resolvedChannelDefault),
+          requestedChatProvider?.providerName,
+        );
       }
       return classifiedGatewayPromise;
     };
@@ -479,7 +480,7 @@ export function createIncomingDispatchPreparer(args: {
       return null;
     };
     if (resolvedCodeSession) {
-      const gateway = await getGateway();
+      const gateway = await getGateway({ force: true });
       const shouldApplyCodeSession = shouldAttachCodeSessionForRequest({
         content: normalizedContent,
         channel,
@@ -517,7 +518,7 @@ export function createIncomingDispatchPreparer(args: {
       }
     }
     if (requestedCodeContext?.workspaceRoot) {
-      const gateway = await getGateway();
+      const gateway = await getGateway({ force: true });
       const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
       const decision = resolvedChannelDefault
         ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
