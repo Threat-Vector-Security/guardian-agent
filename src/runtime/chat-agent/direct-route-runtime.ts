@@ -11,6 +11,10 @@ import {
 import type { ToolApprovalDecisionResult, ToolExecutor } from '../../tools/executor.js';
 import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import {
+  hasRequiredReadOrSearchPlannedStep,
+  hasRequiredReadWritePlan,
+} from '../intent/planned-steps.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import {
@@ -113,19 +117,8 @@ export async function tryDirectFilesystemIntent(input: DirectFilesystemIntentInp
 function shouldDeferFilesystemIntentToOrchestration(input: DirectFilesystemIntentInput): boolean {
   const decision = input.gatewayDecision;
   if (!decision) return false;
-  const plannedSteps = Array.isArray(decision.plannedSteps) ? decision.plannedSteps : [];
-  const hasWriteStep = plannedSteps.some((step) => step.kind === 'write'
-    || step.expectedToolCategories?.some((category) => category === 'write' || category === 'fs_write'));
-  const hasReadOrSearchStep = plannedSteps.some((step) => step.kind === 'read'
-    || step.kind === 'search'
-    || step.kind === 'answer'
-    || step.expectedToolCategories?.some((category) => (
-      category === 'read'
-      || category === 'search'
-      || category === 'fs_read'
-      || category === 'fs_search'
-    )));
-  if (hasWriteStep && hasReadOrSearchStep) {
+  const hasReadOrSearchStep = hasRequiredReadOrSearchPlannedStep(decision);
+  if (hasRequiredReadWritePlan(decision)) {
     return true;
   }
   if (decision.operation === 'save' && decision.turnRelation !== 'new_request' && !hasReadOrSearchStep) {

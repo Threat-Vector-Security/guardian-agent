@@ -7815,4 +7815,149 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).toHaveBeenCalledOnce();
     expect(localChat).not.toHaveBeenCalled();
   });
+
+  it('delegates structured read-write coding plans instead of marking them direct reasoning', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-structured-read-write.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const localChat = vi.fn(async () => ({
+      content: 'Inline answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Graph-controlled write complete.',
+      })),
+    };
+    const selectedProfile = {
+      id: 'managed_cloud_direct' as const,
+      providerName: 'openrouter',
+      providerType: 'openrouter',
+      providerModel: 'qwen/qwen3.6-plus',
+      providerLocality: 'external' as const,
+      providerTier: 'managed_cloud' as const,
+      requestedTier: 'external' as const,
+      preferredAnswerPath: 'chat_synthesis' as const,
+      expectedContextPressure: 'high' as const,
+      contextBudget: 32_000,
+      toolContextMode: 'tight' as const,
+      maxAdditionalSections: 2,
+      maxRuntimeNotices: 2,
+      fallbackProviderOrder: ['openrouter'],
+      reason: 'test managed cloud direct profile',
+      routingMode: 'auto' as const,
+      selectionSource: 'auto' as const,
+    };
+    const gatewayRecord = {
+      mode: 'primary' as const,
+      available: true,
+      model: 'test-gateway',
+      latencyMs: 1,
+      decision: {
+        route: 'coding_task' as const,
+        confidence: 'high' as const,
+        operation: 'inspect' as const,
+        summary: 'Search the repo and write a grounded summary file.',
+        turnRelation: 'new_request' as const,
+        resolution: 'ready' as const,
+        missingFields: [],
+        executionClass: 'repo_grounded' as const,
+        preferredTier: 'external' as const,
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'high' as const,
+        preferredAnswerPath: 'chat_synthesis' as const,
+        plannedSteps: [
+          { kind: 'search' as const, summary: 'Search src/runtime for planned_steps.', required: true },
+          {
+            kind: 'write' as const,
+            summary: 'Write a grounded summary to tmp/manual-web/planned-steps-summary.txt.',
+            expectedToolCategories: ['fs_write'],
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+        entities: {},
+      },
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-structured-read-write',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(
+        attachSelectedExecutionProfileMetadata(undefined, selectedProfile),
+        gatewayRecord,
+      ),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: ['read_files', 'write_files'],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Graph-controlled write complete.');
+    expect(workerManager.handleMessage).toHaveBeenCalledOnce();
+    expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      directReasoning: false,
+      delegation: expect.objectContaining({
+        orchestration: {
+          role: 'implementer',
+          label: 'Workspace Implementer',
+          lenses: ['coding-workspace'],
+        },
+      }),
+    }));
+    expect(localChat).not.toHaveBeenCalled();
+  });
 });

@@ -7,6 +7,7 @@ import type {
   IntentGatewayDecision,
   IntentGatewayOperation,
 } from './intent/types.js';
+import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import {
   normalizeOrchestrationRoleDescriptor,
   type OrchestrationCoreRole,
@@ -205,7 +206,8 @@ export function inferDelegatedOrchestrationDescriptor(
   }
 
   if (decision.route === 'coding_task' || decision.route === 'filesystem_task' || isRepoGrounded) {
-    return readLike
+    const structuredPlanRequiresWrite = hasRequiredWritePlannedStep(decision);
+    return readLike && !structuredPlanRequiresWrite
       ? buildRoleDescriptor('explorer', 'Workspace Explorer', ['coding-workspace'])
       : buildRoleDescriptor('implementer', 'Workspace Implementer', ['coding-workspace']);
   }

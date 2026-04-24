@@ -108,6 +108,30 @@ describe('direct reasoning mode', () => {
     })).toBe(false);
   });
 
+  it('does not select brokered direct reasoning when structured repo inspection plans require writes', () => {
+    expect(shouldHandleDirectReasoningMode({
+      gateway: gateway({
+        route: 'coding_task',
+        operation: 'inspect',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'chat_synthesis',
+        plannedSteps: [
+          { kind: 'search', summary: 'Search src/runtime for planned_steps.', required: true },
+          {
+            kind: 'write',
+            summary: 'Write a grounded summary to tmp/manual-web/planned-steps-summary.txt.',
+            expectedToolCategories: ['fs_write'],
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile(),
+    })).toBe(false);
+  });
+
   it('runs an iterative read-only tool loop with trace and tool execution context', async () => {
     const messagesByCall: ChatMessage[][] = [];
     const optionsByCall: Array<ChatOptions | undefined> = [];

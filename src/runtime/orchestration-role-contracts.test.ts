@@ -135,6 +135,34 @@ describe('orchestration role contracts', () => {
     });
   });
 
+  it('infers workspace implementer for read-like coding decisions with structured write steps', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'coding_task',
+      operation: 'inspect',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search src/runtime for planned_steps.', required: true },
+        {
+          kind: 'write',
+          summary: 'Write a grounded summary to tmp/manual-web/planned-steps-summary.txt.',
+          expectedToolCategories: ['fs_write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'implementer',
+      label: 'Workspace Implementer',
+      lenses: ['coding-workspace'],
+    });
+  });
+
   it('infers executive assistant metadata for personal assistant delegation', () => {
     const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
       route: 'personal_assistant_task',

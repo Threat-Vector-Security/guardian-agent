@@ -24,6 +24,7 @@ import type {
   IntentGatewayOperation,
   IntentGatewayPreferredAnswerPath,
 } from './intent-gateway.js';
+import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import type { RouteDecision } from './message-router.js';
 import type { OrchestrationRoleDescriptor } from './orchestration-role-descriptors.js';
 
@@ -406,6 +407,8 @@ function wouldUseDirectReasoningMode(decision: IntentGatewayDecision): boolean {
   if (decision.executionClass === 'security_analysis') return false;
   // Complex planning always goes through delegated orchestration
   if (decision.executionClass === 'tool_orchestration') return false;
+  // Structured plans with required writes go through delegated graph control.
+  if (hasRequiredWritePlannedStep(decision)) return false;
   return true;
 }
 

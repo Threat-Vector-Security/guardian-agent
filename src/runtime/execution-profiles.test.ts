@@ -134,6 +134,32 @@ describe('execution profiles', () => {
     });
   });
 
+  it('does not treat repo inspections with structured write steps as direct reasoning', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        requiresToolSynthesis: false,
+        plannedSteps: [
+          { kind: 'search', summary: 'Search src/runtime for planned_steps.', required: true },
+          {
+            kind: 'write',
+            summary: 'Write a grounded summary to tmp/manual-web/planned-steps-summary.txt.',
+            expectedToolCategories: ['fs_write'],
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+    });
+  });
+
   it('prefers frontier for non-inspect repo-grounded chat_synthesis in balanced auto mode', () => {
     // When a repo-grounded task goes through the delegated pipeline (e.g.,
     // chat_synthesis without inspect operation), frontier preference applies.
