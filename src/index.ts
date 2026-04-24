@@ -1652,7 +1652,7 @@ function buildDashboardCallbacks(
     surfaceId?: string;
     reason?: string;
   }) => {
-    const pendingActionForApproval = pendingActionStore.findActiveByApprovalId(input.approvalId);
+    const initialPendingActionForApproval = pendingActionStore.findActiveByApprovalId(input.approvalId);
     intentRoutingTrace.record({
       stage: 'approval_decision_resolved',
       userId: input.userId,
@@ -1660,14 +1660,14 @@ function buildDashboardCallbacks(
       details: {
         approvalId: input.approvalId,
         decision: input.decision,
-        pendingActionFound: !!pendingActionForApproval,
-        pendingActionBlockerKind: pendingActionForApproval?.blocker.kind,
-        pendingActionResumeKind: pendingActionForApproval?.resume?.kind,
-        pendingActionResumePayloadType: (pendingActionForApproval?.resume?.payload as { type?: string } | undefined)?.type,
-        pendingActionApprovalIds: pendingActionForApproval?.blocker.approvalIds,
-        scopeAgentId: pendingActionForApproval?.scope.agentId,
-        scopeUserId: pendingActionForApproval?.scope.userId,
-        scopeChannel: pendingActionForApproval?.scope.channel,
+        pendingActionFound: !!initialPendingActionForApproval,
+        pendingActionBlockerKind: initialPendingActionForApproval?.blocker.kind,
+        pendingActionResumeKind: initialPendingActionForApproval?.resume?.kind,
+        pendingActionResumePayloadType: (initialPendingActionForApproval?.resume?.payload as { type?: string } | undefined)?.type,
+        pendingActionApprovalIds: initialPendingActionForApproval?.blocker.approvalIds,
+        scopeAgentId: initialPendingActionForApproval?.scope.agentId,
+        scopeUserId: initialPendingActionForApproval?.scope.userId,
+        scopeChannel: initialPendingActionForApproval?.scope.channel,
       },
     });
     const result = await toolExecutor.decideApproval(
@@ -1677,6 +1677,8 @@ function buildDashboardCallbacks(
       input.actorRole ?? 'owner',
       input.reason,
     );
+    const pendingActionForApproval = initialPendingActionForApproval
+      ?? pendingActionStore.findActiveByApprovalId(input.approvalId);
     if (pendingActionForApproval?.blocker.kind === 'approval') {
       const pendingActionAfterDecision = result.success
         ? (
@@ -1798,6 +1800,8 @@ function buildDashboardCallbacks(
         approvalId: input.approvalId,
         decision: input.decision,
         allowContinuation,
+        pendingActionFoundAfterDecision: !!pendingActionForApproval,
+        pendingActionHydratedAfterDecision: !initialPendingActionForApproval && !!pendingActionForApproval,
         continuationSource: continuedResponse
           ? (continuedResponse === undefined ? 'none' : 'resolved')
           : 'none',

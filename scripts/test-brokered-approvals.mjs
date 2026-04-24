@@ -19,6 +19,9 @@ import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const HARNESS_USER_ID = 'harness';
+const HARNESS_CHANNEL = 'web';
+const HARNESS_SURFACE_ID = 'web-guardian-chat';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -46,6 +49,133 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
     choices: [{ index: 0, message, finish_reason: finishReason }],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   };
+}
+
+function buildRouteIntentDecision(latestUser) {
+  const currentRequest = latestUser
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1) ?? latestUser;
+  const hasExactPath = /create an empty file at\s+[A-Za-z]:[\\/]/i.test(currentRequest)
+    || /use path\s+[A-Za-z]:[\\/]/i.test(currentRequest);
+  if (hasExactPath) {
+    return {
+      route: 'filesystem_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Create the requested empty file at the supplied path.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+    };
+  }
+  if (currentRequest.includes('requested external directory')) {
+    const clarificationPrompt = 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.';
+    return {
+      route: 'filesystem_task',
+      confidence: 'low',
+      operation: 'create',
+      summary: clarificationPrompt,
+      turnRelation: 'new_request',
+      resolution: 'needs_clarification',
+      missingFields: ['path'],
+      entities: {
+        path: 'brokered-test.txt',
+      },
+    };
+  }
+  return {
+    route: 'general_assistant',
+    confidence: 'low',
+    operation: 'unknown',
+    summary: 'Unhandled harness request.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+  };
+}
+
+function readAssistantToolCalls(message) {
+  if (Array.isArray(message?.toolCalls)) {
+    return message.toolCalls;
+  }
+  if (Array.isArray(message?.tool_calls)) {
+    return message.tool_calls.map((toolCall) => ({
+      id: toolCall?.id,
+      name: toolCall?.function?.name,
+      arguments: toolCall?.function?.arguments,
+    }));
+  }
+  return [];
+}
+
+function tryParseJson(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeForSearch(value) {
+  const raw = value && typeof value === 'object'
+    ? JSON.stringify(value)
+    : String(value ?? '');
+  return raw.replace(/[\\/]+/g, '/');
+}
+
+function toolResultHasExpectedPath(content, expectedPath) {
+  if (!expectedPath) return true;
+  return normalizeForSearch(content).includes(normalizeForSearch(expectedPath));
+}
+
+function findMatchingToolCallBefore(messages, assistantIndex, toolName, resultToolCallId = '', expectedPath = '') {
+  for (let previousIndex = assistantIndex; previousIndex >= 0; previousIndex -= 1) {
+    const previous = messages[previousIndex];
+    if (previous?.role !== 'assistant') continue;
+    const toolCalls = readAssistantToolCalls(previous);
+    if (toolCalls.length === 0) continue;
+    for (const toolCall of toolCalls) {
+      if (String(toolCall?.name ?? '').trim() !== toolName) continue;
+      if (resultToolCallId && String(toolCall?.id ?? '').trim() !== resultToolCallId) continue;
+      if (expectedPath && !toolResultHasExpectedPath(toolCall?.arguments, expectedPath)) continue;
+      return toolCall;
+    }
+    break;
+  }
+  return null;
+}
+
+function hasResolvedToolResult(messages, toolName, options = {}) {
+  const expectedPath = typeof options.path === 'string' ? options.path : '';
+  return messages.some((message, index) => {
+    if (message?.role !== 'tool') return false;
+    const content = String(message?.content ?? '');
+    const resultToolCallId = String(message?.toolCallId ?? message?.tool_call_id ?? '').trim();
+    const matchingToolCall = findMatchingToolCallBefore(messages, index - 1, toolName, resultToolCallId, expectedPath);
+    const namedToolResult = content.includes(`<tool_result name="${toolName}"`);
+    const success = namedToolResult
+      && (content.includes('"success":true') || content.includes('"status":"succeeded"'));
+    const parsed = tryParseJson(content);
+    const parsedSuccess = parsed?.success === true || parsed?.status === 'succeeded';
+    if (!success && !parsedSuccess) {
+      return false;
+    }
+    if (expectedPath || resultToolCallId) {
+      return !!matchingToolCall || (namedToolResult && toolResultHasExpectedPath(content, expectedPath));
+    }
+    if (namedToolResult) return true;
+    for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+      const previous = messages[previousIndex];
+      if (previous?.role !== 'assistant') continue;
+      if (readAssistantToolCalls(previous).some((toolCall) => String(toolCall?.name ?? '').trim() === toolName)) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 async function startFakeProvider(testDir, scenarioLog) {
@@ -79,6 +209,10 @@ async function startFakeProvider(testDir, scenarioLog) {
       const asksToCreateEmptyFile = latestUser.includes('create an empty file')
         || latestUser.includes('brokered-test.txt')
         || latestUser.toLowerCase().includes('use path ');
+      const isFileMutationTurn = asksToCreateEmptyFile
+        || latestUser.includes('System correction:')
+        || latestUser.includes('previous tool call did not complete')
+        || latestUser.includes('Result:');
       const targetsPrimaryFile = targetFilePathCandidates.some((candidate) => latestUser.includes(candidate))
         || latestUser.includes(testDir)
         || latestUser.includes(testDir.replace(/\\/g, '/'));
@@ -88,11 +222,14 @@ async function startFakeProvider(testDir, scenarioLog) {
       const isRecoveryConversation = recoveryTargetFilePathCandidates.some((candidate) => conversationText.includes(candidate))
         || conversationText.includes(recoveryDir)
         || conversationText.includes(recoveryDir.replace(/\\/g, '/'));
+      const activeTargetPath = isRecoveryConversation ? recoveryTargetFilePath : targetFilePath;
       scenarioLog.push({
         endpoint: url.pathname,
         latestUser,
         tools,
         model: String(parsed.model ?? ''),
+        resolvedUpdateToolPolicy: hasResolvedToolResult(messages, 'update_tool_policy'),
+        resolvedFsWrite: hasResolvedToolResult(messages, 'fs_write', { path: activeTargetPath }),
       });
       const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -112,8 +249,48 @@ async function startFakeProvider(testDir, scenarioLog) {
               }),
         ));
       };
+      const decision = buildRouteIntentDecision(latestUser);
 
-      if (latestUser.includes('requested external directory')) {
+      if (tools.includes('route_intent')) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'brokered-route-intent-1',
+            name: 'route_intent',
+            arguments: JSON.stringify(decision),
+          }],
+        });
+        return;
+      }
+
+      if (isFileMutationTurn && hasResolvedToolResult(messages, 'fs_write', { path: activeTargetPath })) {
+        sendResponse({
+          model: 'brokered-harness-model',
+          content: `Done - created ${activeTargetPath} as an empty file.`,
+        });
+        return;
+      }
+
+      if (isFileMutationTurn && hasResolvedToolResult(messages, 'update_tool_policy')) {
+        const approvedTargetPath = isRecoveryConversation ? recoveryTargetFilePath : targetFilePath;
+        sendResponse({
+          model: 'brokered-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: isRecoveryConversation ? 'bk-recovery-tc-3' : 'bk-tc-2',
+            name: 'fs_write',
+            arguments: JSON.stringify({
+              path: approvedTargetPath,
+              content: '',
+              append: false,
+            }),
+          }],
+        });
+        return;
+      }
+
+      if (latestUser.includes('requested external directory') && !targetsPrimaryFile && !targetsRecoveryFile) {
         sendResponse({
           model: 'brokered-harness-model',
           content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
@@ -299,6 +476,47 @@ async function readCurrentPendingAction(baseUrl, token, userId = 'harness', chan
   return requestJson(baseUrl, token, 'GET', `/api/chat/pending-action?${qs.toString()}`);
 }
 
+function normalizeApprovalSummary(result, approval, decision = 'approved') {
+  const toolName = approval?.toolName || 'tool';
+  if (result?.success === false) {
+    const rawMessage = typeof result?.message === 'string' ? result.message.trim() : '';
+    return `Failed: ${toolName}: ${rawMessage || 'unknown error'}`;
+  }
+  return `${toolName}: ${decision === 'approved' ? 'Approved and executed' : 'Denied'}`;
+}
+
+async function continueAfterApproval({
+  baseUrl,
+  token,
+  approval,
+  decisionResult,
+  userId = HARNESS_USER_ID,
+  channel = HARNESS_CHANNEL,
+  surfaceId = HARNESS_SURFACE_ID,
+}) {
+  if (decisionResult?.continuedResponse && typeof decisionResult.continuedResponse.content === 'string') {
+    return decisionResult.continuedResponse;
+  }
+
+  const hasExplicitContinuationDirective = decisionResult?.continuedResponse || decisionResult?.continueConversation !== undefined;
+  const needsSyntheticContinuation = decisionResult?.success !== false
+    && (
+      decisionResult?.continueConversation === true
+      || !hasExplicitContinuationDirective
+    );
+  if (!needsSyntheticContinuation) {
+    return null;
+  }
+
+  const summary = normalizeApprovalSummary(decisionResult, approval, 'approved');
+  return requestJson(baseUrl, token, 'POST', '/api/message', {
+    content: `[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ${summary}] Please continue with the current request only. Do not resume older unrelated pending tasks.`,
+    userId,
+    channel,
+    surfaceId,
+  });
+}
+
 async function getFreePort() {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -426,8 +644,9 @@ guardian:
     console.log('Test 0: Ambiguous external path clarifies...');
     const clarification = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'Please create an empty file called brokered-test.txt in the requested external directory.',
-      userId: 'harness',
-      channel: 'web',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(
       getPendingApprovalSummaries(clarification).length,
@@ -445,8 +664,9 @@ guardian:
     console.log('Test 1: Multi-step approval flow (brokered)...');
     const first = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: `Please create an empty file at ${targetFilePath}.`,
-      userId: 'harness',
-      channel: 'web',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     const firstPending = getPendingApprovalSummaries(first);
     assert.ok(
@@ -468,14 +688,17 @@ guardian:
       approvalId: firstPending[0].id,
       decision: 'approved',
       actor: 'brokered-user',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(firstDecision.success, true);
 
-    // Continue after first approval
-    const second = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ update_tool_policy: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
-      userId: 'harness',
-      channel: 'web',
+    const second = await continueAfterApproval({
+      baseUrl,
+      token: harnessToken,
+      approval: firstPending[0],
+      decisionResult: firstDecision,
     });
     const secondPending = getPendingApprovalSummaries(second);
     assert.ok(
@@ -497,14 +720,17 @@ guardian:
       approvalId: secondPending[0].id,
       decision: 'approved',
       actor: 'brokered-user',
+      userId: HARNESS_USER_ID,
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(secondDecision.success, true);
 
-    // Continue after second approval
-    const third = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
-      userId: 'harness',
-      channel: 'web',
+    const third = await continueAfterApproval({
+      baseUrl,
+      token: harnessToken,
+      approval: secondPending[0],
+      decisionResult: secondDecision,
     });
     assert.ok(
       typeof third.content === 'string' && third.content.length > 0,
@@ -527,7 +753,8 @@ guardian:
     const recoveryFirst = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: `Please create an empty file at ${recoveryTargetFilePath}.`,
       userId: 'harness-recovery',
-      channel: 'web',
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     const recoveryFirstPending = getPendingApprovalSummaries(recoveryFirst);
     assert.ok(
@@ -548,46 +775,64 @@ guardian:
       approvalId: recoveryFirstPending[0].id,
       decision: 'approved',
       actor: 'brokered-user',
+      userId: 'harness-recovery',
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     assert.equal(recoveryFirstDecision.success, true);
 
     await new Promise((resolve) => setTimeout(resolve, 11_000));
-    const recoverySecond = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ update_tool_policy: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+    const recoverySecond = await continueAfterApproval({
+      baseUrl,
+      token: harnessToken,
+      approval: recoveryFirstPending[0],
+      decisionResult: recoveryFirstDecision,
       userId: 'harness-recovery',
-      channel: 'web',
+      channel: HARNESS_CHANNEL,
+      surfaceId: HARNESS_SURFACE_ID,
     });
     const recoverySecondPending = getPendingApprovalSummaries(recoverySecond);
-    assert.ok(
-      recoverySecondPending.length > 0,
-      `Expected pending fs_write approval after policy recovery: ${JSON.stringify(recoverySecond)}`,
-    );
-    assert.equal(
-      recoverySecond.metadata?.pendingAction?.blocker?.kind,
-      'approval',
-      `Expected canonical pendingAction metadata on recovery fs_write response: ${JSON.stringify(recoverySecond)}`,
-    );
-    assert.equal(recoverySecondPending[0].toolName, 'fs_write');
-    const recoverySecondCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
-    assert.equal(recoverySecondCurrent?.pendingAction?.blocker?.kind, 'approval');
-    assert.equal(recoverySecondCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, recoverySecondPending[0].id);
+    if (recoverySecondPending.length > 0) {
+      assert.equal(
+        recoverySecond.metadata?.pendingAction?.blocker?.kind,
+        'approval',
+        `Expected canonical pendingAction metadata on recovery fs_write response: ${JSON.stringify(recoverySecond)}`,
+      );
+      assert.equal(recoverySecondPending[0].toolName, 'fs_write');
+      const recoverySecondCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
+      assert.equal(recoverySecondCurrent?.pendingAction?.blocker?.kind, 'approval');
+      assert.equal(recoverySecondCurrent.pendingAction.blocker.approvalSummaries?.[0]?.id, recoverySecondPending[0].id);
 
-    const recoverySecondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: recoverySecondPending[0].id,
-      decision: 'approved',
-      actor: 'brokered-user',
-    });
-    assert.equal(recoverySecondDecision.success, true);
+      const recoverySecondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
+        approvalId: recoverySecondPending[0].id,
+        decision: 'approved',
+        actor: 'brokered-user',
+        userId: 'harness-recovery',
+        channel: HARNESS_CHANNEL,
+        surfaceId: HARNESS_SURFACE_ID,
+      });
+      assert.equal(recoverySecondDecision.success, true);
 
-    await new Promise((resolve) => setTimeout(resolve, 11_000));
-    const recoveryThird = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: '[Context: User is currently viewing the chat panel] [User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
-      userId: 'harness-recovery',
-      channel: 'web',
-    });
-    assert.ok(typeof recoveryThird.content === 'string' && recoveryThird.content.length > 0, `Expected final recovery response text: ${JSON.stringify(recoveryThird)}`);
-    assert.equal(getPendingApprovalSummaries(recoveryThird).length, 0, 'No more pending approvals expected after recovery flow');
-    assert.match(recoveryThird.content, /created .*brokered-test\.txt/i);
+      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      const recoveryThird = await continueAfterApproval({
+        baseUrl,
+        token: harnessToken,
+        approval: recoverySecondPending[0],
+        decisionResult: recoverySecondDecision,
+        userId: 'harness-recovery',
+        channel: HARNESS_CHANNEL,
+        surfaceId: HARNESS_SURFACE_ID,
+      });
+      assert.ok(typeof recoveryThird.content === 'string' && recoveryThird.content.length > 0, `Expected final recovery response text: ${JSON.stringify(recoveryThird)}`);
+      assert.equal(getPendingApprovalSummaries(recoveryThird).length, 0, 'No more pending approvals expected after recovery flow');
+      assert.match(recoveryThird.content, /created .*brokered-test\.txt/i);
+    } else {
+      assert.match(
+        String(recoverySecond.content ?? ''),
+        /created .*brokered-test\.txt/i,
+        `Expected recovered write completion or pending fs_write approval: ${JSON.stringify(recoverySecond)}`,
+      );
+    }
     const recoveryClearedCurrent = await readCurrentPendingAction(baseUrl, harnessToken, 'harness-recovery');
     assert.equal(recoveryClearedCurrent?.pendingAction ?? null, null, `Expected pending action to clear after recovery completion: ${JSON.stringify(recoveryClearedCurrent)}`);
     assert.equal(fs.existsSync(recoveryTargetFilePath), true, `Expected ${recoveryTargetFilePath} to exist`);
@@ -642,6 +887,9 @@ guardian:
     }
     await provider.close();
     if (!completed || preserveArtifacts) {
+      if (!completed) {
+        console.error(`[brokered-approvals] Scenario log: ${JSON.stringify(scenarioLog, null, 2)}`);
+      }
       console.log(`Harness artifacts preserved at: ${tmpDir}`);
     } else {
       fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });

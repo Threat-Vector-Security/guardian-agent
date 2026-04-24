@@ -276,6 +276,53 @@ describe('PendingActionStore', () => {
     expect(store.get(created.id)?.status).toBe('completed');
   });
 
+  it('clears duplicated active pending actions for the same approval id', () => {
+    const store = createStore();
+    const scope = createScope();
+    const first = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the write.',
+        approvalIds: ['approval-1'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}', actionLabel: 'write ./tmp/test.txt' },
+        ],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'create',
+        originalUserContent: 'Create a file.',
+      },
+    }));
+    const second = store.replaceActive({
+      ...scope,
+      surfaceId: 'surface-2',
+    }, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the same write.',
+        approvalIds: ['approval-1'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}', actionLabel: 'write ./tmp/test.txt' },
+        ],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'create',
+        originalUserContent: 'Create a file.',
+      },
+    }));
+
+    const completed = clearApprovalIdFromPendingAction(store, 'approval-1', second.updatedAt + 1);
+
+    expect(completed).not.toBeNull();
+    expect(store.get(first.id)?.status).toBe('completed');
+    expect(store.get(second.id)?.status).toBe('completed');
+    expect(store.findActiveByApprovalId('approval-1')).toBeNull();
+  });
+
   it('reconciles stale approval blockers against the live approval queue', () => {
     const store = createStore();
     const scope = createScope();

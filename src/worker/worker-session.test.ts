@@ -662,7 +662,7 @@ describe('BrokeredWorkerSession automation control', () => {
         } satisfies ChatResponse;
       }
       const lastMessage = _messages.at(-1);
-      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-search-1') {
+      if (lastMessage?.role === 'tool') {
         return {
           content: 'The routing references are in src/config/types.ts and src/runtime/message-router.ts.',
           model: 'test-model',
