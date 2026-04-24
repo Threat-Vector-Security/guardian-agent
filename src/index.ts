@@ -1753,6 +1753,15 @@ function buildDashboardCallbacks(
           }
         }
       }
+      if (!continuedResponse && pendingActionForApproval?.resume?.kind === 'execution_graph') {
+        continuedResponse = await runtime.workerManager?.resumeExecutionGraphPendingAction(
+          pendingActionForApproval,
+          {
+            approvalId: input.approvalId,
+            approvalResult: result,
+          },
+        ) ?? undefined;
+      }
       if (!continuedResponse && pendingActionForApproval) {
         for (const agent of chatAgents.values()) {
           const followUp = await agent.continueDirectRouteAfterApproval(
@@ -5228,6 +5237,7 @@ async function main(): Promise<void> {
       {
         intentRoutingTrace,
         runTimeline,
+        pendingActionStore,
       },
     );
   } else {

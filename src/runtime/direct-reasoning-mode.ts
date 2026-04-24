@@ -75,6 +75,8 @@ export interface DirectReasoningInput {
   maxTotalTimeMs?: number;
   perCallTimeoutMs?: number;
   graphContext?: DirectReasoningGraphContext;
+  graphLifecycle?: 'standalone' | 'node_only';
+  returnExecutionGraphArtifacts?: boolean;
 }
 
 export interface DirectReasoningGraphEventSink {
@@ -102,6 +104,7 @@ export interface DirectReasoningLoopResult {
   evidenceCount: number;
   artifactCount: number;
   artifactIds: string[];
+  executionGraphArtifacts?: ExecutionArtifact[];
   synthesized: boolean;
 }
 
@@ -294,14 +297,17 @@ export async function handleDirectReasoningMode(
     providerName: input.selectedExecutionProfile?.providerName,
     providerTier: input.selectedExecutionProfile?.providerTier,
   });
+  const graphLifecycle = input.graphLifecycle ?? 'standalone';
   const graphEmitter = createDirectReasoningGraphEmitter(input, deps);
-  graphEmitter?.emit('graph_started', {
-    route: decision.route,
-    operation: decision.operation,
-    executionClass: decision.executionClass,
-    providerName: input.selectedExecutionProfile?.providerName,
-    providerTier: input.selectedExecutionProfile?.providerTier,
-  }, 'graph_started');
+  if (graphLifecycle === 'standalone') {
+    graphEmitter?.emit('graph_started', {
+      route: decision.route,
+      operation: decision.operation,
+      executionClass: decision.executionClass,
+      providerName: input.selectedExecutionProfile?.providerName,
+      providerTier: input.selectedExecutionProfile?.providerTier,
+    }, 'graph_started');
+  }
   graphEmitter?.emit('node_started', {
     route: decision.route,
     operation: decision.operation,
@@ -334,7 +340,9 @@ export async function handleDirectReasoningMode(
       reason: 'no_final_answer',
     });
     graphEmitter?.emit('node_failed', { reason: 'no_final_answer' }, 'node_failed');
-    graphEmitter?.emit('graph_failed', { reason: 'no_final_answer' }, 'graph_failed');
+    if (graphLifecycle === 'standalone') {
+      graphEmitter?.emit('graph_failed', { reason: 'no_final_answer' }, 'graph_failed');
+    }
     return buildDirectReasoningFailureResponse(
       input,
       'Direct reasoning did not produce a final grounded answer within its read-only execution budget.',
@@ -366,12 +374,14 @@ export async function handleDirectReasoningMode(
     evidenceCount: loopResult.evidenceCount,
     synthesized: loopResult.synthesized,
   }, 'node_completed');
-  graphEmitter?.emit('graph_completed', {
-    turns: loopResult.turns,
-    toolCallCount: loopResult.toolCallCount,
-    evidenceCount: loopResult.evidenceCount,
-    synthesized: loopResult.synthesized,
-  }, 'graph_completed');
+  if (graphLifecycle === 'standalone') {
+    graphEmitter?.emit('graph_completed', {
+      turns: loopResult.turns,
+      toolCallCount: loopResult.toolCallCount,
+      evidenceCount: loopResult.evidenceCount,
+      synthesized: loopResult.synthesized,
+    }, 'graph_completed');
+  }
 
   return {
     content,
@@ -388,6 +398,9 @@ export async function handleDirectReasoningMode(
         artifactIds: loopResult.artifactIds,
         synthesized: loopResult.synthesized,
       },
+      ...(input.returnExecutionGraphArtifacts && loopResult.executionGraphArtifacts
+        ? { executionGraphArtifacts: loopResult.executionGraphArtifacts }
+        : {}),
       ...(qualityNotes.length > 0 ? { qualityNotes } : {}),
     },
   };
@@ -620,9 +633,16 @@ export async function executeDirectReasoningLoop(input: {
         evidenceCount: evidence.length,
         artifactCount: artifactState.artifacts.length,
         artifactIds: artifactState.artifacts.map((artifact) => artifact.artifactId),
+        ...(input.input.returnExecutionGraphArtifacts
+          ? { executionGraphArtifacts: artifactState.artifacts.map(cloneExecutionArtifact) }
+          : {}),
         synthesized,
       }
     : null;
+}
+
+function cloneExecutionArtifact(artifact: ExecutionArtifact): ExecutionArtifact {
+  return JSON.parse(JSON.stringify(artifact)) as ExecutionArtifact;
 }
 
 export async function executeDirectReasoningToolCall(input: {

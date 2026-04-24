@@ -46,6 +46,7 @@ import {
   shouldHandleDirectReasoningMode,
   type DirectReasoningTraceContext,
 } from '../runtime/direct-reasoning-mode.js';
+import type { DirectReasoningGraphContext } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
   buildRoutedIntentAdditionalSection,
   buildToolExecutionCorrectionPrompt,
@@ -72,7 +73,6 @@ import {
 import {
   buildStepReceipts,
   computeWorkerRunStatus,
-  filterDependencySatisfiedStepReceipts,
   findAnswerStepId,
   matchPlannedStepForTool,
 } from '../runtime/execution/task-plan.js';
@@ -83,9 +83,7 @@ import type {
   EvidenceReceipt,
   ExecutionEvent,
   Interruption,
-  PlannedStep,
   ProviderSelectionSnapshot,
-  StepReceipt,
   WorkerRunStatus,
   WorkerStopReason,
 } from '../runtime/execution/types.js';
@@ -119,14 +117,6 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const TOOL_TRACE_PREVIEW_MAX_CHARS = 12_000;
 const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_search', 'code_symbol_search']);
-const PLANNED_STEP_KINDS = new Set<PlannedStep['kind']>([
-  'tool_call',
-  'write',
-  'read',
-  'search',
-  'memory_save',
-  'answer',
-]);
 const PLANNER_TOOL_ALIASES = new Map<string, string>([
   ['fs_readfile', 'fs_read'],
   ['fs_writefile', 'fs_write'],
@@ -198,6 +188,13 @@ interface AutomationApprovalContinuation {
   expiresAt: number;
 }
 
+export interface WorkerGroundedSynthesisRequest {
+  messages: ChatMessage[];
+  responseFormat?: ChatOptions['responseFormat'];
+  maxTokens?: number;
+  temperature?: number;
+}
+
 type BrokeredChatResponse = ChatResponse & {
   providerName?: string;
   providerLocality?: 'local' | 'external';
@@ -238,11 +235,14 @@ export interface WorkerMessageHandleParams {
   pendingApprovalNotice?: string;
   /** Whether a fallback provider is available on the supervisor side for quality-based retry. */
   hasFallbackProvider?: boolean;
-  /** Step receipts satisfied in a prior attempt; the worker should skip re-running them. */
-  priorSatisfiedStepReceipts?: StepReceipt[];
   /** Run this turn through the brokered direct-reasoning read-only loop. */
   directReasoning?: boolean;
   directReasoningTrace?: DirectReasoningTraceContext;
+  directReasoningGraphContext?: DirectReasoningGraphContext;
+  directReasoningGraphLifecycle?: 'standalone' | 'node_only';
+  returnExecutionGraphArtifacts?: boolean;
+  /** Run a no-tools grounded synthesis node for the execution graph controller. */
+  groundedSynthesis?: WorkerGroundedSynthesisRequest;
   /** Run a no-tools recovery advisor call for a failed delegated contract. */
   recoveryAdvisor?: RecoveryAdvisorRequest;
 }
@@ -940,46 +940,6 @@ function resolveToolStepId(
   return matched;
 }
 
-function chooseSyntheticCarryForwardToolName(step: PlannedStep): string {
-  const explicitToolName = step.expectedToolCategories?.find((value) => !PLANNED_STEP_KINDS.has(value as PlannedStep['kind']));
-  if (explicitToolName) {
-    return explicitToolName;
-  }
-  switch (step.kind) {
-    case 'search':
-      return 'fs_search';
-    case 'read':
-      return 'fs_read';
-    case 'write':
-      return 'fs_write';
-    case 'memory_save':
-      return 'memory_save';
-    case 'tool_call':
-      return step.expectedToolCategories?.[0] || 'find_tools';
-    case 'answer':
-      return 'find_tools';
-  }
-}
-
-function buildSyntheticCarryForwardReceipt(
-  step: PlannedStep | undefined,
-  receipt: StepReceipt,
-): EvidenceReceipt | null {
-  if (!step || step.kind === 'answer') {
-    return null;
-  }
-  return {
-    receiptId: `prior:${receipt.stepId}`,
-    sourceType: 'tool_call',
-    toolName: chooseSyntheticCarryForwardToolName(step),
-    status: 'succeeded',
-    refs: [],
-    summary: receipt.summary,
-    startedAt: receipt.startedAt,
-    endedAt: receipt.endedAt,
-  };
-}
-
 function buildDelegatedResultEnvelope(input: {
   taskContract: DelegatedTaskContract;
   finalAnswerCandidate?: string;
@@ -1634,6 +1594,43 @@ export class BrokeredWorkerSession {
     }
   }
 
+  private async handleGroundedSynthesisMessage(
+    request: WorkerGroundedSynthesisRequest,
+    chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
+    selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    try {
+      const response = await chatFn(request.messages, {
+        tools: [],
+        maxTokens: request.maxTokens ?? 1_500,
+        temperature: request.temperature ?? 0,
+        ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),
+      });
+      return {
+        content: response.content ?? '',
+        metadata: {
+          executionProfile: selectedExecutionProfile ?? undefined,
+          groundedSynthesis: {
+            available: true,
+            ...(response.model ? { model: response.model } : {}),
+            ...(response.finishReason ? { finishReason: response.finishReason } : {}),
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        content: '',
+        metadata: {
+          executionProfile: selectedExecutionProfile ?? undefined,
+          groundedSynthesis: {
+            available: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+      };
+    }
+  }
+
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
     if (codeContext?.workspaceRoot) {
@@ -1657,6 +1654,10 @@ export class BrokeredWorkerSession {
         : undefined,
     );
     const chatFn = buildChatFn(selectedExecutionProfile);
+
+    if (params.groundedSynthesis) {
+      return this.handleGroundedSynthesisMessage(params.groundedSynthesis, chatFn, selectedExecutionProfile);
+    }
 
     if (params.recoveryAdvisor) {
       return this.handleRecoveryAdvisorMessage(params.recoveryAdvisor, chatFn, selectedExecutionProfile);
@@ -1737,6 +1738,9 @@ export class BrokeredWorkerSession {
         },
         workspaceRoot: codeContext?.workspaceRoot,
         traceContext,
+        graphContext: params.directReasoningGraphContext,
+        graphLifecycle: params.directReasoningGraphLifecycle,
+        returnExecutionGraphArtifacts: params.returnExecutionGraphArtifacts,
         toolRequest: {
           origin: 'assistant',
           requestId: traceContext.requestId ?? params.message.id,
@@ -2654,38 +2658,6 @@ export class BrokeredWorkerSession {
     const workerLoopBudget = deriveWorkerLoopBudget(taskContract, selectedExecutionProfile);
     appendSystemGuidance(llmMessages, buildDelegatedTaskPlanGuidance(taskContract));
 
-    const priorStepById = new Map(taskContract.plan.steps.map((step) => [step.stepId, step]));
-    const priorSatisfiedStepReceipts = filterDependencySatisfiedStepReceipts(
-      taskContract.plan,
-      (params.priorSatisfiedStepReceipts ?? [])
-        .filter((receipt) => receipt.status === 'satisfied'),
-    ).filter((receipt) => priorStepById.get(receipt.stepId)?.kind !== 'answer');
-    for (const receipt of priorSatisfiedStepReceipts) {
-      matchedStepIds.add(receipt.stepId);
-      const syntheticReceipt = buildSyntheticCarryForwardReceipt(
-        priorStepById.get(receipt.stepId),
-        receipt,
-      );
-      if (!syntheticReceipt) {
-        continue;
-      }
-      evidenceReceipts.set(syntheticReceipt.receiptId, syntheticReceipt);
-      toolReceiptStepIds.set(syntheticReceipt.receiptId, receipt.stepId);
-    }
-    if (priorSatisfiedStepReceipts.length > 0) {
-      const satisfiedLines = priorSatisfiedStepReceipts
-        .map((receipt) => `- ${receipt.stepId}: ${receipt.summary}`)
-        .join('\n');
-      const retryContext = [
-        '',
-        '',
-        'Retry context — the following planned steps were satisfied in a prior attempt and MUST NOT be re-executed:',
-        satisfiedLines,
-        'Only execute the remaining unsatisfied steps in this attempt.',
-      ].join('\n');
-
-      appendSystemGuidance(llmMessages, retryContext);
-    }
     appendSystemGuidance(llmMessages, buildExactFileReferenceGuidance(taskContract));
     const recordDelegatedToolEvent = (event: LlmLoopToolEvent): void => {
       const resolvedStepId = resolveToolStepId(event, taskContract, toolCallStepIds, matchedStepIds);
