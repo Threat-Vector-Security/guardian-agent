@@ -56,6 +56,44 @@ export interface SynthesisDraftContent {
   truncated: boolean;
 }
 
+export interface WriteSpecContent {
+  operation: 'write_file';
+  path: string;
+  append: boolean;
+  content: string;
+  contentHash: string;
+  contentBytes: number;
+  contentPreview: string;
+  sourceArtifactIds: string[];
+}
+
+export interface MutationReceiptContent {
+  toolName: 'fs_write';
+  writeSpecArtifactId: string;
+  path: string;
+  append: boolean;
+  contentHash: string;
+  success: boolean;
+  status: 'pending_approval' | 'running' | 'succeeded' | 'failed' | 'denied' | string;
+  jobId?: string;
+  approvalId?: string;
+  size?: number;
+  error?: string;
+  message?: string;
+}
+
+export interface VerificationCheckRecord {
+  name: string;
+  status: 'passed' | 'failed' | 'skipped';
+  reason?: string;
+}
+
+export interface VerificationResultContent {
+  subjectArtifactId: string;
+  valid: boolean;
+  checks: VerificationCheckRecord[];
+}
+
 export interface SynthesisDraftValidationResult {
   valid: boolean;
   missingArtifactIds: string[];
@@ -70,6 +108,9 @@ export type ExecutionArtifactContent =
   | FileReadSetContent
   | EvidenceLedgerContent
   | SynthesisDraftContent
+  | WriteSpecContent
+  | MutationReceiptContent
+  | VerificationResultContent
   | Record<string, unknown>;
 
 export interface ExecutionArtifact<TContent extends ExecutionArtifactContent = ExecutionArtifactContent> {
@@ -299,6 +340,127 @@ export function buildSynthesisDraftArtifact(input: {
   };
 }
 
+export function buildWriteSpecArtifact(input: {
+  graphId: string;
+  nodeId: string;
+  artifactId?: string;
+  path: string;
+  content: string;
+  append?: boolean;
+  sourceArtifacts?: ExecutionArtifact[];
+  redactionPolicy?: string;
+  trustLevel?: ExecutionArtifact['trustLevel'];
+  taintReasons?: string[];
+  createdAt: number;
+}): ExecutionArtifact<WriteSpecContent> {
+  const path = normalizePath(input.path) ?? 'unknown';
+  const contentPreview = truncateText(input.content, MAX_PREVIEW_CHARS) ?? '';
+  const sourceArtifactIds = (input.sourceArtifacts ?? []).map((artifact) => artifact.artifactId);
+  return {
+    artifactId: input.artifactId ?? `artifact:${randomUUID()}`,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    artifactType: 'WriteSpec',
+    label: `Write spec: ${path}`,
+    preview: truncateText(`Write ${path} (${Buffer.byteLength(input.content, 'utf-8')} bytes).`, MAX_PREVIEW_CHARS),
+    refs: [path],
+    trustLevel: input.trustLevel ?? deriveTrustLevel(input.sourceArtifacts ?? []),
+    taintReasons: uniqueStrings([
+      ...(input.taintReasons ?? []),
+      ...(input.sourceArtifacts ?? []).flatMap((artifact) => artifact.taintReasons),
+    ]),
+    redactionPolicy: input.redactionPolicy ?? 'exact_content_not_for_timeline',
+    content: {
+      operation: 'write_file',
+      path,
+      append: input.append === true,
+      content: input.content,
+      contentHash: hashText(input.content),
+      contentBytes: Buffer.byteLength(input.content, 'utf-8'),
+      contentPreview,
+      sourceArtifactIds,
+    },
+    createdAt: input.createdAt,
+  };
+}
+
+export function buildMutationReceiptArtifact(input: {
+  graphId: string;
+  nodeId: string;
+  artifactId?: string;
+  writeSpec: ExecutionArtifact<WriteSpecContent>;
+  toolResult: Record<string, unknown>;
+  createdAt: number;
+}): ExecutionArtifact<MutationReceiptContent> {
+  const output = recordValue(input.toolResult.output);
+  const success = input.toolResult.success === true;
+  const status = stringValue(input.toolResult.status) || (success ? 'succeeded' : 'failed');
+  const error = stringValue(input.toolResult.error);
+  const message = stringValue(input.toolResult.message);
+  const jobId = stringValue(input.toolResult.jobId);
+  const approvalId = stringValue(input.toolResult.approvalId);
+  const size = nonNegativeNumberValue(output?.size);
+  return {
+    artifactId: input.artifactId ?? `artifact:${randomUUID()}`,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    artifactType: 'MutationReceipt',
+    label: `Mutation receipt: ${input.writeSpec.content.path}`,
+    preview: truncateText(
+      `${success ? 'Wrote' : status === 'pending_approval' ? 'Awaiting approval for' : 'Failed to write'} ${input.writeSpec.content.path}.`,
+      MAX_PREVIEW_CHARS,
+    ),
+    refs: [input.writeSpec.content.path],
+    trustLevel: input.writeSpec.trustLevel,
+    taintReasons: [...input.writeSpec.taintReasons],
+    redactionPolicy: 'tool_receipt_no_content',
+    content: {
+      toolName: 'fs_write',
+      writeSpecArtifactId: input.writeSpec.artifactId,
+      path: input.writeSpec.content.path,
+      append: input.writeSpec.content.append,
+      contentHash: input.writeSpec.content.contentHash,
+      success,
+      status,
+      ...(jobId ? { jobId } : {}),
+      ...(approvalId ? { approvalId } : {}),
+      ...(typeof size === 'number' ? { size } : {}),
+      ...(error ? { error } : {}),
+      ...(message ? { message } : {}),
+    },
+    createdAt: input.createdAt,
+  };
+}
+
+export function buildVerificationResultArtifact(input: {
+  graphId: string;
+  nodeId: string;
+  artifactId?: string;
+  subjectArtifactId: string;
+  checks: VerificationCheckRecord[];
+  createdAt: number;
+}): ExecutionArtifact<VerificationResultContent> {
+  const valid = input.checks.every((check) => check.status === 'passed' || check.status === 'skipped');
+  return {
+    artifactId: input.artifactId ?? `artifact:${randomUUID()}`,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    artifactType: 'VerificationResult',
+    label: 'Verification result',
+    preview: truncateText(`Verification ${valid ? 'passed' : 'failed'} for ${input.subjectArtifactId}.`, MAX_PREVIEW_CHARS),
+    refs: [input.subjectArtifactId],
+    trustLevel: 'trusted',
+    taintReasons: [],
+    redactionPolicy: 'verification_summary_only',
+    content: {
+      subjectArtifactId: input.subjectArtifactId,
+      valid,
+      checks: input.checks.map((check) => ({ ...check })),
+    },
+    createdAt: input.createdAt,
+  };
+}
+
 export function formatEvidenceArtifactsForSynthesis(input: {
   ledger: ExecutionArtifact<EvidenceLedgerContent>;
   sourceArtifacts: ExecutionArtifact[];
@@ -375,6 +537,18 @@ function normalizeSearchMatch(match: Record<string, unknown>): SearchResultArtif
   };
 }
 
+function deriveTrustLevel(artifacts: ExecutionArtifact[]): ExecutionArtifact['trustLevel'] {
+  if (artifacts.some((artifact) => artifact.trustLevel === 'quarantined')) return 'quarantined';
+  if (artifacts.some((artifact) => artifact.trustLevel === 'low_trust')) return 'low_trust';
+  return 'trusted';
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function buildFileExcerpt(content: string): { text: string; lineEnd: number; truncated: boolean } {
   const truncated = content.length > MAX_FILE_EXCERPT_CHARS;
   const text = truncated ? content.slice(0, MAX_FILE_EXCERPT_CHARS) : content;
@@ -438,4 +612,9 @@ function stringValue(value: unknown): string {
 function numberValue(value: unknown): number | undefined {
   const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   return Number.isFinite(numeric) ? Math.max(1, Math.floor(numeric)) : undefined;
+}
+
+function nonNegativeNumberValue(value: unknown): number | undefined {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : undefined;
 }
