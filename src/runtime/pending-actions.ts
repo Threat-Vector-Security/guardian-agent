@@ -1003,12 +1003,16 @@ export class PendingActionStore {
   }
 
   findActiveByApprovalId(approvalId: string, nowMs: number = this.now()): PendingActionRecord | null {
+    return this.listActiveByApprovalId(approvalId, nowMs)[0] ?? null;
+  }
+
+  listActiveByApprovalId(approvalId: string, nowMs: number = this.now()): PendingActionRecord[] {
     const normalizedId = approvalId.trim();
-    if (!normalizedId) return null;
-    const active = this.listAllRecords(nowMs)
+    if (!normalizedId) return [];
+    return this.listAllRecords(nowMs)
       .filter((record) => isPendingActionActive(record.status))
-      .find((record) => record.blocker.approvalIds?.includes(normalizedId));
-    return active ? cloneRecord(active) : null;
+      .filter((record) => record.blocker.approvalIds?.includes(normalizedId))
+      .map((record) => cloneRecord(record));
   }
 }
 
@@ -1018,21 +1022,26 @@ export function clearApprovalIdFromPendingAction(
   nowMs: number = Date.now(),
 ): PendingActionRecord | null {
   const normalizedId = approvalId.trim();
-  const active = store.findActiveByApprovalId(normalizedId, nowMs);
-  if (!active) return null;
-  const remainingApprovalIds = (active.blocker.approvalIds ?? []).filter((id) => id !== normalizedId);
-  if (remainingApprovalIds.length === 0) {
-    return store.complete(active.id, nowMs);
+  if (!normalizedId) return null;
+  const activeRecords = store.listActiveByApprovalId(normalizedId, nowMs);
+  let firstUpdated: PendingActionRecord | null = null;
+  for (const active of activeRecords) {
+    const remainingApprovalIds = (active.blocker.approvalIds ?? []).filter((id) => id !== normalizedId);
+    const updated = remainingApprovalIds.length === 0
+      ? store.complete(active.id, nowMs)
+      : store.update(active.id, {
+          blocker: {
+            ...active.blocker,
+            approvalIds: remainingApprovalIds,
+            approvalSummaries: (active.blocker.approvalSummaries ?? [])
+              .filter((summary) => summary.id !== normalizedId),
+          },
+        }, nowMs);
+    if (!firstUpdated) {
+      firstUpdated = updated;
+    }
   }
-  const remainingSummaries = (active.blocker.approvalSummaries ?? [])
-    .filter((summary) => summary.id !== normalizedId);
-  return store.update(active.id, {
-    blocker: {
-      ...active.blocker,
-      approvalIds: remainingApprovalIds,
-      approvalSummaries: remainingSummaries,
-    },
-  }, nowMs);
+  return firstUpdated;
 }
 
 function normalizeApprovalIds(ids: readonly string[] | undefined): string[] {

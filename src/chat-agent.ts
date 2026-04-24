@@ -5027,12 +5027,15 @@ type DirectIntentShadowCandidate =
             actionLabel: summary?.actionLabel ?? '',
           };
         });
+        const pendingApprovalPrompt = approvalSummaries.length > 0
+          ? formatPendingApprovalMessage(approvalSummaries)
+          : 'Approval required for the pending action.';
         const pendingActionResult = this.setPendingApprovalAction(
           pendingActionUserId,
           pendingActionChannel,
           pendingActionSurfaceId,
           {
-            prompt: 'Approval required for the pending action.',
+            prompt: pendingApprovalPrompt,
             approvalIds: merged,
             approvalSummaries,
             originalUserContent: routedScopedMessage.content,
@@ -5051,9 +5054,10 @@ type DirectIntentShadowCandidate =
         pendingActionMeta = toPendingActionClientMetadata(pendingActionResult.action);
         if (pendingActionResult.collisionPrompt) {
           finalContent = pendingActionResult.collisionPrompt;
-        } else if (pendingActionResult.action?.blocker.approvalSummaries?.length
-          && (shouldUseStructuredPendingApprovalMessage(finalContent) || this.lacksUsableAssistantContent(finalContent))) {
+        } else if (pendingActionResult.action?.blocker.approvalSummaries?.length) {
           finalContent = formatPendingApprovalMessage(pendingActionResult.action.blocker.approvalSummaries);
+        } else if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.lacksUsableAssistantContent(finalContent)) {
+          finalContent = pendingApprovalPrompt;
         }
       }
 
