@@ -180,7 +180,8 @@ export class BrokerServer {
           const runResponse = await this.tools.runTool(executionRequest);
           const provenance = assignProvenance(toolName, toolDefinition?.category);
           const providerKind = provenance.source === 'remote' ? 'external' : 'local';
-          const scannedOutput = this.runtime.outputGuardian.scanToolResult(toolName, runResponse, { providerKind });
+          const rawOutput = runResponse.output;
+          const scannedOutput = this.runtime.outputGuardian.scanToolResult(toolName, rawOutput, { providerKind });
           const approvalSummary = runResponse.approvalId
             ? this.tools.getApprovalSummaries([runResponse.approvalId]).get(runResponse.approvalId)
             : undefined;
@@ -209,8 +210,8 @@ export class BrokerServer {
                 quarantined: true,
                 trustLevel: scannedOutput.trustLevel,
                 taintReasons: scannedOutput.taintReasons,
-                preview: typeof (runResponse.output as Record<string, unknown> | undefined)?.message === 'string'
-                  ? String((runResponse.output as Record<string, unknown>).message)
+                preview: typeof (rawOutput as Record<string, unknown> | undefined)?.message === 'string'
+                  ? String((rawOutput as Record<string, unknown>).message)
                   : undefined,
               },
             provenance,

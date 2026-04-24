@@ -200,6 +200,39 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
   });
 
+  it('repairs fully unavailable gateway responses into repo-grounded inspection decisions', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything.',
+        channel: 'web',
+      },
+      async () => {
+        throw new Error('routing provider unavailable');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+    expect(result.decision.provenance).toMatchObject({
+      route: 'repair.structured',
+      operation: 'repair.structured',
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresRepoGrounding: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+    });
+  });
+
   it('retries with a JSON-only fallback when the tool-call gateway path throws', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;

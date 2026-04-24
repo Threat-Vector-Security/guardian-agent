@@ -33,6 +33,45 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.operation).toBe('repair.structured');
   });
 
+  it('re-derives workload metadata when route and operation are repaired', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Routing provider unavailable.',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything.',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('coding_task');
+    expect(decision.operation).toBe('inspect');
+    expect(decision.executionClass).toBe('repo_grounded');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresRepoGrounding).toBe(true);
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.expectedContextPressure).toBe('high');
+    expect(decision.preferredAnswerPath).toBe('chat_synthesis');
+    expect(decision.simpleVsComplex).toBe('complex');
+    expect(decision.provenance).toMatchObject({
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresRepoGrounding: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+      simpleVsComplex: 'derived.workload',
+    });
+  });
+
   it('moves exact-file requirements onto gateway-owned decision state', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'coding_task',

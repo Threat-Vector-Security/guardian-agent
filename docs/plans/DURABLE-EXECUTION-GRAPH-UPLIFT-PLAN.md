@@ -1,6 +1,6 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** Canonical target plan for the next orchestration uplift
+**Status:** In progress. Phase 1 is implemented; Phase 2 read-only graph/timeline vertical slice is implemented and the first read-only regression ladder is passing.
 **Date:** 2026-04-24
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
@@ -13,6 +13,16 @@ Guardian's direct-reasoning/delegated-orchestration split improved several sympt
 This plan replaces the binary split with a durable execution graph. Direct reasoning, synthesis, writes, approvals, delegation, verification, and recovery become typed graph nodes under one request id, one artifact flow, one run timeline, and one security boundary.
 
 This is not a request to import LangGraph, Temporal, or another framework. The plan adopts the durable-workflow patterns that those systems use, while preserving Guardian's existing TypeScript runtime, Intent Gateway, brokered worker boundary, Guardian policy layer, and approval system.
+
+## Current Implementation State
+
+As of 2026-04-24:
+
+- Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
+- Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
+- The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
+- Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
+- Do not move to hybrid write/artifact behavior until this read-only lane remains stable through a broader manual web UI pass and the focused verification commands below.
 
 ## External Best-Practice References
 
@@ -28,6 +38,7 @@ The target architecture is based on these production-oriented patterns:
 | [OpenHands event architecture](https://docs.openhands.dev/sdk/arch/events) | Keep an append-only typed event log as both memory and integration surface for visualization and monitoring. |
 | [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-js/guides/tracing/) | Trace LLM generations, tool calls, handoffs, guardrails, and custom events as one end-to-end workflow. |
 | [Temporal durable execution](https://temporal.io/) | Separate deterministic workflow control from failure-prone activities, and make retries, signals, timers, and pauses first-class execution behavior. |
+| [Google Cloud long-running agent patterns](https://x.com/googlecloudtech/status/2046989964077146490) | Treat long-running agents as checkpointed, resumable workflows; keep approval pauses durable; govern memory and tool access through identity/gateway policy; and model fleets as independently observable graph participants. |
 
 ## Current Failure Pattern
 
@@ -350,6 +361,8 @@ Deliverables:
 
 Goal: add the durable graph data model without changing behavior.
 
+Current status: implemented.
+
 Files:
 
 - `src/runtime/execution-graph/types.ts`
@@ -375,6 +388,8 @@ Verification:
 ### Phase 2: Direct Reasoning As `explore_readonly` Node
 
 Goal: direct reasoning tool calls become first-class graph events and timeline items.
+
+Current status: implemented for the first read-only vertical slice; exact-file evidence coverage and synthesis omissions have focused tests and a passing CLI API replay for the current consumer-file regression.
 
 Files:
 
