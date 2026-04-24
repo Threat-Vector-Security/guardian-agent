@@ -3924,12 +3924,10 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('uses validated recovery-advisor guidance for one final write-step retry', async () => {
+  it('records validated recovery-advisor guidance as advisory graph recovery without a final worker retry', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const dispatchModes: string[] = [];
-    const recoverySections: string[] = [];
-    let recoverySucceeded = false;
     workerMessageHandler = (params) => {
       if (params.recoveryAdvisor) {
         dispatchModes.push('advisor');
@@ -3961,78 +3959,41 @@ describe('WorkerManager', () => {
       }
 
       dispatchModes.push('worker');
-      const recoverySection = Array.isArray(params.additionalSections)
-        ? (params.additionalSections as Array<{ section?: string; content?: string }>)
-            .find((section) => section.section === 'Recovery Manager Guidance')?.content ?? ''
-        : '';
-      if (recoverySection) {
-        recoverySections.push(recoverySection);
-        recoverySucceeded = true;
-      }
 
       const gatewayDecision = readPreRoutedIntentGatewayMetadata(filesystemSearchWriteMetadata())?.decision;
       const taskContract = buildDelegatedTaskContract(gatewayDecision);
       return {
-        content: recoverySucceeded
-          ? 'Wrote tmp/manual-web/planned-steps-summary.txt.'
-          : 'I searched src/runtime for planned_steps but did not write the summary file.',
+        content: 'I searched src/runtime for planned_steps but did not write the summary file.',
         metadata: buildDelegatedExecutionMetadata({
           taskContract,
-          runStatus: recoverySucceeded ? 'completed' : 'incomplete',
-          stopReason: recoverySucceeded ? 'completed' : 'end_turn',
+          runStatus: 'incomplete',
+          stopReason: 'end_turn',
           stepReceipts: taskContract.plan.steps.map((step) => ({
             stepId: step.stepId,
-            status: recoverySucceeded || step.stepId === 'step_1' ? 'satisfied' as const : 'failed' as const,
-            evidenceReceiptIds: recoverySucceeded || step.stepId === 'step_1'
+            status: step.stepId === 'step_1' ? 'satisfied' as const : 'failed' as const,
+            evidenceReceiptIds: step.stepId === 'step_1'
               ? [`receipt-${step.stepId}`]
               : [],
             summary: step.summary,
             startedAt: 1,
             endedAt: 2,
           })),
-          operatorSummary: recoverySucceeded
-            ? 'Wrote tmp/manual-web/planned-steps-summary.txt.'
-            : 'I searched src/runtime for planned_steps but did not write the summary file.',
+          operatorSummary: 'I searched src/runtime for planned_steps but did not write the summary file.',
           claims: [],
-          evidenceReceipts: recoverySucceeded
-            ? [
-                {
-                  receiptId: 'receipt-step_1',
-                  sourceType: 'tool_call',
-                  toolName: 'fs_search',
-                  status: 'succeeded',
-                  refs: ['src/runtime/intent/route-classifier.ts'],
-                  summary: 'Searched src/runtime for planned_steps.',
-                  startedAt: 1,
-                  endedAt: 2,
-                },
-                {
-                  receiptId: 'receipt-step_2',
-                  sourceType: 'tool_call',
-                  toolName: 'fs_write',
-                  status: 'succeeded',
-                  refs: ['tmp/manual-web/planned-steps-summary.txt'],
-                  summary: 'Wrote tmp/manual-web/planned-steps-summary.txt.',
-                  startedAt: 3,
-                  endedAt: 4,
-                },
-              ]
-            : [
-                {
-                  receiptId: 'receipt-step_1',
-                  sourceType: 'tool_call',
-                  toolName: 'fs_search',
-                  status: 'succeeded',
-                  refs: ['src/runtime/intent/route-classifier.ts'],
-                  summary: 'Searched src/runtime for planned_steps.',
-                  startedAt: 1,
-                  endedAt: 2,
-                },
-              ],
+          evidenceReceipts: [
+            {
+              receiptId: 'receipt-step_1',
+              sourceType: 'tool_call',
+              toolName: 'fs_search',
+              status: 'succeeded',
+              refs: ['src/runtime/intent/route-classifier.ts'],
+              summary: 'Searched src/runtime for planned_steps.',
+              startedAt: 1,
+              endedAt: 2,
+            },
+          ],
           interruptions: [],
-          artifacts: recoverySucceeded
-            ? [{ kind: 'file', path: 'tmp/manual-web/planned-steps-summary.txt' }]
-            : [],
+          artifacts: [],
           events: [],
         }),
       };
@@ -4065,10 +4026,15 @@ describe('WorkerManager', () => {
     const intentRoutingTrace = {
       record: vi.fn(),
     };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestDelegatedExecutionEvents: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+    };
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
-        listJobs: vi.fn(() => recoverySucceeded ? jobs : jobs.slice(0, 1)),
+        listJobs: vi.fn(() => jobs.slice(0, 1)),
       } as never,
       {
         getFallbackProviderConfig: () => undefined,
@@ -4099,6 +4065,7 @@ describe('WorkerManager', () => {
       undefined,
       {
         intentRoutingTrace,
+        runTimeline,
         now: () => 1_010_000,
       },
     );
@@ -4136,16 +4103,23 @@ describe('WorkerManager', () => {
       },
     });
 
-    expect(dispatchModes).toEqual(['worker', 'advisor', 'worker']);
-    expect(recoverySections[0]).toContain('Recovery Manager Guidance');
-    expect(recoverySections[0]).toContain('step_2');
-    expect(recoverySections[0]).toContain('fs_write');
-    expect(result.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt.');
-    expect(result.content).not.toContain('Delegated work failed.');
+    expect(dispatchModes).toEqual(['worker', 'advisor']);
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('step_2 (Write a short summary');
+    expect(result.metadata?.executionGraphRecovery).toMatchObject({
+      adviceSource: 'llm',
+      actionKinds: ['retry_node'],
+    });
+    expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual([
+      'node_started',
+      'artifact_created',
+      'recovery_proposed',
+      'node_completed',
+    ]);
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
       'recovery_advisor_started',
       'recovery_advisor_completed',
-      'delegated_worker_completed',
+      'delegated_worker_failed',
     ]));
 
     manager.shutdown();
