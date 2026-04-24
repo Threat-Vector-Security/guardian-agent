@@ -39,6 +39,7 @@ import {
 } from './execution-graph/synthesis-node.js';
 
 import { deriveAnswerConstraints } from './intent/request-patterns.js';
+import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import { normalizeIntentGatewayRepairText } from './intent/text.js';
 import { isReadLikeOperation } from './orchestration-role-contracts.js';
 
@@ -195,6 +196,7 @@ export function shouldHandleDirectReasoningMode(input: {
   if (decision.operation === 'create' || decision.operation === 'update' || decision.operation === 'delete') return false;
   if (decision.executionClass === 'security_analysis') return false;
   if (decision.executionClass === 'tool_orchestration') return false;
+  if (hasRequiredWritePlannedStep(decision)) return false;
 
   const tier = input.selectedExecutionProfile?.providerTier;
   return !!input.selectedExecutionProfile && tier !== 'local';

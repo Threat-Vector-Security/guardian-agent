@@ -1,6 +1,6 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** In progress. Phases 1-3 are implemented for the read-only graph/artifact lane, and the first read-only regression ladder is passing.
+**Status:** In progress. Phases 1-3 are implemented for the read-only graph/artifact lane. The first Phase 4 graph-controlled search/write slice is implemented and passing a live API replay.
 **Date:** 2026-04-24
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
@@ -21,6 +21,7 @@ As of 2026-04-24:
 - Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
 - Phase 3 typed artifact store and grounded synthesis are implemented for the read-only lane: graph-owned artifact storage retains typed artifact contents and refs, direct reasoning emits `SearchResultSet`, `FileReadSet`, `EvidenceLedger`, and `SynthesisDraft` artifacts, and no-tools synthesis consumes bounded evidence artifacts.
+- Phase 4 mutation nodes are implemented for the first structured search/write lane: required write steps now keep top-level requests out of read-only direct reasoning, route read-like coding plans with structured writes to workspace implementer orchestration, synthesize `WriteSpec`, execute `fs_write` through supervisor-owned tool execution, and verify the written contents.
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
 - Do not move to broader hybrid write behavior until this read-only/artifact lane remains stable through a broader manual web UI pass and the focused verification commands below.
@@ -443,9 +444,15 @@ Security checks:
 
 Goal: hybrid "search then write" stops relying on worker prose.
 
+Current status: implemented for the first structured repo search/write slice; broader adversarial write/redaction targets still need manual coverage before Phase 5 expansion.
+
 Files:
 
 - `src/runtime/execution-graph/mutation-node.ts`
+- `src/runtime/intent/planned-steps.ts`
+- `src/runtime/direct-reasoning-mode.ts`
+- `src/runtime/orchestration-role-contracts.ts`
+- `src/supervisor/worker-manager.ts`
 - `src/tools/builtin/filesystem-tools.ts`
 - `src/tools/executor.ts`
 - `src/runtime/execution-graph/node-verifier.ts`
