@@ -321,7 +321,7 @@ export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
   pendingActionStore?: Pick<PendingActionStore, 'replaceActive'>;
-  executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact'>;
+  executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact' | 'getSnapshot' | 'getArtifact' | 'listArtifacts'>;
   now?: () => number;
 }
 
@@ -373,7 +373,6 @@ interface GraphControlledExecutionSuspension {
   nodeId: string;
   resumeToken: string;
   approvalId: string;
-  request: WorkerMessageRequest;
   writeSpec: ExecutionArtifact<WriteSpecContent>;
   mutationContext: MutationNodeExecutionContext;
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
@@ -998,7 +997,6 @@ export class WorkerManager {
           nodeId: mutationNodeId,
           resumeToken,
           approvalId,
-          request: input.request,
           writeSpec,
           mutationContext: {
             ...mutationContext,
@@ -1101,7 +1099,8 @@ export class WorkerManager {
       return null;
     }
     const suspension = this.executionGraphSuspensions.get(payload.resumeToken)
-      ?? this.executionGraphSuspensions.get(options.approvalId);
+      ?? this.executionGraphSuspensions.get(options.approvalId)
+      ?? this.reconstructExecutionGraphSuspension(pendingAction, payload, options.approvalId);
     if (!suspension) {
       return {
         content: 'Execution graph approval was resolved, but the suspended graph state is no longer available. Please retry the request.',
@@ -1261,6 +1260,72 @@ export class WorkerManager {
           verificationArtifactId: mutationResult.verificationArtifact.artifactId,
         },
       },
+    };
+  }
+
+  private reconstructExecutionGraphSuspension(
+    pendingAction: PendingActionRecord,
+    payload: ReturnType<typeof readExecutionGraphResumePayload>,
+    approvalId: string,
+  ): GraphControlledExecutionSuspension | null {
+    if (!payload) return null;
+    const graphStore = this.observability.executionGraphStore;
+    if (!graphStore) return null;
+    const snapshot = graphStore.getSnapshot(payload.graphId);
+    if (!snapshot) return null;
+    const writeSpec = findStoredWriteSpecArtifact({
+      graphStore,
+      graphId: payload.graphId,
+      artifactIds: [
+        ...payload.artifactIds,
+        ...(pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
+      ],
+    });
+    if (!writeSpec) return null;
+    const graph = snapshot.graph;
+    const sequenceStart = snapshot.events.reduce(
+      (highest, event) => Math.max(highest, event.sequence),
+      0,
+    );
+    const channel = graph.securityContext.channel ?? pendingAction.scope.channel;
+    const userId = graph.securityContext.userId ?? pendingAction.scope.userId;
+    const agentId = graph.securityContext.agentId ?? pendingAction.scope.agentId;
+    return {
+      graphId: graph.graphId,
+      nodeId: payload.nodeId,
+      resumeToken: payload.resumeToken,
+      approvalId,
+      writeSpec,
+      mutationContext: {
+        graphId: graph.graphId,
+        executionId: graph.executionId,
+        rootExecutionId: graph.rootExecutionId,
+        ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
+        requestId: graph.requestId,
+        ...(graph.runId ? { runId: graph.runId } : {}),
+        nodeId: payload.nodeId,
+        channel,
+        agentId,
+        userId,
+        ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
+        sequenceStart,
+      },
+      toolRequest: {
+        origin: 'assistant',
+        requestId: graph.requestId,
+        agentId,
+        userId,
+        surfaceId: graph.securityContext.surfaceId ?? pendingAction.scope.surfaceId,
+        principalId: userId,
+        principalRole: 'owner',
+        channel,
+        activeSkills: [],
+      },
+      artifactIds: uniqueStrings([
+        ...graph.artifacts.map((artifact) => artifact.artifactId),
+        ...payload.artifactIds,
+      ]),
+      expiresAt: pendingAction.expiresAt,
     };
   }
 
@@ -3723,6 +3788,36 @@ function readExecutionGraphArtifactsFromMetadata(metadata: Record<string, unknow
     .filter((artifact): artifact is ExecutionArtifact => !!artifact);
 }
 
+function findStoredWriteSpecArtifact(input: {
+  graphStore: Pick<ExecutionGraphStore, 'getArtifact' | 'listArtifacts'>;
+  graphId: string;
+  artifactIds: string[];
+}): ExecutionArtifact<WriteSpecContent> | null {
+  for (const artifactId of uniqueStrings(input.artifactIds)) {
+    const artifact = input.graphStore.getArtifact(input.graphId, artifactId);
+    if (isWriteSpecArtifact(artifact)) {
+      return artifact;
+    }
+  }
+  return input.graphStore.listArtifacts(input.graphId).find(isWriteSpecArtifact) ?? null;
+}
+
+function isWriteSpecArtifact(
+  artifact: ExecutionArtifact | null | undefined,
+): artifact is ExecutionArtifact<WriteSpecContent> {
+  if (!artifact || artifact.artifactType !== 'WriteSpec') {
+    return false;
+  }
+  const content = artifact.content as Partial<WriteSpecContent>;
+  return content.operation === 'write_file'
+    && typeof content.path === 'string'
+    && typeof content.append === 'boolean'
+    && typeof content.content === 'string'
+    && typeof content.contentHash === 'string'
+    && typeof content.contentBytes === 'number'
+    && Array.isArray(content.sourceArtifactIds);
+}
+
 function normalizeExecutionArtifact(value: unknown): ExecutionArtifact | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
@@ -3740,6 +3835,18 @@ function normalizeExecutionArtifact(value: unknown): ExecutionArtifact | null {
     return null;
   }
   return artifact as unknown as ExecutionArtifact;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(normalized);
+  }
+  return unique;
 }
 
 function extractDelegatedEvidenceRefs(...values: Array<string | undefined>): string[] {

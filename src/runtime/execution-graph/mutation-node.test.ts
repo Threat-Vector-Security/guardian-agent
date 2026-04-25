@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import { buildSearchResultSetArtifact, buildWriteSpecArtifact } from './graph-artifacts.js';
-import { executeWriteSpecMutationNode, type MutationNodeExecutionContext } from './mutation-node.js';
+import { executeWriteSpecMutationNode, resumeWriteSpecMutationNodeAfterApproval, type MutationNodeExecutionContext } from './mutation-node.js';
 
 describe('execution graph mutation node', () => {
   it('executes WriteSpec through supervisor ToolExecutor and verifies read-back content', async () => {
@@ -122,6 +122,52 @@ describe('execution graph mutation node', () => {
     });
     expect(result.events.map((event) => event.kind)).toContain('approval_requested');
     expect(result.events.map((event) => event.kind)).not.toContain('node_completed');
+  });
+
+  it('uses a distinct approved mutation receipt artifact when resuming after approval', async () => {
+    const content = 'graph approval ok';
+    const writeSpec = buildWriteSpecArtifact({
+      graphId: 'graph-1',
+      nodeId: 'synthesize-1',
+      artifactId: 'write-spec-approval',
+      path: 'tmp/manual-web/approval-graph.txt',
+      content,
+      createdAt: 100,
+    });
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'fs_read') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            content,
+            truncated: false,
+          },
+        };
+      }
+      throw new Error(`unexpected tool ${toolName}`);
+    });
+
+    const result = await resumeWriteSpecMutationNodeAfterApproval({
+      writeSpec,
+      approvedToolResult: {
+        success: true,
+        status: 'succeeded',
+        approvalId: 'approval-1',
+        output: {
+          size: Buffer.byteLength(content, 'utf-8'),
+        },
+      },
+      executeTool,
+      toolRequest: baseToolRequest(),
+      context: baseContext(),
+      approvalId: 'approval-1',
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.receiptArtifact?.artifactId).toBe('graph-1:mutate-1:mutation-receipt:approved:approval-1');
+    expect(result.receiptArtifact?.artifactId).not.toBe('graph-1:mutate-1:mutation-receipt');
+    expect(result.verificationArtifact?.content.valid).toBe(true);
   });
 
   it('rejects no-secret WriteSpecs before executing a tool when content contains secrets', async () => {
