@@ -1394,6 +1394,17 @@ describe('WorkerManager', () => {
       lifecycle: 'blocked',
       verificationArtifactId: expect.stringContaining(':verification'),
     });
+    expect(manager.getJobState(5).jobs[0]?.metadata).toMatchObject({
+      delegation: {
+        executionGraph: {
+          graphId: delegatedGraphId,
+          nodeId: expect.stringContaining(':delegated_worker'),
+          status: 'awaiting_approval',
+          lifecycle: 'blocked',
+          verificationArtifactId: expect.stringContaining(':verification'),
+        },
+      },
+    });
 
     manager.shutdown();
   });
@@ -1492,6 +1503,17 @@ describe('WorkerManager', () => {
       status: 'completed',
       lifecycle: 'completed',
       verificationArtifactId: expect.stringContaining(':verification'),
+    });
+    expect(manager.getJobState(5).jobs[0]?.metadata).toMatchObject({
+      delegation: {
+        executionGraph: {
+          graphId,
+          nodeId: expect.stringContaining(':delegated_worker'),
+          status: 'completed',
+          lifecycle: 'completed',
+          verificationArtifactId: expect.stringContaining(':verification'),
+        },
+      },
     });
 
     manager.shutdown();
@@ -4076,6 +4098,17 @@ describe('WorkerManager', () => {
       status: 'failed',
       lifecycle: 'failed',
       verificationArtifactId: expect.stringContaining(':verification'),
+    });
+    expect(manager.getJobState(5).jobs[0]?.metadata).toMatchObject({
+      delegation: {
+        executionGraph: {
+          graphId: delegatedEvents[0]?.graphId,
+          nodeId: expect.stringContaining(':delegated_worker'),
+          status: 'failed',
+          lifecycle: 'failed',
+          verificationArtifactId: expect.stringContaining(':verification'),
+        },
+      },
     });
     const recoveryEvents = graphEvents.filter((event) => event.graphId === graphId);
     expect(recoveryEvents.map((event) => event.kind)).toEqual([

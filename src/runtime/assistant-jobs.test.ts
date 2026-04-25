@@ -132,10 +132,24 @@ describe('AssistantJobTracker', () => {
         kind: 'brokered_worker',
         executionId: 'exec-operator-1',
         rootExecutionId: 'exec-root-1',
+        executionGraph: {
+          graphId: 'execution-graph:exec-operator-1:delegated-worker',
+          nodeId: 'node:exec-operator-1:delegated_worker',
+          status: 'awaiting_approval',
+          lifecycle: 'blocked',
+          verificationArtifactId: 'execution-graph:exec-operator-1:delegated-worker:verification',
+        },
       },
     })).toMatchObject({
       executionId: 'exec-operator-1',
       rootExecutionId: 'exec-root-1',
+      executionGraph: {
+        graphId: 'execution-graph:exec-operator-1:delegated-worker',
+        nodeId: 'node:exec-operator-1:delegated_worker',
+        status: 'awaiting_approval',
+        lifecycle: 'blocked',
+        verificationArtifactId: 'execution-graph:exec-operator-1:delegated-worker:verification',
+      },
     });
   });
 

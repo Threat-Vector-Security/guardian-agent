@@ -393,9 +393,15 @@ interface DelegatedWorkerGraphRun {
   sequence: number;
 }
 
-interface DelegatedWorkerGraphCompletionMetadata {
+interface DelegatedWorkerGraphJobMetadata {
   graphId: string;
   nodeId: string;
+  status: 'running' | 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
+  lifecycle: 'running' | 'completed' | 'blocked' | 'failed';
+  verificationArtifactId?: string;
+}
+
+interface DelegatedWorkerGraphCompletionMetadata extends DelegatedWorkerGraphJobMetadata {
   status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
   lifecycle: 'completed' | 'blocked' | 'failed';
   verificationArtifactId: string;
@@ -1777,8 +1783,8 @@ export class WorkerManager {
     run: DelegatedWorkerGraphRun | null,
     error: unknown,
     taskContract: DelegatedResultEnvelope['taskContract'],
-  ): void {
-    if (!run) return;
+  ): DelegatedWorkerGraphJobMetadata | undefined {
+    if (!run) return undefined;
     const reason = error instanceof Error ? error.message : String(error);
     const sharedPayload = {
       lifecycle: 'failed',
@@ -1788,6 +1794,24 @@ export class WorkerManager {
     };
     this.emitDelegatedWorkerGraphEvent(run, 'node_failed', sharedPayload, 'node:failed');
     this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', sharedPayload, 'graph:failed', { nodeScoped: false });
+    return {
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: 'failed',
+      lifecycle: 'failed',
+    };
+  }
+
+  private buildDelegatedWorkerGraphRunningMetadata(
+    run: DelegatedWorkerGraphRun | null,
+  ): DelegatedWorkerGraphJobMetadata | undefined {
+    if (!run) return undefined;
+    return {
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: 'running',
+      lifecycle: 'running',
+    };
   }
 
   private emitDelegatedWorkerGraphEvent(
@@ -1917,6 +1941,7 @@ export class WorkerManager {
             lifecycle: 'running',
             workerId: worker.id,
             target: delegatedTarget,
+            executionGraph: this.buildDelegatedWorkerGraphRunningMetadata(delegatedGraphRun),
           }),
         },
       });
@@ -2221,6 +2246,19 @@ export class WorkerManager {
             },
           }
         : applyDelegatedFollowUpPolicy(verifiedResultPayload, handoff, verifiedResult.decision);
+      const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+        lifecycle,
+        handoff,
+        taskContract: effectiveTaskContract,
+        verification: verifiedResult.decision,
+        workerId: worker.id,
+      });
+      if (executionGraphMetadata) {
+        normalizedResult.metadata = {
+          ...(normalizedResult.metadata ?? {}),
+          executionGraph: executionGraphMetadata,
+        };
+      }
       this.recordDelegatedExecutionArtifacts(
         effectiveInput,
         delegatedTarget,
@@ -2248,6 +2286,7 @@ export class WorkerManager {
               workerId: worker.id,
               handoff,
               target: delegatedTarget,
+              executionGraph: executionGraphMetadata,
             }),
           },
         });
@@ -2266,19 +2305,6 @@ export class WorkerManager {
           handoff,
           workerMetadata: normalizedResult.metadata,
         });
-        const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
-          lifecycle,
-          handoff,
-          taskContract: effectiveTaskContract,
-          verification: verifiedResult.decision,
-          workerId: worker.id,
-        });
-        if (executionGraphMetadata) {
-          normalizedResult.metadata = {
-            ...(normalizedResult.metadata ?? {}),
-            executionGraph: executionGraphMetadata,
-          };
-        }
         this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:failed`,
           kind: 'failed',
@@ -2317,6 +2343,7 @@ export class WorkerManager {
             workerId: worker.id,
             handoff,
             target: delegatedTarget,
+            executionGraph: executionGraphMetadata,
           }),
         },
       });
@@ -2335,19 +2362,6 @@ export class WorkerManager {
         handoff,
         workerMetadata: normalizedResult.metadata,
       });
-      const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
-        lifecycle,
-        handoff,
-        taskContract: effectiveTaskContract,
-        verification: verifiedResult.decision,
-        workerId: worker.id,
-      });
-      if (executionGraphMetadata) {
-        normalizedResult.metadata = {
-          ...(normalizedResult.metadata ?? {}),
-          executionGraph: executionGraphMetadata,
-        };
-      }
       this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:completed`,
         kind: lifecycle === 'blocked' ? 'blocked' : 'completed',
@@ -2376,6 +2390,7 @@ export class WorkerManager {
       });
       return normalizedResult;
     } catch (error) {
+      const executionGraphMetadata = this.failDelegatedWorkerGraph(delegatedGraphRun, error, taskContract);
       this.delegatedJobTracker.fail(delegatedJob.id, error, {
         detail: error instanceof Error ? error.message : String(error),
         metadata: {
@@ -2386,6 +2401,7 @@ export class WorkerManager {
               summary: truncateInlineText(error instanceof Error ? error.message : String(error), 220),
               nextAction: 'Inspect the delegated worker failure details.',
             },
+            executionGraph: executionGraphMetadata,
           }),
         },
       });
@@ -2397,7 +2413,6 @@ export class WorkerManager {
         reason: error instanceof Error ? error.message : String(error),
         contentPreview: error instanceof Error ? error.message : String(error),
       });
-      this.failDelegatedWorkerGraph(delegatedGraphRun, error, taskContract);
       this.publishDelegatedWorkerProgress(input, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:failed`,
         kind: 'failed',
@@ -5234,6 +5249,7 @@ function buildDelegationJobMetadata(
     workerId?: string;
     handoff?: DelegatedWorkerHandoff;
     target?: ResolvedDelegatedTargetMetadata;
+    executionGraph?: DelegatedWorkerGraphJobMetadata;
   },
 ): Record<string, unknown> {
   const delegatedExecution = resolveDelegatedExecutionIdentity(input);
@@ -5260,6 +5276,7 @@ function buildDelegationJobMetadata(
       : {}),
     ...(options.workerId ? { workerId: options.workerId } : {}),
     ...(options.handoff ? { handoff: options.handoff } : {}),
+    ...(options.executionGraph ? { executionGraph: options.executionGraph } : {}),
   };
 }
 

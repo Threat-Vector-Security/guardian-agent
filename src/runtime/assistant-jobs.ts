@@ -58,6 +58,14 @@ export interface DelegatedWorkerHandoff {
   qualityNotes?: string[];
 }
 
+export interface DelegatedWorkerExecutionGraphMetadata {
+  graphId: string;
+  nodeId?: string;
+  status?: 'running' | 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
+  lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
+  verificationArtifactId?: string;
+}
+
 export interface DelegatedWorkerMetadata {
   kind: 'brokered_worker';
   lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
@@ -71,6 +79,7 @@ export interface DelegatedWorkerMetadata {
   codeSessionId?: string;
   runClass?: DelegatedWorkerRunClass;
   handoff?: DelegatedWorkerHandoff;
+  executionGraph?: DelegatedWorkerExecutionGraphMetadata;
 }
 
 export interface AssistantJobDisplayFollowUp {
@@ -296,6 +305,7 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
     return null;
   }
   const orchestration = normalizeOrchestrationRoleDescriptor(delegated.orchestration);
+  const executionGraph = readDelegatedWorkerExecutionGraphMetadata(delegated.executionGraph);
   let handoff: DelegatedWorkerHandoff | undefined;
   if (isRecord(delegated.handoff)) {
     handoff = {
@@ -355,7 +365,54 @@ export function readDelegatedWorkerMetadata(metadata: Record<string, unknown> | 
       ? { runClass: delegated.runClass as DelegatedWorkerRunClass }
       : {}),
     ...(handoff ? { handoff } : {}),
+    ...(executionGraph ? { executionGraph } : {}),
   };
+}
+
+function readDelegatedWorkerExecutionGraphMetadata(value: unknown): DelegatedWorkerExecutionGraphMetadata | undefined {
+  if (!isRecord(value)) return undefined;
+  const graphId = typeof value.graphId === 'string' ? value.graphId.trim() : '';
+  if (!graphId) return undefined;
+  const nodeId = typeof value.nodeId === 'string' ? value.nodeId.trim() : '';
+  const verificationArtifactId = typeof value.verificationArtifactId === 'string' ? value.verificationArtifactId.trim() : '';
+  const status = readDelegatedWorkerGraphStatus(value.status);
+  const lifecycle = readDelegatedWorkerGraphLifecycle(value.lifecycle);
+  return {
+    graphId,
+    ...(nodeId ? { nodeId } : {}),
+    ...(status ? { status } : {}),
+    ...(lifecycle ? { lifecycle } : {}),
+    ...(verificationArtifactId ? { verificationArtifactId } : {}),
+  };
+}
+
+function readDelegatedWorkerGraphStatus(
+  value: unknown,
+): DelegatedWorkerExecutionGraphMetadata['status'] | undefined {
+  switch (value) {
+    case 'running':
+    case 'completed':
+    case 'blocked':
+    case 'awaiting_approval':
+    case 'failed':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function readDelegatedWorkerGraphLifecycle(
+  value: unknown,
+): DelegatedWorkerExecutionGraphMetadata['lifecycle'] | undefined {
+  switch (value) {
+    case 'running':
+    case 'completed':
+    case 'blocked':
+    case 'failed':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function buildDelegatedWorkerFollowUp(
