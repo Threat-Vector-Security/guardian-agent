@@ -5,11 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distEntry = path.join(projectRoot, 'dist', 'index.js');
 const workerEntry = path.join(projectRoot, 'dist', 'worker', 'worker-entry.js');
+const harnessModel = process.env.HARNESS_OLLAMA_MODEL?.trim() || DEFAULT_HARNESS_OLLAMA_MODEL;
 const blockedHost = 'vmres13.web-servers.com.au';
 const domainPrompt = 'Add vmres13.web-servers.com.au to allowed domains and then run the read-only whm_status check against the social profile.';
 const pathPrompt = 'Can you create a file called Test100 in S Drive Development?';
@@ -88,13 +91,13 @@ async function createMockLlmServer(port, scenarioLog) {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
     if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ models: [{ name: 'llama3.2' }] }));
+      res.end(JSON.stringify({ models: [{ name: harnessModel }] }));
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ id: 'llama3.2', object: 'model' }] }));
+      res.end(JSON.stringify({ data: [{ id: harnessModel, object: 'model' }] }));
       return;
     }
 
@@ -169,7 +172,7 @@ function textResponse(content) {
     id: 'mock-chat',
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
-    model: 'llama3.2',
+    model: harnessModel,
     choices: [
       {
         index: 0,
@@ -186,7 +189,7 @@ function toolCallResponse(toolName, args) {
     id: 'mock-chat',
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
-    model: 'llama3.2',
+    model: harnessModel,
     choices: [
       {
         index: 0,
@@ -225,7 +228,7 @@ function writeConfig(configPath, options) {
     '  ollama:',
     '    provider: ollama',
     `    baseUrl: "http://127.0.0.1:${llmPort}"`,
-    '    model: llama3.2',
+    `    model: ${harnessModel}`,
     'defaultProvider: ollama',
     'channels:',
     '  cli:',

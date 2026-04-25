@@ -23,8 +23,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+
 const HARNESS_PORT = parseInt(process.env.HARNESS_PORT || '3015', 10);
 const HARNESS_TOKEN = process.env.HARNESS_TOKEN || `test-m365-${Date.now()}`;
+const HARNESS_MODEL = process.env.HARNESS_OLLAMA_MODEL?.trim() || DEFAULT_HARNESS_OLLAMA_MODEL;
 const SKIP_START = process.env.SKIP_START === '1';
 const BASE_URL = `http://127.0.0.1:${HARNESS_PORT}`;
 const TEMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-m365-'));
@@ -118,7 +121,7 @@ llm:
   ollama:
     provider: ollama
     baseUrl: http://127.0.0.1:11434
-    model: llama3.2
+    model: ${HARNESS_MODEL}
 defaultProvider: ollama
 channels:
   cli:
