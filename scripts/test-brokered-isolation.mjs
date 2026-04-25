@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
@@ -12,6 +14,7 @@ const workerEntry = path.join(projectRoot, 'dist', 'worker', 'worker-entry.js');
 const port = 3021;
 const token = `brokered-harness-${Date.now()}`;
 const baseUrl = `http://127.0.0.1:${port}`;
+const harnessModel = process.env.HARNESS_OLLAMA_MODEL?.trim() || DEFAULT_HARNESS_OLLAMA_MODEL;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,7 +76,7 @@ async function main() {
       '  ollama:',
       '    provider: ollama',
       '    baseUrl: http://127.0.0.1:11434',
-      '    model: llama3.2',
+      `    model: ${harnessModel}`,
       'defaultProvider: ollama',
       'channels:',
       '  cli:',

@@ -3,10 +3,13 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const workerEntry = path.join(projectRoot, 'dist', 'worker', 'worker-entry.js');
+const harnessModel = process.env.HARNESS_OLLAMA_MODEL?.trim() || DEFAULT_HARNESS_OLLAMA_MODEL;
 
 function waitFor(predicate, timeoutMs, intervalMs = 25) {
   const start = Date.now();
@@ -126,7 +129,7 @@ async function main() {
         llmConfig: {
           endpoint: 'http://127.0.0.1:11434',
           apiKey: 'not-used',
-          model: 'llama3.2',
+          model: harnessModel,
         },
       },
     });

@@ -1,4 +1,4 @@
-export const DEFAULT_HARNESS_OLLAMA_MODEL = 'gemma4:26b';
+export const DEFAULT_HARNESS_OLLAMA_MODEL = 'gpt-oss:120b';
 
 function normalizeModelName(value) {
   return String(value || '').trim().toLowerCase();

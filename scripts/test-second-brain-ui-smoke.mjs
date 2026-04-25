@@ -309,7 +309,7 @@ async function runHarness() {
   ollama:
     provider: ollama
     baseUrl: http://127.0.0.1:11434
-    model: llama3.2
+    model: ${DEFAULT_HARNESS_OLLAMA_MODEL}
     enabled: false`
     : '';
   const managedCloudAssistantConfig = provider.providerType === 'ollama_cloud'
