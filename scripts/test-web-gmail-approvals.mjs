@@ -80,6 +80,31 @@ async function waitForHealth() {
   throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
+async function waitForProcessExit(processHandle, timeoutMs = 2000) {
+  if (!processHandle || processHandle.exitCode !== null || processHandle.signalCode !== null) return;
+  await new Promise((resolve) => {
+    const timeout = setTimeout(resolve, timeoutMs);
+    processHandle.once('exit', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
+
+async function removeTempDirWithRetry(dir) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error?.code) || attempt === 7) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+}
+
 function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
   const message = {
     role: 'assistant',
@@ -419,11 +444,12 @@ run().then((state) => {
     console.error(`[web-gmail] Preserved artifacts at ${TEMP_DIR}`);
   }
   process.exitCode = 1;
-}).finally(() => {
+}).finally(async () => {
   if (appProcess && !appProcess.killed) {
     appProcess.kill();
+    await waitForProcessExit(appProcess);
   }
   if (process.exitCode !== 1 || process.env.HARNESS_KEEP_TMP !== '1') {
-    fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+    await removeTempDirWithRetry(TEMP_DIR);
   }
 });

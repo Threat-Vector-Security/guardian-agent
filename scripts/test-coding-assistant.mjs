@@ -14,6 +14,8 @@ import {
   resolveRealOllamaProvider,
 } from './ollama-harness-provider.mjs';
 
+const WORKSPACE_NATIVE_AV_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 5_000;
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -1096,7 +1098,7 @@ guardian:
       return snapshot?.session?.workState?.workspaceTrust?.nativeProtection?.status === 'clean'
         ? snapshot
         : null;
-    }, 5_000, 'Expected native AV status to become clean for the ordinary workspace');
+    }, WORKSPACE_NATIVE_AV_TIMEOUT_MS, 'Expected native AV status to become clean for the ordinary workspace');
     assert.equal(nativeCleanSnapshot.session.workState.workspaceTrust.nativeProtection.provider, expectedNativeProtectionProvider);
     const staleOutsideRoot = path.join(tmpDir, 'outside-workspace');
     fs.mkdirSync(staleOutsideRoot, { recursive: true });
@@ -1232,7 +1234,7 @@ guardian:
       return status === 'detected'
         ? snapshot
         : null;
-    }, 5_000, process.platform === 'win32'
+    }, WORKSPACE_NATIVE_AV_TIMEOUT_MS, process.platform === 'win32'
       ? 'Expected native AV status to complete for the suspicious workspace on Windows'
       : 'Expected native AV status to become detected for the suspicious workspace');
     assert.equal(suspiciousNativeSnapshot.session.workState.workspaceTrust.nativeProtection.provider, expectedNativeProtectionProvider);

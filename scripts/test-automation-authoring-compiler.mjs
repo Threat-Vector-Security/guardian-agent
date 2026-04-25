@@ -46,6 +46,164 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
   };
 }
 
+function createOllamaChatResponse({ model, content = '', toolCalls }) {
+  const message = {
+    role: 'assistant',
+    content,
+  };
+  if (toolCalls?.length) {
+    message.tool_calls = toolCalls.map((toolCall) => ({
+      function: {
+        name: toolCall.name,
+        arguments: parseToolArguments(toolCall.arguments),
+      },
+    }));
+  }
+  return {
+    model,
+    created_at: new Date().toISOString(),
+    message,
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 1,
+    eval_count: 1,
+  };
+}
+
+function parseToolArguments(input) {
+  try {
+    const parsed = JSON.parse(input);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : { value: parsed };
+  } catch {
+    return { __raw: String(input ?? '') };
+  }
+}
+
+function buildRouteIntentArguments(latestUser, conversationTranscript) {
+  const wantsAutomationAuthoring = /\b(create|build|set up|setup|make|configure|schedule)\b[\s\S]{0,160}\b(automation|workflow|playbook|scheduled task|assistant task)\b/i.test(latestUser);
+  const wantsAutomationRename = /\brename\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
+    || /\brename\b/i.test(latestUser);
+  const wantsAutomationUpdate = /\b(edit|update|change)\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
+    || /\bmake it scheduled\b/i.test(latestUser);
+  const isAutomationNameClarification = /field:\s*automation_name/i.test(conversationTranscript)
+    && /^[A-Za-z0-9][A-Za-z0-9\s-]{2,}\.?$/.test(latestUser.trim());
+
+  if (isAutomationNameClarification) {
+    return {
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Select the automation to update.',
+      turnRelation: 'clarification_answer',
+      resolution: 'ready',
+      automationName: latestUser.trim().replace(/\.$/, ''),
+      missingFields: [],
+    };
+  }
+
+  if (wantsAutomationRename) {
+    return {
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Rename an existing automation.',
+      turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
+      resolution: 'ready',
+      newAutomationName: latestUser.match(/\bto\s+(.+?)(?:[.?!]\s*)?$/i)?.[1]?.trim(),
+      missingFields: [],
+    };
+  }
+
+  if (wantsAutomationUpdate) {
+    return {
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Update an existing automation.',
+      turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+    };
+  }
+
+  if (wantsAutomationAuthoring) {
+    return {
+      route: 'automation_authoring',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Create a new automation definition.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+    };
+  }
+
+  return {
+    route: 'general_assistant',
+    confidence: 'medium',
+    operation: 'inspect',
+    summary: 'General assistant question.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+  };
+}
+
+function resolveFakeProviderReply(messages, tools) {
+  const toolNames = Array.isArray(tools)
+    ? tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
+    : [];
+  const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+  const conversationTranscript = messages.map((message) => String(message?.content ?? '')).join('\n');
+
+  if (toolNames.includes('route_intent')) {
+    return {
+      finishReason: 'tool_calls',
+      toolCalls: [{
+        id: 'automation-harness-route',
+        name: 'route_intent',
+        arguments: JSON.stringify(buildRouteIntentArguments(latestUser, conversationTranscript)),
+      }],
+    };
+  }
+
+  if (/Guardian's intent gateway/i.test(conversationTranscript)) {
+    return {
+      content: JSON.stringify(buildRouteIntentArguments(latestUser, conversationTranscript)),
+    };
+  }
+
+  if (toolNames.includes('resolve_automation_name')) {
+    const normalizedTranscript = conversationTranscript.toLowerCase();
+    let automationName = '';
+    if (/now edit that automation/i.test(latestUser) && normalizedTranscript.includes('whm social check disk quota')) {
+      automationName = 'WHM Social Check Disk Quota';
+    } else if (/rename that automation to/i.test(latestUser) && normalizedTranscript.includes('it should check account')) {
+      automationName = 'It Should Check Account';
+    } else if (normalizedTranscript.includes('whm social check disk quota')) {
+      automationName = 'WHM Social Check Disk Quota';
+    } else if (normalizedTranscript.includes('it should check account')) {
+      automationName = 'It Should Check Account';
+    }
+    return {
+      finishReason: 'tool_calls',
+      toolCalls: [{
+        id: 'automation-harness-name-repair',
+        name: 'resolve_automation_name',
+        arguments: JSON.stringify({
+          automationName,
+        }),
+      }],
+    };
+  }
+
+  return {
+    content: 'Harness provider response.',
+  };
+}
+
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -74,114 +232,23 @@ async function startFakeProvider() {
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
-      const toolNames = Array.isArray(parsed?.tools)
-        ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
-        : [];
-      const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
-      const conversationTranscript = messages.map((message) => String(message?.content ?? '')).join('\n');
-
-      if (toolNames.includes('route_intent')) {
-        const wantsAutomationAuthoring = /\b(create|build|set up|setup|make|configure|schedule)\b[\s\S]{0,160}\b(automation|workflow|playbook|scheduled task|assistant task)\b/i.test(latestUser);
-        const wantsAutomationRename = /\brename\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
-          || /\brename\b/i.test(latestUser);
-        const wantsAutomationUpdate = /\b(edit|update|change)\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
-          || /\bmake it scheduled\b/i.test(latestUser);
-        const isAutomationNameClarification = /field:\s*automation_name/i.test(conversationTranscript)
-          && /^[A-Za-z0-9][A-Za-z0-9\s-]{2,}\.?$/.test(latestUser.trim());
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'automation-harness-model',
-          finishReason: 'tool_calls',
-          toolCalls: [{
-            id: 'automation-harness-route',
-            name: 'route_intent',
-            arguments: JSON.stringify(isAutomationNameClarification
-              ? {
-                  route: 'automation_control',
-                  confidence: 'high',
-                  operation: 'update',
-                  summary: 'Select the automation to update.',
-                  turnRelation: 'clarification_answer',
-                  resolution: 'ready',
-                  automationName: latestUser.trim().replace(/\.$/, ''),
-                  missingFields: [],
-                }
-              : wantsAutomationRename
-                ? {
-                    route: 'automation_control',
-                    confidence: 'high',
-                    operation: 'update',
-                    summary: 'Rename an existing automation.',
-                    turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
-                    resolution: 'ready',
-                    newAutomationName: latestUser.match(/\bto\s+(.+?)(?:[.?!]\s*)?$/i)?.[1]?.trim(),
-                    missingFields: [],
-                  }
-                : wantsAutomationUpdate
-                  ? {
-                      route: 'automation_control',
-                      confidence: 'high',
-                      operation: 'update',
-                      summary: 'Update an existing automation.',
-                      turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
-                      resolution: 'ready',
-                      missingFields: [],
-                    }
-                  : wantsAutomationAuthoring
-                    ? {
-                  route: 'automation_authoring',
-                  confidence: 'high',
-                  operation: 'create',
-                  summary: 'Create a new automation definition.',
-                  turnRelation: 'new_request',
-                  resolution: 'ready',
-                  missingFields: [],
-                }
-                    : {
-                        route: 'general_assistant',
-                        confidence: 'medium',
-                        operation: 'inspect',
-                        summary: 'General assistant question.',
-                        turnRelation: 'new_request',
-                        resolution: 'ready',
-                        missingFields: [],
-                      }),
-          }],
-        })));
-        return;
-      }
-
-      if (toolNames.includes('resolve_automation_name')) {
-        const normalizedTranscript = conversationTranscript.toLowerCase();
-        let automationName = '';
-        if (/now edit that automation/i.test(latestUser) && normalizedTranscript.includes('whm social check disk quota')) {
-          automationName = 'WHM Social Check Disk Quota';
-        } else if (/rename that automation to/i.test(latestUser) && normalizedTranscript.includes('it should check account')) {
-          automationName = 'It Should Check Account';
-        } else if (normalizedTranscript.includes('whm social check disk quota')) {
-          automationName = 'WHM Social Check Disk Quota';
-        } else if (normalizedTranscript.includes('it should check account')) {
-          automationName = 'It Should Check Account';
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
-          model: 'automation-harness-model',
-          finishReason: 'tool_calls',
-          toolCalls: [{
-            id: 'automation-harness-name-repair',
-            name: 'resolve_automation_name',
-            arguments: JSON.stringify({
-              automationName,
-            }),
-          }],
-        })));
-        return;
-      }
-
+      const reply = resolveFakeProviderReply(messages, parsed?.tools);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatCompletionResponse({
         model: 'automation-harness-model',
-        content: 'Harness provider response.',
+        ...reply,
+      })));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/chat') {
+      const parsed = await readJsonBody(req);
+      const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+      const reply = resolveFakeProviderReply(messages, parsed?.tools);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(createOllamaChatResponse({
+        model: 'automation-harness-model',
+        ...reply,
       })));
       return;
     }
@@ -609,6 +676,10 @@ assistant:
       - github.com
       - httpbin.org
       - html.duckduckgo.com
+    sandbox:
+      degradedFallback:
+        allowBrowserTools: true
+        allowMcpServers: true
     mcp:
       enabled: true
       servers:
