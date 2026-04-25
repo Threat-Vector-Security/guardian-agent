@@ -319,6 +319,162 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(llmChat.mock.calls[0]?.[1]?.tools).toEqual([]);
   });
 
+  it('does not let answer-first skills bypass evidence-required delegated contracts', async () => {
+    let toolLoopCallCount = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      if (Array.isArray(options?.tools) && options.tools.length === 0) {
+        throw new Error('Evidence-required contracts must not run a tool-free answer-first pass.');
+      }
+
+      toolLoopCallCount += 1;
+      if (toolLoopCallCount === 1) {
+        return {
+          content: 'Based on my analysis, I found some existing automations and suggest a code review monitor.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'openrouter',
+        } as ChatResponse;
+      }
+
+      if (toolLoopCallCount === 2) {
+        const lastUserMessage = messages.findLast((message) => message.role === 'user')?.content ?? '';
+        expect(lastUserMessage).toContain('structured tool-backed execution plan');
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-automation-list',
+            name: 'automation_list',
+            arguments: JSON.stringify({ step_id: 'step_1' }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openrouter',
+        } as ChatResponse;
+      }
+
+      return {
+        content: 'I checked the automation catalog and suggest creating an approval continuity monitor.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'openrouter',
+      } as ChatResponse;
+    });
+    const callTool = vi.fn(async () => ({
+      success: true,
+      output: {
+        automations: [{
+          id: 'auto-1',
+          name: 'Approval Smoke',
+          enabled: true,
+          summary: 'Checks approval continuity.',
+        }],
+      },
+    }));
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'automation_list',
+        description: 'List saved automations.',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      }],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      activeSkills: [{
+        id: 'code-review',
+        name: 'Code Review',
+        summary: 'Review code with findings first.',
+      }],
+      message: {
+        id: 'msg-evidence-required-skill-answer-first',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Find any automations related to code review, then suggest one useful automation I could create. Do not create it yet.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'search',
+            summary: 'Find matching automations, then suggest one useful automation to create.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Search existing automations.',
+                expectedToolCategories: ['automation_list'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Suggest one useful automation to create.',
+                required: true,
+                dependsOn: ['step_1'],
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.content).toContain('approval continuity monitor');
+    expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.length === 0)).toBe(false);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'automation_list',
+    }));
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        completionReason: 'model_response',
+        toolCallCount: 1,
+        successfulToolResultCount: 1,
+      },
+      delegatedResult: {
+        taskContract: {
+          requiresEvidence: true,
+          allowsAnswerFirst: false,
+          plan: {
+            steps: [
+              { kind: 'read', expectedToolCategories: ['automation_list'] },
+              { kind: 'answer' },
+            ],
+          },
+        },
+        runStatus: 'completed',
+      },
+    });
+  });
+
   it('suppresses approval-looking text when no real approval metadata exists', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -789,6 +945,143 @@ describe('BrokeredWorkerSession automation control', () => {
     ).toHaveLength(1);
   });
 
+  it('synthesizes from approved tool evidence when approval resume ends without a final answer', async () => {
+    const finalAnswer = 'The approved search found src/config/types.ts and src/runtime/message-router.ts.';
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'search',
+            summary: 'Search the repo.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const lastMessage = messages.at(-1);
+      if (
+        options?.tools?.length === 0
+        && messages.some((message) => message.content.includes('approval-continuation grounded synthesis'))
+      ) {
+        expect(messages.map((message) => message.content).join('\n')).toContain('src/config/types.ts');
+        return {
+          content: finalAnswer,
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastMessage?.role === 'tool') {
+        return {
+          content: 'I could not generate a final response for that request.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_search')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-search-1',
+            name: 'fs_search',
+            arguments: JSON.stringify({ path: '.', pattern: 'ollama_cloud' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat tool call ${firstTool ?? 'unknown'}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_search',
+        description: 'Search files for a pattern.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            pattern: { type: 'string' },
+          },
+          required: ['path', 'pattern'],
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: false,
+        status: 'pending_approval',
+        jobId: 'job-search-1',
+        approvalId: 'approval-search-1',
+        message: 'fs_search is awaiting approval.',
+        approvalSummary: {
+          toolName: 'fs_search',
+          argsPreview: '{"path":".","pattern":"ollama_cloud"}',
+          actionLabel: 'Search the repo for ollama_cloud',
+        },
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(async () => ({
+        success: true,
+        message: 'Search completed.',
+        output: {
+          matches: [
+            { path: 'src/config/types.ts' },
+            { path: 'src/runtime/message-router.ts' },
+          ],
+        },
+      })),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-approval-empty-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Search the repo for ollama_cloud routing references.',
+        timestamp: Date.now(),
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-approval-empty-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-search-1',
+          decision: 'approved',
+          resultMessage: 'Search completed.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toBe(finalAnswer);
+    expect(resumed.metadata).toMatchObject({
+      approvalContinuationSynthesis: {
+        available: true,
+        reason: 'empty_response_after_approval',
+      },
+      delegatedResult: {
+        finalUserAnswer: finalAnswer,
+      },
+    });
+    expect(
+      llmChat.mock.calls.filter(([, options]) => options?.tools?.length === 0),
+    ).toHaveLength(1);
+  });
+
   it('captures matched fs_search file refs for exact-file delegated repo inspections instead of the search root', async () => {
     const llmChat = vi.fn(async (messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -1114,6 +1407,134 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(systemMessages).toContain('Do not assume a subdirectory is authoritative just because the request mentions "worker", "timeline", "contract", or similar terms; verify the implementation files from actual search results first.');
     expect(systemMessages).toContain('For exact-file repo inspections, search and symbol results are only leads; read the actual implementation files with fs_read or fs_list before answering.');
     expect(systemMessages).toContain('When the user asks where behavior is implemented, prefer non-test source files that contain the implementation logic, not files that only import, test, document, or quote that behavior.');
+  });
+
+  it('adds catalog grounding guidance for mixed automation and routine evidence plans', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed mixed catalog turns should not reclassify the turn.');
+      }
+      return {
+        content: 'I found one automation and one routine, then suggested a candidate automation.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'openai',
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'automation_list',
+          description: 'List automations.',
+          parameters: { type: 'object', properties: {} },
+        },
+        {
+          name: 'second_brain_routine_list',
+          description: 'List Second Brain routines.',
+          parameters: { type: 'object', properties: {} },
+        },
+        {
+          name: 'second_brain_routine_catalog',
+          description: 'List available routine templates.',
+          parameters: { type: 'object', properties: {} },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'openrouter-tools',
+        providerName: 'openrouter',
+        providerType: 'openrouter',
+        providerModel: 'qwen/qwen3.6-plus',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'full',
+        maxAdditionalSections: 4,
+        maxRuntimeNotices: 4,
+        fallbackProviderOrder: [],
+        reason: 'test mixed catalog guidance',
+      },
+      message: {
+        id: 'msg-mixed-catalog-guidance',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'search',
+            summary: 'Find matching automations and routines, then suggest one useful automation to create.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Search existing automations.',
+                expectedToolCategories: ['automation_list'],
+                required: true,
+              },
+              {
+                kind: 'read',
+                summary: 'Search existing Second Brain routines.',
+                expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Suggest one useful automation to create.',
+                required: true,
+                dependsOn: ['step_1', 'step_2'],
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const firstToolLoopCall = llmChat.mock.calls.find((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'automation_list'));
+    const systemMessages = (firstToolLoopCall?.[0] ?? [])
+      .filter((message: { role?: string; content?: string }) => message.role === 'system')
+      .map((message: { content?: string }) => message.content ?? '')
+      .join('\n\n');
+
+    expect(systemMessages).toContain('Catalog/list evidence grounding rule:');
+    expect(systemMessages).toContain('When answering from automation or Second Brain catalog/list tools, use exact names, ids, enabled/status fields, and summaries returned by successful tool receipts.');
+    expect(systemMessages).toContain('- step_1 [read]: Search existing automations. [required tools/categories: automation_list]');
+    expect(systemMessages).toContain('- step_2 [read]: Search existing Second Brain routines. [required tools/categories: second_brain_routine_list, second_brain_routine_catalog]');
+    expect(systemMessages).toContain('- step_3 [answer] (depends on step_1, step_2): Suggest one useful automation to create.');
   });
 
   it('emits exact file claims from search-only repo inspections when tool results are wrapped under nested output objects', async () => {

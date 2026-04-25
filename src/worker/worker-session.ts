@@ -62,6 +62,7 @@ import {
 } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
+  readDelegatedResultEnvelope,
 } from '../runtime/execution/metadata.js';
 import {
   buildRecoveryAdvisorMessages,
@@ -116,6 +117,7 @@ const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go 
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const EMPTY_RESPONSE_FALLBACK_CONTENT = 'I could not generate a final response for that request.';
 const TOOL_TRACE_PREVIEW_MAX_CHARS = 12_000;
 const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_search', 'code_symbol_search']);
 const PLANNER_TOOL_ALIASES = new Map<string, string>([
@@ -150,6 +152,7 @@ interface SuspendedToolLoopSession {
   llmMessages: ChatMessage[];
   pendingTools: SuspendedToolCall[];
   originalMessage: UserMessage;
+  taskContract?: DelegatedTaskContract;
   executionProfile?: SelectedExecutionProfile;
 }
 
@@ -439,6 +442,44 @@ function shouldUseDelegatedAnswerFirstLane(input: {
   return input.selectedExecutionProfile?.preferredAnswerPath === 'direct';
 }
 
+function shouldAllowSkillAnswerFirstLane(input: {
+  taskContract: DelegatedTaskContract;
+  intentDecision: IntentGatewayDecision | undefined;
+}): boolean {
+  if (input.taskContract.allowsAnswerFirst) {
+    return true;
+  }
+  if (input.taskContract.kind !== 'general_answer') {
+    return false;
+  }
+  const requiresReadOrToolEvidence = input.taskContract.plan.steps.some((step) => (
+    step.required !== false
+    && (
+      step.kind === 'read'
+      || step.kind === 'search'
+      || step.kind === 'tool_call'
+      || step.kind === 'memory_save'
+    )
+  ));
+  if (
+    requiresReadOrToolEvidence
+    && (
+      input.intentDecision?.requiresToolSynthesis === true
+      || input.intentDecision?.requiresRepoGrounding === true
+      || input.intentDecision?.preferredAnswerPath === 'tool_loop'
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function hasActiveWritingPlansSkill(
+  skills: ReadonlyArray<{ id?: string | null }>,
+): boolean {
+  return skills.some((skill) => skill.id === 'writing-plans');
+}
+
 function appendSystemGuidance(
   llmMessages: ChatMessage[],
   guidance: string | null | undefined,
@@ -494,6 +535,7 @@ function buildDelegatedModelProvenance(
     ...(responseSource?.providerProfileName ? { resolvedProviderProfileName: responseSource.providerProfileName } : {}),
     ...(responseSource?.providerTier ? { resolvedProviderTier: responseSource.providerTier } : {}),
     ...(responseSource?.locality ? { resolvedProviderLocality: responseSource.locality } : {}),
+    ...(responseSource?.usedFallback === true ? { resolvedViaFallback: true } : {}),
     ...(selectedExecutionProfile?.selectionSource ? { selectionSource: selectedExecutionProfile.selectionSource } : {}),
   };
 }
@@ -624,11 +666,15 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
       ? ` (depends on ${step.dependsOn.join(', ')})`
       : '';
     const toolSummary = step.expectedToolCategories?.length
-      ? ` [preferred tools: ${step.expectedToolCategories.join(', ')}]`
+      ? ` [required tools/categories: ${step.expectedToolCategories.join(', ')}]`
       : '';
     return `- ${step.stepId} [${step.kind}]${dependencySummary}: ${step.summary}${toolSummary}`;
   });
   const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
+  const hasCatalogEvidenceStep = requiredSteps.some((step) => (
+    step.kind !== 'answer'
+    && (step.expectedToolCategories?.some(isCatalogEvidenceCategory) ?? false)
+  ));
   return [
     'Delegated task contract:',
     `kind: ${taskContract.kind}`,
@@ -638,7 +684,18 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
     ...stepLines,
     'Complete every required planned step before ending the turn.',
     ...(requiredSteps.some((step) => (step.expectedToolCategories?.length ?? 0) > 0)
-      ? ['A tool call only satisfies a planned step when it matches that step\'s expected tool categories.']
+      ? [
+          'A tool call only satisfies a planned step when it matches that step\'s expected tool categories.',
+          'When a required exact tool name is visible, call that tool directly. If it is not visible, call find_tools with that exact tool name before using substitutes.',
+        ]
+      : []),
+    ...(hasCatalogEvidenceStep && answerSteps.length > 0
+      ? [
+          'Catalog/list evidence grounding rule:',
+          'When answering from automation or Second Brain catalog/list tools, use exact names, ids, enabled/status fields, and summaries returned by successful tool receipts.',
+          'If the catalog/list evidence has no matching item, say that plainly and base the recommendation on the absence of a match.',
+          'Do not describe a catalog item as a likely match unless the returned evidence explicitly supports that relation.',
+        ]
       : []),
     ...(answerSteps.length > 0
       ? [
@@ -656,6 +713,14 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
         ]
       : []),
   ].join('\n');
+}
+
+function isCatalogEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'automation'
+    || normalized.startsWith('automation_')
+    || normalized === 'second_brain'
+    || normalized.startsWith('second_brain_');
 }
 
 function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
@@ -751,7 +816,11 @@ const READ_ONLY_EVIDENCE_TOOLS = new Set([
   'sys_resources', 'sys_processes', 'web_search', 'web_fetch',
   'intel_summary', 'intel_findings', 'security_alert_search',
   'windows_defender_status', 'code_session_list', 'code_session_current',
-  'code_session_attach', 'code_session_detach', 'code_session_create'
+  'code_session_attach', 'code_session_detach', 'code_session_create',
+  'automation_list',
+  'second_brain_overview', 'second_brain_brief_list', 'second_brain_note_list',
+  'second_brain_task_list', 'second_brain_calendar_list', 'second_brain_people_list',
+  'second_brain_library_list', 'second_brain_routine_list', 'second_brain_routine_catalog',
 ]);
 
 function isReadOnlyEvidenceTool(toolName: string): boolean {
@@ -1009,6 +1078,181 @@ function buildDelegatedResultEnvelope(input: {
   };
 }
 
+function isEmptyResponseFallbackContent(content: string | undefined): boolean {
+  return content?.trim() === EMPTY_RESPONSE_FALLBACK_CONTENT;
+}
+
+function readWorkerCompletionReason(metadata: Record<string, unknown> | undefined): string | undefined {
+  const workerExecution = metadata?.workerExecution;
+  if (!isRecord(workerExecution)) return undefined;
+  return typeof workerExecution.completionReason === 'string'
+    ? workerExecution.completionReason
+    : undefined;
+}
+
+function shouldSynthesizeApprovalContinuationFallback(
+  result: { content: string; metadata?: Record<string, unknown> },
+): boolean {
+  return isEmptyResponseFallbackContent(result.content)
+    || readWorkerCompletionReason(result.metadata) === 'empty_response_fallback';
+}
+
+function buildApprovalContinuationToolReceipt(input: {
+  pending: SuspendedToolCall;
+  result: {
+    status?: string;
+    message?: string;
+    output?: unknown;
+    success?: boolean;
+  };
+  workspaceRoot?: string;
+  timestamp: number;
+}): EvidenceReceipt {
+  const status = input.result.success === true
+    ? 'succeeded'
+    : input.result.status === 'denied'
+      ? 'blocked'
+      : 'failed';
+  const resultRecord: Record<string, unknown> = {
+    success: input.result.success === true,
+    status,
+    ...(input.result.message ? { message: input.result.message } : {}),
+    ...(input.result.output !== undefined ? { output: input.result.output } : {}),
+  };
+  return {
+    receiptId: `approval:${input.pending.approvalId}:receipt`,
+    sourceType: 'tool_call',
+    toolName: input.pending.name,
+    status,
+    refs: canonicalizeEvidenceRefs([
+      ...extractRefsFromUnknown(input.result.output),
+      ...extractRefsFromUnknown(resultRecord),
+    ], input.workspaceRoot),
+    summary: buildEvidenceSummary(
+      input.pending.name,
+      resultRecord,
+      status === 'succeeded' ? undefined : input.result.message,
+    ),
+    startedAt: input.timestamp,
+    endedAt: input.timestamp,
+  };
+}
+
+function buildApprovalContinuationToolEvent(input: {
+  pending: SuspendedToolCall;
+  receipt: EvidenceReceipt;
+  timestamp: number;
+}): ExecutionEvent {
+  return {
+    eventId: `${input.receipt.receiptId}:completed`,
+    nodeId: input.pending.toolCallId,
+    type: 'tool_call_completed',
+    timestamp: input.timestamp,
+    payload: {
+      toolCallId: input.pending.toolCallId,
+      toolName: input.pending.name,
+      approvalId: input.pending.approvalId,
+      resultStatus: input.receipt.status,
+      resultMessage: input.receipt.summary,
+      refs: [...input.receipt.refs],
+    },
+  };
+}
+
+function buildReceiptStepIdsFromEnvelope(
+  envelope: DelegatedResultEnvelope | undefined,
+): Map<string, string> {
+  const evidenceById = new Map((envelope?.evidenceReceipts ?? []).map((receipt) => [receipt.receiptId, receipt]));
+  const ids = new Map<string, string>();
+  for (const stepReceipt of envelope?.stepReceipts ?? []) {
+    for (const receiptId of stepReceipt.evidenceReceiptIds) {
+      const receipt = evidenceById.get(receiptId);
+      if (receipt?.sourceType === 'tool_call') {
+        ids.set(receiptId, stepReceipt.stepId);
+      }
+    }
+  }
+  return ids;
+}
+
+function removeFallbackAnswerReceipts(receipts: EvidenceReceipt[]): EvidenceReceipt[] {
+  return receipts.filter((receipt) => !(
+    receipt.sourceType === 'model_answer'
+    && isEmptyResponseFallbackContent(receipt.summary)
+  ));
+}
+
+function buildApprovalContinuationReceiptStepIds(input: {
+  taskContract: DelegatedTaskContract;
+  sourceEnvelope?: DelegatedResultEnvelope;
+  approvedReceipts: EvidenceReceipt[];
+}): Map<string, string> {
+  const receiptStepIds = buildReceiptStepIdsFromEnvelope(input.sourceEnvelope);
+  const matchedStepIds = new Set(receiptStepIds.values());
+  for (const receipt of input.approvedReceipts) {
+    if (!receipt.toolName) continue;
+    const stepId = matchPlannedStepForTool({
+      toolName: receipt.toolName,
+      args: { refs: receipt.refs },
+      plannedTask: input.taskContract.plan,
+      previouslyMatchedStepIds: matchedStepIds,
+    });
+    if (stepId) {
+      receiptStepIds.set(receipt.receiptId, stepId);
+      matchedStepIds.add(stepId);
+    }
+  }
+  return receiptStepIds;
+}
+
+function buildApprovalContinuationSynthesisMessages(input: {
+  originalMessage: UserMessage;
+  resumedMessages: ChatMessage[];
+  approvedReceipts: EvidenceReceipt[];
+  sourceEnvelope?: DelegatedResultEnvelope;
+}): ChatMessage[] {
+  const sourceReceipts = removeFallbackAnswerReceipts(input.sourceEnvelope?.evidenceReceipts ?? [])
+    .filter((receipt) => receipt.status === 'succeeded')
+    .slice(0, 30);
+  const toolTranscript = input.resumedMessages
+    .filter((message) => message.role === 'tool' && message.content.trim())
+    .slice(-8)
+    .map((message, index) => `- tool_${index + 1}${message.toolCallId ? ` (${message.toolCallId})` : ''}: ${truncateInlineText(message.content, 1_200) ?? ''}`);
+  const receiptLines = [...input.approvedReceipts, ...sourceReceipts]
+    .filter((receipt) => receipt.status === 'succeeded')
+    .map((receipt, index) => {
+      const refs = receipt.refs.length > 0 ? ` refs=${receipt.refs.slice(0, 8).join(', ')}` : '';
+      const toolName = receipt.toolName ? ` tool=${receipt.toolName}` : '';
+      return `- evidence_${index + 1}: id=${receipt.receiptId} source=${receipt.sourceType}${toolName}${refs} summary=${truncateInlineText(receipt.summary, 800) ?? ''}`;
+    });
+  return [
+    {
+      role: 'system',
+      content: [
+        'You are GuardianAgent approval-continuation grounded synthesis.',
+        'No tools are available in this pass. Use only the approved tool results, gathered evidence, and original request below.',
+        'Do not execute actions, request approval, or claim that additional tool calls were made.',
+        'Produce the final user-facing answer that the approved tool result now enables.',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        'Original request:',
+        input.originalMessage.content,
+        '',
+        'Approved tool result transcript:',
+        ...(toolTranscript.length > 0 ? toolTranscript : ['- none']),
+        '',
+        'Evidence receipts:',
+        ...(receiptLines.length > 0 ? receiptLines : ['- none']),
+        '',
+        'Write the final answer now. Keep it concise and grounded in the evidence.',
+      ].join('\n'),
+    },
+  ];
+}
+
 function buildExecutionProfileResponseSource(
   executionProfile: SelectedExecutionProfile | null | undefined,
 ): ResponseSourceMetadata | undefined {
@@ -1027,6 +1271,10 @@ function buildExecutionProfileResponseSource(
   };
 }
 
+function normalizeProviderIdentity(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
 function buildChatResponseSource(
   response: BrokeredChatResponse,
   executionProfile: SelectedExecutionProfile | null | undefined,
@@ -1041,12 +1289,18 @@ function buildChatResponseSource(
   const actualProviderName = typeof response.providerName === 'string'
     ? response.providerName.trim()
     : '';
+  const actualProviderIdentity = normalizeProviderIdentity(actualProviderName);
+  const selectedProviderIdentity = normalizeProviderIdentity(executionProfile?.providerName);
+  const selectedProviderTypeIdentity = normalizeProviderIdentity(executionProfile?.providerType);
   const useSelectedExecutionProfile = !!executionProfile
     && (
       !actualProviderName
-      || actualProviderName === executionProfile.providerName
-      || actualProviderName === executionProfile.providerType
+      || actualProviderIdentity === selectedProviderIdentity
+      || actualProviderIdentity === selectedProviderTypeIdentity
     );
+  const usedProviderFallback = !!executionProfile
+    && !!actualProviderIdentity
+    && !useSelectedExecutionProfile;
   const providerName = useSelectedExecutionProfile
     ? executionProfile.providerType
     : actualProviderName;
@@ -1062,7 +1316,7 @@ function buildChatResponseSource(
       ? { providerTier: (useSelectedExecutionProfile ? executionProfile.providerTier : getProviderTier(providerName)) }
       : {}),
     ...(response.model?.trim() ? { model: response.model.trim() } : {}),
-    usedFallback: options.usedFallback,
+    usedFallback: options.usedFallback || usedProviderFallback,
     ...(options.notice ? { notice: options.notice } : {}),
   };
 }
@@ -1434,7 +1688,13 @@ class BrokeredToolExecutor {
   }
 
   async searchTools(query: string): Promise<ToolDefinition[]> {
-    const results = await this.client.searchTools(query);
+    const searchTools = (this.client as unknown as {
+      searchTools?: (query: string) => Promise<ToolDefinition[]> | ToolDefinition[];
+    }).searchTools;
+    if (typeof searchTools !== 'function') {
+      return [];
+    }
+    const results = await searchTools.call(this.client, query);
     for (const definition of results) {
       this.toolDefinitions.set(definition.name, definition);
     }
@@ -1729,6 +1989,7 @@ export class BrokeredWorkerSession {
 
       const result = await handleDirectReasoningMode({
         message: params.message.content,
+        history: params.history,
         gateway: directIntent,
         selectedExecutionProfile,
         promptKnowledge: {
@@ -2320,8 +2581,25 @@ export class BrokeredWorkerSession {
     }
 
     const resumedMessages = [...suspended.llmMessages];
+    const approvedReceipts: EvidenceReceipt[] = [];
+    const approvedEvents: ExecutionEvent[] = [];
+    const codeContext = suspended.originalMessage.metadata?.codeContext as { workspaceRoot?: string } | undefined;
+    const workspaceRoot = codeContext?.workspaceRoot;
     for (const pending of suspended.pendingTools) {
       const result = await this.client.getApprovalResult(pending.approvalId);
+      const timestamp = Date.now();
+      const receipt = buildApprovalContinuationToolReceipt({
+        pending,
+        result,
+        workspaceRoot,
+        timestamp,
+      });
+      approvedReceipts.push(receipt);
+      approvedEvents.push(buildApprovalContinuationToolEvent({
+        pending,
+        receipt,
+        timestamp,
+      }));
       const toolPayload = result.success === true
         ? buildToolResultPayloadFromJob({
           status: 'succeeded',
@@ -2339,7 +2617,7 @@ export class BrokeredWorkerSession {
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
-    return this.executeLoop(
+    const resumed = await this.executeLoop(
       suspended.originalMessage,
       resumedMessages,
       chatFn,
@@ -2349,6 +2627,100 @@ export class BrokeredWorkerSession {
         message: suspended.originalMessage,
       },
     );
+    const synthesized = await this.trySynthesizeApprovalContinuationFallback({
+      suspended,
+      resumed,
+      resumedMessages,
+      approvedReceipts,
+      approvedEvents,
+      chatFn,
+    });
+    return synthesized ?? resumed;
+  }
+
+  private async trySynthesizeApprovalContinuationFallback(input: {
+    suspended: SuspendedToolLoopSession;
+    resumed: { content: string; metadata?: Record<string, unknown> };
+    resumedMessages: ChatMessage[];
+    approvedReceipts: EvidenceReceipt[];
+    approvedEvents: ExecutionEvent[];
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
+  }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!shouldSynthesizeApprovalContinuationFallback(input.resumed)) {
+      return null;
+    }
+    const sourceEnvelope = readDelegatedResultEnvelope(input.resumed.metadata);
+    const usefulReceiptCount = input.approvedReceipts.filter((receipt) => receipt.status === 'succeeded').length
+      + (sourceEnvelope?.evidenceReceipts.filter((receipt) => (
+        receipt.status === 'succeeded'
+        && !(receipt.sourceType === 'model_answer' && isEmptyResponseFallbackContent(receipt.summary))
+      )).length ?? 0);
+    if (usefulReceiptCount <= 0) {
+      return null;
+    }
+
+    const response = await input.chatFn(
+      buildApprovalContinuationSynthesisMessages({
+        originalMessage: input.suspended.originalMessage,
+        resumedMessages: input.resumedMessages,
+        approvedReceipts: input.approvedReceipts,
+        sourceEnvelope,
+      }),
+      {
+        tools: [],
+        maxTokens: 2_000,
+        temperature: 0,
+      },
+    );
+    const finalAnswer = response.content.trim();
+    if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
+      return null;
+    }
+
+    const taskContract = input.suspended.taskContract
+      ?? sourceEnvelope?.taskContract
+      ?? buildDelegatedTaskContract(readPreRoutedIntentGatewayMetadata(input.suspended.originalMessage.metadata)?.decision);
+    const sourceReceipts = removeFallbackAnswerReceipts(sourceEnvelope?.evidenceReceipts ?? []);
+    const approvedReceiptIds = new Set(input.approvedReceipts.map((receipt) => receipt.receiptId));
+    const receipts = [
+      ...sourceReceipts.filter((receipt) => !approvedReceiptIds.has(receipt.receiptId)),
+      ...input.approvedReceipts,
+    ];
+    const toolReceiptStepIds = buildApprovalContinuationReceiptStepIds({
+      taskContract,
+      sourceEnvelope,
+      approvedReceipts: input.approvedReceipts,
+    });
+    const responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
+      usedFallback: false,
+    });
+    const envelope = buildDelegatedResultEnvelope({
+      taskContract,
+      finalAnswerCandidate: finalAnswer,
+      operatorSummary: finalAnswer,
+      events: [
+        ...(sourceEnvelope?.events ?? []),
+        ...input.approvedEvents,
+      ],
+      receipts,
+      toolReceiptStepIds,
+      responseSource,
+      selectedExecutionProfile: input.suspended.executionProfile,
+      stopReason: 'end_turn',
+    });
+    return {
+      content: finalAnswer,
+      metadata: {
+        ...(input.resumed.metadata ?? {}),
+        ...buildDelegatedExecutionMetadata(envelope),
+        approvalContinuationSynthesis: {
+          available: true,
+          reason: 'empty_response_after_approval',
+          approvedReceiptCount: input.approvedReceipts.length,
+        },
+        ...(responseSource ? { responseSource } : {}),
+      },
+    };
   }
 
   private async resumeSuspendedPlannerAfterApproval(
@@ -2650,7 +3022,15 @@ export class BrokeredWorkerSession {
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
     const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision);
     const answerFirstOriginalRequest = stripLeadingContextPrefix(message.content);
-    const skillPrefersAnswerFirst = shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest);
+    const skillAnswerFirstCandidate = shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest);
+    const skillPrefersAnswerFirst = skillAnswerFirstCandidate
+      && (
+        hasActiveWritingPlansSkill(params.activeSkills)
+        || shouldAllowSkillAnswerFirstLane({
+          taskContract,
+          intentDecision,
+        })
+      );
     const delegatedAnswerFirst = shouldUseDelegatedAnswerFirstLane({
       taskContract,
       intentDecision,
@@ -2661,7 +3041,9 @@ export class BrokeredWorkerSession {
       taskContract,
       delegatedAnswerFirst,
       answerFirstOriginalRequest,
-      buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),
+      skillPrefersAnswerFirst
+        ? buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest)
+        : undefined,
     );
     const workerLoopBudget = deriveWorkerLoopBudget(taskContract, selectedExecutionProfile);
     appendSystemGuidance(llmMessages, buildDelegatedTaskPlanGuidance(taskContract));
@@ -2777,6 +3159,7 @@ export class BrokeredWorkerSession {
           ...message,
           ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
         },
+        taskContract,
         ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),
       };
 

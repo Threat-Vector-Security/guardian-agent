@@ -300,14 +300,21 @@ export class BrokerServer {
           const instance = this.runtime.registry.get(token.agentId);
           const primaryName = instance?.definition.providerName ?? this.runtime.defaultProviderName;
           const preferredProviderName = requestedProviderName ?? primaryName;
+          const providerOrder = requestedFallbackOrder.length > 0
+            ? [...new Set([
+                ...(preferredProviderName ? [preferredProviderName] : []),
+                ...requestedFallbackOrder,
+              ])]
+            : (preferredProviderName ? [preferredProviderName] : []);
           const candidateNames = useFallback
             ? [...new Set([
-                ...requestedFallbackOrder,
+                ...(requestedFallbackOrder.length > 0 ? requestedFallbackOrder : []),
                 ...this.runtime.getProviderNames(),
               ])].filter((name) => name && name !== preferredProviderName)
-            : (preferredProviderName ? [preferredProviderName] : []);
+            : providerOrder;
 
           let provider: LLMProvider | null = null;
+          let providerProfileName: string | null = null;
           let chatResponse: ChatResponse | null = null;
           let lastError: unknown;
 
@@ -317,6 +324,7 @@ export class BrokerServer {
             try {
               chatResponse = await candidateProvider.chat(chatMessages, chatOptions);
               provider = candidateProvider;
+              providerProfileName = name;
               break;
             } catch (error) {
               lastError = error;
@@ -337,7 +345,7 @@ export class BrokerServer {
 
           result = {
             ...chatResponse,
-            providerName: provider.name,
+            providerName: providerProfileName ?? provider.name,
             providerLocality: getProviderLocalityFromName(provider.name),
           };
           break;

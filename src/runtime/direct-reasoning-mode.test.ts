@@ -109,6 +109,174 @@ describe('direct reasoning mode', () => {
     })).toBe(false);
   });
 
+  it('includes prior conversation history for follow-up reasoning turns', async () => {
+    const chat = vi.fn(async (messages: ChatMessage[]) => {
+      expect(messages.map((message) => message.content).join('\n')).toContain('run-timeline-context.js');
+      expect(messages.at(-2)?.content).toContain('run-timeline-context.js');
+      expect(messages.at(-1)?.content).toContain('Based on your last answer');
+      return chatResponse({
+        content: 'The most fragile component from the prior answer is chat-run-tracking.js because request correlation can affect continuity.',
+      });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {},
+    }));
+
+    const result = await handleDirectReasoningMode({
+      message: 'Based on your last answer, which part would be most likely to break approval continuity?',
+      history: [
+        {
+          role: 'user',
+          content: 'Find where run timeline rendering is implemented and where it is consumed. Do not edit anything.',
+        },
+        {
+          role: 'assistant',
+          content: 'Run timeline rendering is implemented in web/public/js/components/run-timeline-context.js and consumed by web/public/js/pages/automations.js, web/public/js/pages/code.js, and web/public/js/pages/system.js.',
+        },
+      ],
+      gateway: gateway({
+        summary: 'Follow up about the prior answer.',
+        turnRelation: 'follow_up',
+      }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(result.content).toContain('chat-run-tracking.js');
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('requires read-only tool evidence before accepting planned repo-grounded follow-up answers', async () => {
+    let callNumber = 0;
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      callNumber += 1;
+      const transcript = messages.map((message) => message.content).join('\n');
+      if (callNumber === 1) {
+        return chatResponse({
+          content: 'src/runtime/execution-graph/timeline-adapter.ts is the likely continuity file.',
+        });
+      }
+      if (callNumber === 2) {
+        expect(transcript).toContain('previous response used no read-only tool evidence');
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-search',
+              name: 'fs_search',
+              arguments: JSON.stringify({ query: 'approval continuity resume', mode: 'content' }),
+            },
+          ],
+        });
+      }
+      if ((options?.tools?.length ?? 0) === 0) {
+        return chatResponse({
+          content: 'The grounded file is src/runtime/approval-continuations.ts because it owns scoped approval continuation lookup and resume gating.',
+        });
+      }
+      return chatResponse({
+        content: 'src/runtime/approval-continuations.ts owns scoped approval continuation lookup and resume gating.',
+      });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        query: 'approval continuity resume',
+        matches: [
+          {
+            path: 'src/runtime/approval-continuations.ts',
+            line: 33,
+            snippet: 'export function shouldContinueConversationAfterApprovalDecision',
+          },
+        ],
+      },
+    }));
+
+    const result = await handleDirectReasoningMode({
+      message: 'Based on your last answer, which file is most likely to affect approval continuity, and why? Do not edit anything.',
+      history: [
+        {
+          role: 'assistant',
+          content: 'Direct reasoning artifacts include graph-artifacts.ts, direct-reasoning-node.ts, synthesis-node.ts, and graph-events.ts.',
+        },
+      ],
+      gateway: gateway({
+        summary: 'Follow up about approval continuity.',
+        turnRelation: 'follow_up',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect relevant repo files before answering.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer from repo evidence.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      'fs_search',
+      expect.objectContaining({ query: 'approval continuity resume' }),
+      expect.any(Object),
+    );
+    expect(result.content).toContain('src/runtime/approval-continuations.ts');
+    expect(result.metadata?.directReasoningStats).toMatchObject({
+      toolCallCount: 1,
+      evidenceCount: 1,
+      synthesized: true,
+    });
+  });
+
+  it('does not select brokered direct reasoning when planned evidence requires web search', () => {
+    expect(shouldHandleDirectReasoningMode({
+      gateway: gateway({
+        route: 'general_assistant',
+        operation: 'search',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search external sources.',
+            expectedToolCategories: ['web_search'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'Inspect repo implementation.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Compare findings.',
+            required: true,
+            dependsOn: ['step_1', 'step_2'],
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile(),
+    })).toBe(false);
+  });
+
   it('does not select brokered direct reasoning when structured repo inspection plans require writes', () => {
     expect(shouldHandleDirectReasoningMode({
       gateway: gateway({

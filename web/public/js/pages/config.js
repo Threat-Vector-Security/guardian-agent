@@ -36,6 +36,8 @@ const configUiState = {
     cloud: null,
     external: null,
   },
+  collapsedProviderGroups: {},
+  collapsedConfiguredProviderGroups: {},
   providerEditor: {
     side: null,
     mode: null,
@@ -77,13 +79,13 @@ const CONFIG_HELP = {
       whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud providers such as Ollama Cloud, OpenRouter, and NVIDIA Cloud, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
       whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, alphabetized model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test, save, and delete actions.',
       whatCanDo: 'Add a new provider, edit or delete an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profiles exist for routing and fallback.',
-      howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here, while the Model Auto Selection Policy below decides how Guardian prefers between those profiles at runtime.',
+      howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here, while the Model Tier Selection Policy below decides how Guardian prefers between provider tiers at runtime.',
     },
     'Configured Providers': {
       whatItIs: 'This section is the runtime-facing inventory of provider profiles that Guardian currently knows about and can attempt to use.',
-      whatSeeing: 'You are seeing each configured provider name, provider family, locality, active model, connection status, base URL, any live model metadata returned by the runtime, and an enable checkbox on the saved profile list.',
-      whatCanDo: 'Use it to confirm that saved config became a usable runtime provider, compare configured profiles, temporarily disable a profile without deleting it, and troubleshoot why a provider is offline, mispointed, or missing.',
-      howLinks: 'It validates whether the setup work done in AI Provider Configuration has actually produced a provider the rest of the system can call.',
+      whatSeeing: 'You are seeing local, managed-cloud, and frontier providers separated into matching sections. Managed-cloud families include current-family selection, role-profile selectors, connection state, and live model metadata.',
+      whatCanDo: 'Use it to confirm that saved config became a usable runtime provider, compare configured profiles, route managed-cloud roles to family-specific profiles, temporarily disable a profile without deleting it, and troubleshoot why a provider is offline, mispointed, or missing.',
+      howLinks: 'It validates whether setup work done in AI Provider Configuration has produced provider profiles the rest of the system can call, and it owns the managed-cloud family/profile routing used by Auto mode.',
     },
     'Web Search & Model Fallback': {
       whatItIs: 'This section controls how Guardian reaches out beyond the base model when it needs web results, external search providers, or a secondary model path after a provider failure.',
@@ -1216,27 +1218,32 @@ function createProviderPanel(config, providers, panel) {
       }
     }
 
-    function renderProfiles() {
-      const buttons = names.map(name => {
+    function getProfileRoleBadges(name, info) {
+      const roleBadges = [];
+      const preferredBucket = getPreferredProviderBucketForEntry(info);
+      if (preferredBucket === 'local' && preferredLocal === name) roleBadges.push('local');
+      if (preferredBucket === 'frontier' && preferredFrontier === name) roleBadges.push('frontier');
+      if (managedCloudRoleRoutingEnabled && info.tier === 'managed_cloud') {
+        const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, info.provider);
+        if (familyBindings.general === name) roleBadges.push('general');
+        if (familyBindings.direct === name) roleBadges.push('direct');
+        if (familyBindings.toolLoop === name) roleBadges.push('tool loop');
+        if (familyBindings.coding === name) roleBadges.push('coding');
+      }
+      return roleBadges;
+    }
+
+    function renderProviderProfileButton(name) {
         const info = providerMap[name];
         const isActive = selectedProfile === name;
         const isEnabled = isProviderConfigEnabled(info);
         const tone = !isEnabled ? 'badge-queued' : info.connected === false ? 'badge-errored' : 'badge-idle';
         const tierLabel = getProviderTierLabel(info.tier);
-        const roleBadges = [];
-        const preferredBucket = getPreferredProviderBucketForEntry(info);
-        if (preferredBucket === 'local' && preferredLocal === name) roleBadges.push('local');
-        if (preferredBucket === 'frontier' && preferredFrontier === name) roleBadges.push('frontier');
-        if (managedCloudRoleRoutingEnabled && info.tier === 'managed_cloud') {
-          const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, info.provider);
-          if (familyBindings.general === name) roleBadges.push('general');
-          if (familyBindings.direct === name) roleBadges.push('direct');
-          if (familyBindings.toolLoop === name) roleBadges.push('tool loop');
-          if (familyBindings.coding === name) roleBadges.push('coding');
-        }
+        const roleBadges = getProfileRoleBadges(name, info);
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
         return `
           <div
+            class="cfg-provider-profile-row${isActive ? ' is-active' : ''}${isEnabled ? '' : ' is-disabled'}"
             style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius:0; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
             data-provider-profile="${escAttr(name)}"
             title="${escAttr(`${name} (${info.provider}, ${tierLabel}${badgeLabel}${isEnabled ? '' : ', disabled'})`)}"
@@ -1254,8 +1261,90 @@ function createProviderPanel(config, providers, panel) {
             <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${!isEnabled ? 'disabled' : info.connected === false ? 'offline' : 'online'}</span>
           </div>
         `;
-      }).join('');
+    }
+
+    function renderManagedCloudProfileGroups() {
+      const groups = new Map();
+      names.forEach((name) => {
+        const info = providerMap[name];
+        const providerType = normalizeProviderTypeName(info.provider);
+        if (!groups.has(providerType)) groups.set(providerType, []);
+        groups.get(providerType).push(name);
+      });
+      if (groups.size === 0) return '';
+      return [...groups.entries()]
+        .sort(([left, leftNames], [right, rightNames]) => {
+          const leftIsCurrent = left === preferredManagedCloudType || (selectedProfile ? leftNames.includes(selectedProfile) : false);
+          const rightIsCurrent = right === preferredManagedCloudType || (selectedProfile ? rightNames.includes(selectedProfile) : false);
+          if (leftIsCurrent !== rightIsCurrent) return leftIsCurrent ? -1 : 1;
+          return getProviderDisplayName(left).localeCompare(getProviderDisplayName(right), undefined, { sensitivity: 'base' });
+        })
+        .map(([providerType, groupNames]) => {
+          const providerDisplay = getProviderDisplayName(providerType);
+          const hasSelectedProfile = selectedProfile ? groupNames.includes(selectedProfile) : false;
+          const stateKey = `managedCloud:${providerType}`;
+          const userCollapsed = configUiState.collapsedProviderGroups[stateKey];
+          const shouldDefaultCollapsed = providerType !== preferredManagedCloudType && !hasSelectedProfile;
+          const isCollapsed = userCollapsed === undefined ? shouldDefaultCollapsed : userCollapsed;
+          const enabledCount = groupNames.filter((name) => isProviderConfigEnabled(providerMap[name])).length;
+          const onlineCount = groupNames.filter((name) => isProviderConfigEnabled(providerMap[name]) && providerMap[name].connected !== false).length;
+          const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, providerType);
+          const boundRoles = [
+            familyBindings.general ? 'general' : '',
+            familyBindings.direct ? 'direct' : '',
+            familyBindings.toolLoop ? 'tools' : '',
+            familyBindings.coding ? 'coding' : '',
+          ].filter(Boolean);
+          const summaryText = boundRoles.length > 0 ? boundRoles.join(' / ') : 'unbound';
+          const activeFamilyBadge = providerType === preferredManagedCloudType
+            ? '<span class="cfg-provider-family-badge">current</span>'
+            : '';
+          return `
+            <div class="cfg-provider-family${isCollapsed ? ' is-collapsed' : ''}${hasSelectedProfile ? ' has-active-profile' : ''}">
+              <button
+                class="cfg-provider-family-summary"
+                type="button"
+                data-provider-group-toggle="${escAttr(stateKey)}"
+                aria-expanded="${isCollapsed ? 'false' : 'true'}"
+                title="${escAttr(`${providerDisplay}: ${groupNames.length} profile${groupNames.length === 1 ? '' : 's'}, ${onlineCount} online`)}"
+              >
+                <span class="cfg-provider-family-main">
+                  <span class="cfg-provider-family-caret" aria-hidden="true">›</span>
+                  ${renderProviderLogo(providerType, 'sm')}
+                  <span class="cfg-provider-family-text">
+                    <strong>${esc(providerDisplay)}</strong>
+                    <span>${esc(groupNames.length)} profile${groupNames.length === 1 ? '' : 's'} • ${esc(onlineCount)}/${esc(enabledCount)} online</span>
+                  </span>
+                </span>
+                <span class="cfg-provider-family-meta">
+                  ${activeFamilyBadge}
+                  <span class="cfg-provider-family-roles">${esc(summaryText)}</span>
+                </span>
+              </button>
+              <div class="cfg-provider-family-items">
+                ${groupNames.map(renderProviderProfileButton).join('')}
+              </div>
+            </div>
+          `;
+        }).join('');
+    }
+
+    function renderProfiles() {
+      const buttons = isCloud
+        ? renderManagedCloudProfileGroups()
+        : names.map(renderProviderProfileButton).join('');
       profilesEl.innerHTML = buttons || '<span class="text-muted" style="font-size:0.78rem;">No configured providers yet.</span>';
+      profilesEl.querySelectorAll('[data-provider-group-toggle]').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const groupKey = btn.getAttribute('data-provider-group-toggle');
+          if (!groupKey) return;
+          const group = btn.closest('.cfg-provider-family');
+          const nextCollapsed = !group?.classList.contains('is-collapsed');
+          configUiState.collapsedProviderGroups[groupKey] = nextCollapsed;
+          renderProfiles();
+        });
+      });
       profilesEl.querySelectorAll('[data-provider-enabled-toggle]').forEach((checkbox) => {
         checkbox.addEventListener('click', (event) => {
           event.stopPropagation();
@@ -1299,6 +1388,7 @@ function createProviderPanel(config, providers, panel) {
               const candidateProfilesEl = section.querySelector(`#${getSidePrefix(candidateSide)}-profiles`);
               if (!candidateProfilesEl) return;
               candidateProfilesEl.querySelectorAll('[data-provider-profile]').forEach((el) => {
+                el.classList.remove('is-active');
                 el.style.background = 'transparent';
                 el.style.border = '1px solid transparent';
                 const spans = el.querySelectorAll('span');
@@ -1338,6 +1428,7 @@ function createProviderPanel(config, providers, panel) {
           const candidateProfilesEl = section.querySelector(`#${getSidePrefix(candidateSide)}-profiles`);
           if (!candidateProfilesEl) return;
           candidateProfilesEl.querySelectorAll('[data-provider-profile]').forEach((el) => {
+            el.classList.remove('is-active');
             el.style.background = 'transparent';
             el.style.border = '1px solid transparent';
             const spans = el.querySelectorAll('span');
@@ -2050,6 +2141,8 @@ function createProviderStatusTable(config, providers, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
+  const managedCloudRoleRouting = config?.assistant?.tools?.modelSelection?.managedCloudRouting || {};
+  const managedCloudRoleRoutingEnabled = managedCloudRoleRouting.enabled !== false;
   const providerEntries = Object.entries(config.llm || {});
   const providerMap = providerEntries.reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
@@ -2066,7 +2159,7 @@ function createProviderStatusTable(config, providers, panel) {
   const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
   const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(preferredProviders, providerMap);
   const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
-  const rows = sortConfiguredProviders(providerEntries.map(([name, cfg]) => {
+  const configuredRows = sortConfiguredProviders(providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const enabled = isProviderConfigEnabled(cfg);
     const connected = enabled ? (live ? (live.connected !== false) : false) : false;
@@ -2091,8 +2184,8 @@ function createProviderStatusTable(config, providers, panel) {
       ? '<span class="config-provider-current" title="' + escAttr('Enable this provider before using it in model routing.') + '">Disabled for routing</span>'
       : preferredBucket === 'managedCloud'
         ? normalizeProviderTypeName(cfg.provider) === preferredManagedCloudType
-          ? '<span class="config-provider-current" title="' + escAttr('The active managed-cloud provider family is selected in Model Auto Selection Policy.') + '">Current ' + esc(getProviderDisplayName(cfg.provider)) + ' family</span>'
-          : '<span class="config-provider-current" title="' + escAttr('Choose the active managed-cloud provider family in Model Auto Selection Policy.') + '">Set in Model Policy</span>'
+          ? '<span class="config-provider-current" title="' + escAttr('The active managed-cloud provider family is selected in Configured Providers.') + '">Current ' + esc(getProviderDisplayName(cfg.provider)) + ' family</span>'
+          : '<span class="config-provider-current" title="' + escAttr('Choose the active managed-cloud provider family in Configured Providers.') + '">Set in Configured Providers</span>'
         : isPreferredBucket
           ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
           : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
@@ -2101,17 +2194,301 @@ function createProviderStatusTable(config, providers, panel) {
       provider: cfg.provider,
       locality,
       tier,
+      enabled,
+      connected,
+      model: cfg.model,
+      statusBadge,
+      actionMarkup: preferredActionBtn,
+      modelList,
+      defaultBadges,
       markup: '<tr><td><div class="config-provider-name-cell">' + renderProviderLogo(cfg.provider, 'sm') + '<div class="config-provider-name-text"><strong>' + esc(name) + '</strong>' + defaultBadges + '</div></div></td><td><span class="config-provider-type-label">' + esc(getProviderDisplayName(cfg.provider)) + '</span><span class="config-provider-type-id">' + esc(cfg.provider) + '</span></td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>',
     };
-  })).map((entry) => entry.markup).join('');
+  }));
+  const localRows = configuredRows.filter((entry) => entry.locality === 'local' || entry.tier === 'local');
+  const managedCloudRows = configuredRows.filter((entry) => entry.tier === 'managed_cloud');
+  const frontierRows = configuredRows.filter((entry) => entry.locality !== 'local' && entry.tier !== 'local' && entry.tier !== 'managed_cloud');
+  const managedCloudProviderTypes = [...new Set(managedCloudRows.map((entry) => normalizeProviderTypeName(entry.provider)))];
+
+  function renderConfiguredProviderTable(rows, options = {}) {
+    const columns = options.managedCloudFamily
+      ? '<th>Name</th><th>Bound Role</th><th>Model</th><th>Status</th><th>Available Models</th>'
+      : '<th>Name</th><th>Type</th><th>Model</th><th>Status</th><th>Available Models</th><th>Actions</th>';
+    const emptyColspan = options.managedCloudFamily ? 5 : 6;
+    const rowMarkup = rows.map((entry) => {
+      if (options.managedCloudFamily) {
+        const boundRoles = getConfiguredProviderRolesForEntry(entry);
+        const roleMarkup = boundRoles.length > 0
+          ? boundRoles.map((role) => `<span class="config-provider-role-chip">${esc(role)}</span>`).join('')
+          : '<span class="table-muted">Auto fallback</span>';
+        return '<tr><td><div class="config-provider-name-cell">' + renderProviderLogo(entry.provider, 'sm') + '<div class="config-provider-name-text"><strong>' + esc(entry.name) + '</strong>' + entry.defaultBadges + '</div></div></td><td><div class="config-provider-role-chips">' + roleMarkup + '</div></td><td>' + esc(entry.model) + '</td><td>' + entry.statusBadge + '</td><td>' + esc(entry.modelList) + '</td></tr>';
+      }
+      return '<tr><td><div class="config-provider-name-cell">' + renderProviderLogo(entry.provider, 'sm') + '<div class="config-provider-name-text"><strong>' + esc(entry.name) + '</strong>' + entry.defaultBadges + '</div></div></td><td><span class="config-provider-type-label">' + esc(getProviderDisplayName(entry.provider)) + '</span><span class="config-provider-type-id">' + esc(entry.provider) + '</span></td><td>' + esc(entry.model) + '</td><td>' + entry.statusBadge + '</td><td>' + esc(entry.modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + entry.actionMarkup + '</div></td></tr>';
+    }).join('');
+    return `
+      <div class="table-wrap config-provider-table-wrap">
+        <table class="data-table config-provider-table">
+          <thead><tr>${columns}</tr></thead>
+          <tbody>${rowMarkup || `<tr><td colspan="${emptyColspan}">No providers configured</td></tr>`}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function getConfiguredProviderFamilyRoles(providerType) {
+    if (!managedCloudRoleRoutingEnabled) return [];
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, providerType);
+    return [
+      familyBindings.general ? 'general' : '',
+      familyBindings.direct ? 'direct' : '',
+      familyBindings.toolLoop ? 'tools' : '',
+      familyBindings.coding ? 'coding' : '',
+    ].filter(Boolean);
+  }
+
+  function getConfiguredProviderRolesForEntry(entry) {
+    if (!managedCloudRoleRoutingEnabled || entry.tier !== 'managed_cloud') return [];
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, entry.provider);
+    return [
+      familyBindings.general === entry.name ? 'general' : '',
+      familyBindings.direct === entry.name ? 'direct' : '',
+      familyBindings.toolLoop === entry.name ? 'tools' : '',
+      familyBindings.coding === entry.name ? 'coding' : '',
+    ].filter(Boolean);
+  }
+
+  function renderManagedCloudRoleOptions(providerType, role, selectedValue) {
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, providerType);
+    const fallbackLabel = describeManagedCloudAutoFallback(role, providerType, familyBindings, providerMap);
+    const familyProfiles = getManagedCloudProfilesForProviderType(providerMap, providerType);
+    return [
+      `<option value="">${esc(fallbackLabel)}</option>`,
+      ...familyProfiles.map((name) => `<option value="${escAttr(name)}"${selectedValue === name ? ' selected' : ''}>${esc(name)}</option>`),
+    ].join('');
+  }
+
+  function renderManagedCloudRoutingControls(providerType) {
+    const normalizedType = normalizeProviderTypeName(providerType);
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, normalizedType);
+    return `
+      <div class="config-provider-family-routing">
+        <div class="config-provider-family-routing-title">Profile Routing</div>
+        <div class="cfg-form-grid">
+          <div class="cfg-field">
+            <label>General</label>
+            <select id="cfg-configured-managed-cloud-role-${escAttr(normalizedType)}-general">${renderManagedCloudRoleOptions(normalizedType, 'general', familyBindings.general || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Direct Answers</label>
+            <select id="cfg-configured-managed-cloud-role-${escAttr(normalizedType)}-direct">${renderManagedCloudRoleOptions(normalizedType, 'direct', familyBindings.direct || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Tool Loops</label>
+            <select id="cfg-configured-managed-cloud-role-${escAttr(normalizedType)}-tool-loop">${renderManagedCloudRoleOptions(normalizedType, 'toolLoop', familyBindings.toolLoop || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Coding</label>
+            <select id="cfg-configured-managed-cloud-role-${escAttr(normalizedType)}-coding">${renderManagedCloudRoleOptions(normalizedType, 'coding', familyBindings.coding || '')}</select>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderManagedCloudConfiguredGroups() {
+    const groups = new Map();
+    managedCloudRows.forEach((entry) => {
+      const providerType = normalizeProviderTypeName(entry.provider);
+      if (!groups.has(providerType)) groups.set(providerType, []);
+      groups.get(providerType).push(entry);
+    });
+    if (groups.size === 0) return '';
+    const groupMarkup = [...groups.entries()]
+      .sort(([left], [right]) => {
+        const leftIsCurrent = left === preferredManagedCloudType;
+        const rightIsCurrent = right === preferredManagedCloudType;
+        if (leftIsCurrent !== rightIsCurrent) return leftIsCurrent ? -1 : 1;
+        return getProviderDisplayName(left).localeCompare(getProviderDisplayName(right), undefined, { sensitivity: 'base' });
+      })
+      .map(([providerType, entries]) => {
+        const providerDisplay = getProviderDisplayName(providerType);
+        const stateKey = `configuredManagedCloud:${providerType}`;
+        const userCollapsed = configUiState.collapsedConfiguredProviderGroups[stateKey];
+        const isCurrentFamily = providerType === preferredManagedCloudType;
+        const isCollapsed = userCollapsed === undefined ? !isCurrentFamily : userCollapsed;
+        const enabledCount = entries.filter((entry) => entry.enabled).length;
+        const onlineCount = entries.filter((entry) => entry.enabled && entry.connected).length;
+        const roleSummary = getConfiguredProviderFamilyRoles(providerType).join(' / ') || 'unbound';
+        const currentBadge = isCurrentFamily
+          ? '<span class="cfg-provider-family-badge">current</span>'
+          : `<button class="btn btn-secondary btn-sm set-managed-cloud-family-btn" type="button" data-provider-type="${escAttr(providerType)}">Use Family</button>`;
+        return `
+          <div class="config-provider-family${isCollapsed ? ' is-collapsed' : ''}">
+            <div class="config-provider-family-summary">
+              <button
+                class="config-provider-family-toggle"
+                type="button"
+                data-config-provider-group-toggle="${escAttr(stateKey)}"
+                aria-expanded="${isCollapsed ? 'false' : 'true'}"
+                title="${escAttr(`${providerDisplay}: ${entries.length} profile${entries.length === 1 ? '' : 's'}, ${onlineCount} online`)}"
+              >
+                <span class="cfg-provider-family-caret" aria-hidden="true">›</span>
+                ${renderProviderLogo(providerType, 'sm')}
+                <span class="config-provider-family-text">
+                  <strong>${esc(providerDisplay)}</strong>
+                  <span>${esc(entries.length)} profile${entries.length === 1 ? '' : 's'} • ${esc(onlineCount)}/${esc(enabledCount)} online</span>
+                </span>
+              </button>
+              <span class="config-provider-family-meta">
+                ${currentBadge}
+                <span class="config-provider-family-roles">${esc(roleSummary)}</span>
+              </span>
+            </div>
+            <div class="config-provider-family-items">
+              ${renderManagedCloudRoutingControls(providerType)}
+              ${renderConfiguredProviderTable(entries, { managedCloudFamily: true })}
+            </div>
+          </div>
+        `;
+      }).join('');
+    return `
+      <div class="config-provider-section">
+        <div class="config-provider-section-heading">Managed Cloud</div>
+        <label class="config-provider-routing-toggle">
+          <input id="cfg-configured-managed-cloud-role-routing-enabled" type="checkbox"${managedCloudRoleRoutingEnabled ? ' checked' : ''}>
+          <span>Route managed-cloud roles to family-specific profiles</span>
+        </label>
+        <div class="config-provider-groups">${groupMarkup}</div>
+        <div class="cfg-actions" style="margin-top:0;">
+          <button class="btn btn-primary" id="cfg-configured-managed-cloud-routing-save" type="button">Save Managed Cloud Routing</button>
+          <span id="cfg-configured-managed-cloud-routing-status" class="cfg-save-status"></span>
+        </div>
+      </div>
+    `;
+  }
 
   section.innerHTML = `
     <div class="table-header"><h3>Configured Providers</h3></div>
-    <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Tier</th><th>Model</th><th>Locality</th><th>Status</th><th>Available Models</th><th>Actions</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="8">No providers configured</td></tr>'}</tbody>
-    </table>
+    <div class="config-provider-body">
+      <div class="config-provider-section">
+        <div class="config-provider-section-heading">Local</div>
+        ${renderConfiguredProviderTable(localRows)}
+      </div>
+      ${renderManagedCloudConfiguredGroups()}
+      <div class="config-provider-section">
+        <div class="config-provider-section-heading">Frontier</div>
+        ${renderConfiguredProviderTable(frontierRows)}
+      </div>
+    </div>
   `;
+
+  section.querySelectorAll('[data-config-provider-group-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const groupKey = btn.getAttribute('data-config-provider-group-toggle');
+      if (!groupKey) return;
+      const group = btn.closest('.config-provider-family');
+      const nextCollapsed = !group?.classList.contains('is-collapsed');
+      configUiState.collapsedConfiguredProviderGroups[groupKey] = nextCollapsed;
+      group?.classList.toggle('is-collapsed', nextCollapsed);
+      btn.setAttribute('aria-expanded', nextCollapsed ? 'false' : 'true');
+    });
+  });
+
+  section.querySelectorAll('.set-managed-cloud-family-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const providerType = btn.dataset.providerType;
+      if (!providerType) return;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const result = await api.updateConfig({
+          assistant: {
+            tools: {
+              preferredProviders: {
+                ...(sharedConfig?.assistant?.tools?.preferredProviders || {}),
+                managedCloud: providerType,
+              },
+            },
+          },
+        });
+        if (result.success) {
+          sharedConfig.assistant = sharedConfig.assistant || {};
+          sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+          sharedConfig.assistant.tools.preferredProviders = {
+            ...(sharedConfig.assistant.tools.preferredProviders || {}),
+            managedCloud: providerType,
+          };
+          if (panel) renderProvidersTab(panel);
+        } else {
+          alert('Failed to set managed-cloud family: ' + (result.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error: ' + (err instanceof Error ? err.message : String(err)));
+      }
+      btn.disabled = false;
+    });
+  });
+
+  section.querySelector('#cfg-configured-managed-cloud-routing-save')?.addEventListener('click', async () => {
+    const saveBtn = section.querySelector('#cfg-configured-managed-cloud-routing-save');
+    const statusEl = section.querySelector('#cfg-configured-managed-cloud-routing-status');
+    const nextManagedCloudRouting = {
+      enabled: section.querySelector('#cfg-configured-managed-cloud-role-routing-enabled')?.checked === true,
+      providerRoleBindings: managedCloudProviderTypes.reduce((acc, providerType) => {
+        const normalizedType = normalizeProviderTypeName(providerType);
+        const bindings = {
+          general: section.querySelector(`#cfg-configured-managed-cloud-role-${normalizedType}-general`)?.value || undefined,
+          direct: section.querySelector(`#cfg-configured-managed-cloud-role-${normalizedType}-direct`)?.value || undefined,
+          toolLoop: section.querySelector(`#cfg-configured-managed-cloud-role-${normalizedType}-tool-loop`)?.value || undefined,
+          coding: section.querySelector(`#cfg-configured-managed-cloud-role-${normalizedType}-coding`)?.value || undefined,
+        };
+        if (bindings.general || bindings.direct || bindings.toolLoop || bindings.coding) {
+          acc[normalizedType] = bindings;
+        }
+        return acc;
+      }, {}),
+      roleBindings: {},
+    };
+    const nextModelSelection = {
+      ...(sharedConfig?.assistant?.tools?.modelSelection || {}),
+      managedCloudRouting: nextManagedCloudRouting,
+    };
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
+    if (statusEl) {
+      statusEl.textContent = 'Saving...';
+      statusEl.style.color = 'var(--text-muted)';
+    }
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            modelSelection: nextModelSelection,
+          },
+        },
+      });
+      if (statusEl) {
+        statusEl.textContent = result.message;
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      }
+      if (result.success) {
+        sharedConfig.assistant = sharedConfig.assistant || {};
+        sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+        sharedConfig.assistant.tools.modelSelection = nextModelSelection;
+        if (panel) renderProvidersTab(panel);
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+    }
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Managed Cloud Routing';
+    }
+  });
 
   section.querySelectorAll('.set-preferred-provider-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -2161,74 +2538,10 @@ function createProviderSelectionPolicyPanel(config, panel) {
   const preferManagedCloud = selection.preferManagedCloudForLowPressureExternal !== false;
   const preferFrontierForRepoGrounded = selection.preferFrontierForRepoGrounded !== false;
   const preferFrontierForSecurity = selection.preferFrontierForSecurity !== false;
-  const providerMap = Object.entries(config?.llm || {}).reduce((acc, [name, cfg]) => {
-    acc[name] = {
-      provider: cfg.provider,
-      enabled: cfg.enabled,
-      locality: getProviderLocalityForType(cfg.provider),
-      tier: getProviderTypeMeta(cfg.provider)?.tier || 'frontier',
-    };
-    return acc;
-  }, {});
-  const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
-  const managedCloudProviderTypes = getManagedCloudProviderTypes(providerMap);
-  const managedCloudDefaultProviderType = resolveExplicitManagedCloudProviderType(preferredProviders, providerMap) || '';
-  const managedCloudRouting = selection.managedCloudRouting || {};
-  const managedCloudRoutingEnabled = managedCloudRouting.enabled !== false;
-  const renderManagedCloudFamilyOptions = () => {
-    const fallbackType = managedCloudProviderTypes[0] || '';
-    const fallbackLabel = fallbackType
-      ? `Automatic (${getProviderDisplayName(fallbackType)})`
-      : 'Automatic';
-    const options = [
-      `<option value="">${esc(fallbackLabel)}</option>`,
-      ...managedCloudProviderTypes.map((providerType) => `<option value="${escAttr(providerType)}"${managedCloudDefaultProviderType === providerType ? ' selected' : ''}>${esc(getProviderDisplayName(providerType))}</option>`),
-    ];
-    return options.join('');
-  };
-  const renderManagedCloudRoleOptions = (providerType, role, selectedValue) => {
-    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRouting, providerType);
-    const fallbackLabel = describeManagedCloudAutoFallback(role, providerType, familyBindings, providerMap);
-    const familyProfiles = getManagedCloudProfilesForProviderType(providerMap, providerType);
-    const options = [
-      `<option value="">${esc(fallbackLabel)}</option>`,
-      ...familyProfiles.map((name) => `<option value="${escAttr(name)}"${selectedValue === name ? ' selected' : ''}>${esc(name)}</option>`),
-    ];
-    return options.join('');
-  };
-  const renderManagedCloudFamilySections = () => managedCloudProviderTypes.map((providerType) => {
-    const normalizedType = normalizeProviderTypeName(providerType);
-    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRouting, normalizedType);
-    const familyLabel = getProviderDisplayName(normalizedType);
-    return `
-      <div class="cfg-divider"></div>
-      <div style="margin-top:0.85rem;">
-        <div style="font-weight:600; margin-bottom:0.65rem;">${esc(familyLabel)} Profiles</div>
-        <div class="cfg-form-grid">
-          <div class="cfg-field">
-            <label>General</label>
-            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-general">${renderManagedCloudRoleOptions(normalizedType, 'general', familyBindings.general || '')}</select>
-          </div>
-          <div class="cfg-field">
-            <label>Direct Answers</label>
-            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-direct">${renderManagedCloudRoleOptions(normalizedType, 'direct', familyBindings.direct || '')}</select>
-          </div>
-          <div class="cfg-field">
-            <label>Tool Loops / Provider CRUD</label>
-            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-tool-loop">${renderManagedCloudRoleOptions(normalizedType, 'toolLoop', familyBindings.toolLoop || '')}</select>
-          </div>
-          <div class="cfg-field">
-            <label>Managed-Cloud Coding</label>
-            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-coding">${renderManagedCloudRoleOptions(normalizedType, 'coding', familyBindings.coding || '')}</select>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
 
   section.innerHTML = `
     <div class="table-header">
-      <h3>Model Auto Selection Policy</h3>
+      <h3>Model Tier Selection Policy</h3>
     </div>
     <div class="cfg-center-body cfg-selection-policy-body">
       <div class="cfg-form-grid">
@@ -2267,36 +2580,11 @@ function createProviderSelectionPolicyPanel(config, panel) {
           </span>
         </label>
       </div>
-      <div class="cfg-divider"></div>
-      ${managedCloudProviderTypes.length > 0 ? `
-      <div class="cfg-form-grid" style="margin-top:0.85rem;">
-        <div class="cfg-field">
-          <label>Managed-Cloud Provider Family</label>
-          <select id="cfg-managed-cloud-provider-type">${renderManagedCloudFamilyOptions()}</select>
-        </div>
+      <div class="config-provider-policy-note">
+        Managed-cloud family selection and role-specific profile routing live in Configured Providers under Managed Cloud.
       </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Choose which managed-cloud provider family Auto mode should use when work is routed into the managed-cloud tier. Profile routing below stays scoped inside each family.
-      </div>
-      ` : ''}
-      <div class="cfg-field" style="margin-top:0.85rem;">
-        <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
-          <input id="cfg-managed-cloud-role-routing-enabled" type="checkbox"${managedCloudRoutingEnabled ? ' checked' : ''}>
-          <span>
-            <strong>Enable managed-cloud profile routing</strong><br>
-            <span style="font-size:0.72rem;color:var(--text-muted);">Route different managed-cloud Guardian workloads to different named profiles inside each managed-cloud provider family instead of treating the tier as one undifferentiated slot.</span>
-          </span>
-        </label>
-      </div>
-      ${managedCloudProviderTypes.length > 0 ? `
-      ${renderManagedCloudFamilySections()}
-      ` : `
-      <div style="margin-top:0.85rem;font-size:0.72rem;color:var(--text-muted);">
-        Add one or more managed-cloud provider profiles in AI Provider Configuration before choosing the managed-cloud provider family or binding family-specific profiles here.
-      </div>
-      `}
       <div class="cfg-actions" style="margin-top: 1rem;">
-        <button class="btn btn-primary" id="cfg-model-selection-save" type="button">Save Model Policy</button>
+        <button class="btn btn-primary" id="cfg-model-selection-save" type="button">Save Tier Policy</button>
         <span id="cfg-model-selection-status" class="cfg-save-status"></span>
       </div>
     </div>
@@ -2305,31 +2593,14 @@ function createProviderSelectionPolicyPanel(config, panel) {
   section.querySelector('#cfg-model-selection-save')?.addEventListener('click', async () => {
     const statusEl = section.querySelector('#cfg-model-selection-status');
     const saveBtn = section.querySelector('#cfg-model-selection-save');
-    const nextManagedCloudProviderType = section.querySelector('#cfg-managed-cloud-provider-type')?.value || '';
     const nextPolicy = {
+      ...selection,
       autoPolicy: section.querySelector('#cfg-model-selection-policy')?.value === 'quality_first'
         ? 'quality_first'
         : 'balanced',
       preferManagedCloudForLowPressureExternal: section.querySelector('#cfg-model-selection-managed-cloud')?.checked === true,
       preferFrontierForRepoGrounded: section.querySelector('#cfg-model-selection-repo')?.checked === true,
       preferFrontierForSecurity: section.querySelector('#cfg-model-selection-security')?.checked === true,
-      managedCloudRouting: {
-        enabled: section.querySelector('#cfg-managed-cloud-role-routing-enabled')?.checked === true,
-        providerRoleBindings: managedCloudProviderTypes.reduce((acc, providerType) => {
-          const normalizedType = normalizeProviderTypeName(providerType);
-          const bindings = {
-            general: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-general`)?.value || undefined,
-            direct: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-direct`)?.value || undefined,
-            toolLoop: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-tool-loop`)?.value || undefined,
-            coding: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-coding`)?.value || undefined,
-          };
-          if (bindings.general || bindings.direct || bindings.toolLoop || bindings.coding) {
-            acc[normalizedType] = bindings;
-          }
-          return acc;
-        }, {}),
-        roleBindings: {},
-      },
     };
 
     if (saveBtn) {
@@ -2345,10 +2616,6 @@ function createProviderSelectionPolicyPanel(config, panel) {
       const result = await api.updateConfig({
         assistant: {
           tools: {
-            preferredProviders: {
-              ...(sharedConfig?.assistant?.tools?.preferredProviders || {}),
-              managedCloud: nextManagedCloudProviderType,
-            },
             modelSelection: nextPolicy,
           },
         },
@@ -2360,10 +2627,6 @@ function createProviderSelectionPolicyPanel(config, panel) {
       if (result.success) {
         sharedConfig.assistant = sharedConfig.assistant || {};
         sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
-        sharedConfig.assistant.tools.preferredProviders = {
-          ...(sharedConfig.assistant.tools.preferredProviders || {}),
-          managedCloud: nextManagedCloudProviderType,
-        };
         sharedConfig.assistant.tools.modelSelection = nextPolicy;
         if (panel) renderProvidersTab(panel);
       }
@@ -2376,7 +2639,7 @@ function createProviderSelectionPolicyPanel(config, panel) {
 
     if (saveBtn) {
       saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Model Policy';
+      saveBtn.textContent = 'Save Tier Policy';
     }
   });
 
@@ -6280,7 +6543,7 @@ function createGenericHelpFactory(area) {
       whatItIs: 'This section is the editor for a managed-cloud provider profile that sits between the local and frontier lanes, such as Ollama Cloud, OpenRouter, or NVIDIA Cloud.',
       whatSeeing: 'You are seeing the managed-cloud provider name, provider family, model, credential mode, base URL, any Ollama-only advanced runtime options, and test, save, and delete actions.',
       whatCanDo: 'Configure one or more named managed-cloud profiles, let Guardian suggest a starting model from the profile name, validate connectivity, and prepare those profiles for managed-cloud routed defaults or role-based routing.',
-      howLinks: 'These profiles back Guardian’s managed-cloud tier and can be bound to general, direct, tool-loop, or coding work in the Model Auto Selection Policy.',
+      howLinks: 'These profiles back Guardian’s managed-cloud tier and can be bound to general, direct, tool-loop, or coding work in Configured Providers.',
       whenToUse: 'Current recommended starting mappings depend on provider family: Ollama Cloud general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`; OpenRouter general/coding `qwen/qwen3.6-plus`, direct/tool loop `moonshotai/kimi-k2.6`; NVIDIA Cloud general `qwen/qwen3-5-122b-a10b`, direct `moonshotai/kimi-k2-instruct`, tool loop `moonshotai/kimi-k2-thinking`, coding `qwen/qwen3-coder-480b-a35b-instruct`.',
       whereNext: 'Use the direct API model IDs returned by live model discovery for the managed-cloud provider family you selected.',
     },
@@ -6290,12 +6553,12 @@ function createGenericHelpFactory(area) {
       whatCanDo: 'Configure a hosted provider, validate connectivity, rotate credentials, and save or delete that provider for chat, fallback, or routing use.',
       howLinks: 'External providers supply the hosted model paths used across assistant responses, automations, and failover behavior.',
     },
-    'Model Auto Selection Policy': {
+    'Model Tier Selection Policy': {
       whatItIs: 'This section controls how Guardian chooses between managed-cloud and frontier provider tiers after routing has already decided the work should leave the local lane.',
-      whatSeeing: 'You are seeing the top-level auto-policy posture, bias toggles for managed-cloud versus frontier use, and the managed-cloud role-routing bindings for named managed-cloud profiles.',
-      whatCanDo: 'Keep Auto balanced, bias more aggressively toward frontier quality, and bind different managed-cloud profiles to general, direct-answer, tool-loop, or coding work.',
-      howLinks: 'These controls shape which configured providers Guardian prefers at runtime. Guardian derives its internal primary provider from these routed defaults, with managed cloud preferred when it is configured. When a specific managed-cloud role is unset, Guardian uses the explicit `general` profile first when one is set, otherwise it can infer a profile from the provider name before falling back to the managed-cloud routed default.',
-      whenToUse: 'A good current starting point is one general managed-cloud profile, then optional direct, tool-loop, and coding profiles. For OpenRouter, `qwen/qwen3.6-plus` and `moonshotai/kimi-k2.6` are good starting points. For NVIDIA Cloud, start with `qwen/qwen3-coder-480b-a35b-instruct` for coding and Kimi K2 profiles for direct or tool-loop work.',
+      whatSeeing: 'You are seeing the top-level auto-policy posture and bias toggles for managed-cloud versus frontier use.',
+      whatCanDo: 'Keep Auto balanced or bias more aggressively toward frontier quality for heavier grounded work and security analysis.',
+      howLinks: 'These controls shape which tier Guardian prefers at runtime. Managed-cloud family selection and role-profile routing are configured in Configured Providers under Managed Cloud.',
+      whenToUse: 'Use this when you want to change Auto mode behavior across tiers. Use Configured Providers when you want to change the active managed-cloud family or bind general, direct, tools, and coding profiles.',
     },
     'Cloud Configuration': {
       whatItIs: 'This section is the advanced raw-config editor for `assistant.tools.cloud` rather than the guided Cloud page workflow.',

@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import {
   buildDelegatedExecutionMetadata,
   buildDelegatedSyntheticEnvelope,
+  readDelegatedResultEnvelope,
 } from '../runtime/execution/metadata.js';
 import {
   buildFileReadSetArtifact,
@@ -189,7 +190,9 @@ function filesystemSearchWriteMetadata(
         { kind: 'search', summary: 'Search src/runtime for planned_steps.', required: true },
         { kind: 'write', summary: 'Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.', required: true },
       ],
-      entities: {},
+      entities: {
+        path: 'tmp/manual-web/planned-steps-summary.txt',
+      },
     },
   });
 }
@@ -732,6 +735,523 @@ describe('WorkerManager', () => {
       'message.handle',
     ]);
     expect(typeof workerNotifications[0]?.params.capabilityToken).toBe('string');
+
+    manager.shutdown();
+  });
+
+  it('does not use graph-controlled mutation for general assistant read/write plans', async () => {
+    const { shouldUseGraphControlledExecution } = await import('./worker-manager.js');
+    const decision = {
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Find existing automations and routines, then suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Find existing automations and routines related to approval, routing, or code review.',
+          expectedToolCategories: ['automation_read', 'second_brain_routine_read'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation without creating it.',
+          expectedToolCategories: ['answer'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    } as const;
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: buildDelegatedTaskContract(decision),
+      decision,
+      executionProfile: {
+        id: 'managed-cloud',
+        providerName: 'openrouter-tools',
+        providerType: 'openrouter',
+        providerModel: 'moonshotai/kimi-k2.6',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        reason: 'test profile',
+      },
+    })).toBe(false);
+  });
+
+  it('does not use graph-controlled mutation for low-confidence filesystem plans without a structured write target', async () => {
+    const { shouldUseGraphControlledExecution } = await import('./worker-manager.js');
+    const decision = {
+      route: 'filesystem_task',
+      confidence: 'low',
+      operation: 'update',
+      summary: 'Search web and compare findings to the repo approach.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      provenance: {
+        route: 'repair.unstructured',
+        operation: 'repair.unstructured',
+      },
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search web for approval workflow best practices.',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Compare findings to the repo approach.',
+          expectedToolCategories: ['write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    } as const;
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: buildDelegatedTaskContract(decision),
+      decision,
+      executionProfile: {
+        id: 'managed-cloud',
+        providerName: 'openrouter-tools',
+        providerType: 'openrouter',
+        providerModel: 'moonshotai/kimi-k2.6',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        reason: 'test profile',
+      },
+    })).toBe(false);
+  });
+
+  it('retries answer-only delegated insufficiency on the same profile after evidence is gathered', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const decision = {
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Find existing automations and routines related to approval, routing, or code review, then suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Find existing automations and routines related to approval, routing, or code review.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation without creating it.',
+          expectedToolCategories: ['answer'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    } as const;
+    const taskContract = buildDelegatedTaskContract(decision);
+    const automationEvidence = {
+      receiptId: 'automation-list-1',
+      sourceType: 'tool_call' as const,
+      toolName: 'automation_list',
+      status: 'succeeded' as const,
+      refs: ['automation:approval-review', 'automation:routing-watch'],
+      summary: 'Found approval-review and routing-watch automations; no code-review automation exists yet.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const toolReceiptStepIds = new Map([[automationEvidence.receiptId, 'step_1']]);
+    const firstStepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts: [automationEvidence],
+      toolReceiptStepIds,
+    });
+    const finalAnswer = 'Create a daily code-review readiness automation that checks pending approvals and routing failures, then posts a concise review queue summary.';
+    const answerEvidence = {
+      receiptId: 'answer-1',
+      sourceType: 'model_answer' as const,
+      status: 'succeeded' as const,
+      refs: [] as string[],
+      summary: finalAnswer,
+      startedAt: 3,
+      endedAt: 3,
+    };
+    const secondStepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts: [automationEvidence, answerEvidence],
+      toolReceiptStepIds,
+      finalAnswerReceiptId: answerEvidence.receiptId,
+    });
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    const retrySections: string[] = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      const retrySection = (params.additionalSections as Array<{ section?: string; content?: string }> | undefined)
+        ?.find((section) => section.section === 'Delegated Retry Directive');
+      if (retrySection?.content) {
+        retrySections.push(retrySection.content);
+      }
+      if (dispatchProfiles.length === 1) {
+        return {
+          content: '',
+          metadata: buildDelegatedExecutionMetadata({
+            taskContract,
+            runStatus: 'incomplete',
+            stopReason: 'end_turn',
+            stepReceipts: firstStepReceipts,
+            operatorSummary: 'Found related automations but did not produce the requested recommendation.',
+            claims: [],
+            evidenceReceipts: [automationEvidence],
+            interruptions: [],
+            artifacts: [],
+            events: [],
+          }),
+        };
+      }
+      return {
+        content: finalAnswer,
+        metadata: buildDelegatedExecutionMetadata({
+          taskContract,
+          runStatus: 'completed',
+          stopReason: 'end_turn',
+          stepReceipts: secondStepReceipts,
+          finalUserAnswer: finalAnswer,
+          operatorSummary: finalAnswer,
+          claims: [],
+          evidenceReceipts: [automationEvidence, answerEvidence],
+          interruptions: [],
+          artifacts: [],
+          events: [],
+        }),
+      };
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-answer-only-retry',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision,
+        }),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed-cloud',
+        providerName: 'openrouter-tools',
+        providerType: 'openrouter',
+        providerModel: 'qwen/qwen3.6-plus',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openrouter-tools', 'openai-frontier'],
+        reason: 'test managed cloud profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-answer-only-retry',
+        originChannel: 'web',
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['openrouter-tools', 'openrouter-tools']);
+    expect(retrySections).toHaveLength(1);
+    expect(retrySections[0]).toContain('answer-synthesis retry');
+    expect(retrySections[0]).toContain('Found approval-review and routing-watch automations');
+    expect(result.content).toBe(finalAnswer);
+
+    manager.shutdown();
+  });
+
+  it('uses no-tools grounded synthesis on the same managed profile when answer-only retry also returns no final answer', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const decision = {
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Search the web for approval workflow best practices, compare them to the repo approach, and do not edit files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for recent best practices on agent approval workflows.',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Inspect the repo for the current approval continuation approach.',
+          expectedToolCategories: ['repo_inspect'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Compare the web best practices to this repo approach without editing files.',
+          expectedToolCategories: ['answer'],
+          required: true,
+          dependsOn: ['step_1', 'step_2'],
+        },
+      ],
+    } as const;
+    const taskContract = buildDelegatedTaskContract(decision);
+    const webEvidence = {
+      receiptId: 'web-search-1',
+      sourceType: 'tool_call' as const,
+      toolName: 'web_search',
+      status: 'succeeded' as const,
+      refs: ['https://example.com/agent-approval-patterns'],
+      summary: 'Current agent guidance emphasizes explicit approval gates, scoped continuations, and auditability.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const repoEvidence = {
+      receiptId: 'repo-search-1',
+      sourceType: 'tool_call' as const,
+      toolName: 'fs_search',
+      status: 'succeeded' as const,
+      refs: ['src/runtime/approval-continuations.ts', 'src/runtime/pending-actions.ts'],
+      summary: 'Repo evidence found scoped approval continuations and pending-action metadata.',
+      startedAt: 3,
+      endedAt: 4,
+    };
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts: [webEvidence, repoEvidence],
+      toolReceiptStepIds: new Map([
+        [webEvidence.receiptId, 'step_1'],
+        [repoEvidence.receiptId, 'step_2'],
+      ]),
+    });
+    const incompleteEnvelope = {
+      taskContract,
+      runStatus: 'incomplete' as const,
+      stopReason: 'end_turn' as const,
+      stepReceipts,
+      operatorSummary: 'Gathered web and repo evidence but did not produce the requested comparison.',
+      claims: [],
+      evidenceReceipts: [webEvidence, repoEvidence],
+      interruptions: [],
+      artifacts: [],
+      events: [],
+    };
+    const finalAnswer = [
+      'The repo approach is aligned with current approval workflow practice: it keeps approval decisions explicit, scopes resume state through pending-action metadata, and preserves auditability.',
+      'The main gap is UX resilience after evidence gathering: the orchestrator should synthesize from gathered receipts instead of asking the user to retry when only the final answer step is missing.',
+    ].join('\n');
+
+    const dispatchModes: string[] = [];
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const groundedSynthesis = !!params.groundedSynthesis;
+      dispatchModes.push(groundedSynthesis ? 'synthesis' : 'delegated');
+      dispatchProfiles.push((params.executionProfile as { providerName?: string } | undefined)?.providerName);
+      if (groundedSynthesis) {
+        const synthesisMessages = params.groundedSynthesis as { messages?: Array<{ content?: string }> };
+        const combinedPrompt = synthesisMessages.messages?.map((message) => message.content ?? '').join('\n') ?? '';
+        expect(combinedPrompt).toContain('web-search-1');
+        expect(combinedPrompt).toContain('repo-search-1');
+        expect(combinedPrompt).toContain('No tools are available');
+        return {
+          content: finalAnswer,
+          metadata: {
+            skipTestDelegatedEnvelope: true,
+            groundedSynthesis: { available: true },
+          },
+        };
+      }
+      return {
+        content: '',
+        metadata: buildDelegatedExecutionMetadata(incompleteEnvelope),
+      };
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-grounded-answer-fallback',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Search the web for recent best practices on agent approval workflows, then compare them to this repo approach. Do not edit files.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision,
+        }),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed-cloud',
+        providerName: 'openrouter-tools',
+        providerType: 'openrouter',
+        providerModel: 'qwen/qwen3.6-plus',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openrouter-tools', 'openai-frontier'],
+        reason: 'test managed cloud profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-grounded-answer-fallback',
+        originChannel: 'web',
+      },
+    });
+
+    expect(dispatchModes).toEqual(['delegated', 'delegated', 'synthesis']);
+    expect(dispatchProfiles).toEqual(['openrouter-tools', 'openrouter-tools', 'openrouter-tools']);
+    expect(result.content).toBe(finalAnswer);
+    expect(result.metadata?.delegatedGroundedAnswerSynthesis).toMatchObject({
+      available: true,
+      reason: 'answer_only_retry',
+      unsatisfiedStepIds: ['step_3'],
+    });
+    const envelope = readDelegatedResultEnvelope(result.metadata);
+    expect(envelope?.verification).toMatchObject({
+      decision: 'satisfied',
+    });
+    expect(envelope?.stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'satisfied' },
+      { stepId: 'step_2', status: 'satisfied' },
+      { stepId: 'step_3', status: 'satisfied' },
+    ]);
 
     manager.shutdown();
   });

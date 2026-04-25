@@ -325,7 +325,7 @@ function buildFallbackTierOrder(
   if (primaryTier === 'managed_cloud') {
     return ['frontier', 'local', 'managed_cloud'];
   }
-  return ['managed_cloud', 'local', 'frontier'];
+  return ['frontier', 'managed_cloud', 'local'];
 }
 
 function buildFallbackProviderOrder(
@@ -646,6 +646,7 @@ function deriveDelegatedExecutionDecision(input: {
 }): IntentGatewayDecision | null {
   const descriptor = input.orchestration;
   const gatewayDecision = input.gatewayDecision ?? null;
+  const hasGatewayDecision = !!gatewayDecision;
   if (!descriptor) {
     return gatewayDecision;
   }
@@ -750,6 +751,9 @@ function deriveDelegatedExecutionDecision(input: {
   }
 
   if (lenses.has('coding-workspace')) {
+    if (!shouldDeriveCodingWorkspaceDelegatedWorkload(base, hasGatewayDecision)) {
+      return base;
+    }
     return withDerivedWorkload({
       route: base.route === 'filesystem_task' || base.route === 'coding_session_control'
         ? base.route
@@ -841,6 +845,22 @@ function deriveDelegatedExecutionDecision(input: {
     default:
       return base;
   }
+}
+
+function shouldDeriveCodingWorkspaceDelegatedWorkload(
+  base: IntentGatewayDecision,
+  hasGatewayDecision: boolean,
+): boolean {
+  if (!hasGatewayDecision) {
+    return true;
+  }
+  return base.route === 'coding_task'
+    || base.route === 'filesystem_task'
+    || base.route === 'coding_session_control'
+    || (
+      base.route === 'general_assistant'
+      && (base.requiresRepoGrounding === true || base.executionClass === 'repo_grounded')
+    );
 }
 
 export function resolveDelegatedExecutionDecision(input: {

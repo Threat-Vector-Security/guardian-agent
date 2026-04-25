@@ -243,6 +243,24 @@ export function buildToolExecutionCorrectionPrompt(
     ].join(' ');
   }
 
+  const requiredEvidenceSteps = decision.plannedSteps
+    ?.filter((step) => step.required !== false && step.kind !== 'answer')
+    ?? [];
+  if (decision.requiresToolSynthesis && requiredEvidenceSteps.length > 0) {
+    const categorySummary = [
+      ...new Set(requiredEvidenceSteps.flatMap((step) => step.expectedToolCategories ?? [])),
+    ];
+    return [
+      'System correction: this turn has a structured tool-backed execution plan.',
+      'Do not answer from memory or claim findings before satisfying the required non-answer planned steps with real tool results.',
+      ...(categorySummary.length > 0
+        ? [`Use tools matching these planned categories before the final answer: ${categorySummary.join(', ')}.`]
+        : ['Use the available tools that match the required planned steps before the final answer.']),
+      'After collecting tool evidence, synthesize the answer from those tool results.',
+      'Only ask the user for approval after a real tool result returns pending_approval.',
+    ].join(' ');
+  }
+
   return undefined;
 }
 

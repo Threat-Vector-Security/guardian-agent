@@ -268,10 +268,7 @@ export function summarizeContinuityThreadForGateway(
     ...(record.focusSummary ? { focusSummary: record.focusSummary } : {}),
     ...(record.lastActionableRequest ? { lastActionableRequest: record.lastActionableRequest } : {}),
     ...(record.activeExecutionRefs?.length
-      ? {
-          activeExecutionRefs: record.activeExecutionRefs.map((ref) =>
-            ref.label ? `${ref.kind}:${ref.label}` : `${ref.kind}:${ref.id}`),
-        }
+      ? { activeExecutionRefs: record.activeExecutionRefs.map((ref) => `${ref.kind}:${ref.id}`) }
       : {}),
     ...(record.continuationState?.kind
       ? { continuationStateKind: record.continuationState.kind }

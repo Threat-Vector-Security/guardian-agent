@@ -239,6 +239,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
   }));
   const allJobs = input.tools.listJobs(200);
   const resumedApprovalId = input.options?.approvalId?.trim();
+  const resumedToolResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
   for (const pendingTool of resume.pendingTools) {
     let resultObj: Record<string, unknown> | undefined;
     if (input.options?.approvalResult?.result && resumedApprovalId && pendingTool.approvalId === resumedApprovalId) {
@@ -249,6 +250,12 @@ export async function resumeStoredToolLoopPendingAction(input: {
     if (!resultObj) {
       const job = allJobs.find((entry) => entry.id === pendingTool.jobId);
       resultObj = buildToolResultPayloadFromJob(job);
+    }
+    if (resultObj) {
+      resumedToolResults.push({
+        toolName: pendingTool.name,
+        result: resultObj,
+      });
     }
     llmMessages.push({
       role: 'tool',
@@ -267,7 +274,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
   let llmToolDefs = allToolDefs.map((definition) => toLLMToolDef(definition, providerLocality));
   let finalContent = '';
   let rounds = 0;
-  let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
+  let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = resumedToolResults;
   let currentContextTrustLevel = resume.contentTrustLevel;
   const currentTaintReasons = new Set(resume.taintReasons);
   const toolResultProviderKind: 'local' | 'external' = providerLocality;

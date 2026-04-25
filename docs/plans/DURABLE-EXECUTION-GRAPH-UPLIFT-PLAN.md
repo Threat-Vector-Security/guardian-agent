@@ -1,7 +1,7 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** In progress. Phases 1-3 are implemented for the read-only graph/artifact lane. The first Phase 4 graph-controlled search/write slice is implemented and passing a live API replay.
-**Date:** 2026-04-24
+**Status:** Architecture refinement and refactoring phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented, but the current risk is no longer missing primitives. The risk is overlapping orchestration ownership between `ChatAgent`, `WorkerManager`, pending actions, continuity, execution records, and the graph. The next phase must make graph ownership explicit and delete each legacy owner as its replacement lands.
+**Date:** 2026-04-26
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
 - `docs/plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md`
@@ -25,6 +25,120 @@ As of 2026-04-24:
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
 - Do not move to broader hybrid write behavior until this read-only/artifact lane remains stable through a broader manual web UI pass and the focused verification commands below.
+
+### 2026-04-26 Handoff Status
+
+The latest work focused on orchestration quality, evidence grounding, provider fallback, continuation, and approval-resume recovery. These changes are intentionally in shared routing/orchestration/verifier layers, not keyword intent-routing band-aids.
+
+Implemented in the current dirty worktree:
+
+- Structured task-plan category matching now lets evidence tools satisfy semantic planned-step categories such as `repo_inspect`, `web_search`, and answer/model-answer steps without adding pre-gateway keyword routing.
+- Direct reasoning now refuses non-read-only planned evidence, retries when a repo-grounded answer appears before read/search evidence, treats weak/empty search evidence as insufficient, and defaults brokered `fs_search` calls to content search when the model omits a mode.
+- Grounded answer synthesis fallback now runs as a no-tools LLM pass over collected evidence when tool execution succeeded but the delegated worker failed to produce a final answer.
+- Approval-continuation recovery now carries approved tool results into the resumed tool loop and can synthesize a final answer from those approved tool receipts if the first resumed model turn is empty.
+- Intent Gateway confirmation guidance now makes mixed web+repo requests produce concrete planned steps (`web_search`, `repo_inspect`, answer) so direct read-only reasoning does not accidentally absorb external research requests.
+- Managed-cloud classifier fallback now tries other configured managed-cloud providers when the preferred classifier/profile is unavailable or rate limited.
+
+Verified locally after these changes:
+
+- Focused Vitest slices passed for direct reasoning, task-plan/verifier, worker-manager, worker-session, tool-loop resume, confirmation pass, intent gateway, and incoming dispatch fallback.
+- `npm run check` passed.
+- `npm run build` passed.
+- Live API replay passed the core read-only ladder for:
+  - "Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything."
+  - "Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything."
+  - "Inspect this repo and tell me which files implement direct reasoning graph artifacts. Do not edit anything."
+- Live API replay for web+repo comparison succeeded with a planned `web_search` + `repo_inspect` + answer contract and satisfied delegated verification.
+- Live scratch-file write to `tmp/manual-web/approval-resume-smoke.txt` succeeded, but it did not request approval because the current policy allowed that path/action.
+
+Known remaining problems and risks:
+
+- A live gated approval-resume test is still outstanding. The latest scratch write proved mutation execution, not approval pause/resume, because policy allowed the write without an approval interrupt.
+- Follow-up continuity is improved but not fully proven. A follow-up like "Based on your last answer..." can now recover a useful answer, but one replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-resume.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
+- One replay still showed an unstructured repair path for a follow-up after the classifier returned malformed prose. The system recovered, but this path should be audited before adding more complexity.
+- The full `npm test` suite has not been rerun after the latest continuation/provider-fallback fixes. It must run before commit.
+- The web UI approval experience still needs a manual pass once a policy-gated action is identified reliably.
+
+Recommended next slice before moving into the broader web UI phase:
+
+1. Identify or configure a harmless action that is definitely approval-gated under the current dev policy, then run a live web/API approval-resume smoke that proves pending action creation, decision submission, tool execution, and continuation response.
+2. Add/strengthen tests for follow-up anchoring against the immediately previous answer and its evidence artifacts, especially "based on your last answer" questions.
+3. Audit the unstructured repair path seen in the follow-up replay and either make it produce a structured Intent Gateway decision or fail into the existing clarification/recovery path.
+4. Run `npm test`, then rerun the short live API replay ladder.
+5. Commit only after the above passes or after explicitly documenting any remaining failures in this plan.
+
+### 2026-04-26 Architecture Refinement And Debt-Burn Phase
+
+The architecture audit found that Guardian now has most of the necessary primitives, but several partial systems still own the same lifecycle decisions. The next phase is a refactor and deletion phase, not a feature expansion phase.
+
+Root ownership problems to resolve:
+
+- `ChatAgent` still owns normal turn orchestration, approval resume, direct-route dispatch, tool-loop resume, retry/continuation repair, and response shaping.
+- `WorkerManager` still owns delegated execution, retries, recovery advice, graph setup, and graph persistence instead of acting as a graph node runner.
+- `PendingActionStore`, `ExecutionStore`, `ContinuityThreadStore`, `ExecutionGraphStore`, and `RunTimelineStore` each hold part of the same execution lifecycle without one authoritative owner.
+- Approval continuity is split across pending actions, live `ToolExecutor` approvals, in-memory suspended sessions, direct-route resumes, tool-loop resumes, automation continuations, and graph suspensions.
+- Continuity still has semantic recovery authority in places. It must become context projection over active execution refs and artifacts, not a source of reconstructed intent.
+- Routing and repair are split between pre-dispatch gateway handling, `ChatAgent` classification, direct candidate routing, and delegated retry/recovery.
+- Provider fallback is distributed across failover providers, model fallback chains, execution profile selection, classifier retry loops, dashboard fallback, and delegated escalation.
+
+Refactoring rules for this phase:
+
+- Every slice must remove the legacy owner it replaces in the same commit. Do not leave a compatibility path for old behavior once a graph-owned path exists.
+- Temporary adapters are allowed only inside an unfinished local edit. They must not survive the commit for that slice.
+- Pending actions remain the only durable blocked-work contract. New approval, clarification, auth, policy, workspace, and missing-context pauses must be graph interrupts.
+- Continuity may select and summarize active context, but it must not rewrite user content, infer intent from prose, or override the Intent Gateway.
+- The Intent Gateway decision produced by shared dispatch is the turn's semantic authority. Any classifier recovery must produce a structured gateway decision or fall into clarification.
+- The execution graph owns node completion, artifacts, verification, interrupts, recovery, and finalization for every non-trivial request.
+- Provider fallback decisions must be expressed through execution profile/runtime orchestration and recorded as execution or graph events.
+- Timeline rendering must consume runtime/graph events, not parallel bespoke progress feeds.
+- Tests and harnesses are part of each slice. Do not defer broken brittle expectations, startup drift, or web/API smoke drift to a later cleanup.
+
+Refactor sequence:
+
+1. Establish graph-owned approval resume as the first hard boundary.
+   - Prove a policy-gated harmless write creates a graph interrupt, stores the pending action, resumes through the graph, writes the mutation receipt, verifies the result, and finalizes once.
+   - Delete the parallel new-path approval resume logic for that flow as part of the slice.
+
+2. Add a thin graph controller boundary and move graph-capable dispatch behind it.
+   - `ChatAgent` should hand the structured request to the controller and render the result.
+   - `WorkerManager` should run delegated/exploration nodes requested by the controller.
+   - Delete duplicate control-flow decisions from callers as they move behind the controller.
+
+3. Collapse approval and resume state.
+   - Remove `suspendedSessions`, approval follow-up maps, automation continuation maps, direct-route resume state, and tool-loop resume state as graph equivalents land.
+   - Pending actions should carry graph interrupt identity and artifact refs, not opaque model-message replay blobs.
+
+4. Demote continuity to context projection.
+   - Follow-ups such as "based on your last answer" must resolve through active execution refs, graph artifacts, and answer evidence.
+   - Remove regex/prose continuation repair that manufactures semantic intent outside the gateway.
+
+5. Centralize routing repair and provider fallback.
+   - Keep one Intent Gateway classification/repair decision per turn.
+   - Move malformed classifier recovery into structured recovery or clarification.
+   - Keep provider fallback ordering in execution profile/runtime services and remove duplicate retry policy from call sites as they are migrated.
+
+6. Make delegated work graph-native.
+   - Delegated workers become node runners that emit node events/artifacts.
+   - Move required-step verification, retry, recovery proposal, and terminal state into graph nodes.
+   - Delete delegated handoff/retry side channels once node-runner behavior passes the harnesses.
+
+7. Normalize observability.
+   - Run timeline should display graph/runtime events for direct reasoning, delegated workers, approval interrupts, recovery, verification, and finalization.
+   - Remove duplicate progress feeds that describe the same lifecycle.
+
+8. Run the app-facing regression loop after each meaningful slice.
+   - Run focused Vitest first, then `npm run check`, then the relevant script harness.
+   - For approval/continuity/routing slices, run the web/API replay loop from `docs/guides/INTEGRATION-TEST-HARNESS.md`.
+   - Update brittle tests, startup scripts, and operator docs in the same slice when behavior changes.
+
+Exit criteria for this refinement phase:
+
+- There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
+- No graph-owned flow still depends on `ChatAgent` replaying raw LLM messages to resume work.
+- No approval-capable graph path has a parallel in-memory resume implementation.
+- No continuity path reconstructs user intent from prior prose when an execution/artifact reference is available.
+- No delegated graph path depends on the old worker-manager retry/handoff side channel.
+- The focused harnesses, app/API smoke loop, `npm run check`, `npm run build`, and `npm test` pass or any failure is documented here before the next commit.
 
 ## External Best-Practice References
 
@@ -528,7 +642,7 @@ Status:
 
 - `node-recovery.ts` validates bounded advisory recovery proposals and emits recovery node events.
 - Delegated worker verification failures now persist advisory recovery graphs, terminal graph lifecycle events, and `RecoveryProposal` artifacts when the original request has an Intent Gateway decision.
-- Remaining work: migrate legacy recovery prompt/advice producers onto graph-native failed-node recovery so the old worker-manager recovery prompt sections can be removed.
+- Refactor target: migrate legacy recovery prompt/advice producers onto graph-native failed-node recovery and remove the old worker-manager recovery prompt sections in the same slice.
 
 ### Phase 7: Decommission Interim Hybrid Manager Paths
 
@@ -547,17 +661,17 @@ Deliverables:
 - no special-case direct-then-delegated handoff code path
 - direct reasoning and delegated workers are both node runners
 - verifier operates on graph artifacts/receipts
-- `priorSatisfiedStepReceipts` either removed or reduced to a compatibility adapter during migration
+- `priorSatisfiedStepReceipts` removed once graph artifacts/receipts own verification
 
 Status:
 
-- Graph-controlled read/write runs now model mutation verification as a distinct `verify` node while preserving the mutation helper's legacy single-node behavior for non-graph callers.
+- Graph-controlled read/write runs now model mutation verification as a distinct `verify` node; the remaining non-graph single-node mutation helper behavior must be deleted when the graph controller owns the last caller.
 - Approval resume reconstruction carries the stored verify node forward so post-approval read-back verification completes the graph-native verifier node.
-- Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node, write `VerificationResult` artifacts, and emit completed, blocked, or failed graph lifecycle events while preserving the existing retry and handoff path.
+- Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node, write `VerificationResult` artifacts, and emit completed, blocked, or failed graph lifecycle events. The existing retry and handoff path is technical debt and must be removed as delegated workers become graph node runners.
 - Delegated worker start and terminal verification/event construction now live in `delegated-worker-node.ts`, reducing WorkerManager to graph setup, dispatch orchestration, and persistence of returned node projections.
 - Delegated worker responses now include `executionGraph` metadata with the graph id, node id, lifecycle status, and verification artifact id when a durable delegated graph is available.
 - Delegated worker job metadata now carries the same durable execution graph reference so operator job views can correlate delegated work with timeline graph events.
-- Remaining work: remove the interim delegated retry/handoff compatibility paths only after delegated workers are fully represented as graph node runners.
+- Refactor target: remove the interim delegated retry/handoff paths as part of the slice that makes delegated workers graph node runners.
 
 ### Phase 8: Web UI And Operator Observability
 
@@ -652,21 +766,21 @@ The following prior work should not continue as standalone remediation:
 | Prior work | New disposition |
 |---|---|
 | Direct-reasoning progressive output as an `onProgress` callback only | Fold into graph events and `RunTimelineStore` SSE projection. |
-| Hybrid phased execution in `WorkerManager` | Temporary bridge only. Replace with graph nodes and typed artifacts. |
-| Delegated recovery prompt section | Temporary bridge only. Replace with `recover` node proposals. |
+| Hybrid phased execution in `WorkerManager` | Delete as graph nodes and typed artifacts take ownership. |
+| Delegated recovery prompt section | Delete when `recover` node proposals own failed-node recovery. |
 | Direct reasoning trace-only observability | Replace with graph events ingested by run timeline; keep routing trace as diagnostics. |
 | Test-specific write repair or deterministic fallback | Do not revive. Mutation success must come from graph artifacts, tool receipts, and verifier checks. |
 
 ## Rollout Strategy
 
-Use a vertical-slice migration, not a rewrite.
+Use a vertical-slice refactor, not a rewrite. A slice is complete only when the graph-owned path and the deletion of the replaced legacy owner land together.
 
 1. Add graph kernel in parallel with current paths.
 2. Project direct reasoning into graph/timeline without changing routing.
 3. Move one pure read-only direct reasoning path to graph ownership.
 4. Move one hybrid search/synthesis/write path to graph ownership.
 5. Move approval interrupts to graph ownership.
-6. Remove old hybrid/recovery bridges only after graph slices pass tests and manual web validation.
+6. Remove old hybrid/recovery bridges in the same slice that proves the graph replacement through tests and manual web validation.
 
 ## Definition Of Done
 
@@ -691,7 +805,7 @@ Implement the durable execution graph uplift from docs/plans/DURABLE-EXECUTION-G
 
 First inspect SECURITY.md, docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md, docs/architecture/FORWARD-ARCHITECTURE.md, docs/design/ORCHESTRATION-DESIGN.md, and docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md.
 
-Do not commit unless explicitly asked. Preserve unrelated dirty worktree changes. Do not add keyword/regex intent-routing band-aids. Keep the brokered worker isolated: no direct Runtime, ToolExecutor, provider, channel, or filesystem authority in the worker.
+Do not commit unless explicitly asked. Do not preserve compatibility shims for replaced graph-owned flows. Do not add keyword/regex intent-routing band-aids. Keep the brokered worker isolated: no direct Runtime, ToolExecutor, provider, channel, or filesystem authority in the worker.
 
 Start with Phase 1: graph types, graph store, graph events, and run-timeline adapter. Then implement Phase 2 as the first behavioral vertical slice: direct reasoning emits execution graph events that appear in RunTimelineStore.
 ```

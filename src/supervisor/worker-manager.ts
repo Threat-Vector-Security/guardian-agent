@@ -374,6 +374,22 @@ interface DelegatedJobSnapshot {
   error?: string;
 }
 
+interface DelegatedWorkerDispatchBase {
+  message: UserMessage;
+  systemPrompt: string;
+  history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  knowledgeBases: PromptAssemblyKnowledgeBase[];
+  activeSkills: ResolvedSkill[];
+  additionalSections: PromptAssemblyAdditionalSection[];
+  toolContext: string;
+  runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+  executionProfile?: SelectedExecutionProfile;
+  continuity?: PromptAssemblyContinuity | null;
+  pendingAction?: PromptAssemblyPendingAction | null;
+  pendingApprovalNotice?: string;
+  hasFallbackProvider?: boolean;
+}
+
 function normalizeDelegatedApprovalSummaries(value: unknown): PendingActionApprovalSummary[] {
   if (!Array.isArray(value)) return [];
   const summaries: PendingActionApprovalSummary[] = [];
@@ -1472,6 +1488,115 @@ export class WorkerManager {
     };
   }
 
+  private async tryDelegatedGroundedAnswerSynthesis(input: {
+    request: WorkerMessageRequest;
+    worker: WorkerProcess;
+    target: ResolvedDelegatedTargetMetadata;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    verifiedResult: {
+      envelope: DelegatedResultEnvelope;
+      decision: VerificationDecision;
+    };
+    insufficiency: DelegatedResultSufficiencyFailure;
+    jobSnapshots: DelegatedJobSnapshot[];
+    requestId: string;
+    taskRunId: string;
+    effectiveIntentDecision?: IntentGatewayDecision;
+    dispatchBase: DelegatedWorkerDispatchBase;
+  }): Promise<{
+    result: { content: string; metadata?: Record<string, unknown> };
+    verifiedResult: {
+      envelope: DelegatedResultEnvelope;
+      decision: VerificationDecision;
+    };
+  } | null> {
+    if (!isDelegatedAnswerSynthesisRetry(input.insufficiency)) {
+      return null;
+    }
+
+    const profileLabel = describeDelegatedExecutionProfile(input.dispatchBase.executionProfile);
+    const detail = profileLabel
+      ? `Synthesizing final answer from gathered evidence using ${profileLabel}.`
+      : 'Synthesizing final answer from gathered evidence.';
+    this.recordDelegatedWorkerTrace('delegated_worker_retrying', input.request, input.target, {
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
+      lifecycle: 'running',
+      workerId: input.worker.id,
+      taskContract: input.taskContract,
+      reason: detail,
+    });
+    this.publishDelegatedWorkerProgress(input.request, input.target, {
+      id: `delegated-worker:${input.taskRunId}:grounded-answer-synthesis`,
+      kind: 'running',
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
+      workerId: input.worker.id,
+      detail,
+    });
+
+    const synthesis = await this.dispatchToWorker(input.worker, {
+      ...input.dispatchBase,
+      groundedSynthesis: {
+        messages: buildDelegatedGroundedAnswerSynthesisMessages({
+          originalRequest: input.request.message.content,
+          history: input.dispatchBase.history,
+          intentDecision: input.effectiveIntentDecision,
+          envelope: input.verifiedResult.envelope,
+          verification: input.verifiedResult.decision,
+          insufficiency: input.insufficiency,
+          jobSnapshots: input.jobSnapshots,
+        }),
+        maxTokens: 2_500,
+        temperature: 0,
+      },
+    });
+    const finalAnswer = synthesis.content.trim();
+    if (!finalAnswer) {
+      this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
+        requestId: input.requestId,
+        taskRunId: input.taskRunId,
+        lifecycle: 'running',
+        workerId: input.worker.id,
+        taskContract: input.taskContract,
+        reason: 'Grounded answer synthesis returned empty content; delegated verification failure remains authoritative.',
+      });
+      return null;
+    }
+
+    const now = this.observability.now?.() ?? Date.now();
+    const synthesizedEnvelope = buildDelegatedGroundedAnswerEnvelope({
+      sourceEnvelope: input.verifiedResult.envelope,
+      finalAnswer,
+      taskRunId: input.taskRunId,
+      timestamp: now,
+    });
+    const metadata: Record<string, unknown> = {
+      ...(synthesis.metadata ?? {}),
+      ...buildDelegatedExecutionMetadata(synthesizedEnvelope),
+      delegatedGroundedAnswerSynthesis: {
+        available: true,
+        reason: 'answer_only_retry',
+        satisfiedStepCount: input.insufficiency.satisfiedSteps.length,
+        unsatisfiedStepIds: input.insufficiency.unsatisfiedSteps.map((step) => step.stepId),
+      },
+    };
+    const verifiedResult = verifyDelegatedWorkerResult({
+      metadata,
+      intentDecision: input.effectiveIntentDecision,
+      executionProfile: input.dispatchBase.executionProfile,
+      taskContract: input.taskContract,
+      jobSnapshots: input.jobSnapshots,
+    });
+    return {
+      result: {
+        content: finalAnswer,
+        metadata,
+      },
+      verifiedResult,
+    };
+  }
+
   private async requestRecoveryAdvisorGuidance(input: {
     request: WorkerMessageRequest;
     worker: WorkerProcess;
@@ -1482,21 +1607,7 @@ export class WorkerManager {
     requestId: string;
     taskRunId: string;
     effectiveIntentDecision?: IntentGatewayDecision;
-    dispatchBase: {
-      message: UserMessage;
-      systemPrompt: string;
-      history: Array<{ role: 'user' | 'assistant'; content: string }>;
-      knowledgeBases: PromptAssemblyKnowledgeBase[];
-      activeSkills: ResolvedSkill[];
-      additionalSections: PromptAssemblyAdditionalSection[];
-      toolContext: string;
-      runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
-      executionProfile?: SelectedExecutionProfile;
-      continuity?: PromptAssemblyContinuity | null;
-      pendingAction?: PromptAssemblyPendingAction | null;
-      pendingApprovalNotice?: string;
-      hasFallbackProvider?: boolean;
-    };
+    dispatchBase: DelegatedWorkerDispatchBase;
   }): Promise<RecoveryAdvisorGraphResult | null> {
     const advisorRequest: RecoveryAdvisorRequest = {
       originalRequest: input.request.message.content,
@@ -2126,13 +2237,27 @@ export class WorkerManager {
       if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
         effectiveTaskContract = verifiedResult.envelope.taskContract;
       }
+      let answerSynthesisFallback:
+        | {
+            verifiedResult: typeof verifiedResult;
+            insufficiency: DelegatedResultSufficiencyFailure;
+            jobSnapshots: DelegatedJobSnapshot[];
+          }
+        | null = insufficiency && isDelegatedAnswerSynthesisRetry(insufficiency)
+          ? { verifiedResult, insufficiency, jobSnapshots }
+          : null;
       if (insufficiency) {
-        const retryProfile = selectDelegatedRetryExecutionProfile(
-          this.runtime,
-          delegatedTarget,
-          effectiveIntentDecision ?? undefined,
+        const retryProfile = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
+          insufficiency,
           effectiveExecutionProfile,
-        );
+        )
+          ? effectiveExecutionProfile ?? null
+          : selectDelegatedRetryExecutionProfile(
+              this.runtime,
+              delegatedTarget,
+              effectiveIntentDecision ?? undefined,
+              effectiveExecutionProfile,
+            );
         if (retryProfile) {
           const retryUsesSameProfile = isSameExecutionProfile(retryProfile, effectiveExecutionProfile);
           const retryDetail = buildDelegatedRetryDetail(
@@ -2194,7 +2319,7 @@ export class WorkerManager {
               reason: insufficiency.retryReason,
             }),
           });
-            result = await this.dispatchToWorker(worker, {
+          result = await this.dispatchToWorker(worker, {
             ...baseDispatchParams,
             message: effectiveInput.message,
             systemPrompt: effectiveInput.systemPrompt,
@@ -2227,6 +2352,45 @@ export class WorkerManager {
             taskContract: effectiveTaskContract,
             jobSnapshots,
           });
+          if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
+            effectiveTaskContract = verifiedResult.envelope.taskContract;
+          }
+          insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
+          if (insufficiency && isDelegatedAnswerSynthesisRetry(insufficiency)) {
+            answerSynthesisFallback = { verifiedResult, insufficiency, jobSnapshots };
+          }
+        }
+      }
+      if (insufficiency && answerSynthesisFallback) {
+        const synthesisResult = await this.tryDelegatedGroundedAnswerSynthesis({
+          request: effectiveInput,
+          worker,
+          target: delegatedTarget,
+          taskContract: effectiveTaskContract,
+          verifiedResult: answerSynthesisFallback.verifiedResult,
+          insufficiency: answerSynthesisFallback.insufficiency,
+          jobSnapshots: answerSynthesisFallback.jobSnapshots,
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          effectiveIntentDecision: effectiveIntentDecision ?? undefined,
+          dispatchBase: {
+            ...baseDispatchParams,
+            message: effectiveInput.message,
+            systemPrompt: effectiveInput.systemPrompt,
+            history: effectiveInput.history,
+            knowledgeBases: effectiveInput.knowledgeBases ?? [],
+            activeSkills: effectiveInput.activeSkills ?? [],
+            toolContext: effectiveInput.toolContext ?? '',
+            runtimeNotices: effectiveInput.runtimeNotices ?? [],
+            executionProfile: effectiveExecutionProfile,
+            continuity: effectiveInput.continuity,
+            pendingAction: effectiveInput.pendingAction,
+            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
+          },
+        });
+        if (synthesisResult) {
+          result = synthesisResult.result;
+          verifiedResult = synthesisResult.verifiedResult;
           if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
             effectiveTaskContract = verifiedResult.envelope.taskContract;
           }
@@ -4259,6 +4423,244 @@ function buildDelegatedRetryDetail(
   return `Retrying ${targetLabel}${profileSuffix}${sessionSuffix} because ${insufficiency.retryReason}`;
 }
 
+function isDelegatedAnswerSynthesisRetry(
+  insufficiency: DelegatedResultSufficiencyFailure,
+): boolean {
+  const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  const hasOnlyAnswerEvidenceMissing = missingEvidenceKinds.length === 0
+    || missingEvidenceKinds.every((kind) => kind === 'answer');
+  return hasOnlyAnswerEvidenceMissing
+    && insufficiency.satisfiedSteps.length > 0
+    && insufficiency.unsatisfiedSteps.length > 0
+    && insufficiency.unsatisfiedSteps.every((step) => !step.kind || step.kind === 'answer');
+}
+
+function shouldRetryDelegatedAnswerSynthesisOnSameProfile(
+  insufficiency: DelegatedResultSufficiencyFailure,
+  currentProfile: SelectedExecutionProfile | undefined,
+): boolean {
+  return !!currentProfile && isDelegatedAnswerSynthesisRetry(insufficiency);
+}
+
+function buildDelegatedGroundedAnswerSynthesisMessages(input: {
+  originalRequest: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  intentDecision?: IntentGatewayDecision;
+  envelope: DelegatedResultEnvelope;
+  verification: VerificationDecision;
+  insufficiency: DelegatedResultSufficiencyFailure;
+  jobSnapshots: DelegatedJobSnapshot[];
+}): ChatMessage[] {
+  const stepLines = buildDelegatedSynthesisStepLines(input.envelope);
+  const evidenceLines = buildDelegatedSynthesisEvidenceLines(input.envelope);
+  const jobLines = buildDelegatedSynthesisJobLines(input.jobSnapshots);
+  const historyLines = buildDelegatedSynthesisHistoryLines(input.history);
+  return [
+    {
+      role: 'system',
+      content: [
+        'You are GuardianAgent delegated grounded-synthesis execution.',
+        'No tools are available in this pass. Use the gathered delegated evidence and recent conversation context only.',
+        'Do not execute actions, approve actions, mutate files, or claim that additional tool calls were made.',
+        'If evidence is thin, clearly separate what the evidence shows from what remains uncertain.',
+        'Produce the final user-facing answer that satisfies the remaining answer step.',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        'Original request:',
+        input.originalRequest,
+        '',
+        'Routing:',
+        `- route: ${input.intentDecision?.route ?? input.envelope.taskContract.route ?? 'unknown'}`,
+        `- operation: ${input.intentDecision?.operation ?? input.envelope.taskContract.operation ?? 'unknown'}`,
+        `- executionClass: ${input.intentDecision?.executionClass ?? 'unknown'}`,
+        `- taskContractKind: ${input.envelope.taskContract.kind}`,
+        '',
+        'Verification failure to repair:',
+        `- decision: ${input.verification.decision}`,
+        `- reasons: ${input.verification.reasons.join('; ') || 'none recorded'}`,
+        `- missingEvidenceKinds: ${(input.verification.missingEvidenceKinds ?? []).join(', ') || 'answer'}`,
+        `- unsatisfiedStepIds: ${(input.verification.unsatisfiedStepIds ?? []).join(', ') || input.insufficiency.unsatisfiedSteps.map((step) => step.stepId).join(', ')}`,
+        '',
+        'Planned step status:',
+        ...stepLines,
+        '',
+        ...(historyLines.length > 0
+          ? [
+              'Recent conversation context:',
+              ...historyLines,
+              '',
+            ]
+          : []),
+        'Delegated evidence receipts:',
+        ...evidenceLines,
+        '',
+        ...(jobLines.length > 0
+          ? [
+              'Delegated job snapshots:',
+              ...jobLines,
+              '',
+            ]
+          : []),
+        'Write the final answer now. Keep it concise, grounded, and directly responsive to the original request.',
+      ].join('\n'),
+    },
+  ];
+}
+
+function buildDelegatedGroundedAnswerEnvelope(input: {
+  sourceEnvelope: DelegatedResultEnvelope;
+  finalAnswer: string;
+  taskRunId: string;
+  timestamp: number;
+}): DelegatedResultEnvelope {
+  const answerReceiptId = `answer:${input.taskRunId}:grounded-synthesis`;
+  const answerReceipt: DelegatedResultEnvelope['evidenceReceipts'][number] = {
+    receiptId: answerReceiptId,
+    sourceType: 'model_answer',
+    status: 'succeeded',
+    refs: collectDelegatedGroundedAnswerRefs(input.sourceEnvelope),
+    summary: truncateInlineText(input.finalAnswer, 4_000),
+    startedAt: input.timestamp,
+    endedAt: input.timestamp,
+  };
+  const evidenceReceipts = [
+    ...input.sourceEnvelope.evidenceReceipts.filter((receipt) => receipt.receiptId !== answerReceiptId),
+    answerReceipt,
+  ];
+  const toolReceiptStepIds = buildDelegatedToolReceiptStepMap(input.sourceEnvelope);
+  const stepReceipts = buildStepReceipts({
+    plannedTask: input.sourceEnvelope.taskContract.plan,
+    evidenceReceipts,
+    toolReceiptStepIds,
+    finalAnswerReceiptId: answerReceiptId,
+    interruptions: input.sourceEnvelope.interruptions,
+  });
+  const stopReason = 'end_turn' as const;
+  const runStatus = computeWorkerRunStatus(
+    input.sourceEnvelope.taskContract.plan,
+    stepReceipts,
+    input.sourceEnvelope.interruptions,
+    stopReason,
+  );
+  const answerClaim: DelegatedResultEnvelope['claims'][number] = {
+    claimId: `claim:${answerReceiptId}`,
+    kind: 'answer',
+    subject: 'final_user_answer',
+    value: truncateInlineText(input.finalAnswer, 1_000),
+    evidenceReceiptIds: [answerReceiptId],
+    confidence: 0.85,
+  };
+  const answerEvent: ExecutionEvent = {
+    eventId: `answer-synthesis:${input.taskRunId}`,
+    type: 'claim_emitted',
+    timestamp: input.timestamp,
+    payload: {
+      claimKind: 'answer',
+      evidenceReceiptId: answerReceiptId,
+      summary: truncateInlineText(input.finalAnswer, 500),
+      synthesisMode: 'grounded_no_tools',
+    },
+  };
+  return {
+    ...input.sourceEnvelope,
+    runStatus,
+    stopReason,
+    stepReceipts,
+    finalUserAnswer: input.finalAnswer,
+    operatorSummary: input.finalAnswer,
+    evidenceReceipts,
+    claims: [
+      ...input.sourceEnvelope.claims.filter((claim) => claim.claimId !== answerClaim.claimId),
+      answerClaim,
+    ],
+    events: [
+      ...input.sourceEnvelope.events.filter((event) => event.eventId !== answerEvent.eventId),
+      answerEvent,
+    ],
+  };
+}
+
+function buildDelegatedToolReceiptStepMap(
+  envelope: DelegatedResultEnvelope,
+): Map<string, string> {
+  const evidenceById = new Map(envelope.evidenceReceipts.map((receipt) => [receipt.receiptId, receipt]));
+  const stepIds = new Map<string, string>();
+  for (const stepReceipt of envelope.stepReceipts) {
+    for (const evidenceReceiptId of stepReceipt.evidenceReceiptIds) {
+      const receipt = evidenceById.get(evidenceReceiptId);
+      if (receipt?.sourceType === 'tool_call') {
+        stepIds.set(evidenceReceiptId, stepReceipt.stepId);
+      }
+    }
+  }
+  return stepIds;
+}
+
+function collectDelegatedGroundedAnswerRefs(envelope: DelegatedResultEnvelope): string[] {
+  const refs = new Set<string>();
+  for (const receipt of envelope.evidenceReceipts) {
+    if (receipt.status !== 'succeeded') continue;
+    for (const ref of receipt.refs) {
+      const normalized = normalizeDelegatedEvidenceRef(ref);
+      if (!normalized) continue;
+      refs.add(normalized);
+      if (refs.size >= 12) {
+        return [...refs];
+      }
+    }
+  }
+  return [...refs];
+}
+
+function buildDelegatedSynthesisStepLines(envelope: DelegatedResultEnvelope): string[] {
+  const receiptByStepId = new Map(envelope.stepReceipts.map((receipt) => [receipt.stepId, receipt]));
+  return envelope.taskContract.plan.steps.map((step) => {
+    const receipt = receiptByStepId.get(step.stepId);
+    const status = receipt?.status ?? 'missing';
+    const evidenceIds = receipt?.evidenceReceiptIds.length
+      ? ` receipts=${receipt.evidenceReceiptIds.join(',')}`
+      : '';
+    return `- ${step.stepId} [${status}] ${step.kind}: ${truncateInlineText(step.summary, 220)}${evidenceIds}`;
+  });
+}
+
+function buildDelegatedSynthesisEvidenceLines(envelope: DelegatedResultEnvelope): string[] {
+  const receipts = envelope.evidenceReceipts
+    .filter((receipt) => receipt.status === 'succeeded')
+    .slice(0, 40);
+  if (receipts.length === 0) {
+    return ['- none'];
+  }
+  return receipts.map((receipt, index) => {
+    const refs = receipt.refs.length > 0 ? ` refs=${receipt.refs.slice(0, 8).join(', ')}` : '';
+    const toolName = receipt.toolName ? ` tool=${receipt.toolName}` : '';
+    const artifactType = receipt.artifactType ? ` artifactType=${receipt.artifactType}` : '';
+    return `- evidence_${index + 1}: id=${receipt.receiptId} source=${receipt.sourceType}${toolName}${artifactType}${refs} summary=${truncateInlineText(receipt.summary, 1_200)}`;
+  });
+}
+
+function buildDelegatedSynthesisJobLines(jobSnapshots: DelegatedJobSnapshot[]): string[] {
+  return jobSnapshots
+    .filter((snapshot) => snapshot.status === 'succeeded' || snapshot.status === 'completed')
+    .slice(0, 20)
+    .map((snapshot, index) => {
+      const refs = extractDelegatedEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview);
+      return `- job_${index + 1}: id=${snapshot.id} tool=${snapshot.toolName} status=${snapshot.status}${refs.length > 0 ? ` refs=${refs.join(', ')}` : ''} result=${truncateInlineText(snapshot.resultPreview ?? snapshot.error ?? '', 1_200)}`;
+    });
+}
+
+function buildDelegatedSynthesisHistoryLines(
+  history: Array<{ role: 'user' | 'assistant'; content: string }> | undefined,
+): string[] {
+  return (history ?? [])
+    .filter((entry) => entry.content.trim())
+    .slice(-6)
+    .map((entry) => `- ${entry.role}: ${truncateInlineText(entry.content, 600)}`);
+}
+
 function appendDelegatedRetrySection(
   sections: PromptAssemblyAdditionalSection[],
   insufficiency: DelegatedResultSufficiencyFailure,
@@ -4277,6 +4679,33 @@ function appendDelegatedRetrySection(
   const satisfiedRefLines = insufficiency.satisfiedSteps
     .filter((step) => Array.isArray(step.refs) && step.refs.length > 0)
     .map((step) => `- ${step.stepId}: ${step.refs?.join(', ')}`);
+  if (isDelegatedAnswerSynthesisRetry(insufficiency)) {
+    return [
+      ...sections,
+      {
+        section: 'Delegated Retry Directive',
+        mode: 'plain',
+        content: [
+          'The previous delegated attempt gathered the required evidence but did not produce the required final user-facing answer.',
+          `Failure mode: ${insufficiency.failureSummary}`,
+          'Unsatisfied required steps:',
+          ...unsatisfiedLines,
+          `Already satisfied evidence steps: ${satisfiedSummary}`,
+          ...(satisfiedRefLines.length > 0
+            ? [
+                'Evidence references from already satisfied steps:',
+                ...satisfiedRefLines,
+              ]
+            : []),
+          retryInstruction,
+          'This retry is an answer-synthesis retry. Use the evidence already gathered in the previous attempt to satisfy the remaining answer step.',
+          'Do not re-run satisfied tool calls unless the remaining answer genuinely cannot be produced from the already satisfied evidence.',
+          'Do not ask the user for clarification when the requested answer can be produced from the gathered evidence.',
+          'End with a concise answer that directly satisfies every unsatisfied answer step.',
+        ].join('\n'),
+      },
+    ];
+  }
   const hasUnsatisfiedWriteStep = missingEvidenceKinds.includes('write')
     || insufficiency.unsatisfiedSteps.some((step) => step.kind === 'write');
   if (hasUnsatisfiedWriteStep) {
@@ -4377,7 +4806,7 @@ function isGraphWriteStep(step: DelegatedTaskPlanStep): boolean {
   return step.required !== false && step.kind === 'write';
 }
 
-function shouldUseGraphControlledExecution(input: {
+export function shouldUseGraphControlledExecution(input: {
   taskContract: DelegatedResultEnvelope['taskContract'];
   decision: IntentGatewayDecision | undefined;
   executionProfile?: SelectedExecutionProfile;
@@ -4388,10 +4817,39 @@ function shouldUseGraphControlledExecution(input: {
   if (input.decision?.executionClass === 'security_analysis') {
     return false;
   }
+  const route = input.decision?.route ?? input.taskContract.route;
+  if (route !== 'coding_task' && route !== 'filesystem_task') {
+    return false;
+  }
+  if (!hasConcreteGraphMutationContract(input.decision, route)) {
+    return false;
+  }
   const requiredSteps = input.taskContract.plan.steps.filter((step) => step.required !== false);
   const hasReadPhase = requiredSteps.some((step) => isGraphReadStep(step));
   const hasWritePhase = requiredSteps.some((step) => isGraphWriteStep(step));
   return hasReadPhase && hasWritePhase;
+}
+
+function hasConcreteGraphMutationContract(
+  decision: IntentGatewayDecision | undefined,
+  route: IntentGatewayDecision['route'] | DelegatedResultEnvelope['taskContract']['route'],
+): boolean {
+  if (!decision) {
+    return false;
+  }
+  if (decision.confidence === 'low') {
+    return false;
+  }
+  if (
+    decision.provenance?.route === 'repair.unstructured'
+    || decision.provenance?.operation === 'repair.unstructured'
+  ) {
+    return false;
+  }
+  if (route === 'filesystem_task' && !decision.entities.path?.trim()) {
+    return false;
+  }
+  return true;
 }
 
 function selectGraphControllerExecutionProfile(input: {
@@ -4769,7 +5227,7 @@ function collectDelegatedSatisfiedSteps(
   )
     .map((receipt) => ({
       stepId: receipt.stepId,
-      summary: stepById.get(receipt.stepId)?.summary ?? receipt.summary,
+      summary: receipt.summary ?? stepById.get(receipt.stepId)?.summary ?? receipt.stepId,
       refs: dedupeDelegatedRetryRefs(
         receipt.evidenceReceiptIds.flatMap((receiptId) => evidenceById.get(receiptId)?.refs ?? []),
       ),

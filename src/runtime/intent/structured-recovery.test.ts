@@ -170,4 +170,314 @@ describe('normalizeIntentGatewayDecision', () => {
       }),
     ]);
   });
+
+  it('does not repair an explicit filesystem save with a path into a Second Brain note save', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'filesystem_task',
+      confidence: 'high',
+      operation: 'save',
+      summary: 'Write a status note to tmp/manual-web/continuity-user-experience-summary.txt.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      path: 'tmp/manual-web/continuity-user-experience-summary.txt',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'Based on our last few messages, write a short status note to tmp/manual-web/continuity-user-experience-summary.txt covering what worked, what was confusing, and what should be improved next.',
+    });
+
+    expect(decision.route).toBe('filesystem_task');
+    expect(decision.entities.path).toBe('tmp/manual-web/continuity-user-experience-summary.txt');
+    expect(decision.provenance?.route).toBe('classifier.primary');
+  });
+
+  it('repairs a path-bearing Second Brain misclassification into a filesystem save', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'personal_assistant_task',
+      confidence: 'medium',
+      operation: 'save',
+      summary: 'Write a status note to tmp/manual-web/continuity-user-experience-summary.txt.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      path: 'tmp/manual-web/continuity-user-experience-summary.txt',
+      personalItemType: 'note',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'Based on our last few messages, write a short status note to tmp/manual-web/continuity-user-experience-summary.txt covering what worked, what was confusing, and what should be improved next.',
+    });
+
+    expect(decision.route).toBe('filesystem_task');
+    expect(decision.entities.path).toBe('tmp/manual-web/continuity-user-experience-summary.txt');
+    expect(decision.provenance?.route).toBe('repair.structured');
+  });
+
+  it('normalizes automation catalog list plans into automation evidence plus answer synthesis', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'list',
+      summary: 'Find matching automations and suggest one useful automation to create.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search existing automations.',
+          expectedToolCategories: ['search'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation to create.',
+          expectedToolCategories: ['write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Find any automations related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+    });
+
+    expect(decision.operation).toBe('read');
+    expect(decision.provenance?.operation).toBe('repair.structured');
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'read',
+        expectedToolCategories: ['automation_list'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_1'],
+      }),
+    ]);
+    expect(decision.plannedSteps?.[1]?.expectedToolCategories).toBeUndefined();
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('preserves mixed automation and routine evidence plans on the orchestrated general route', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Find matching automations and routines, then suggest one useful automation to create.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Search existing automations.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Search existing Second Brain routines.',
+          expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation to create.',
+          required: true,
+          dependsOn: ['step_1', 'step_2'],
+        },
+      ],
+    }, {
+      sourceContent: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+    });
+
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'read',
+        expectedToolCategories: ['automation_list'],
+      }),
+      expect.objectContaining({
+        kind: 'read',
+        expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_1', 'step_2'],
+      }),
+    ]);
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.expectedContextPressure).toBe('medium');
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.simpleVsComplex).toBe('complex');
+    expect(decision.provenance).toMatchObject({
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+      simpleVsComplex: 'derived.workload',
+    });
+  });
+
+  it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_control',
+      confidence: 'low',
+      operation: 'search',
+      summary: 'Find matching automations and suggest one useful automation to create.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Find matching automations and routines.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation to create.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+    });
+
+    expect(decision.operation).toBe('search');
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.expectedContextPressure).toBe('medium');
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.provenance).toMatchObject({
+      executionClass: 'derived.workload',
+      preferredTier: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+      expectedContextPressure: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+    });
+  });
+
+  it('treats generic write steps as answer synthesis for general read/search tool plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'low',
+      operation: 'search',
+      summary: 'Find matching automations and routines, then suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Find matching automations and routines.',
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation to create.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+    });
+
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'answer']);
+    expect(decision.plannedSteps?.[1]?.expectedToolCategories).toBeUndefined();
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('normalizes read-only Second Brain routine plans into routine evidence plus answer synthesis', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'personal_assistant_task',
+      confidence: 'low',
+      operation: 'read',
+      personalItemType: 'routine',
+      query: 'approval or routing or code review',
+      summary: 'Find matching routines and suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search matching routines.',
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation to create.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+    });
+
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'read',
+        expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_1'],
+      }),
+    ]);
+    expect(decision.plannedSteps?.[1]?.expectedToolCategories).toBeUndefined();
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
 });

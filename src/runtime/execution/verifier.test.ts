@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INTENT_GATEWAY_MISSING_SUMMARY } from '../intent/summary.js';
+import { normalizeIntentGatewayDecision } from '../intent/structured-recovery.js';
 import type {
   AnswerConstraints,
   Claim,
@@ -149,6 +150,154 @@ function buildEnvelope(input?: {
 }
 
 describe('verifyDelegatedResult', () => {
+  it('requires evidence and disables answer-first when a general task has required tool-backed steps', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Find matching automations and suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Read the existing automation catalog.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        { kind: 'answer', summary: 'Suggest one useful automation.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.kind).toBe('general_answer');
+    expect(taskContract.requiresEvidence).toBe(true);
+    expect(taskContract.allowsAnswerFirst).toBe(false);
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
+  it('verifies normalized automation catalog evidence plus answer synthesis', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_control',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Find matching automations and suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search existing automations and routines.', required: true },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation to create.',
+          expectedToolCategories: ['write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      entities: {},
+    });
+    const taskContract = buildDelegatedTaskContract(decision);
+
+    expect(taskContract.plan.steps).toMatchObject([
+      { kind: 'read', expectedToolCategories: ['automation_list'] },
+      { kind: 'answer' },
+    ]);
+    expect(taskContract.plan.steps[1]?.expectedToolCategories).toBeUndefined();
+
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-search-1',
+        sourceType: 'tool_call',
+        toolName: 'automation_list',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Listed existing automations and routines.',
+        startedAt: 1,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'answer-1',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Suggested one useful automation.',
+        startedAt: 3,
+        endedAt: 3,
+      },
+    ];
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts,
+      toolReceiptStepIds: new Map([['receipt-search-1', 'step_1']]),
+      finalAnswerReceiptId: 'answer-1',
+    });
+    const verification = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        evidenceReceipts,
+        stepReceipts,
+        finalUserAnswer: 'A useful automation would monitor pending approval continuations and report stale ones.',
+        runStatus: 'completed',
+      }),
+    });
+
+    expect(stepReceipts.map((receipt) => receipt.status)).toEqual(['satisfied', 'satisfied']);
+    expect(verification).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
+  it('normalizes automation list operations before delegated contract construction', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_control',
+      confidence: 'low',
+      operation: 'list',
+      summary: 'List matching automations and suggest one useful automation.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search existing automations and routines.', required: true },
+        {
+          kind: 'write',
+          summary: 'Suggest one useful automation to create.',
+          expectedToolCategories: ['write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      entities: {},
+    });
+    const taskContract = buildDelegatedTaskContract(decision);
+
+    expect(decision.operation).toBe('read');
+    expect(taskContract.kind).toBe('general_answer');
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'answer']);
+    expect(taskContract.plan.steps[0]?.expectedToolCategories).toEqual(['automation_list']);
+    expect(taskContract.plan.steps[1]?.expectedToolCategories).toBeUndefined();
+  });
+
   it('falls back to resolvedContent when the gateway summary is only a placeholder', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',
@@ -815,6 +964,150 @@ describe('verifyDelegatedResult', () => {
     });
 
     expect(decision.decision).toBe('satisfied');
+  });
+
+  it('accepts OpenRouter dated snapshot ids when they match the selected alias model', () => {
+    const taskContract = buildRepoInspectionTaskContract();
+    const decision = verifyDelegatedResult({
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'openrouter-coding',
+        providerType: 'openrouter',
+        providerModel: 'qwen/qwen3.6-plus',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        reason: 'test profile',
+      },
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: index === 0 ? ['receipt-1'] : index === 1 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [{
+          receiptId: 'receipt-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_read',
+          status: 'succeeded',
+          refs: ['src/runtime/run-timeline.ts'],
+          summary: 'Read src/runtime/run-timeline.ts',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        modelProvenance: {
+          resolvedProviderName: 'openrouter',
+          resolvedProviderType: 'openrouter',
+          resolvedProviderProfileName: 'openrouter-coding',
+          resolvedProviderModel: 'qwen/qwen3.6-plus-04-02',
+        },
+      }),
+    });
+
+    expect(decision.decision).toBe('satisfied');
+  });
+
+  it('accepts delegated model provenance from an explicitly configured fallback provider', () => {
+    const taskContract = buildRepoInspectionTaskContract();
+    const decision = verifyDelegatedResult({
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openai', 'nvidia'],
+        reason: 'test profile',
+      },
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts: taskContract.plan.steps.map((step, index) => ({
+          stepId: step.stepId,
+          status: 'satisfied',
+          evidenceReceiptIds: index === 0 ? ['receipt-1'] : index === 1 ? ['answer:1'] : [],
+          summary: step.summary,
+          startedAt: index + 1,
+          endedAt: index + 2,
+        })),
+        evidenceReceipts: [{
+          receiptId: 'receipt-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_read',
+          status: 'succeeded',
+          refs: ['src/runtime/run-timeline.ts'],
+          summary: 'Read src/runtime/run-timeline.ts',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        modelProvenance: {
+          resolvedProviderName: 'nvidia',
+          resolvedProviderType: 'nvidia',
+          resolvedProviderModel: 'moonshotai/kimi-k2-instruct-0905',
+          resolvedProviderTier: 'managed_cloud',
+          resolvedProviderLocality: 'external',
+          resolvedViaFallback: true,
+        },
+      }),
+    });
+
+    expect(decision.decision).toBe('satisfied');
+  });
+
+  it('still rejects delegated provider drift when the reported fallback was not selected', () => {
+    const decision = verifyDelegatedResult({
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['openai', 'anthropic'],
+        reason: 'test profile',
+      },
+      envelope: buildEnvelope({
+        modelProvenance: {
+          resolvedProviderName: 'nvidia',
+          resolvedProviderType: 'nvidia',
+          resolvedProviderModel: 'moonshotai/kimi-k2-instruct-0905',
+          resolvedViaFallback: true,
+        },
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'contradicted',
+      retryable: false,
+      missingEvidenceKinds: ['provider_selection'],
+    });
+    expect(decision.reasons[0]).toContain("provider profile 'nvidia'");
   });
 
   it('still rejects real model drift when the reported model is not the selected alias', () => {

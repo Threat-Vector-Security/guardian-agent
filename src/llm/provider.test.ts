@@ -339,6 +339,117 @@ describe('OpenAIProvider compatibility', () => {
     });
   });
 
+  it('adds OpenRouter automatic routing as the fallback for the selected model', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-coder',
+      apiKey: 'or-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    }, 'openrouter');
+
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: { content: 'ok' },
+          finish_reason: 'stop',
+        },
+      ],
+      model: 'qwen/qwen3.6-coder',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await provider.chat([{ role: 'user', content: 'Hello?' }]);
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      model: 'qwen/qwen3.6-coder',
+      models: ['qwen/qwen3.6-coder', 'openrouter/auto'],
+      route: 'fallback',
+    });
+  });
+
+  it('does not duplicate OpenRouter auto when it is the selected model', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openrouter',
+      model: 'openrouter/auto',
+      apiKey: 'or-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    }, 'openrouter');
+
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: { content: 'ok' },
+          finish_reason: 'stop',
+        },
+      ],
+      model: 'openrouter/auto',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await provider.chat([{ role: 'user', content: 'Hello?' }]);
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      model: 'openrouter/auto',
+    });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('models');
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('route');
+  });
+
+  it('does not add OpenRouter fallback routing to other compatible providers', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'nvidia',
+      model: 'nvidia/llama-3.3-nemotron-super-49b-v1',
+      apiKey: 'nv-test',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    }, 'nvidia');
+
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: { content: 'ok' },
+          finish_reason: 'stop',
+        },
+      ],
+      model: 'nvidia/llama-3.3-nemotron-super-49b-v1',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await provider.chat([{ role: 'user', content: 'Hello?' }]);
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('models');
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('route');
+  });
+
   it('surfaces provider-specific model-not-found guidance for xAI', async () => {
     const provider = new OpenAIProvider({
       provider: 'xai',

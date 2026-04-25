@@ -98,6 +98,184 @@ describe('BrokerServer', () => {
       channel: 'code-session',
     }));
   });
+
+  it('honors brokered LLM fallback provider order when the requested provider fails', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const responsePromise = readFirstJsonLine(output);
+    const tokenManager = new CapabilityTokenManager();
+    const token = tokenManager.mint({
+      workerId: 'worker-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      authorizedBy: 'owner',
+      authorizedChannel: 'web',
+      grantedCapabilities: ['llm.chat'],
+    });
+    const primaryChat = vi.fn(async () => {
+      throw new Error('primary quota exhausted');
+    });
+    const fallbackChat = vi.fn(async () => ({
+      content: 'fallback answer',
+      model: 'fallback-model',
+      finishReason: 'stop',
+    }));
+    const runtime = {
+      registry: {
+        get: vi.fn(() => ({
+          definition: {
+            providerName: 'openai-frontier',
+          },
+        })),
+      },
+      defaultProviderName: 'openai-frontier',
+      getProviderNames: vi.fn(() => ['openai-frontier', 'anthropic-frontier']),
+      getProvider: vi.fn((name: string) => {
+        if (name === 'openai-frontier') {
+          return { name, chat: primaryChat };
+        }
+        if (name === 'anthropic-frontier') {
+          return { name, chat: fallbackChat };
+        }
+        return undefined;
+      }),
+    } as unknown as Runtime;
+    const tools = {
+      searchTools: vi.fn(() => []),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+    } as unknown as ToolExecutor;
+
+    new BrokerServer({
+      tools,
+      runtime,
+      tokenManager,
+      inputStream: input,
+      outputStream: output,
+      workerId: 'worker-1',
+    });
+
+    input.write(`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'request-llm',
+      method: 'llm.chat',
+      params: {
+        capabilityToken: token.id,
+        providerName: 'openai-frontier',
+        fallbackProviderOrder: ['openai-frontier', 'anthropic-frontier'],
+        messages: [{ role: 'user', content: 'Use the ordered provider chain.' }],
+        options: {},
+      },
+    })}\n`);
+
+    const response = await responsePromise as {
+      result?: {
+        content?: string;
+        providerName?: string;
+        model?: string;
+      };
+      error?: unknown;
+    };
+
+    expect(response.error).toBeUndefined();
+    expect(primaryChat).toHaveBeenCalledTimes(1);
+    expect(fallbackChat).toHaveBeenCalledTimes(1);
+    expect(response.result).toMatchObject({
+      content: 'fallback answer',
+      providerName: 'anthropic-frontier',
+      model: 'fallback-model',
+    });
+  });
+
+  it('reports the selected fallback provider profile name instead of the provider implementation type', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const responsePromise = readFirstJsonLine(output);
+    const tokenManager = new CapabilityTokenManager();
+    const token = tokenManager.mint({
+      workerId: 'worker-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      authorizedBy: 'owner',
+      authorizedChannel: 'web',
+      grantedCapabilities: ['llm.chat'],
+    });
+    const primaryChat = vi.fn(async () => {
+      throw new Error('frontier unavailable');
+    });
+    const fallbackChat = vi.fn(async () => ({
+      content: 'managed fallback answer',
+      model: 'moonshotai/kimi-k2-instruct-0905',
+      finishReason: 'stop',
+    }));
+    const runtime = {
+      registry: {
+        get: vi.fn(() => ({
+          definition: {
+            providerName: 'openai',
+          },
+        })),
+      },
+      defaultProviderName: 'openai',
+      getProviderNames: vi.fn(() => ['openai', 'nvidia-tools']),
+      getProvider: vi.fn((name: string) => {
+        if (name === 'openai') {
+          return { name: 'openai', chat: primaryChat };
+        }
+        if (name === 'nvidia-tools') {
+          return { name: 'nvidia', chat: fallbackChat };
+        }
+        return undefined;
+      }),
+    } as unknown as Runtime;
+    const tools = {
+      searchTools: vi.fn(() => []),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+    } as unknown as ToolExecutor;
+
+    new BrokerServer({
+      tools,
+      runtime,
+      tokenManager,
+      inputStream: input,
+      outputStream: output,
+      workerId: 'worker-1',
+    });
+
+    input.write(`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'request-llm-profile',
+      method: 'llm.chat',
+      params: {
+        capabilityToken: token.id,
+        providerName: 'openai',
+        fallbackProviderOrder: ['openai', 'nvidia-tools'],
+        messages: [{ role: 'user', content: 'Use managed cloud fallback.' }],
+        options: {},
+      },
+    })}\n`);
+
+    const response = await responsePromise as {
+      result?: {
+        content?: string;
+        providerName?: string;
+        providerLocality?: string;
+        model?: string;
+      };
+      error?: unknown;
+    };
+
+    expect(response.error).toBeUndefined();
+    expect(primaryChat).toHaveBeenCalledTimes(1);
+    expect(fallbackChat).toHaveBeenCalledTimes(1);
+    expect(response.result).toMatchObject({
+      content: 'managed fallback answer',
+      providerName: 'nvidia-tools',
+      providerLocality: 'external',
+      model: 'moonshotai/kimi-k2-instruct-0905',
+    });
+  });
 });
 
 function readFirstJsonLine(stream: PassThrough): Promise<unknown> {

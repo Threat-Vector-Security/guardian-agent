@@ -22,6 +22,7 @@ export interface ProviderSelectionSnapshot {
   resolvedProviderProfileName?: string;
   resolvedProviderTier?: string;
   resolvedProviderLocality?: 'local' | 'external';
+  resolvedViaFallback?: boolean;
   selectionSource?: string;
   defaultProviderName?: string;
 }

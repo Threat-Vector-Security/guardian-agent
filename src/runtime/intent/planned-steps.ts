@@ -20,6 +20,14 @@ const READ_OR_SEARCH_TOOL_CATEGORIES = new Set([
   'web_fetch',
 ]);
 
+const GENERIC_TOOL_PLAN_CATEGORIES = new Set([
+  'answer',
+  'read',
+  'search',
+  'tool_call',
+  'write',
+]);
+
 function plannedSteps(decision: IntentGatewayDecision | null | undefined): IntentGatewayPlannedStep[] {
   return Array.isArray(decision?.plannedSteps) ? decision.plannedSteps : [];
 }
@@ -33,6 +41,22 @@ function hasAnyExpectedCategory(
   categories: ReadonlySet<string>,
 ): boolean {
   return step.expectedToolCategories?.some((category) => categories.has(category)) === true;
+}
+
+function requiredEvidenceSteps(
+  decision: IntentGatewayDecision | null | undefined,
+): IntentGatewayPlannedStep[] {
+  return plannedSteps(decision)
+    .filter((step) => isRequiredStep(step) && step.kind !== 'answer');
+}
+
+export function hasConcreteToolEvidenceCategory(
+  categories: readonly string[] | undefined,
+): boolean {
+  return categories?.some((category) => {
+    const normalized = category.trim();
+    return normalized.length > 0 && !GENERIC_TOOL_PLAN_CATEGORIES.has(normalized);
+  }) === true;
 }
 
 export function hasRequiredWritePlannedStep(
@@ -71,4 +95,58 @@ export function hasRequiredToolOrMutationPlannedStep(
       || step.kind === 'memory_save'
       || hasAnyExpectedCategory(step, WRITE_TOOL_CATEGORIES)
     ));
+}
+
+export function hasRequiredToolBackedAnswerPlan(
+  decision: IntentGatewayDecision | null | undefined,
+): boolean {
+  const requiredSteps = plannedSteps(decision).filter(isRequiredStep);
+  const hasAnswerStep = requiredSteps.some((step) => step.kind === 'answer');
+  if (!hasAnswerStep) {
+    return false;
+  }
+  return requiredSteps.some((step) => step.kind !== 'answer'
+    && (
+      step.kind === 'tool_call'
+      || step.kind === 'write'
+      || step.kind === 'read'
+      || step.kind === 'search'
+      || step.kind === 'memory_save'
+      || (step.expectedToolCategories?.length ?? 0) > 0
+    ));
+}
+
+export function hasGenericRequiredToolBackedAnswerPlan(
+  decision: IntentGatewayDecision | null | undefined,
+): boolean {
+  if (!hasRequiredToolBackedAnswerPlan(decision)) {
+    return false;
+  }
+  const evidenceSteps = requiredEvidenceSteps(decision);
+  if (evidenceSteps.length === 0) {
+    return true;
+  }
+  return evidenceSteps.some((step) => !hasConcreteToolEvidenceCategory(step.expectedToolCategories));
+}
+
+export function countConcreteRequiredEvidenceSteps(
+  decision: IntentGatewayDecision | null | undefined,
+): number {
+  return requiredEvidenceSteps(decision)
+    .filter((step) => hasConcreteToolEvidenceCategory(step.expectedToolCategories))
+    .length;
+}
+
+export function shouldAdoptMoreConcreteToolBackedAnswerPlan(input: {
+  current: IntentGatewayDecision | null | undefined;
+  candidate: IntentGatewayDecision | null | undefined;
+}): boolean {
+  if (input.candidate?.resolution !== 'ready') {
+    return false;
+  }
+  if (!hasRequiredToolBackedAnswerPlan(input.candidate)) {
+    return false;
+  }
+  return countConcreteRequiredEvidenceSteps(input.candidate)
+    > countConcreteRequiredEvidenceSteps(input.current);
 }

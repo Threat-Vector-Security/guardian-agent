@@ -642,6 +642,62 @@ describe('execution profiles', () => {
     });
   });
 
+  it('derives coding-workspace intent when pre-routed gateway metadata is absent', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: null,
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+  });
+
+  it('does not recast explicit automation control work as a coding task just because a code workspace is attached', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'automation_control',
+        operation: 'read',
+        summary: 'Find existing approval-related automations and suggest one useful automation.',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          { kind: 'search', summary: 'Search existing automations and routines.', required: true },
+          { kind: 'answer', summary: 'Suggest one useful automation.', required: true, dependsOn: ['step_1'] },
+        ],
+      }),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'automation_control',
+      operation: 'read',
+      executionClass: 'tool_orchestration',
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'answer']);
+  });
+
   it('keeps security verification on frontier when delegating to a security verifier', () => {
     const config = createConfig();
     const parentProfile = selectExecutionProfile({
@@ -687,6 +743,34 @@ describe('execution profiles', () => {
       providerTier: 'frontier',
       selectionSource: 'delegated_role',
     });
+  });
+
+  it('orders alternate frontier providers before degrading an escalated frontier profile', () => {
+    const config = createConfig();
+    config.llm['openai-frontier'] = {
+      provider: 'openai',
+      model: 'gpt-5.4',
+      apiKey: 'test-key',
+    };
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        executionClass: 'security_analysis',
+        requiresRepoGrounding: true,
+      }),
+      mode: 'frontier-only',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+    });
+    expect(profile?.fallbackProviderOrder.slice(0, 2)).toEqual([
+      'anthropic',
+      'openai-frontier',
+    ]);
   });
 
   it('escalates delegated coding-workspace retries from the managed-cloud coding profile to frontier', () => {
