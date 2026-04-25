@@ -75,6 +75,30 @@ describe('intent-route-clarification', () => {
     });
   });
 
+  it('does not ask for automation confirmation when run behavior describes a new automation', () => {
+    expect(deriveIntentRouteClarification({
+      content: 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
+      decision: {
+        route: 'automation_authoring',
+        confidence: 'medium',
+        turnRelation: 'new_request',
+      },
+      mode: 'primary',
+    })).toBeNull();
+  });
+
+  it('does not ask for automation confirmation when scheduling an existing automation follow-up', () => {
+    expect(deriveIntentRouteClarification({
+      content: 'Now edit that automation, make it scheduled and run daily at 9:00 AM.',
+      decision: {
+        route: 'automation_control',
+        confidence: 'medium',
+        turnRelation: 'follow_up',
+      },
+      mode: 'primary',
+    })).toBeNull();
+  });
+
   it('asks whether an ambiguous page request is Guardian UI or the web', () => {
     expect(deriveIntentRouteClarification({
       content: 'Open the dashboard page for me.',

@@ -7,6 +7,7 @@ import { fileURLToPath, URL } from 'node:url';
 import yaml from 'js-yaml';
 
 import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), '..');
@@ -57,15 +58,26 @@ function skipCase(name, detail = '') {
   console.log(`  \x1b[33mSKIP\x1b[0m ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
-function createChatCompletionResponse({ model, content = '' }) {
+function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
+  const message = { role: 'assistant', content };
+  if (toolCalls?.length) {
+    message.tool_calls = toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      type: 'function',
+      function: {
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      },
+    }));
+  }
   return {
     id: `chatcmpl-${Date.now()}`,
     model,
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content },
-        finish_reason: 'stop',
+        message,
+        finish_reason: finishReason,
       },
     ],
     usage: {
@@ -73,6 +85,131 @@ function createChatCompletionResponse({ model, content = '' }) {
       completion_tokens: 1,
       total_tokens: 2,
     },
+  };
+}
+
+function extractToolNames(tools) {
+  return Array.isArray(tools)
+    ? tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
+    : [];
+}
+
+function latestUserMessage(messages) {
+  return String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+}
+
+function buildFakeIntentDecision(latestUser) {
+  const request = latestUser.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? latestUser;
+  if (/\bgmail\b/i.test(request)) {
+    return {
+      route: 'email_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Check Gmail inbox.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      emailProvider: 'gws',
+      mailboxReadMode: 'latest',
+    };
+  }
+  if (/\b(?:outlook|microsoft 365|m365)\b/i.test(request)) {
+    return {
+      route: 'email_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Check Outlook inbox.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      emailProvider: 'm365',
+      mailboxReadMode: 'latest',
+    };
+  }
+  if (/\bsend\b[\s\S]{0,80}\bemail\b|\bemail\b[\s\S]{0,80}\bsend\b/i.test(request)) {
+    return {
+      route: 'email_task',
+      confidence: 'high',
+      operation: 'send',
+      summary: 'Which one do you want me to use?',
+      turnRelation: 'new_request',
+      resolution: 'needs_clarification',
+      missingFields: ['email_provider'],
+    };
+  }
+  if (/\b(?:check|read|show|list)\b[\s\S]{0,80}\b(?:email|inbox|mailbox|mail)\b/i.test(request)) {
+    return {
+      route: 'email_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Which mailbox would you like to check?',
+      turnRelation: 'new_request',
+      resolution: 'needs_clarification',
+      missingFields: ['email_provider'],
+    };
+  }
+  return {
+    route: 'general_assistant',
+    confidence: 'medium',
+    operation: 'inspect',
+    summary: 'General assistant request.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+  };
+}
+
+function createFakeProviderReply(parsed) {
+  const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+  const tools = extractToolNames(parsed?.tools);
+  const latestUser = latestUserMessage(messages);
+  const transcript = messages.map((message) => String(message?.content ?? '')).join('\n');
+  const toolMessages = messages.filter((message) => message.role === 'tool');
+
+  if (tools.includes('route_intent')) {
+    return {
+      finishReason: 'tool_calls',
+      toolCalls: [{
+        id: 'skills-routing-route',
+        name: 'route_intent',
+        arguments: JSON.stringify(buildFakeIntentDecision(latestUser)),
+      }],
+    };
+  }
+
+  if (/Guardian's intent gateway/i.test(transcript)) {
+    return {
+      content: JSON.stringify(buildFakeIntentDecision(latestUser)),
+    };
+  }
+
+  if (tools.includes('gws')) {
+    return {
+      finishReason: 'tool_calls',
+      toolCalls: [{
+        id: 'skills-routing-gws',
+        name: 'gws',
+        arguments: JSON.stringify({
+          service: 'gmail',
+          resource: 'users messages',
+          action: 'list',
+          args: {
+            userId: 'me',
+            maxResults: 5,
+          },
+        }),
+      }],
+    };
+  }
+
+  if (toolMessages.length > 0) {
+    return {
+      content: 'Gmail inbox contains stub messages from the harness.',
+    };
+  }
+
+  return {
+    content: 'Harness provider response.',
   };
 }
 
@@ -96,13 +233,14 @@ async function readJsonBody(req) {
 async function startFakeProvider() {
   const modelName = 'skills-routing-harness-model';
   const server = http.createServer(async (req, res) => {
-    if (req.method === 'GET' && req.url === '/api/tags') {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ models: [{ name: modelName, size: 1 }] }));
       return;
     }
 
-    if (req.method === 'GET' && req.url === '/v1/models') {
+    if (req.method === 'GET' && (url.pathname === '/v1/models' || url.pathname === '/models')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         data: [{ id: modelName, object: 'model' }],
@@ -110,12 +248,25 @@ async function startFakeProvider() {
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/v1/chat/completions') {
-      await readJsonBody(req);
+    if (req.method === 'POST' && (url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions')) {
+      const parsed = await readJsonBody(req);
+      const reply = createFakeProviderReply(parsed);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatCompletionResponse({
         model: modelName,
-        content: 'Harness provider response.',
+        ...reply,
+      })));
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/chat') {
+      const parsed = await readJsonBody(req);
+      const reply = createFakeProviderReply(parsed);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(createOllamaHarnessChatResponse({
+        model: modelName,
+        doneReason: reply.finishReason,
+        ...reply,
       })));
       return;
     }
@@ -396,8 +547,14 @@ async function requestJson(baseUrl, token, method, pathname, body) {
 }
 
 async function resetPendingAction(baseUrl, token, userId, surfaceId) {
-  return requestJson(baseUrl, token, 'POST', '/api/chat/pending-action/reset', {
+  const result = await requestJson(baseUrl, token, 'POST', '/api/chat/pending-action/reset', {
     userId,
+    channel: 'web',
+    surfaceId,
+  });
+  if (result?.success || userId === 'harness') return result;
+  return requestJson(baseUrl, token, 'POST', '/api/chat/pending-action/reset', {
+    userId: 'harness',
     channel: 'web',
     surfaceId,
   });
@@ -640,7 +797,7 @@ async function runHttpMatrix(provider, options) {
         host: '127.0.0.1',
         port,
         authToken: token,
-        defaultAgent: 'default',
+        defaultAgent: 'local',
       },
     },
     assistant: {
@@ -729,7 +886,7 @@ async function runHttpMatrix(provider, options) {
     const sendMessage = async (content, userId = 'harness', surfaceId = `web-${userId}`) => requestJson(baseUrl, token, 'POST', '/api/message', {
       content,
       userId,
-      agentId: 'default',
+      agentId: 'local',
       channel: 'web',
       surfaceId,
     });

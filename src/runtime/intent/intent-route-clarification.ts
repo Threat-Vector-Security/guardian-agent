@@ -15,6 +15,7 @@ import type { IntentGatewayDecision, IntentGatewayRecord, IntentGatewayRoute } f
 const AUTOMATION_NOUN_PATTERN = /\b(?:automation|automations|workflow|workflows|scheduled automation|scheduled task|assistant automation)\b/;
 const AUTOMATION_CREATE_PATTERN = /\b(?:create|build|set up|setup|make|configure|automate|save)\b/;
 const AUTOMATION_UPDATE_PATTERN = /\b(?:edit|update|change|modify|rename|enable|disable|run|delete|remove|inspect|show|list)\b/;
+const AUTOMATION_CREATE_OR_CONTROL_CHOICE_PATTERN = /\b(?:create|build|set up|setup|make|configure|automate|save)\b[\s\S]{0,60}(?:\bor\b|\/)[\s\S]{0,60}\b(?:edit|update|change|modify|rename|enable|disable|run|delete|remove|inspect|show|list)\b|\b(?:edit|update|change|modify|rename|enable|disable|run|delete|remove|inspect|show|list)\b[\s\S]{0,60}(?:\bor\b|\/)[\s\S]{0,60}\b(?:create|build|set up|setup|make|configure|automate|save)\b/;
 
 const SESSION_SIGNAL_PATTERN = /\b(?:session|sessions|workspace|workspaces|attached|attach|detached|detach|active|current workspace|current session|this chat)\b/;
 const CODING_WORK_SIGNAL_PATTERN = /\b(?:repo|repository|codebase|source|file|files|function|class|module|symbol|path|paths|implement|review|inspect|search|grep|debug|refactor|fix|test|build|run)\b/;
@@ -103,6 +104,11 @@ function deriveAutomationClarification(
 
   const hasCreateLanguage = AUTOMATION_CREATE_PATTERN.test(normalized);
   const hasUpdateLanguage = AUTOMATION_UPDATE_PATTERN.test(normalized);
+  const explicitAuthoring = isExplicitAutomationAuthoringRequest(normalized);
+  const explicitControl = isExplicitAutomationControlRequest(normalized);
+  if (explicitAuthoring !== explicitControl && !AUTOMATION_CREATE_OR_CONTROL_CHOICE_PATTERN.test(normalized)) {
+    return null;
+  }
   if (hasCreateLanguage && hasUpdateLanguage) {
     return {
       prompt: 'Do you want me to create a new automation, or update an existing automation?',
@@ -122,8 +128,6 @@ function deriveAutomationClarification(
     };
   }
 
-  const explicitAuthoring = isExplicitAutomationAuthoringRequest(normalized);
-  const explicitControl = isExplicitAutomationControlRequest(normalized);
   if (explicitAuthoring !== explicitControl) {
     return null;
   }
