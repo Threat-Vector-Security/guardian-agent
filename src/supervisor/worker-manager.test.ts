@@ -21,6 +21,7 @@ import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
 import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
+import type { PendingActionRecord } from '../runtime/pending-actions.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
@@ -4176,17 +4177,24 @@ describe('WorkerManager', () => {
     const runTimeline = {
       ingestExecutionGraphEvent: vi.fn(),
     };
+    let capturedPendingAction: PendingActionRecord | undefined;
     const pendingActionStore = {
-      replaceActive: vi.fn((_scope, draft) => ({
+      replaceActive: vi.fn((_scope, draft) => {
+        capturedPendingAction = {
         id: 'pending-graph-1',
         scope: _scope,
         ...draft,
-      })),
+          createdAt: 1_112_000,
+          updatedAt: 1_112_000,
+        } as PendingActionRecord;
+        return capturedPendingAction;
+      }),
     };
     const executionGraphStore = new ExecutionGraphStore({
       now: () => 1_112_000,
     });
-    const executeModelTool = vi.fn(async (toolName: string) => {
+    const synthesizedContent = 'planned_steps appears in src/runtime/intent/route-classifier.ts.\n';
+    const executeModelTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'fs_write') {
         return {
           success: false,
@@ -4194,6 +4202,19 @@ describe('WorkerManager', () => {
           approvalId: 'approval-graph-write',
           jobId: 'job-graph-write',
           message: 'Approval required.',
+        };
+      }
+      if (toolName === 'fs_read') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-graph-readback',
+          output: {
+            path: args.path,
+            bytes: Buffer.byteLength(synthesizedContent, 'utf-8'),
+            truncated: false,
+            content: synthesizedContent,
+          },
         };
       }
       throw new Error(`Unexpected tool ${toolName}`);
@@ -4323,6 +4344,74 @@ describe('WorkerManager', () => {
       'MutationReceipt',
     ]));
 
+    const resumeManager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listJobs: vi.fn(() => []),
+        executeModelTool,
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: () => undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        executionGraphStore,
+        now: () => 1_112_100,
+      },
+    );
+    const resumed = await resumeManager.resumeExecutionGraphPendingAction(
+      capturedPendingAction!,
+      {
+        approvalId: 'approval-graph-write',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: 'Approved and executed.',
+          job: { id: 'job-graph-write', status: 'succeeded' } as never,
+          result: {
+            success: true,
+            output: {
+              size: Buffer.byteLength(synthesizedContent, 'utf-8'),
+            },
+          } as never,
+        },
+      },
+    );
+    expect(resumed?.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt');
+    expect(resumed?.metadata?.executionGraph).toMatchObject({
+      graphId,
+      status: 'succeeded',
+      verificationArtifactId: expect.stringContaining('verification'),
+    });
+    const resumedSnapshot = executionGraphStore.getSnapshot(graphId);
+    expect(resumedSnapshot?.graph.status).toBe('completed');
+    expect(resumedSnapshot?.graph.nodes.find((node) => node.kind === 'mutate')?.status).toBe('completed');
+    expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual(expect.arrayContaining([
+      'VerificationResult',
+    ]));
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'fs_read',
+      expect.objectContaining({ path: 'tmp/manual-web/planned-steps-summary.txt' }),
+      expect.objectContaining({ requestId: 'm-search-write-graph-approval', userId: 'tester' }),
+    );
+
+    resumeManager.shutdown();
     manager.shutdown();
   });
 

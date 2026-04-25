@@ -283,7 +283,7 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
   const receiptArtifact = buildMutationReceiptArtifact({
     graphId: input.context.graphId,
     nodeId: input.context.nodeId,
-    artifactId: `${input.context.graphId}:${input.context.nodeId}:mutation-receipt`,
+    artifactId: `${input.context.graphId}:${input.context.nodeId}:mutation-receipt:approved:${input.approvalId ?? 'approval'}`,
     writeSpec: input.writeSpec,
     toolResult: input.approvedToolResult,
     createdAt: now(),
