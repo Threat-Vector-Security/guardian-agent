@@ -12,6 +12,8 @@ export type ExecutionGraphEventKind =
   | 'approval_resolved'
   | 'clarification_requested'
   | 'clarification_resolved'
+  | 'interruption_requested'
+  | 'interruption_resolved'
   | 'verification_completed'
   | 'recovery_proposed'
   | 'node_completed'
@@ -165,6 +167,8 @@ function isExecutionGraphEventKind(value: unknown): value is ExecutionGraphEvent
     case 'approval_resolved':
     case 'clarification_requested':
     case 'clarification_resolved':
+    case 'interruption_requested':
+    case 'interruption_resolved':
     case 'verification_completed':
     case 'recovery_proposed':
     case 'node_completed':

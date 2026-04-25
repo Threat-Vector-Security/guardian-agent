@@ -96,6 +96,8 @@ function readGraphBlockerKind(event: ExecutionGraphEvent): PendingActionBlockerK
       return 'approval';
     case 'clarification_requested':
       return 'clarification';
+    case 'interruption_requested':
+      return readPendingActionBlockerKind(event.payload.kind);
     default:
       return null;
   }
@@ -114,31 +116,93 @@ function buildPendingActionBlocker(input: {
     nodeId: input.graphInterrupt.nodeId,
     resumeToken: input.graphInterrupt.resumeToken,
   };
-  if (input.blockerKind === 'approval') {
-    return {
-      kind: 'approval',
-      prompt: readApprovalPrompt(input.event.payload, input.approvalSummaries),
-      ...(input.approvalIds.length > 0 ? { approvalIds: input.approvalIds } : {}),
-      ...(input.approvalSummaries.length > 0 ? { approvalSummaries: input.approvalSummaries } : {}),
-      metadata: graphMetadata,
-    };
+  switch (input.blockerKind) {
+    case 'approval':
+      return {
+        kind: 'approval',
+        prompt: readApprovalPrompt(input.event.payload, input.approvalSummaries),
+        ...(input.approvalIds.length > 0 ? { approvalIds: input.approvalIds } : {}),
+        ...(input.approvalSummaries.length > 0 ? { approvalSummaries: input.approvalSummaries } : {}),
+        metadata: graphMetadata,
+      };
+    case 'clarification':
+    case 'missing_context': {
+      const options = readPendingActionOptions(input.event.payload.options);
+      const field = readString(input.event.payload.field)
+        || readString(input.event.payload.missingField)
+        || readFirstString(input.missingFields);
+      const clarificationId = readString(input.event.payload.clarificationId);
+      return {
+        kind: input.blockerKind,
+        prompt: readGenericBlockerPrompt(input.event.payload, input.blockerKind),
+        ...(field ? { field } : {}),
+        ...(options.length > 0 ? { options } : {}),
+        metadata: {
+          ...graphMetadata,
+          ...(clarificationId ? { clarificationId } : {}),
+        },
+      };
+    }
+    case 'workspace_switch':
+      return {
+        kind: 'workspace_switch',
+        prompt: readGenericBlockerPrompt(input.event.payload, 'workspace_switch'),
+        ...(readString(input.event.payload.currentSessionId) ? { currentSessionId: readString(input.event.payload.currentSessionId) } : {}),
+        ...(readString(input.event.payload.currentSessionLabel) ? { currentSessionLabel: readString(input.event.payload.currentSessionLabel) } : {}),
+        ...(readString(input.event.payload.targetSessionId) ? { targetSessionId: readString(input.event.payload.targetSessionId) } : {}),
+        ...(readString(input.event.payload.targetSessionLabel) ? { targetSessionLabel: readString(input.event.payload.targetSessionLabel) } : {}),
+        metadata: graphMetadata,
+      };
+    case 'auth':
+      return {
+        kind: 'auth',
+        prompt: readGenericBlockerPrompt(input.event.payload, 'auth'),
+        ...(readString(input.event.payload.provider) ? { provider: readString(input.event.payload.provider) } : {}),
+        ...(readString(input.event.payload.service) ? { service: readString(input.event.payload.service) } : {}),
+        ...(readPendingActionOptions(input.event.payload.options).length > 0
+          ? { options: readPendingActionOptions(input.event.payload.options) }
+          : {}),
+        metadata: graphMetadata,
+      };
+    case 'policy':
+      return {
+        kind: 'policy',
+        prompt: readGenericBlockerPrompt(input.event.payload, 'policy'),
+        ...(readString(input.event.payload.provider) ? { provider: readString(input.event.payload.provider) } : {}),
+        ...(readString(input.event.payload.service) ? { service: readString(input.event.payload.service) } : {}),
+        metadata: graphMetadata,
+      };
+    default:
+      return {
+        kind: 'clarification',
+        prompt: readGenericBlockerPrompt(input.event.payload, 'clarification'),
+        metadata: graphMetadata,
+      };
   }
+}
 
-  const options = readPendingActionOptions(input.event.payload.options);
-  const field = readString(input.event.payload.field)
-    || readString(input.event.payload.missingField)
-    || readFirstString(input.missingFields);
-  const clarificationId = readString(input.event.payload.clarificationId);
-  return {
-    kind: 'clarification',
-    prompt: readClarificationPrompt(input.event.payload),
-    ...(field ? { field } : {}),
-    ...(options.length > 0 ? { options } : {}),
-    metadata: {
-      ...graphMetadata,
-      ...(clarificationId ? { clarificationId } : {}),
-    },
-  };
+function readPendingActionBlockerKind(value: unknown): PendingActionBlockerKind | null {
+  switch (value) {
+    case 'approval':
+    case 'clarification':
+    case 'workspace_switch':
+    case 'auth':
+    case 'policy':
+    case 'missing_context':
+      return value;
+    default:
+      return null;
+  }
+}
+
+function readGenericBlockerPrompt(
+  payload: Record<string, unknown>,
+  blockerKind: PendingActionBlockerKind,
+): string {
+  return readString(payload.prompt)
+    || readString(payload.question)
+    || readString(payload.summary)
+    || fallbackPendingActionPrompt(blockerKind);
 }
 
 function readApprovalPrompt(
@@ -149,13 +213,6 @@ function readApprovalPrompt(
     || readString(payload.summary)
     || (approvalSummaries.length > 0 ? formatPendingApprovalMessage(approvalSummaries) : '')
     || 'Approval required for the pending graph action.';
-}
-
-function readClarificationPrompt(payload: Record<string, unknown>): string {
-  return readString(payload.prompt)
-    || readString(payload.question)
-    || readString(payload.summary)
-    || fallbackPendingActionPrompt('clarification');
 }
 
 export function buildExecutionGraphResumePayload(
