@@ -82,6 +82,7 @@ function createBaseArgs(config: GuardianAgentConfig) {
       },
       conversations: {
         getHistoryForContext: vi.fn(() => []),
+        getSessionHistory: vi.fn(() => []),
       },
       pendingActionStore: {
         resolveActiveForSurface: vi.fn(() => null),
@@ -91,6 +92,7 @@ function createBaseArgs(config: GuardianAgentConfig) {
       },
       codeSessionStore: {
         resolveForRequest: vi.fn(() => null),
+        getSession: vi.fn(() => null),
       },
       intentRoutingTrace: {
         record: vi.fn(),

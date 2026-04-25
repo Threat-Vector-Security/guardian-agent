@@ -12,6 +12,7 @@ function mockGateway(partial: {
   turnRelation?: string;
   entities?: Record<string, unknown>;
   available?: boolean;
+  plannedSteps?: IntentGatewayRecord['decision']['plannedSteps'];
 }): IntentGatewayRecord {
   return {
     mode: 'primary',
@@ -26,6 +27,7 @@ function mockGateway(partial: {
       turnRelation: (partial.turnRelation ?? 'new_request') as IntentGatewayRecord['decision']['turnRelation'],
       resolution: 'ready',
       missingFields: [],
+      ...(partial.plannedSteps ? { plannedSteps: partial.plannedSteps } : {}),
       entities: (partial.entities ?? {}) as IntentGatewayRecord['decision']['entities'],
     },
   };
@@ -171,6 +173,33 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['personal_assistant']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('defers automation catalog plus answer plans to the worker synthesis path', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'automation_control',
+        operation: 'read',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'List matching automations.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Suggest one useful automation.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
   });
 

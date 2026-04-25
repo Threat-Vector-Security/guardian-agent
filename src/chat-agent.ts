@@ -133,6 +133,14 @@ import {
 import {
   buildIntentGatewayHistoryQuery,
 } from './runtime/intent/history-context.js';
+import {
+  hasRequiredToolBackedAnswerPlan,
+} from './runtime/intent/planned-steps.js';
+import {
+  buildFrontierIntentPlanRepairProviderOrder,
+  tryRepairGenericIntentGatewayPlan,
+} from './runtime/intent/gateway-plan-repair.js';
+import { buildContinuityAwareHistory } from './runtime/continuity-history.js';
 import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
 import {
   parseWebSearchIntent,
@@ -2531,6 +2539,7 @@ type DirectIntentShadowCandidate =
     if (!decision) return false;
     if (decision.executionClass !== 'direct_assistant') return false;
     if (decision.requiresRepoGrounding || decision.requiresToolSynthesis) return false;
+    if (hasRequiredToolBackedAnswerPlan(decision)) return false;
     const preferredAnswerPath = decision.preferredAnswerPath ?? input.selectedExecutionProfile?.preferredAnswerPath;
     if (preferredAnswerPath !== 'direct') return false;
 
@@ -2780,16 +2789,19 @@ type DirectIntentShadowCandidate =
       codeSessionId: effectiveCodeContext?.sessionId,
     });
     const continuitySummaryForHistory = summarizeContinuityThreadForGateway(continuityThread);
-    const priorHistory = this.conversationService?.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: conversationUserId,
-      channel: conversationChannel,
-    }, {
+    const priorHistory = buildContinuityAwareHistory({
+      conversationService: this.conversationService,
+      codeSessionStore: this.codeSessionStore,
+      continuityThread,
+      currentConversationKey: conversationKey,
+      currentUserId: pendingActionUserId,
+      currentPrincipalId: effectiveMessage.principalId,
+      resolvedCodeSession: resolvedCodeSession?.session ?? null,
       query: buildIntentGatewayHistoryQuery({
         content: stripLeadingContextPrefix(scopedMessage.content),
         continuity: continuitySummaryForHistory,
       }),
-    }) ?? [];
+    }).history;
     const buildScopedDirectIntentResponse = (input: Omit<DirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>) => this.buildDirectIntentResponse({
       ...input,
       surfaceUserId: pendingActionUserId,
@@ -3835,6 +3847,7 @@ type DirectIntentShadowCandidate =
           .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
         const directReasoningResult = await handleDirectReasoningModeRuntime({
           message: message.content,
+          history: priorHistory,
           gateway: earlyGateway,
           selectedExecutionProfile,
           promptKnowledge: {
@@ -7782,6 +7795,65 @@ type DirectIntentShadowCandidate =
     });
   }
 
+  private async tryRepairGenericIntentGatewayPlanWithFrontier(input: {
+    message: UserMessage;
+    ctx: AgentContext;
+    gatewayInput: Parameters<IntentGateway['classify']>[0];
+    current: IntentGatewayRecord;
+  }): Promise<{
+    attempted: boolean;
+    adopted: boolean;
+    providerOrder?: string[];
+    record?: IntentGatewayRecord;
+  } | null> {
+    if (!this.fallbackChain) {
+      return {
+        attempted: false,
+        adopted: false,
+      };
+    }
+    const selectedProfile = readSelectedExecutionProfileMetadata(input.message.metadata);
+    const config = this.readConfig?.();
+    if (!config) {
+      return {
+        attempted: false,
+        adopted: false,
+      };
+    }
+    const providerOrder = buildFrontierIntentPlanRepairProviderOrder({
+      config,
+      currentProviderName: input.ctx.llm?.name,
+      fallbackProviderOrder: selectedProfile?.fallbackProviderOrder,
+      selectedProviderTier: selectedProfile?.providerTier,
+      forcedProviderName: selectedProfile?.selectionSource === 'request_override'
+        ? selectedProfile.providerName
+        : null,
+    });
+    return tryRepairGenericIntentGatewayPlan({
+      current: input.current,
+      sourceContent: stripLeadingContextPrefix(input.message.content),
+      candidates: (providerOrder ?? []).map((providerName) => ({
+        providerName,
+        classify: () => this.intentGateway.classify(
+          input.gatewayInput,
+          (messages, options) => this.chatWithFallback(
+            input.ctx,
+            messages,
+            { ...options, signal: input.message.abortSignal },
+            [providerName],
+          ),
+        ),
+      })),
+      onError: (err, providerName) => {
+        log.warn({
+          agentId: this.id,
+          providerName,
+          err: err instanceof Error ? err.message : String(err),
+        }, 'Frontier intent plan repair provider failed');
+      },
+    });
+  }
+
   private async classifyIntentGateway(
     message: UserMessage,
     ctx: AgentContext,
@@ -7831,29 +7903,42 @@ type DirectIntentShadowCandidate =
       pendingAction: options?.pendingAction ?? null,
       continuityThread: options?.continuityThread ?? null,
     });
+    const gatewayInput = {
+      content: stripLeadingContextPrefix(message.content),
+      channel: message.channel,
+      recentHistory: gatewayContext.recentHistory,
+      pendingAction: gatewayContext.pendingAction
+        ? summarizePendingActionForGateway(gatewayContext.pendingAction)
+        : null,
+      continuity: summarizeContinuityThreadForGateway(gatewayContext.continuityThread),
+      enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
+      availableCodingBackends: this.tools?.listEnabledCodingBackends?.() ?? [],
+    };
+    const fallbackProviderOrder = readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder;
     const classified = await this.intentGateway.classify(
-      {
-        content: stripLeadingContextPrefix(message.content),
-        channel: message.channel,
-        recentHistory: gatewayContext.recentHistory,
-        pendingAction: gatewayContext.pendingAction
-          ? summarizePendingActionForGateway(gatewayContext.pendingAction)
-          : null,
-        continuity: summarizeContinuityThreadForGateway(gatewayContext.continuityThread),
-        enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
-        availableCodingBackends: this.tools?.listEnabledCodingBackends?.() ?? [],
-      },
+      gatewayInput,
       (messages, options) => this.chatWithFallback(
         ctx,
         messages,
         { ...options, signal: message.abortSignal },
-        readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder,
+        fallbackProviderOrder,
       ),
     );
-    const enrichedClassified = enrichIntentGatewayRecordWithContentPlan(
+    let enrichedClassified = enrichIntentGatewayRecordWithContentPlan(
       classified,
       stripLeadingContextPrefix(message.content),
     );
+    const semanticPlanRepair = enrichedClassified
+      ? await this.tryRepairGenericIntentGatewayPlanWithFrontier({
+          message,
+          ctx,
+          gatewayInput,
+          current: enrichedClassified,
+        })
+      : null;
+    if (semanticPlanRepair?.record) {
+      enrichedClassified = semanticPlanRepair.record;
+    }
     this.recordIntentRoutingTrace('gateway_classified', {
       message,
       details: enrichedClassified
@@ -7872,12 +7957,18 @@ type DirectIntentShadowCandidate =
             missingFields: enrichedClassified.decision.missingFields,
             simpleVsComplex: enrichedClassified.decision.simpleVsComplex,
             plannedStepKinds: enrichedClassified.decision.plannedSteps?.map((step) => step.kind),
+            plannedStepCategories: enrichedClassified.decision.plannedSteps
+              ?.map((step) => step.expectedToolCategories)
+              .filter((categories): categories is string[] => Array.isArray(categories)),
             entitySources: enrichedClassified.decision.provenance?.entities,
             emailProvider: enrichedClassified.decision.entities.emailProvider,
             codingBackend: enrichedClassified.decision.entities.codingBackend,
             continuityKey: gatewayContext.continuityThread?.continuityKey,
             pendingActionContextSuppressed: gatewayContext.contextSuppressed,
             pendingActionContextSuppressionReason: gatewayContext.suppressionReason,
+            semanticPlanRepairAttempted: semanticPlanRepair?.attempted ?? false,
+            semanticPlanRepairAdopted: semanticPlanRepair?.adopted ?? false,
+            semanticPlanRepairProviderOrder: semanticPlanRepair?.providerOrder,
             latencyMs: enrichedClassified.latencyMs,
             model: enrichedClassified.model,
             rawResponsePreview: enrichedClassified.rawResponsePreview,

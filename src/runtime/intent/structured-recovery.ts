@@ -264,6 +264,7 @@ export function normalizeIntentGatewayDecision(
     parsedOperation,
     turnRelation,
     repairContext,
+    parsed,
   );
   const route = repairIntentGatewayRoute(
     semanticallyRepairedRoute,
@@ -380,11 +381,23 @@ export function normalizeIntentGatewayDecision(
     requireExactFileReferences,
     requiresRepoGrounding,
   });
-  const effectivePlannedSteps = shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
+  const selectedPlannedSteps = shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
     ? synthesizedPlannedSteps
     : plannedSteps.length > 0
       ? plannedSteps
       : synthesizedPlannedSteps;
+  const effectivePlannedSteps = normalizePlannedStepsForDecision(selectedPlannedSteps, {
+    route,
+    operation,
+    personalItemType: entityResolution.entities.personalItemType,
+  });
+  const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(route, effectivePlannedSteps);
+  const effectiveExecutionClass = toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
+  const effectivePreferredTier = toolBackedAnswerPlan ? 'external' : preferredTier;
+  const effectiveRequiresToolSynthesis = toolBackedAnswerPlan ? true : requiresToolSynthesis;
+  const effectiveExpectedContextPressure = toolBackedAnswerPlan ? 'medium' : expectedContextPressure;
+  const effectivePreferredAnswerPath = toolBackedAnswerPlan ? 'tool_loop' : preferredAnswerPath;
+  const effectiveSimpleVsComplex = toolBackedAnswerPlan ? 'complex' : simpleVsComplex;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -409,10 +422,16 @@ export function normalizeIntentGatewayDecision(
         ? 'repair.structured'
         : 'resolver.clarification',
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
-    executionClass: (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
-    preferredTier: (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
+    executionClass: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
+    preferredTier: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
     requiresRepoGrounding: hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
-    requiresToolSynthesis: hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
+    requiresToolSynthesis: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
     ...(hasParsedRequireExactFileReferences || requireExactFileReferences
       ? {
           requireExactFileReferences: (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean === requireExactFileReferences)
@@ -420,13 +439,19 @@ export function normalizeIntentGatewayDecision(
             : 'derived.workload',
         }
       : {}),
-    expectedContextPressure: (!routeOrOperationRepaired && normalizedExpectedContextPressure)
+    expectedContextPressure: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : (!routeOrOperationRepaired && normalizedExpectedContextPressure)
       ? classifierSource
       : 'derived.workload',
-    preferredAnswerPath: (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
+    preferredAnswerPath: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
       ? classifierSource
       : 'derived.workload',
-    simpleVsComplex: (!routeOrOperationRepaired && normalizedSimpleVsComplex)
+    simpleVsComplex: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : (!routeOrOperationRepaired && normalizedSimpleVsComplex)
       ? classifierSource
       : 'derived.workload',
     ...(entityResolution.provenance ? { entities: entityResolution.provenance } : {}),
@@ -440,14 +465,14 @@ export function normalizeIntentGatewayDecision(
     turnRelation,
     resolution,
     missingFields,
-    executionClass,
-    preferredTier,
+    executionClass: effectiveExecutionClass,
+    preferredTier: effectivePreferredTier,
     requiresRepoGrounding,
-    requiresToolSynthesis,
+    requiresToolSynthesis: effectiveRequiresToolSynthesis,
     requireExactFileReferences,
-    expectedContextPressure,
-    preferredAnswerPath,
-    simpleVsComplex,
+    expectedContextPressure: effectiveExpectedContextPressure,
+    preferredAnswerPath: effectivePreferredAnswerPath,
+    simpleVsComplex: effectiveSimpleVsComplex,
     ...(effectivePlannedSteps.length > 0 ? { plannedSteps: effectivePlannedSteps } : {}),
     ...(recoveryReason ? { recoveryReason } : {}),
     provenance,
@@ -537,6 +562,9 @@ function shouldPreferSynthesizedPlannedSteps(
   }
   const synthesizedRequired = synthesizedSteps.filter((step) => step.required !== false);
   const parsedRequired = parsedSteps.filter((step) => step.required !== false);
+  if (hasExplicitToolBackedAnswerPlan(parsedRequired)) {
+    return false;
+  }
   const synthesizedHasWrite = synthesizedRequired.some((step) => step.kind === 'write'
     || step.expectedToolCategories?.includes('write'));
   if (!synthesizedHasWrite) {
@@ -548,6 +576,187 @@ function shouldPreferSynthesizedPlannedSteps(
     return true;
   }
   return parsedRequired.length < synthesizedRequired.length;
+}
+
+function hasExplicitToolBackedAnswerPlan(steps: IntentGatewayPlannedStep[]): boolean {
+  const hasEvidenceStep = steps.some((step) => (
+    step.kind !== 'answer'
+    && (step.expectedToolCategories?.some(isToolBackedEvidenceCategory) ?? false)
+  ));
+  const hasAnswerStep = steps.some((step) => step.kind === 'answer');
+  return hasEvidenceStep && hasAnswerStep;
+}
+
+function normalizePlannedStepsForDecision(
+  steps: IntentGatewayPlannedStep[],
+  decision: {
+    route: IntentGatewayDecision['route'];
+    operation: IntentGatewayDecision['operation'];
+    personalItemType?: IntentGatewayDecision['entities']['personalItemType'];
+  },
+): IntentGatewayPlannedStep[] {
+  if (
+    !isAutomationCatalogReadDecision(decision)
+    && !isPersonalAssistantReadDecision(decision)
+    && !isToolBackedReadAnswerDecision(decision)
+  ) {
+    return steps;
+  }
+  return steps.map((step) => {
+    if (
+      isToolBackedReadAnswerDecision(decision)
+      && step.kind === 'write'
+      && hasOnlyGenericAnswerCategories(step.expectedToolCategories)
+    ) {
+      const { expectedToolCategories: _expectedToolCategories, ...rest } = step;
+      return {
+        ...rest,
+        kind: 'answer' as const,
+      };
+    }
+    if (
+      isAutomationCatalogReadDecision(decision)
+      && (step.kind === 'search' || step.kind === 'read')
+      && hasOnlyGenericReadCategories(step.expectedToolCategories)
+    ) {
+      return {
+        ...step,
+        kind: 'read' as const,
+        expectedToolCategories: ['automation_list'],
+      };
+    }
+    if (
+      isPersonalAssistantReadDecision(decision)
+      && (step.kind === 'search' || step.kind === 'read')
+      && hasOnlyGenericReadCategories(step.expectedToolCategories)
+    ) {
+      const expectedToolCategories = inferSecondBrainReadToolCategories(decision.personalItemType);
+      return {
+        ...step,
+        kind: 'read' as const,
+        ...(expectedToolCategories.length > 0 ? { expectedToolCategories } : {}),
+      };
+    }
+    return step;
+  });
+}
+
+function isAutomationCatalogReadDecision(decision: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): boolean {
+  return decision.route === 'automation_control'
+    && (
+      decision.operation === 'read'
+      || decision.operation === 'inspect'
+      || decision.operation === 'search'
+      || decision.operation === 'navigate'
+    );
+}
+
+function isPersonalAssistantReadDecision(decision: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): boolean {
+  return decision.route === 'personal_assistant_task'
+    && (
+      decision.operation === 'read'
+      || decision.operation === 'inspect'
+      || decision.operation === 'search'
+      || decision.operation === 'navigate'
+    );
+}
+
+function isToolBackedReadAnswerDecision(decision: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): boolean {
+  return supportsToolBackedAnswerPlan(decision.route)
+    && (
+      decision.operation === 'read'
+      || decision.operation === 'inspect'
+      || decision.operation === 'search'
+      || decision.operation === 'navigate'
+    );
+}
+
+function hasOnlyGenericAnswerCategories(categories: string[] | undefined): boolean {
+  return !categories?.length || categories.every((category) => category === 'write' || category === 'answer');
+}
+
+function hasOnlyGenericReadCategories(categories: string[] | undefined): boolean {
+  return !categories?.length || categories.every((category) => (
+    category === 'search'
+    || category === 'read'
+  ));
+}
+
+function requiresToolBackedAnswerPlan(
+  route: IntentGatewayDecision['route'],
+  steps: IntentGatewayPlannedStep[],
+): boolean {
+  if (!supportsToolBackedAnswerPlan(route)) {
+    return false;
+  }
+  const requiredSteps = steps.filter((step) => step.required !== false);
+  const hasToolEvidenceStep = requiredSteps.some((step) => (
+    step.kind !== 'answer'
+    && (step.expectedToolCategories?.some(isToolBackedEvidenceCategory) ?? false)
+  ));
+  const hasAnswerStep = requiredSteps.some((step) => step.kind === 'answer');
+  return hasToolEvidenceStep && hasAnswerStep;
+}
+
+function supportsToolBackedAnswerPlan(route: IntentGatewayDecision['route']): boolean {
+  return route === 'automation_control'
+    || route === 'personal_assistant_task'
+    || route === 'general_assistant';
+}
+
+function isToolBackedEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return isAutomationToolCategory(normalized)
+    || normalized === 'second_brain'
+    || normalized.startsWith('second_brain_');
+}
+
+function isAutomationToolCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'automation'
+    || normalized === 'scheduled_email_automation'
+    || normalized.startsWith('automation_');
+}
+
+function inferSecondBrainReadToolCategories(
+  personalItemType: IntentGatewayDecision['entities']['personalItemType'] | undefined,
+): string[] {
+  switch (personalItemType) {
+    case 'note':
+      return ['second_brain_note_list'];
+    case 'task':
+      return ['second_brain_task_list'];
+    case 'calendar':
+      return ['second_brain_calendar_list'];
+    case 'person':
+      return ['second_brain_people_list'];
+    case 'library':
+      return ['second_brain_library_list'];
+    case 'routine':
+      return ['second_brain_routine_list', 'second_brain_routine_catalog'];
+    case 'brief':
+      return ['second_brain_brief_list'];
+    case 'overview':
+      return ['second_brain_overview'];
+    case 'unknown':
+    case undefined:
+      return [
+        'second_brain_overview',
+        'second_brain_note_list',
+        'second_brain_task_list',
+        'second_brain_calendar_list',
+        'second_brain_routine_list',
+      ];
+  }
 }
 
 const MODIFIER_CLAUSE_LEADERS = [

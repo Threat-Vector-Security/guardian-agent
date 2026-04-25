@@ -5,6 +5,179 @@ import { resumeStoredToolLoopPendingAction } from './tool-loop-runtime.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 
 describe('tool-loop-runtime', () => {
+  it('recovers a final answer from the approved tool result when the first resume turn is empty', async () => {
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve web search.',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Search the web for approval workflow practices and compare them to this repo.',
+        summary: 'Search web approval practices.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {},
+      },
+      resume: {
+        kind: 'tool_loop',
+        payload: buildToolLoopResumePayload({
+          llmMessages: [
+            { role: 'system', content: 'system prompt' },
+            { role: 'user', content: 'Search the web for approval workflow practices and compare them to this repo.' },
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                {
+                  id: 'tool-call-1',
+                  name: 'web_search',
+                  arguments: JSON.stringify({ query: 'AI agent approval workflow patterns' }),
+                },
+              ],
+            },
+          ],
+          pendingTools: [
+            {
+              approvalId: 'approval-1',
+              toolCallId: 'tool-call-1',
+              jobId: 'job-1',
+              name: 'web_search',
+            },
+          ],
+          originalMessage: {
+            id: 'msg-1',
+            userId: 'owner',
+            channel: 'web',
+            surfaceId: 'web-guardian-chat',
+            timestamp: 1,
+            content: 'Search the web for approval workflow practices and compare them to this repo.',
+          },
+          requestText: 'Search the web for approval workflow practices and compare them to this repo.',
+          referenceTime: 1,
+          allowModelMemoryMutation: false,
+          activeSkillIds: [],
+          contentTrustLevel: 'trusted',
+          taintReasons: [],
+          intentDecision: {
+            route: 'search_task',
+            operation: 'search',
+            summary: 'Search web approval practices.',
+            confidence: 'high',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            simpleVsComplex: 'complex',
+            entities: {},
+          },
+        }),
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    let callNumber = 0;
+    const chatFn = vi.fn(async (messages, options) => {
+      callNumber += 1;
+      if (callNumber === 1) {
+        return {
+          content: '',
+          toolCalls: [],
+          model: 'test-model',
+          finishReason: 'stop' as const,
+        };
+      }
+      expect(options?.tools).toEqual([]);
+      expect(messages.map((message) => message.content).join('\n')).toContain('AI agent approval workflow patterns');
+      return {
+        content: 'Recent practice is human-in-the-loop approval with scoped resumable tool execution.',
+        toolCalls: [],
+        model: 'test-model',
+        finishReason: 'stop' as const,
+      };
+    });
+
+    const result = await resumeStoredToolLoopPendingAction({
+      pendingAction,
+      options: {
+        approvalId: 'approval-1',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: "Tool 'web_search' completed.",
+          result: {
+            success: true,
+            status: 'succeeded',
+            output: {
+              query: 'AI agent approval workflow patterns',
+              results: [
+                { title: 'Human-in-the-loop approvals', url: 'https://example.test/approval' },
+              ],
+            },
+          },
+        },
+      },
+      agentId: 'chat',
+      tools: {
+        executeModelTool: vi.fn(),
+        getApprovalSummaries: vi.fn(() => new Map()),
+        getToolDefinition: vi.fn(() => undefined),
+        isEnabled: vi.fn(() => true),
+        listAlwaysLoadedDefinitions: vi.fn(() => []),
+        listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+        listJobs: vi.fn(() => []),
+      },
+      secondBrainService: null,
+      maxToolRounds: 2,
+      contextBudget: 32_000,
+      normalizePrincipalRole: () => 'owner',
+      buildChatRunner: () => ({
+        providerLocality: 'external',
+        chatFn,
+      }),
+      completePendingAction: vi.fn(),
+      sanitizeToolResultForLlm: vi.fn((_toolName, result) => ({
+        sanitized: result,
+        threats: [],
+        trustLevel: 'trusted',
+        taintReasons: [],
+      })),
+      storeSuspendedSession: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => {
+        throw new Error('unexpected pending approval');
+      }),
+      buildPendingApprovalBlockedResponse: vi.fn(() => {
+        throw new Error('unexpected blocked response');
+      }),
+      lacksUsableAssistantContent: (content) => !content?.trim(),
+    });
+
+    expect(chatFn).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      content: 'Recent practice is human-in-the-loop approval with scoped resumable tool execution.',
+    });
+  });
+
   it('does not treat intermediate retry narration as a completed resumed tool-loop answer', async () => {
     const pendingAction: PendingActionRecord = {
       id: 'pending-1',
@@ -141,9 +314,9 @@ describe('tool-loop-runtime', () => {
       }),
     });
 
-    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(chatFn).toHaveBeenCalledTimes(2);
     expect(result).toEqual({
-      content: 'I could not resume the pending coding run after approval.',
+      content: 'Attempted code_remote_exec, but it did not complete successfully.',
     });
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
 import { attachChatProviderSelectionMetadata } from './chat-provider-selection.js';
-import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
+import { readPreRoutedIntentGatewayMetadata, type IntentGatewayInput, type IntentGatewayRecord } from './intent-gateway.js';
 import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
 import type { MessageRouter } from './message-router.js';
 
@@ -67,6 +67,7 @@ function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispa
     },
     conversations: {
       getHistoryForContext: vi.fn(() => []),
+      getSessionHistory: vi.fn(() => []),
     },
     pendingActionStore: {
       resolveActiveForSurface: vi.fn(() => null),
@@ -76,6 +77,7 @@ function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispa
     },
     codeSessionStore: {
       resolveForRequest: vi.fn(() => null),
+      getSession: vi.fn(() => null),
     },
     intentRoutingTrace: {
       record: vi.fn(),
@@ -110,6 +112,7 @@ describe('createIncomingDispatchPreparer', () => {
       resolveForRequest: vi.fn(() => ({
         session: { agentId: 'pinned-worker' },
       })),
+      getSession: vi.fn(() => null),
     };
     const routingIntentGateway = {
       classify: vi.fn(async () => createGatewayRecord()),
@@ -137,6 +140,104 @@ describe('createIncomingDispatchPreparer', () => {
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
+  it('classifies cross-surface follow-ups with active code-session continuity history', async () => {
+    const linkedSession = {
+      id: 'session-1',
+      ownerUserId: 'web:alex',
+      ownerPrincipalId: 'alex-principal',
+      conversationUserId: 'code-session:session-1',
+      conversationChannel: 'code-session',
+    };
+    const conversations = {
+      getHistoryForContext: vi.fn(() => [
+        { role: 'user' as const, content: 'hello guardian' },
+        { role: 'assistant' as const, content: 'hello guardian' },
+      ]),
+      getSessionHistory: vi.fn(() => [
+        {
+          role: 'user' as const,
+          content: 'Find where run timeline rendering is implemented and where it is consumed.',
+          timestamp: 1,
+        },
+        {
+          role: 'assistant' as const,
+          content: 'Run timeline rendering is implemented in run-timeline-context.js and consumed by automations.js.',
+          timestamp: 2,
+        },
+      ]),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.recentHistory?.map((entry) => entry.content)).toEqual([
+          'hello guardian',
+          'hello guardian',
+          'Find where run timeline rendering is implemented and where it is consumed.',
+          'Run timeline rendering is implemented in run-timeline-context.js and consumed by automations.js.',
+        ]);
+        return createGatewayRecord({
+          route: 'general_assistant',
+          operation: 'answer',
+          summary: 'Answer a follow-up about the prior answer.',
+          turnRelation: 'follow_up',
+          executionClass: 'direct_assistant',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      conversations,
+      routingIntentGateway,
+      continuityThreadStore: {
+        get: vi.fn(() => ({
+          continuityKey: 'chat:web:alex',
+          scope: {
+            assistantId: 'chat',
+            userId: 'web:alex',
+          },
+          linkedSurfaces: [],
+          activeExecutionRefs: [
+            { kind: 'execution', id: 'execution-1' },
+            { kind: 'code_session', id: 'session-1' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        })),
+      },
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => null),
+        getSession: vi.fn((sessionId: string, ownerUserId?: string) => (
+          sessionId === linkedSession.id && (!ownerUserId || ownerUserId === linkedSession.ownerUserId)
+            ? linkedSession
+            : null
+        )),
+      },
+      summarizeContinuityThreadForGateway: vi.fn((thread) => thread ? ({
+        continuityKey: thread.continuityKey,
+        linkedSurfaceCount: thread.linkedSurfaces.length,
+        activeExecutionRefs: thread.activeExecutionRefs?.map((ref) => `${ref.kind}:${ref.id}`),
+      }) : null),
+      resolveSharedStateAgentId: vi.fn(() => 'chat'),
+      identity: {
+        resolveCanonicalUserId: () => 'web:alex',
+      },
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Based on your last answer, which part would be most likely to break approval continuity?',
+      userId: 'alex',
+      principalId: 'alex-principal',
+      channel: 'web',
+      surfaceId: 'config-panel',
+    });
+
+    expect(result.gateway?.decision.turnRelation).toBe('follow_up');
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
   it('keeps gateway metadata for explicit coding sessions even when a channel default agent is configured', async () => {
     const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
     const routingIntentGateway = {
@@ -148,6 +249,7 @@ describe('createIncomingDispatchPreparer', () => {
         resolveForRequest: vi.fn(() => ({
           session: { id: 'session-1', agentId: 'pinned-worker', workspaceRoot: 'S:/Development/GuardianAgent' },
         })),
+        getSession: vi.fn(() => null),
       },
       routingIntentGateway,
     }));
@@ -199,6 +301,7 @@ describe('createIncomingDispatchPreparer', () => {
         resolveForRequest: vi.fn(() => ({
           session: { id: 'session-1', agentId: 'pinned-worker', workspaceRoot: 'S:/Development/GuardianAgent' },
         })),
+        getSession: vi.fn(() => null),
       },
       routingIntentGateway,
     }));
@@ -215,6 +318,304 @@ describe('createIncomingDispatchPreparer', () => {
     expect(preRouted?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'write']);
   });
 
+  it('repairs generic managed-cloud tool plans with frontier before attaching pre-routed metadata', async () => {
+    const config = createConfig();
+    config.llm['openrouter-general'] = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      enabled: true,
+    };
+    config.llm.openai = {
+      provider: 'openai',
+      model: 'gpt-4o',
+      enabled: true,
+    };
+    config.assistant.tools.preferredProviders = {
+      managedCloud: 'openrouter-general',
+      frontier: 'openai',
+    };
+    const managedChat = vi.fn(async () => ({ content: 'managed' }));
+    const frontierChat = vi.fn(async () => ({ content: 'frontier' }));
+    const runtime = {
+      getProvider: vi.fn((providerName: string) => {
+        if (providerName === 'openrouter-general') {
+          return { chat: managedChat };
+        }
+        if (providerName === 'openai') {
+          return { chat: frontierChat };
+        }
+        return null;
+      }),
+    };
+    const genericRecord = createGatewayRecord({
+      route: 'general_assistant',
+      operation: 'search',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Find matching automations and routines.',
+          expectedToolCategories: ['search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation.',
+          required: true,
+        },
+      ],
+    });
+    const concreteRecord = {
+      ...genericRecord,
+      model: 'gpt-4o',
+      decision: {
+        ...genericRecord.decision,
+        plannedSteps: [
+          {
+            kind: 'read' as const,
+            summary: 'Read existing automations.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+          {
+            kind: 'read' as const,
+            summary: 'Read existing routines.',
+            expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+            required: true,
+          },
+          {
+            kind: 'answer' as const,
+            summary: 'Suggest one useful automation.',
+            required: true,
+          },
+        ],
+      },
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: unknown[], options?: unknown) => Promise<{ content: string }>) => {
+        const response = await chat([]);
+        return response.content === 'frontier' ? concreteRecord : genericRecord;
+      }),
+    };
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      runtime,
+      routingIntentGateway,
+      intentRoutingTrace,
+      findProviderByLocality: vi.fn(() => 'openrouter-general'),
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    const preRouted = readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata);
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(2);
+    expect(runtime.getProvider).toHaveBeenCalledWith('openrouter-general');
+    expect(runtime.getProvider).toHaveBeenCalledWith('openai');
+    expect(preRouted?.model).toBe('gpt-4o');
+    expect(preRouted?.decision.plannedSteps?.map((step) => step.expectedToolCategories)).toEqual([
+      ['automation_list'],
+      ['second_brain_routine_list', 'second_brain_routine_catalog'],
+      undefined,
+    ]);
+    expect(intentRoutingTrace.record).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'gateway_classified',
+      details: expect.objectContaining({
+        source: 'routing_plan_repair',
+        semanticPlanRepairAttempted: true,
+        semanticPlanRepairAdopted: true,
+        semanticPlanRepairProvider: 'openai',
+      }),
+    }));
+  });
+
+  it('falls through to the next managed-cloud classifier provider when the preferred one is unavailable', async () => {
+    const config = createConfig();
+    config.llm['nvidia-general'] = {
+      provider: 'nvidia',
+      model: 'moonshotai/kimi-k2-instruct-0905',
+      enabled: true,
+    };
+    config.llm['openrouter-general'] = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      enabled: true,
+    };
+    config.assistant.tools.preferredProviders = {
+      managedCloud: 'nvidia-general',
+    };
+    const runtime = {
+      getProvider: vi.fn((providerName: string) => ({
+        chat: vi.fn(async () => ({ content: providerName })),
+      })),
+    };
+    const unavailableRecord = createGatewayRecord({
+      route: 'unknown',
+      operation: 'unknown',
+      confidence: 'low',
+      summary: 'Preferred classifier unavailable.',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    }, { available: false });
+    const availableRecord = {
+      ...createGatewayRecord({
+        route: 'coding_task',
+        operation: 'inspect',
+        summary: 'Inspect repo implementation.',
+      }),
+      model: 'qwen/qwen3.6-plus',
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: unknown[], options?: unknown) => Promise<{ content: string }>) => {
+        const response = await chat([]);
+        return response.content === 'nvidia-general' ? unavailableRecord : availableRecord;
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      runtime,
+      routingIntentGateway,
+      findProviderByLocality: vi.fn(() => 'nvidia-general'),
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Inspect this repo and tell me which files implement approval continuity. Do not edit anything.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    const preRouted = readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata);
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(2);
+    expect(runtime.getProvider).toHaveBeenCalledWith('nvidia-general');
+    expect(runtime.getProvider).toHaveBeenCalledWith('openrouter-general');
+    expect(result.gateway?.available).toBe(true);
+    expect(preRouted?.model).toBe('qwen/qwen3.6-plus');
+    expect(preRouted?.decision.route).toBe('coding_task');
+  });
+
+  it('continues frontier plan repair with another frontier provider when the preferred frontier is unavailable', async () => {
+    const config = createConfig();
+    config.llm['openrouter-general'] = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      enabled: true,
+    };
+    config.llm.openai = {
+      provider: 'openai',
+      model: 'gpt-4o',
+      enabled: true,
+    };
+    config.llm.anthropic = {
+      provider: 'anthropic',
+      model: 'claude-opus-4.6',
+      enabled: true,
+    };
+    config.assistant.tools.preferredProviders = {
+      managedCloud: 'openrouter-general',
+      frontier: 'openai',
+    };
+    const genericRecord = createGatewayRecord({
+      route: 'general_assistant',
+      operation: 'search',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Find matching automations and routines.',
+          expectedToolCategories: ['search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation.',
+          required: true,
+        },
+      ],
+    });
+    const concreteRecord = {
+      ...genericRecord,
+      model: 'claude-opus-4.6',
+      decision: {
+        ...genericRecord.decision,
+        plannedSteps: [
+          {
+            kind: 'read' as const,
+            summary: 'Read existing automations.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+          {
+            kind: 'read' as const,
+            summary: 'Read existing routines.',
+            expectedToolCategories: ['second_brain_routine_list'],
+            required: true,
+          },
+          {
+            kind: 'answer' as const,
+            summary: 'Suggest one useful automation.',
+            required: true,
+          },
+        ],
+      },
+    };
+    const managedChat = vi.fn(async () => ({ content: 'managed' }));
+    const openaiChat = vi.fn(async () => {
+      throw new Error('quota exceeded');
+    });
+    const anthropicChat = vi.fn(async () => ({ content: 'anthropic' }));
+    const runtime = {
+      getProvider: vi.fn((providerName: string) => {
+        if (providerName === 'openrouter-general') return { chat: managedChat };
+        if (providerName === 'openai') return { chat: openaiChat };
+        if (providerName === 'anthropic') return { chat: anthropicChat };
+        return null;
+      }),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: unknown[], options?: unknown) => Promise<{ content: string }>) => {
+        const response = await chat([]);
+        return response.content === 'anthropic' ? concreteRecord : genericRecord;
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      runtime,
+      routingIntentGateway,
+      findProviderByLocality: vi.fn(() => 'openrouter-general'),
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(3);
+    expect(openaiChat).toHaveBeenCalledOnce();
+    expect(anthropicChat).toHaveBeenCalledOnce();
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)?.model).toBe('claude-opus-4.6');
+  });
+
   it('still attaches a forced provider profile when a coding session is active', async () => {
     const config = createConfig();
     config.llm.anthropic = {
@@ -227,6 +628,7 @@ describe('createIncomingDispatchPreparer', () => {
       resolveForRequest: vi.fn(() => ({
         session: { agentId: 'pinned-worker' },
       })),
+      getSession: vi.fn(() => null),
     };
     const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
       configRef: { current: config },
@@ -262,6 +664,7 @@ describe('createIncomingDispatchPreparer', () => {
         resolveForRequest: vi.fn(() => ({
           session: { agentId: 'external' },
         })),
+        getSession: vi.fn(() => null),
       },
       routingIntentGateway,
       resolveConfiguredAgentId: vi.fn((agentId?: string) => agentId === 'external' ? undefined : agentId),
@@ -301,6 +704,7 @@ describe('createIncomingDispatchPreparer', () => {
           session: { agentId: 'external', resolvedRoot: 'S:\\Development\\GuardianAgent' },
           attachment: { channel: 'web', surfaceId: 'code-panel' },
         })),
+        getSession: vi.fn(() => null),
       },
       routingIntentGateway,
       resolveConfiguredAgentId: vi.fn((agentId?: string) => agentId === 'external' ? undefined : agentId),

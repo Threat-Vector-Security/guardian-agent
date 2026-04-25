@@ -107,6 +107,7 @@ Core harness scripts include:
 | **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
 | **`scripts/test-m365.mjs`** | Microsoft 365 tool registration, approval gating, schema, API routes (Node.js) | ~34 |
 | **`scripts/test-web-gmail-approvals.mjs`** | Web Gmail approval flow: pending-action metadata, approval decision, immediate send confirmation, and pending-action cleanup (Node.js) | focused Gmail approval assertions |
+| **`scripts/test-web-approvals.mjs`** | Web approval UX and continuation flow: pending approvals, approval decisions, and follow-up response continuity (Node.js) | focused web approval assertions |
 | **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
 | **`scripts/test-search.ps1`** | Document search + approval tests (PowerShell) | ~12 |
 | **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |
@@ -118,6 +119,7 @@ Core harness scripts include:
 | **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
 | **`scripts/test-security-verification.mjs`** | Security verification harness: auth rejection, prompt-injection blocking, secret redaction, SSRF/path policy, approval-gated writes, sandbox visibility, and audit/config redaction (Node.js) | focused security verification assertions |
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
+| **`scripts/test-telegram-approvals.mjs`** | Telegram approval UX regression harness: inline approval buttons, empty-file approvals, and channel continuation behavior (Node.js with `tsx`) | focused Telegram approval assertions |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-brokered-isolation.mjs`** | Brokered worker smoke harness: isolated worker startup, broker-mediated chat path, and health under agent isolation (Node.js) | focused brokered-worker assertions |
 | **`scripts/test-brokered-approvals.mjs`** | Brokered approval harness: multi-step approvals, broker-mediated continuation, memory-save suppression, and tool-reporting (Node.js) | focused brokered approval assertions |
@@ -125,6 +127,9 @@ Core harness scripts include:
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
+| **`scripts/test-second-brain-smoke.mjs`** | Dist-backed Second Brain service smoke: tasks, notes, contacts, library links, events, and briefing behavior (Node.js) | focused Second Brain service assertions |
+| **`scripts/test-second-brain-routines.mjs`** | Dist-backed Second Brain routines smoke: seeded routines, horizon scanning, scheduled-task integration, and sync behavior (Node.js) | focused Second Brain routine assertions |
+| **`scripts/test-second-brain-budgeting.mjs`** | Dist-backed Second Brain budgeting smoke: usage accounting and local/external sync budgeting behavior (Node.js) | focused Second Brain budget assertions |
 | **`scripts/test-second-brain-chat-crud.mjs`** | Chat-driven Second Brain CRUD harness: assistant create/update/delete coverage for notes, tasks, local calendar, contacts, library items, briefs, and routines through `POST /api/message`, plus an optional real Ollama smoke lane (Node.js). Known gap: this lane is still WIP and currently exposes approval/continuation issues on mutating `second_brain_*` chat flows. | focused Second Brain assistant CRUD assertions |
 | **`scripts/test-second-brain-ui-smoke.mjs`** | Browser smoke for the `#/` Second Brain workspace: local calendar/tasks/notes/contacts/library/briefs/routines CRUD through the web UI, plus an optional real Ollama retrieval smoke lane (Node.js + Playwright) | focused Second Brain UI assertions |
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
@@ -225,11 +230,11 @@ When you run the Node-based harnesses from Windows PowerShell instead of WSL:
 
 This Codex desktop session is using Windows PowerShell, so those Windows-hosted notes apply directly here.
 
-### Automated Node.js / Jest Test Scripts (Preferred for Coding Assistants)
+### Automated Node.js Harness Scripts (Preferred for Coding Assistants)
 
 When debugging complex state loops (e.g., approval systems, UI-specific message formatting, or LLM context poisoning), the standard PowerShell test harness can be difficult for AI coding assistants to reliably generate and execute automatically within a Linux/WSL environment.
 
-The **preferred method** for automated testing and bug reproduction is to write self-contained Node.js (`.mjs`) scripts or Jest tests. This allows for precise simulation of frontend HTTP signatures, hidden prefixes, and concurrent API requests.
+The **preferred method** for automated testing and bug reproduction is to write self-contained Node.js (`.mjs`) harness scripts. This allows for precise simulation of frontend HTTP signatures, hidden prefixes, and concurrent API requests.
 
 **Process for Creating an Isolated Node.js Test:**
 1. **Create a dummy configuration:** Generate a temporary `.yaml` file within the script to configure the agent to use a `mock` LLM provider (or explicit local provider like Ollama) and an isolated port.
@@ -255,6 +260,7 @@ HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_BASE_URL=https://ollama.com/api HARNESS
 Recommended Second Brain regression loop:
 
 ```bash
+npm run build
 node scripts/test-second-brain-smoke.mjs
 node scripts/test-second-brain-routines.mjs
 node scripts/test-second-brain-budgeting.mjs
@@ -355,6 +361,13 @@ When validating the current Coding Assistant architecture, also assert:
 - repo/app answers mention evidence from retrieved files, not just stack detection from manifests
 
 For web approval UX regressions, assert both the positive action copy and the absence of internal schema chatter. A good write-to-new-path scenario should produce approval text like `Waiting for approval to add S:\Development to allowed paths.` followed by `Waiting for approval to write S:\Development\test26.txt.`, and should not contain phrases like `tool is unavailable`, `tool is available`, or `action and value`.
+
+For approval-continuity or resume-flow regressions, pair focused runtime tests with the web channel harness:
+
+```bash
+npx vitest run src/runtime/continuity-threads.test.ts src/runtime/incoming-dispatch.test.ts src/runtime/direct-reasoning-mode.test.ts
+node scripts/test-web-approvals.mjs
+```
 
 When new configuration inputs are added, especially host fields, base URLs, endpoint override maps, or similar operator-entered connection targets, extend the harness to cover both:
 

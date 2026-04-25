@@ -546,6 +546,100 @@ describe('ChatAgentOrchestrationState', () => {
     ]);
   });
 
+  it('preserves active code-session refs when a cross-surface direct follow-up does not resolve a session', () => {
+    const nowMs = 1_710_000_000_050;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+    const existing = continuityStore.upsert({
+      assistantId: 'assistant',
+      userId: 'user-1',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'config-panel',
+      },
+      activeExecutionRefs: [
+        {
+          kind: 'execution',
+          id: 'exec-previous',
+          label: 'Find where run timeline rendering is implemented and where it is consumed.',
+        },
+        {
+          kind: 'code_session',
+          id: 'code-session-1',
+        },
+      ],
+    }, nowMs);
+    const gateway = {
+      mode: 'primary' as const,
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'general_assistant' as const,
+        confidence: 'high' as const,
+        operation: 'answer',
+        summary: 'Answer a follow-up about the prior answer.',
+        turnRelation: 'new_request' as const,
+        resolution: 'ready' as const,
+        missingFields: [],
+        executionClass: 'direct_assistant' as const,
+        preferredTier: 'external' as const,
+        preferredAnswerPath: 'direct' as const,
+        expectedContextPressure: 'low' as const,
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        entities: {},
+      },
+    };
+
+    state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-follow-up',
+        rootExecutionId: 'exec-follow-up',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'config-panel',
+      continuityThread: existing,
+      routingContent: 'Based on your last answer, which part would be most likely to break approval continuity?',
+      gateway,
+      nowMs,
+    });
+    const updated = state.updateContinuityThreadFromIntent({
+      executionIdentity: {
+        executionId: 'exec-follow-up',
+        rootExecutionId: 'exec-follow-up',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'config-panel',
+      continuityThread: existing,
+      routingContent: 'Based on your last answer, which part would be most likely to break approval continuity?',
+      gateway,
+    });
+
+    expect(updated?.activeExecutionRefs).toEqual([
+      {
+        kind: 'execution',
+        id: 'exec-follow-up',
+        label: 'Answer a follow-up about the prior answer.',
+      },
+      {
+        kind: 'code_session',
+        id: 'code-session-1',
+      },
+    ]);
+  });
+
   it('drops internal fallback summaries from durable execution and continuity labels', () => {
     const nowMs = 1_710_000_000_100;
     const continuityStore = createContinuityStore(nowMs);

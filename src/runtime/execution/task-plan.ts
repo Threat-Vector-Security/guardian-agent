@@ -15,6 +15,23 @@ import type {
 type GatewayPlannedStep = NonNullable<IntentGatewayDecision['plannedSteps']>[number];
 
 const PATHLIKE_TOKEN_PATTERN = /(?:[a-zA-Z]:)?[./\\][^\s,;:()]+|[a-zA-Z0-9_.-]+(?:[\\/][a-zA-Z0-9_.-]+)+|[a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]+/g;
+const SECOND_BRAIN_READ_TOOL_NAMES = new Set([
+  'second_brain_overview',
+  'second_brain_brief_list',
+  'second_brain_note_list',
+  'second_brain_task_list',
+  'second_brain_calendar_list',
+  'second_brain_people_list',
+  'second_brain_library_list',
+  'second_brain_routine_list',
+  'second_brain_routine_catalog',
+]);
+const REPO_INSPECTION_TOOL_NAMES = new Set([
+  'fs_search',
+  'fs_read',
+  'fs_list',
+  'code_symbol_search',
+]);
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -319,7 +336,7 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
       return { step, index, score: Number.NEGATIVE_INFINITY };
     }
     if (step.kind === toolKind) score += 8;
-    if (step.expectedToolCategories?.some((value) => value === input.toolName || value === toolKind)) {
+    if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind))) {
       score += 6;
     }
     const summaryRefs = extractNormalizedRefs(step.summary);
@@ -701,7 +718,15 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
   if (toolName === 'find_tools' || toolName === 'fs_search' || toolName === 'web_search' || toolName === 'code_symbol_search') {
     return 'search';
   }
-  if (toolName === 'fs_read' || toolName === 'fs_list' || toolName === 'web_fetch' || toolName === 'memory_recall' || toolName === 'memory_search') {
+  if (
+    toolName === 'fs_read'
+    || toolName === 'fs_list'
+    || toolName === 'web_fetch'
+    || toolName === 'memory_recall'
+    || toolName === 'memory_search'
+    || toolName === 'automation_list'
+    || SECOND_BRAIN_READ_TOOL_NAMES.has(toolName)
+  ) {
     return 'read';
   }
   if (toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete' || toolName === 'fs_move' || toolName === 'fs_copy') {
@@ -720,12 +745,31 @@ function toolNameSatisfiesStep(
       ? inferredToolKind === 'tool_call'
       : step.kind === inferredToolKind;
   }
-  return step.expectedToolCategories.some((value) => value === toolName || value === inferredToolKind);
+  return step.expectedToolCategories.some((value) => (
+    expectedToolCategoryMatchesTool(value, toolName, inferredToolKind)
+  ));
+}
+
+function expectedToolCategoryMatchesTool(
+  value: string,
+  toolName: string,
+  inferredToolKind: PlannedStepKind,
+): boolean {
+  return value === toolName
+    || value === inferredToolKind
+    || (value === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (value === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || (value === 'second_brain' && toolName.startsWith('second_brain_'))
+    || (value === 'automation' && toolName.startsWith('automation_'));
 }
 
 function receiptSatisfiesStep(step: PlannedStep, receipt: EvidenceReceipt): boolean {
   if (!step.expectedToolCategories?.length) {
     return true;
+  }
+  if (receipt.sourceType === 'model_answer') {
+    return step.kind === 'answer'
+      && step.expectedToolCategories.some((value) => value === 'answer' || value === 'model_answer');
   }
   if (receipt.sourceType !== 'tool_call' || !receipt.toolName) {
     return false;

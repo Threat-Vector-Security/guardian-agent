@@ -176,8 +176,9 @@ export class OpenAIProvider implements LLMProvider {
     stream: boolean,
     useMaxCompletionTokens: boolean,
   ): OpenAI.ChatCompletionCreateParamsNonStreaming | OpenAI.ChatCompletionCreateParamsStreaming {
+    const selectedModel = options?.model ?? this.model;
     const params = {
-      model: options?.model ?? this.model,
+      model: selectedModel,
       temperature: options?.temperature ?? this.temperature,
       messages: messages.map(toOpenAIMessage),
       ...(stream
@@ -190,6 +191,13 @@ export class OpenAIProvider implements LLMProvider {
         ? { max_completion_tokens: options?.maxTokens ?? this.maxTokens }
         : { max_tokens: options?.maxTokens ?? this.maxTokens }),
     } satisfies Record<string, unknown>;
+
+    if (this.shouldUseOpenRouterAutoFallback(selectedModel)) {
+      Object.assign(params, {
+        models: [selectedModel, 'openrouter/auto'],
+        route: 'fallback' as const,
+      });
+    }
 
     if (options?.tools?.length) {
       Object.assign(params, {
@@ -224,6 +232,10 @@ export class OpenAIProvider implements LLMProvider {
     return stream
       ? params as OpenAI.ChatCompletionCreateParamsStreaming
       : params as OpenAI.ChatCompletionCreateParamsNonStreaming;
+  }
+
+  private shouldUseOpenRouterAutoFallback(selectedModel: string): boolean {
+    return this.name === 'openrouter' && selectedModel.trim().toLowerCase() !== 'openrouter/auto';
   }
 }
 

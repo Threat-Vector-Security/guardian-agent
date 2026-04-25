@@ -2062,6 +2062,131 @@ tr:hover td {
   flex-wrap: wrap;
 }
 
+.cfg-provider-family {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.cfg-provider-family + .cfg-provider-family {
+  margin-top: 0.45rem;
+}
+
+.cfg-provider-family-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 0.38rem;
+  width: 100%;
+  min-height: 3.2rem;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cfg-provider-family-summary:hover {
+  background: var(--bg-hover);
+}
+
+.cfg-provider-family-main {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-provider-family-caret {
+  display: inline-grid;
+  place-items: center;
+  width: 0.85rem;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.cfg-provider-family.is-collapsed .cfg-provider-family-caret {
+  transform: rotate(0deg);
+}
+
+.cfg-provider-family-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cfg-provider-family-text strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-provider-family-text span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.63rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-provider-family-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-width: 0;
+  padding-left: 3rem;
+  width: 100%;
+}
+
+.cfg-provider-family-badge {
+  padding: 0.12rem 0.32rem;
+  background: rgba(62, 166, 255, 0.16);
+  color: var(--accent);
+  font-size: 0.55rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.cfg-provider-family-roles {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  line-height: 1.15;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-provider-family-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.35rem 0.45rem;
+}
+
+.cfg-provider-family.is-collapsed .cfg-provider-family-items {
+  display: none;
+}
+
+.cfg-provider-profile-row:hover {
+  background: var(--bg-hover) !important;
+}
+
 .config-provider-actions-cell {
   width: 1%;
   white-space: nowrap;
@@ -2078,6 +2203,195 @@ tr:hover td {
 
 .config-provider-actions .btn {
   margin-right: 0;
+}
+
+.config-provider-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.config-provider-section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.config-provider-section-heading {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: var(--font-label-tracking);
+  text-transform: var(--font-label-transform);
+}
+
+.config-provider-groups {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.config-provider-family {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.config-provider-family-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  min-height: 3.4rem;
+  padding: 0.65rem 0.85rem;
+}
+
+.config-provider-family-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.config-provider-family-toggle:hover {
+  color: var(--accent);
+}
+
+.config-provider-family-summary:hover {
+  background: var(--bg-hover);
+}
+
+.config-provider-family-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.config-provider-family-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.config-provider-family-text strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-provider-family-text span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-provider-family-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  min-width: 0;
+  flex: 0 1 18rem;
+}
+
+.config-provider-family-roles {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-provider-family-items {
+  padding: 0 0.75rem 0.75rem;
+}
+
+.config-provider-family.is-collapsed .config-provider-family-items {
+  display: none;
+}
+
+.config-provider-family.is-collapsed .cfg-provider-family-caret {
+  transform: rotate(0deg);
+}
+
+.config-provider-routing-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.config-provider-family-routing {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.config-provider-family-routing-title {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: var(--font-label-tracking);
+  text-transform: var(--font-label-transform);
+}
+
+.config-provider-role-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.config-provider-role-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.12rem 0.38rem;
+  border: 1px solid rgba(62, 166, 255, 0.22);
+  background: rgba(62, 166, 255, 0.12);
+  color: var(--accent);
+  font-size: 0.62rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.config-provider-policy-note {
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.config-provider-table-wrap {
+  width: 100%;
+}
+
+.config-provider-table {
+  min-width: 760px;
 }
 
 .config-provider-name-cell,

@@ -563,17 +563,22 @@ export class ChatAgentOrchestrationState {
     const nextExecutionRef = decision.turnRelation === 'new_request' || !existingExecutionRef
       ? (currentExecutionRef ?? existingExecutionRef)
       : existingExecutionRef;
+    const codeSessionRef = input.codeSessionId?.trim()
+      ? {
+          kind: 'code_session' as const,
+          id: input.codeSessionId.trim(),
+        }
+      : null;
+    const nextCodeSessionRefs = codeSessionRef
+      ? [codeSessionRef]
+      : (input.continuityThread?.activeExecutionRefs ?? [])
+          .filter((ref) => ref.kind === 'code_session');
     const nextExecutionRefs = replaceContinuityExecutionRefsByKind(
       input.continuityThread?.activeExecutionRefs,
       new Set<ContinuityThreadExecutionRef['kind']>(['execution', 'code_session']),
       [
         ...(nextExecutionRef ? [nextExecutionRef] : []),
-        ...(input.codeSessionId?.trim()
-          ? [{
-              kind: 'code_session' as const,
-              id: input.codeSessionId.trim(),
-            }]
-          : []),
+        ...nextCodeSessionRefs,
       ],
     );
     return this.continuityThreadStore.upsert(

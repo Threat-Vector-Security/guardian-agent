@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { runLlmLoop } from './worker-llm-loop.js';
 import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
 import type { ToolCaller, ToolResult } from '../broker/types.js';
+import type { PlannedTask } from '../runtime/execution/types.js';
 
 describe('runLlmLoop', () => {
   it('falls back to an explicit empty-response failure when a post-tool LLM round produces empty content', async () => {
@@ -503,6 +504,82 @@ describe('runLlmLoop', () => {
     expect(calledTools).toEqual(expect.arrayContaining(['fs_read', 'fs_write']));
     expect(result.outcome.completionReason).toBe('model_response');
     expect(result.finalContent).toContain('wrote tmp/repo-summary.md');
+  });
+
+  it('does not accept synthetic tool-response markup as answer-first completion', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Find matching automations and suggest one useful automation.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '<tool_response><tool_name>fs_search</tool_name><tool_args>{"pattern":"approval"}</tool_args></tool_response>',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [
+          { id: 'call-1', name: 'fs_search', arguments: JSON.stringify({ pattern: 'approval' }) },
+        ],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Found related automation material and suggested an approval continuity monitor.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_search',
+          description: 'Search files.',
+          parameters: {
+            type: 'object',
+            properties: {
+              pattern: { type: 'string' },
+            },
+            required: ['pattern'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        return {
+          success: true,
+          output: { matches: [{ path: 'docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md' }] },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      4,
+      32_000,
+      undefined,
+      {
+        preferAnswerFirst: true,
+      },
+    );
+
+    expect(chatCalls[0]?.options?.tools).toEqual([]);
+    expect(calledTools).toEqual(['fs_search']);
+    expect(result.outcome.completionReason).toBe('model_response');
+    expect(result.finalContent).toContain('approval continuity monitor');
   });
 
   it('prefers a tool-free answer first for writing-plan style turns when the response is strong', async () => {
@@ -1272,6 +1349,99 @@ describe('runLlmLoop', () => {
     expect(searchQueries.length).toBeGreaterThan(0);
     expect(result.finalContent).toContain('Read complete.');
     expect(messages.some((message) => message.role === 'tool' && message.content.includes('<tool_result name="browser_read"'))).toBe(true);
+  });
+
+  it('preloads exact tools required by the planned task without broadening deferred loading', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Find matching automations and suggest one useful automation.' }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan:automation_control:read:2',
+      allowAdditionalSteps: false,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'read',
+          summary: 'Read the automation catalog.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Suggest one useful automation.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'automation_list', arguments: JSON.stringify({ step_id: 'step_1' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Create a stale-approval monitor automation.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const searchQueries: string[] = [];
+    const toolNamesByRound: string[][] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'find_tools',
+          description: 'Find deferred tools.',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'system',
+        }];
+      },
+      async searchTools(query) {
+        searchQueries.push(query);
+        return [
+          {
+            name: 'automation_list',
+            description: 'List automations from the canonical catalog.',
+            parameters: { type: 'object', properties: {} },
+            risk: 'read_only',
+            category: 'automation',
+          },
+          {
+            name: 'automation_save',
+            description: 'Create an automation.',
+            parameters: { type: 'object', properties: {} },
+            risk: 'mutating',
+            category: 'automation',
+          },
+        ];
+      },
+      async callTool(request): Promise<ToolResult> {
+        expect(request.toolName).toBe('automation_list');
+        return { success: true, output: { automations: [] } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (_messages, options) => {
+        toolNamesByRound.push(options?.tools?.map((tool) => tool.name) ?? []);
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+      undefined,
+      { plannedTask },
+    );
+
+    expect(searchQueries).toEqual(['automation_list']);
+    expect(toolNamesByRound[0]).toContain('automation_list');
+    expect(toolNamesByRound[0]).not.toContain('automation_save');
+    expect(result.finalContent).toContain('stale-approval monitor');
   });
 
   it('repairs empty find_tools queries from the latest user request', async () => {

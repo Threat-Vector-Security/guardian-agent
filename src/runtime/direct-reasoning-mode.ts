@@ -14,6 +14,7 @@ import type { IntentGatewayDecision, IntentGatewayRecord } from './intent/types.
 import type { SelectedExecutionProfile } from './execution-profiles.js';
 import type {
   PromptAssemblyAdditionalSection,
+  PromptAssemblyHistoryEntry,
   PromptAssemblyKnowledgeBase,
 } from './context-assembly.js';
 import type { IntentRoutingTraceEntry, IntentRoutingTraceLog } from './intent-routing-trace.js';
@@ -58,6 +59,7 @@ export interface DirectReasoningTraceContext {
 
 export interface DirectReasoningInput {
   message: string;
+  history?: PromptAssemblyHistoryEntry[];
   gateway: IntentGatewayRecord | null | undefined;
   selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
   promptKnowledge?: {
@@ -197,9 +199,57 @@ export function shouldHandleDirectReasoningMode(input: {
   if (decision.executionClass === 'security_analysis') return false;
   if (decision.executionClass === 'tool_orchestration') return false;
   if (hasRequiredWritePlannedStep(decision)) return false;
+  if (hasRequiredNonDirectReasoningEvidenceStep(decision)) return false;
 
   const tier = input.selectedExecutionProfile?.providerTier;
   return !!input.selectedExecutionProfile && tier !== 'local';
+}
+
+const DIRECT_REASONING_EVIDENCE_CATEGORIES = new Set([
+  'search',
+  'read',
+  'fs_search',
+  'fs_read',
+  'fs_list',
+  'repo_inspect',
+  'code_symbol_search',
+]);
+
+function requiredNonAnswerPlannedSteps(
+  decision: IntentGatewayDecision | null | undefined,
+): NonNullable<IntentGatewayDecision['plannedSteps']> {
+  return (decision?.plannedSteps ?? [])
+    .filter((step) => step.required !== false && step.kind !== 'answer');
+}
+
+function hasRequiredNonDirectReasoningEvidenceStep(
+  decision: IntentGatewayDecision | null | undefined,
+): boolean {
+  return requiredNonAnswerPlannedSteps(decision).some((step) => {
+    const categories = step.expectedToolCategories ?? [];
+    if (categories.length === 0) {
+      return false;
+    }
+    return categories.some((category) => {
+      const normalized = category.trim();
+      return normalized.length > 0 && !DIRECT_REASONING_EVIDENCE_CATEGORIES.has(normalized);
+    });
+  });
+}
+
+function directReasoningRequiresToolEvidence(input: DirectReasoningInput): boolean {
+  const decision = input.gateway?.decision;
+  return requiredNonAnswerPlannedSteps(decision).some((step) => (
+    step.kind === 'search'
+    || step.kind === 'read'
+    || step.kind === 'tool_call'
+    || step.kind === 'memory_save'
+    || (step.expectedToolCategories?.length ?? 0) > 0
+  ));
+}
+
+function directReasoningHasUsefulEvidence(evidence: DirectReasoningEvidenceEntry[]): boolean {
+  return evidence.some((entry) => entry.references.length > 0 || entry.snippets.length > 0);
 }
 
 export function buildDirectReasoningToolSet(): ToolDefinition[] {
@@ -359,6 +409,10 @@ export async function handleDirectReasoningMode(
           workspaceRoot: input.workspaceRoot,
         }),
       },
+      ...(input.history ?? []).map((entry): ChatMessage => ({
+        role: entry.role,
+        content: entry.content,
+      })),
       { role: 'user', content: input.message },
     ],
     tools: buildDirectReasoningToolSet(),
@@ -458,6 +512,8 @@ export async function executeDirectReasoningLoop(input: {
   let finalContent = '';
   let timedOut = false;
   let turns = 0;
+  let noEvidenceRetryUsed = false;
+  let weakEvidenceRetryUsed = false;
   const evidence: DirectReasoningEvidenceEntry[] = [];
   const artifactState: DirectReasoningArtifactState = {
     context: input.graphEmitter?.context ?? input.input.graphContext ?? buildDirectReasoningGraphContext({
@@ -557,6 +613,84 @@ export async function executeDirectReasoningLoop(input: {
     }
 
     if (!chatResponse.toolCalls || chatResponse.toolCalls.length === 0) {
+      if (
+        toolCallCount === 0
+        && evidence.length === 0
+        && directReasoningRequiresToolEvidence(input.input)
+      ) {
+        if (!noEvidenceRetryUsed) {
+          noEvidenceRetryUsed = true;
+          recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_required_retry', {
+            route: input.input.gateway?.decision.route,
+            operation: input.input.gateway?.decision.operation,
+            turn: turns,
+            reason: 'planned_repo_evidence_missing',
+            contentChars: (chatResponse.content ?? '').length,
+          });
+          messages.push({
+            role: 'assistant',
+            content: chatResponse.content ?? '',
+          });
+          messages.push({
+            role: 'user',
+            content: [
+              'The previous response used no read-only tool evidence.',
+              'This routed request includes required repository evidence steps.',
+              'Use fs_search, fs_list, or fs_read now, then answer only after at least one tool result has been observed.',
+            ].join(' '),
+          });
+          continue;
+        }
+        recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_failed', {
+          route: input.input.gateway?.decision.route,
+          operation: input.input.gateway?.decision.operation,
+          reason: 'planned_repo_evidence_missing_after_retry',
+          turn: turns,
+        });
+        finalContent = '';
+        break;
+      }
+      if (
+        toolCallCount > 0
+        && directReasoningRequiresToolEvidence(input.input)
+        && !directReasoningHasUsefulEvidence(evidence)
+      ) {
+        if (!weakEvidenceRetryUsed) {
+          weakEvidenceRetryUsed = true;
+          recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_required_retry', {
+            route: input.input.gateway?.decision.route,
+            operation: input.input.gateway?.decision.operation,
+            turn: turns,
+            reason: 'planned_repo_evidence_empty_or_weak',
+            completedToolCalls: toolCallCount,
+            evidenceCount: evidence.length,
+            contentChars: (chatResponse.content ?? '').length,
+          });
+          messages.push({
+            role: 'assistant',
+            content: chatResponse.content ?? '',
+          });
+          messages.push({
+            role: 'user',
+            content: [
+              'The last read-only tool evidence did not provide usable file references or snippets.',
+              'Search again before answering.',
+              'For implementation concepts rather than a likely filename, call fs_search with mode="content" and then read the most relevant files with fs_read.',
+            ].join(' '),
+          });
+          continue;
+        }
+        recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_failed', {
+          route: input.input.gateway?.decision.route,
+          operation: input.input.gateway?.decision.operation,
+          reason: 'planned_repo_evidence_empty_or_weak_after_retry',
+          completedToolCalls: toolCallCount,
+          evidenceCount: evidence.length,
+          turn: turns,
+        });
+        finalContent = '';
+        break;
+      }
       finalContent = chatResponse.content ?? '';
       break;
     }
@@ -599,7 +733,7 @@ export async function executeDirectReasoningLoop(input: {
   }
 
   let synthesized = false;
-  if (evidence.length > 0 && !finalContent.trim()) {
+  if (directReasoningHasUsefulEvidence(evidence) && !finalContent.trim()) {
     const remainingForHydrationMs = maxTotalTimeMs - (now() - startedAt);
     if (remainingForHydrationMs > FINAL_RESPONSE_RESERVE_MS + 1_000) {
       toolCallCount += await hydrateDirectReasoningEvidenceFromSearch({
@@ -613,7 +747,7 @@ export async function executeDirectReasoningLoop(input: {
     }
   }
 
-  if (evidence.length > 0) {
+  if (directReasoningHasUsefulEvidence(evidence)) {
     const remainingMs = maxTotalTimeMs - (now() - startedAt);
     const finalTimeoutMs = remainingMs > 1_000
       ? Math.min(DEFAULT_FINAL_RESPONSE_TIMEOUT_MS, remainingMs)
@@ -948,6 +1082,10 @@ function buildDirectReasoningCompactRetryMessages(input: DirectReasoningInput): 
   ];
   return [
     { role: 'system', content: parts.join('\n') },
+    ...(input.history ?? []).map((entry): ChatMessage => ({
+      role: entry.role,
+      content: entry.content,
+    })),
     { role: 'user', content: input.message },
   ];
 }
@@ -2628,6 +2766,9 @@ function normalizeDirectReasoningToolArgs(
     normalized.path = normalizeRepoDirectoryReference(path)
       ?? (isWorkspaceRootPath(path, input) ? selectDefaultDirectReasoningSearchPath(input) : undefined)
       ?? selectDefaultDirectReasoningSearchPath(input);
+    if (!['name', 'content', 'auto'].includes(stringValue(normalized.mode))) {
+      normalized.mode = 'content';
+    }
     normalized.maxResults = clampEvidenceBudgetInteger(
       normalized.maxResults,
       DIRECT_SEARCH_DEFAULT_MAX_RESULTS,

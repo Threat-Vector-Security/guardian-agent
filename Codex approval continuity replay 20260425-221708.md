@@ -1,0 +1,3 @@
+- Read‑only repo evidence: inspected files (e.g., `src/runtime/execution-graph/types.ts`, `timeline-adapter.ts`) provided factual, untrusted‑but‑read‑only data.
+- Grounded answer synthesis: conclusions derived only from the inspected file contents, no external assumptions.
+- Approval‑resume continuity: the note records the approval‑continuity workflow, enabling future resumption without re‑inspection.

@@ -20,9 +20,13 @@ export function buildDelegatedTaskContract(
   decision: IntentGatewayDecision | null | undefined,
 ): DelegatedTaskContract {
   const base = buildBaseDelegatedTaskContract(decision);
+  const plan = buildPlannedTask(decision, base);
+  const hasRequiredEvidenceStep = plan.steps.some((step) => step.required !== false && step.kind !== 'answer');
   return {
     ...base,
-    plan: buildPlannedTask(decision, base),
+    requiresEvidence: hasRequiredEvidenceStep ? true : base.requiresEvidence,
+    allowsAnswerFirst: hasRequiredEvidenceStep ? false : base.allowsAnswerFirst,
+    plan,
   };
 }
 
@@ -239,7 +243,8 @@ function verifyProviderSelection(
   const actualProfileName = provenance.resolvedProviderProfileName?.trim() || provenance.resolvedProviderName?.trim();
   const expectedModel = executionProfile.providerModel?.trim();
   const actualModel = provenance.resolvedProviderModel?.trim();
-  if (expectedProfileName && actualProfileName && expectedProfileName !== actualProfileName) {
+  const providerMatch = evaluateProviderSelectionMatch(provenance, executionProfile);
+  if (expectedProfileName && actualProfileName && !providerMatch.allowed) {
     return {
       decision: 'contradicted',
       reasons: [`Delegated worker reported provider profile '${actualProfileName}' but the supervisor selected '${expectedProfileName}'.`],
@@ -248,10 +253,12 @@ function verifyProviderSelection(
       missingEvidenceKinds: ['provider_selection'],
     };
   }
-  const expectsOpenAIModelAlias = isOpenAIProviderSelection(provenance, executionProfile);
-  const normalizedExpectedModel = normalizeProviderModelForVerification(expectedModel, expectsOpenAIModelAlias);
-  const normalizedActualModel = normalizeProviderModelForVerification(actualModel, expectsOpenAIModelAlias);
-  if (expectedModel && actualModel && normalizedExpectedModel !== normalizedActualModel) {
+  if (
+    expectedModel
+    && actualModel
+    && !providerMatch.usedFallback
+    && !areProviderModelsEquivalent(expectedModel, actualModel, provenance, executionProfile)
+  ) {
     return {
       decision: 'contradicted',
       reasons: [`Delegated worker reported model '${actualModel}' but the supervisor selected '${expectedModel}'.`],
@@ -267,9 +274,59 @@ function normalizeProviderIdentity(value: string | undefined): string {
   return (typeof value === 'string' ? value : '').trim().toLowerCase().replace(/[\s_-]+/g, '');
 }
 
+function evaluateProviderSelectionMatch(
+  provenance: ProviderSelectionSnapshot,
+  executionProfile: SelectedExecutionProfile,
+): { allowed: boolean; usedFallback: boolean } {
+  const actualIdentities = [
+    provenance.resolvedProviderProfileName,
+    provenance.resolvedProviderName,
+    provenance.resolvedProviderType,
+  ]
+    .map((value) => normalizeProviderIdentity(value))
+    .filter((value) => value.length > 0);
+  if (actualIdentities.length <= 0) {
+    return { allowed: true, usedFallback: false };
+  }
+
+  const selectedIdentities = new Set([
+    normalizeProviderIdentity(executionProfile.providerName),
+    normalizeProviderIdentity(executionProfile.providerType),
+  ].filter((value) => value.length > 0));
+  if (actualIdentities.some((identity) => selectedIdentities.has(identity))) {
+    return { allowed: true, usedFallback: provenance.resolvedViaFallback === true };
+  }
+
+  const fallbackIdentities = new Set(
+    (executionProfile.fallbackProviderOrder ?? [])
+      .map((value) => normalizeProviderIdentity(value))
+      .filter((value) => value.length > 0),
+  );
+  if (actualIdentities.some((identity) => fallbackIdentities.has(identity))) {
+    return { allowed: true, usedFallback: true };
+  }
+
+  return { allowed: false, usedFallback: provenance.resolvedViaFallback === true };
+}
+
 function isOpenAIProviderSelection(
   provenance: ProviderSelectionSnapshot,
   executionProfile: SelectedExecutionProfile,
+): boolean {
+  return isProviderSelection(provenance, executionProfile, 'openai');
+}
+
+function isOpenRouterProviderSelection(
+  provenance: ProviderSelectionSnapshot,
+  executionProfile: SelectedExecutionProfile,
+): boolean {
+  return isProviderSelection(provenance, executionProfile, 'openrouter');
+}
+
+function isProviderSelection(
+  provenance: ProviderSelectionSnapshot,
+  executionProfile: SelectedExecutionProfile,
+  provider: string,
 ): boolean {
   return [
     executionProfile.providerType,
@@ -277,19 +334,29 @@ function isOpenAIProviderSelection(
     provenance.resolvedProviderName,
     provenance.resolvedProviderType,
     provenance.resolvedProviderProfileName,
-  ].some((value) => normalizeProviderIdentity(value) === 'openai');
+  ].some((value) => normalizeProviderIdentity(value) === provider);
 }
 
-function normalizeProviderModelForVerification(
-  model: string | undefined,
-  allowOpenAIAliasNormalization: boolean,
-): string {
-  const trimmed = model?.trim().toLowerCase() ?? '';
-  if (!trimmed) return '';
-  if (allowOpenAIAliasNormalization) {
-    return trimmed.replace(/-\d{4}-\d{2}-\d{2}$/u, '');
-  }
-  return trimmed;
+function areProviderModelsEquivalent(
+  expectedModel: string,
+  actualModel: string,
+  provenance: ProviderSelectionSnapshot,
+  executionProfile: SelectedExecutionProfile,
+): boolean {
+  const expected = expectedModel.trim().toLowerCase();
+  const actual = actualModel.trim().toLowerCase();
+  if (!expected || !actual) return true;
+  if (expected === actual) return true;
+  const allowSnapshotAlias = isOpenAIProviderSelection(provenance, executionProfile)
+    || isOpenRouterProviderSelection(provenance, executionProfile);
+  if (!allowSnapshotAlias) return false;
+  return isDatedSnapshotOfAlias(expected, actual) || isDatedSnapshotOfAlias(actual, expected);
+}
+
+function isDatedSnapshotOfAlias(alias: string, snapshot: string): boolean {
+  if (!alias || !snapshot.startsWith(`${alias}-`)) return false;
+  const suffix = snapshot.slice(alias.length + 1);
+  return /^\d{4}-\d{2}-\d{2}$/u.test(suffix) || /^\d{2}-\d{2}$/u.test(suffix);
 }
 
 function verifyExactFileReferenceRequirements(

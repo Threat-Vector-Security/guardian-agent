@@ -118,6 +118,9 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
   }
 
   if (decision.route === 'automation_authoring' || decision.route === 'automation_control') {
+    if (requiresAutomationSynthesisWorker(requiredSteps)) {
+      return true;
+    }
     return plannedStepExpectedCategories(decision).some((category) => !isAutomationDirectCategory(category));
   }
 
@@ -138,6 +141,17 @@ function isAutomationDirectCategory(category: string): boolean {
   if (normalized === 'automation' || normalized === 'scheduled_email_automation') return true;
   if (normalized.startsWith('automation_')) return true;
   return getBuiltinToolCategory(normalized) === 'automation';
+}
+
+function requiresAutomationSynthesisWorker(
+  requiredSteps: NonNullable<IntentGatewayDecision['plannedSteps']>,
+): boolean {
+  const hasAutomationEvidenceStep = requiredSteps.some((step) => (
+    step.kind !== 'answer'
+    && (step.expectedToolCategories?.some(isAutomationDirectCategory) ?? false)
+  ));
+  const hasAnswerStep = requiredSteps.some((step) => step.kind === 'answer');
+  return hasAutomationEvidenceStep && hasAnswerStep;
 }
 
 function dedupeCandidates(

@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig, RoutingTierMode } from '../config/types.js';
 import { stripLeadingContextPrefix } from '../chat-agent-helpers.js';
 import { SHARED_TIER_AGENT_STATE_ID } from './agent-state-context.js';
-import type { CodeSessionStore } from './code-sessions.js';
+import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
 import type { ConversationService } from './conversation.js';
 import type { ContinuityThreadStore } from './continuity-threads.js';
+import { buildContinuityAwareHistory } from './continuity-history.js';
 import type { IdentityService } from './identity.js';
 import {
   attachPreRoutedIntentGatewayMetadata,
@@ -17,10 +18,16 @@ import {
 import {
   attachSelectedExecutionProfileMetadata,
   findProviderByTier,
+  providerMatchesTier,
   selectExecutionProfile,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
+import {
+  buildFrontierIntentPlanRepairProviderOrder,
+  tryRepairGenericIntentGatewayPlan,
+} from './intent/gateway-plan-repair.js';
 import { attachExecutionIdentityMetadata } from './execution-identity.js';
+import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
 import {
   readChatProviderSelectionMetadata,
@@ -73,10 +80,10 @@ export function createIncomingDispatchPreparer(args: {
   routingIntentGateway: Pick<IntentGateway, 'classify'>;
   runtime: Pick<Runtime, 'getProvider'>;
   identity: Pick<IdentityService, 'resolveCanonicalUserId'>;
-  conversations: Pick<ConversationService, 'getHistoryForContext'>;
+  conversations: Pick<ConversationService, 'getHistoryForContext' | 'getSessionHistory'>;
   pendingActionStore: Pick<PendingActionStore, 'resolveActiveForSurface'>;
   continuityThreadStore: Pick<ContinuityThreadStore, 'get'>;
-  codeSessionStore: Pick<CodeSessionStore, 'resolveForRequest'>;
+  codeSessionStore: Pick<CodeSessionStore, 'resolveForRequest' | 'getSession'>;
   intentRoutingTrace: Pick<IntentRoutingTraceLog, 'record'>;
   enabledManagedProviders?: Set<string>;
   availableCodingBackends?: string[];
@@ -117,45 +124,57 @@ export function createIncomingDispatchPreparer(args: {
     config: GuardianAgentConfig,
     mode: RoutingTierMode,
   ): string[] => {
+    const uniqueProviders = (providers: Array<string | null | undefined>): string[] => [
+      ...new Set(providers.map((provider) => provider?.trim() ?? '').filter((provider) => provider.length > 0)),
+    ];
+    const listProvidersForTier = (tier: 'local' | 'managed_cloud' | 'frontier'): string[] => {
+      const preferred = findProviderByTier(config, tier);
+      const matches = Object.entries(config.llm)
+        .filter(([, llmCfg]) => providerMatchesTier(llmCfg, tier))
+        .map(([name]) => name)
+        .sort((left, right) => left.localeCompare(right));
+      return uniqueProviders([preferred, ...matches]);
+    };
     if (mode === 'local-only') {
-      const local = findProviderByTier(config, 'local');
-      return local
-        ? [local]
-        : [
-            findProviderByTier(config, 'managed_cloud'),
-            findProviderByTier(config, 'frontier'),
-          ].filter((value): value is string => Boolean(value));
+      const localProviders = listProvidersForTier('local');
+      return localProviders.length > 0
+        ? localProviders
+        : uniqueProviders([
+            ...listProvidersForTier('managed_cloud'),
+            ...listProvidersForTier('frontier'),
+          ]);
     }
     if (mode === 'managed-cloud-only') {
-      const managedCloud = findProviderByTier(config, 'managed_cloud');
-      return managedCloud
-        ? ([
-            managedCloud,
-            findProviderByTier(config, 'frontier'),
-          ].filter((value): value is string => Boolean(value)))
-        : ([
-            findProviderByTier(config, 'frontier'),
-            findProviderByTier(config, 'local'),
-          ].filter((value): value is string => Boolean(value)));
+      const managedCloudProviders = listProvidersForTier('managed_cloud');
+      return managedCloudProviders.length > 0
+        ? uniqueProviders([
+            ...managedCloudProviders,
+            ...listProvidersForTier('frontier'),
+          ])
+        : uniqueProviders([
+            ...listProvidersForTier('frontier'),
+            ...listProvidersForTier('local'),
+          ]);
     }
     if (mode === 'frontier-only') {
-      const frontier = findProviderByTier(config, 'frontier');
-      return frontier
-        ? ([
-            frontier,
-            findProviderByTier(config, 'managed_cloud'),
-          ].filter((value): value is string => Boolean(value)))
-        : ([
-            findProviderByTier(config, 'managed_cloud'),
-            findProviderByTier(config, 'local'),
-          ].filter((value): value is string => Boolean(value)));
+      const frontierProviders = listProvidersForTier('frontier');
+      return frontierProviders.length > 0
+        ? uniqueProviders([
+            ...frontierProviders,
+            ...listProvidersForTier('managed_cloud'),
+          ])
+        : uniqueProviders([
+            ...listProvidersForTier('managed_cloud'),
+            ...listProvidersForTier('local'),
+          ]);
     }
-    return [
+    return uniqueProviders([
       args.findProviderByLocality(config, 'external'),
-      args.findProviderByLocality(config, 'local')
-        ?? config.defaultProvider
-        ?? null,
-    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+      ...listProvidersForTier('managed_cloud'),
+      ...listProvidersForTier('frontier'),
+      args.findProviderByLocality(config, 'local'),
+      config.defaultProvider,
+    ]);
   };
 
   const resolveRoutingStateAgentId = (preferredAgentId?: string): string => (
@@ -169,6 +188,8 @@ export function createIncomingDispatchPreparer(args: {
     msg: IncomingDispatchMessage,
     stateAgentId: string,
     requestedProviderName?: string,
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+    requestId?: string,
   ): Promise<IntentGatewayRecord | null> => {
     const normalizedContent = stripLeadingContextPrefix(msg.content);
     const channel = msg.channel?.trim() || 'web';
@@ -198,35 +219,91 @@ export function createIncomingDispatchPreparer(args: {
       assistantId: stateAgentId,
       userId: canonicalUserId,
     });
-    const recentHistory = args.conversations.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: canonicalUserId,
+    const continuitySummary = args.summarizeContinuityThreadForGateway(continuity);
+    const recentHistory = buildContinuityAwareHistory({
+      conversationService: args.conversations,
+      codeSessionStore: args.codeSessionStore,
+      continuityThread: continuity,
+      currentConversationKey: {
+        agentId: stateAgentId,
+        userId: canonicalUserId,
+        channel,
+      },
+      currentUserId: canonicalUserId,
+      currentPrincipalId: msg.principalId,
+      resolvedCodeSession: resolvedCodeSession?.session ?? null,
+      query: buildIntentGatewayHistoryQuery({
+        content: normalizedContent,
+        continuity: continuitySummary,
+      }),
+    }).history;
+    const gatewayInput: IntentGatewayInput = {
+      content: normalizedContent,
       channel,
-    });
+      recentHistory,
+      pendingAction: args.summarizePendingActionForGateway(pendingAction),
+      continuity: continuitySummary,
+      enabledManagedProviders: args.enabledManagedProviders ? [...args.enabledManagedProviders] : [],
+      availableCodingBackends,
+    };
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;
       const provider = args.runtime.getProvider(providerName);
       if (!provider) return null;
       const classified = await args.routingIntentGateway.classify(
-        {
-          content: normalizedContent,
-          channel,
-          recentHistory,
-          pendingAction: args.summarizePendingActionForGateway(pendingAction),
-          continuity: args.summarizeContinuityThreadForGateway(continuity),
-          enabledManagedProviders: args.enabledManagedProviders ? [...args.enabledManagedProviders] : [],
-          availableCodingBackends,
-        },
+        gatewayInput,
         (messages, options) => provider.chat(messages, options),
       );
       return enrichIntentGatewayRecordWithContentPlan(classified, normalizedContent);
+    };
+    const repairGenericGatewayPlan = async (
+      current: IntentGatewayRecord,
+      currentProviderName: string,
+    ): Promise<IntentGatewayRecord> => {
+      const providerOrder = buildFrontierIntentPlanRepairProviderOrder({
+        config: currentConfig,
+        currentProviderName,
+        forcedProviderName: requestedProviderName,
+      });
+      const repair = await tryRepairGenericIntentGatewayPlan({
+        current,
+        sourceContent: normalizedContent,
+        candidates: (providerOrder ?? []).map((providerName) => ({
+          providerName,
+          classify: () => classifyWithProvider(providerName),
+        })),
+      });
+      if (repair) {
+        recordIntentRoutingTrace('gateway_classified', {
+          msg,
+          requestId,
+          details: {
+            source: 'routing_plan_repair',
+            semanticPlanRepairAttempted: repair.attempted,
+            semanticPlanRepairAdopted: repair.adopted,
+            semanticPlanRepairProviderOrder: repair.providerOrder,
+            semanticPlanRepairProvider: repair.providerName,
+            originalModel: current.model,
+            repairedModel: repair.record?.model,
+            originalPlannedStepKinds: current.decision.plannedSteps?.map((step) => step.kind),
+            repairedPlannedStepKinds: repair.record?.decision.plannedSteps?.map((step) => step.kind),
+            originalPlannedStepCategories: current.decision.plannedSteps
+              ?.map((step) => step.expectedToolCategories)
+              .filter((categories): categories is string[] => Array.isArray(categories)),
+            repairedPlannedStepCategories: repair.record?.decision.plannedSteps
+              ?.map((step) => step.expectedToolCategories)
+              .filter((categories): categories is string[] => Array.isArray(categories)),
+          },
+        });
+      }
+      return repair?.record ?? current;
     };
 
     let lastResult: IntentGatewayRecord | null = null;
     for (const providerName of classifierProviders) {
       lastResult = await classifyWithProvider(providerName);
       if (lastResult?.available) {
-        return lastResult;
+        return repairGenericGatewayPlan(lastResult, providerName);
       }
     }
     return lastResult;
@@ -309,6 +386,8 @@ export function createIncomingDispatchPreparer(args: {
           msg,
           resolveRoutingStateAgentId(resolvedChannelDefault),
           requestedChatProvider?.providerName,
+          resolvedCodeSession,
+          requestId,
         );
       }
       return classifiedGatewayPromise;
@@ -341,6 +420,9 @@ export function createIncomingDispatchPreparer(args: {
             resolution: gateway.decision.resolution,
             missingFields: gateway.decision.missingFields,
             plannedStepKinds: gateway.decision.plannedSteps?.map((step) => step.kind),
+            plannedStepCategories: gateway.decision.plannedSteps
+              ?.map((step) => step.expectedToolCategories)
+              .filter((categories): categories is string[] => Array.isArray(categories)),
             executionClass: gateway.decision.executionClass,
             preferredTier: gateway.decision.preferredTier,
             requiresRepoGrounding: gateway.decision.requiresRepoGrounding,
@@ -636,6 +718,9 @@ export function createIncomingDispatchPreparer(args: {
         details: {
           route: routed.gateway.decision.route,
           plannedStepKinds: routed.gateway.decision.plannedSteps?.map((step) => step.kind),
+          plannedStepCategories: routed.gateway.decision.plannedSteps
+            ?.map((step) => step.expectedToolCategories)
+            .filter((categories): categories is string[] => Array.isArray(categories)),
           selectedAgentId: routed.decision.agentId,
           ...(selectedProfile
             ? {

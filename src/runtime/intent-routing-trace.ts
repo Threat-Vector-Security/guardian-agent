@@ -46,6 +46,7 @@ export type IntentRoutingTraceStage =
   | 'direct_reasoning_llm_call_started'
   | 'direct_reasoning_llm_call_completed'
   | 'direct_reasoning_tool_call'
+  | 'direct_reasoning_evidence_required_retry'
   | 'direct_reasoning_evidence_hydration'
   | 'direct_reasoning_synthesis_reserved'
   | 'direct_reasoning_synthesis_started'

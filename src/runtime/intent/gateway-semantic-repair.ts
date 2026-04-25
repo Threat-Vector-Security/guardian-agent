@@ -38,6 +38,7 @@ export function repairStructuredIntentGatewayRoute(
   operation: IntentGatewayDecision['operation'],
   turnRelation: IntentGatewayDecision['turnRelation'],
   repairContext: IntentGatewayRepairContext | undefined,
+  parsed?: Record<string, unknown>,
 ): IntentGatewayDecision['route'] {
   if (turnRelation === 'clarification_answer' || turnRelation === 'correction') {
     return route;
@@ -96,6 +97,16 @@ export function repairStructuredIntentGatewayRoute(
     return 'coding_session_control';
   }
   const sourceContent = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
+  if (route === 'filesystem_task' && typeof parsed?.path === 'string' && parsed.path.trim().length > 0) {
+    return route;
+  }
+  if (
+    (route === 'personal_assistant_task' || route === 'general_assistant' || route === 'unknown')
+    && typeof parsed?.path === 'string'
+    && parsed.path.trim().length > 0
+  ) {
+    return 'filesystem_task';
+  }
   if (mentionsAutomationControlTerms(sourceContent)) {
     return route;
   }
@@ -137,6 +148,9 @@ export function repairStructuredIntentGatewayOperation(
   }
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
+  }
+  if (route === 'automation_control' && operation === 'navigate') {
+    return 'read';
   }
   if (route === 'coding_session_control' && isExplicitCodingSessionControlRequest(rawSourceContent)) {
     return inferCodeSessionControlOperation(normalizedSourceContent) ?? operation;

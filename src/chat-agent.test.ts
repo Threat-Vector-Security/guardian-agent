@@ -3,9 +3,10 @@ import type { AgentContext, UserMessage } from './agent/types.js';
 import { createChatAgentClass } from './chat-agent.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
+import { ConversationService } from './runtime/conversation.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
-import { attachPreRoutedIntentGatewayMetadata } from './runtime/intent-gateway.js';
+import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './runtime/intent-gateway.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 
 describe('LLMChatAgent direct intent metadata', () => {
@@ -122,6 +123,174 @@ describe('LLMChatAgent direct intent metadata', () => {
       pendingAction: null,
       continuity: null,
     }), expect.any(Function));
+  });
+
+  it('repairs generic managed-cloud tool plans with a configured frontier gateway pass', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const managedChat = vi.fn(async () => ({
+      content: '{}',
+      toolCalls: [],
+      model: 'qwen/qwen3.6-plus',
+      finishReason: 'stop',
+    }));
+    const frontierChat = vi.fn(async () => ({
+      content: '{}',
+      toolCalls: [],
+      model: 'gpt-4o',
+      finishReason: 'stop',
+    }));
+    const fallbackChain = new ModelFallbackChain(new Map([
+      ['nvidia-tools', { name: 'nvidia-tools', chat: managedChat } as never],
+      ['openai', { name: 'openai', chat: frontierChat } as never],
+    ]), ['nvidia-tools', 'openai']);
+    const genericRecord: IntentGatewayRecord = {
+      mode: 'primary',
+      available: true,
+      model: 'qwen/qwen3.6-plus',
+      latencyMs: 1,
+      decision: {
+        route: 'general_assistant',
+        confidence: 'high',
+        operation: 'search',
+        summary: 'Find matching automations and routines.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Find matching automations and routines.',
+            expectedToolCategories: ['search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Suggest one useful automation.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+        entities: {},
+      },
+    };
+    const concreteRecord: IntentGatewayRecord = {
+      ...genericRecord,
+      model: 'gpt-4o',
+      decision: {
+        ...genericRecord.decision,
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read existing automations.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'Read existing Second Brain routines.',
+            expectedToolCategories: ['second_brain_routine_list', 'second_brain_routine_catalog'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Suggest one useful automation.',
+            required: true,
+            dependsOn: ['step_1', 'step_2'],
+          },
+        ],
+      },
+    };
+    const classify = vi.fn(async (_input: unknown, chat: any) => {
+      const response = await chat([{ role: 'user', content: 'classify' }], {
+        responseFormat: { type: 'json_object' },
+      });
+      return response.model === 'gpt-4o' ? concreteRecord : genericRecord;
+    });
+
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).intentGateway = { classify };
+    (agent as any).fallbackChain = fallbackChain;
+    (agent as any).readConfig = () => ({
+      defaultProvider: 'nvidia-tools',
+      llm: {
+        'nvidia-tools': {
+          provider: 'nvidia',
+          model: 'qwen/qwen3.6-plus',
+          enabled: true,
+        },
+        openai: {
+          provider: 'openai',
+          model: 'gpt-4o',
+          enabled: true,
+        },
+      },
+      assistant: {
+        tools: {
+          preferredProviders: {
+            managedCloud: 'nvidia-tools',
+            frontier: 'openai',
+          },
+        },
+      },
+    });
+
+    const result = await (agent as any).classifyIntentGateway({
+      id: 'msg-generic-plan',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet.',
+      timestamp: Date.now(),
+      metadata: attachSelectedExecutionProfileMetadata(undefined, {
+        id: 'managed_cloud_tool',
+        providerName: 'nvidia-tools',
+        providerType: 'nvidia',
+        providerModel: 'qwen/qwen3.6-plus',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['nvidia-tools', 'openai'],
+        reason: 'managed cloud selected for test',
+        routingMode: 'auto',
+        selectionSource: 'auto',
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'nvidia-tools', chat: managedChat } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(classify).toHaveBeenCalledTimes(2);
+    expect(managedChat).toHaveBeenCalledTimes(1);
+    expect(frontierChat).toHaveBeenCalledTimes(1);
+    expect(result?.decision.plannedSteps?.map((step: { expectedToolCategories?: string[] }) => step.expectedToolCategories)).toEqual([
+      ['automation_list'],
+      ['second_brain_routine_list', 'second_brain_routine_catalog'],
+      undefined,
+    ]);
+    expect(result?.model).toBe('gpt-4o');
   });
 
   it('preserves blocked approval context for legitimate correction turns before intent-gateway classification', async () => {
@@ -7939,6 +8108,159 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(response.content).toBe('Inline answer.');
     expect(localChat).toHaveBeenCalledOnce();
     expect(workerManager.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('uses active code-session continuity history for cross-surface direct follow-ups', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const conversationService = new ConversationService({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-cross-surface-history.test.sqlite',
+      maxTurns: 50,
+      maxMessageChars: 20_000,
+      maxContextChars: 20_000,
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-cross-surface-history-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-cross-surface-history-code-session.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'config-panel',
+      },
+      activeExecutionRefs: [
+        {
+          kind: 'execution',
+          id: 'execution:run-timeline-rendering',
+          label: 'Find where run timeline rendering is implemented and where it is consumed.',
+        },
+        {
+          kind: 'code_session',
+          id: guardianSession.id,
+        },
+      ],
+    }, nowMs);
+    conversationService.recordTurn(
+      { agentId: 'chat', userId: 'owner', channel: 'web' },
+      'hello guardian',
+      'hello guardian',
+    );
+    conversationService.recordTurn(
+      {
+        agentId: 'chat',
+        userId: guardianSession.conversationUserId,
+        channel: guardianSession.conversationChannel,
+      },
+      'Find where run timeline rendering is implemented and where it is consumed. Do not edit anything.',
+      'Run timeline rendering is implemented in web/public/js/components/run-timeline-context.js and consumed by web/public/js/pages/automations.js, web/public/js/pages/code.js, and web/public/js/pages/system.js.',
+    );
+
+    const localChat = vi.fn(async () => ({
+      content: 'The fragile part is request correlation between chat-run-tracking.js and the timeline consumers.',
+      toolCalls: [],
+      model: 'test-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      conversationService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    (agent as any).continuityThreadStore = continuityThreadStore;
+
+    const response = await agent.onMessage!({
+      id: 'msg-cross-surface-continuity-follow-up',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'config-panel',
+      content: 'Based on your last answer, which part would be most likely to break approval continuity?',
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'answer',
+          summary: 'Answer a follow-up about the prior answer.',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.content).toContain('request correlation');
+    expect(localChat).toHaveBeenCalledOnce();
+    const messages = localChat.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const staleWebIndex = messages.findIndex((entry) => entry.content === 'hello guardian');
+    const codeAnswerIndex = messages.findIndex((entry) => entry.content.includes('run-timeline-context.js'));
+    expect(staleWebIndex).toBeGreaterThan(-1);
+    expect(codeAnswerIndex).toBeGreaterThan(staleWebIndex);
+    expect(messages.at(-2)?.content).toContain('run-timeline-context.js');
+    expect(messages.at(-1)?.content).toContain('Based on your last answer');
   });
 
   it('delegates structured general-assistant follow-ups that need tool synthesis', async () => {

@@ -195,6 +195,44 @@ describe('routed tool execution', () => {
     expect(prompt).toContain('After collecting evidence, synthesize the findings');
   });
 
+  it('builds shared correction guidance for generic tool-backed planned turns', () => {
+    const prompt = buildToolExecutionCorrectionPrompt({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Find matching automations and routines, then suggest one useful automation.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Search existing automations.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Suggest one useful automation.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      entities: {},
+    });
+
+    expect(prompt).toContain('structured tool-backed execution plan');
+    expect(prompt).toContain('Do not answer from memory');
+    expect(prompt).toContain('automation_list');
+    expect(prompt).toContain('Only ask the user for approval after a real tool result returns pending_approval');
+  });
+
   it('denies grep-style shell inspection during repo-grounded coding review turns', () => {
     const prepared = prepareToolExecutionForIntent({
       toolName: 'shell_safe',

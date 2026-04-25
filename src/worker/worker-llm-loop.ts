@@ -133,6 +133,27 @@ export async function runLlmLoop(
     }
   };
 
+  const preloadPlannedTaskTools = async (plannedTask: PlannedTask | undefined): Promise<void> => {
+    if (!plannedTask) return;
+    const exactToolNames = new Set<string>();
+    for (const step of plannedTask.steps) {
+      for (const category of step.expectedToolCategories ?? []) {
+        const normalized = category.trim();
+        if (!normalized || !/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/u.test(normalized)) {
+          continue;
+        }
+        exactToolNames.add(normalized);
+      }
+    }
+    for (const toolName of exactToolNames) {
+      if (llmToolDefs.some((tool) => tool.name === toolName)) {
+        continue;
+      }
+      const searched = await searchDeferredTools(toolName);
+      mergeDiscoveredTools(searched.filter((definition) => definition.name === toolName));
+    }
+  };
+
   const searchIfToolMissing = async (name: string): Promise<void> => {
     if (llmToolDefs.some((tool) => tool.name === name)) return;
     const query = name.includes('_') ? name.replace(/_/g, ' ') : name;
@@ -223,6 +244,8 @@ export async function runLlmLoop(
       finalContent = '';
     }
   }
+
+  await preloadPlannedTaskTools(options?.plannedTask);
 
   while (rounds < maxRounds) {
     if (finalContent) {
@@ -726,7 +749,7 @@ function addPlannerStepIdHint(
 function hasUsableDirectContent(content: string | undefined): boolean {
   const trimmed = content?.trim() ?? '';
   if (!trimmed) return false;
-  if (/<\/?tool_result\b|<\/?tool_calls?\b|<\/?tool_call\b/i.test(trimmed)) {
+  if (/<\/?tool_result\b|<\/?tool_response\b|<\/?tool_calls?\b|<\/?tool_call\b/i.test(trimmed)) {
     return false;
   }
   if (trimmed.length < 200 && /^\{[\s\S]*\}$/.test(trimmed)) {
