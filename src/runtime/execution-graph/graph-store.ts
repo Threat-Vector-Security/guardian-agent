@@ -283,6 +283,12 @@ function applyEventToGraph(graph: ExecutionGraph, event: ExecutionGraphEvent): v
     case 'clarification_requested':
       graph.status = 'awaiting_clarification';
       break;
+    case 'interruption_requested':
+      graph.status = mapInterruptionGraphStatus(event);
+      break;
+    case 'interruption_resolved':
+      graph.status = 'running';
+      break;
     case 'graph_completed':
       graph.status = 'completed';
       break;
@@ -316,6 +322,10 @@ function mapEventToNodeStatus(event: ExecutionGraphEvent): ExecutionNodeStatus |
       return 'awaiting_approval';
     case 'clarification_requested':
       return 'awaiting_clarification';
+    case 'interruption_requested':
+      return mapInterruptionGraphStatus(event);
+    case 'interruption_resolved':
+      return 'running';
     case 'node_completed':
       return 'completed';
     case 'node_failed':
@@ -360,6 +370,12 @@ function getCheckpointReason(
       return 'approval_interrupt';
     case 'clarification_requested':
       return 'clarification_interrupt';
+    case 'interruption_requested':
+      return mapInterruptionGraphStatus(event) === 'awaiting_approval'
+        ? 'approval_interrupt'
+        : mapInterruptionGraphStatus(event) === 'awaiting_clarification'
+          ? 'clarification_interrupt'
+          : 'blocker_interrupt';
     case 'graph_completed':
     case 'graph_failed':
       return 'terminal';
@@ -373,6 +389,27 @@ function cloneArtifact(artifact: ExecutionArtifactRef): ExecutionArtifactRef {
     ...artifact,
     ...(artifact.taintReasons ? { taintReasons: [...artifact.taintReasons] } : {}),
   };
+}
+
+function mapInterruptionGraphStatus(event: ExecutionGraphEvent): ExecutionGraph['status'] {
+  const blockerKind = readInterruptionBlockerKind(event.payload.kind);
+  if (blockerKind === 'approval') return 'awaiting_approval';
+  if (blockerKind === 'clarification') return 'awaiting_clarification';
+  return 'blocked';
+}
+
+function readInterruptionBlockerKind(value: unknown): 'approval' | 'clarification' | 'workspace_switch' | 'auth' | 'policy' | 'missing_context' | null {
+  switch (value) {
+    case 'approval':
+    case 'clarification':
+    case 'workspace_switch':
+    case 'auth':
+    case 'policy':
+    case 'missing_context':
+      return value;
+    default:
+      return null;
+  }
 }
 
 function cloneEvent(event: ExecutionGraphEvent): ExecutionGraphEvent {
@@ -589,6 +626,7 @@ function normalizeCheckpoint(value: unknown, graphId: string): ExecutionCheckpoi
   const createdAt = readFiniteNumber(value.createdAt);
   const reason = value.reason === 'approval_interrupt'
     || value.reason === 'clarification_interrupt'
+    || value.reason === 'blocker_interrupt'
     || value.reason === 'terminal'
     || value.reason === 'interval'
     ? value.reason
@@ -640,6 +678,7 @@ function normalizeGraphStatus(value: unknown): ExecutionGraph['status'] {
     case 'running':
     case 'awaiting_approval':
     case 'awaiting_clarification':
+    case 'blocked':
     case 'completed':
     case 'failed':
     case 'cancelled':
@@ -655,6 +694,7 @@ function normalizeNodeStatus(value: unknown): ExecutionNodeStatus {
     case 'running':
     case 'awaiting_approval':
     case 'awaiting_clarification':
+    case 'blocked':
     case 'completed':
     case 'failed':
     case 'cancelled':

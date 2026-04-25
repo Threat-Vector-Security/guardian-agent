@@ -102,6 +102,28 @@ function buildGraphTimelineItem(
       return { ...shared, type: 'note', status: 'blocked', title: 'Clarification requested', ...(detail ? { detail } : {}) };
     case 'clarification_resolved':
       return { ...shared, type: 'note', status: graphEventHasError(event) ? 'failed' : 'succeeded', title: graphEventHasError(event) ? 'Clarification failed' : 'Clarification resolved', ...(detail ? { detail } : {}) };
+    case 'interruption_requested': {
+      const blockerKind = normalizeText(stringPayload(event, 'kind'));
+      return {
+        ...shared,
+        type: blockerKind === 'approval' ? 'approval_requested' : 'note',
+        status: 'blocked',
+        title: `${humanizeBlockerKind(blockerKind)} requested`,
+        ...(detail ? { detail } : {}),
+        ...(normalizeText(stringPayload(event, 'approvalId')) ? { approvalId: normalizeText(stringPayload(event, 'approvalId')) } : {}),
+      };
+    }
+    case 'interruption_resolved': {
+      const blockerKind = normalizeText(stringPayload(event, 'kind'));
+      return {
+        ...shared,
+        type: blockerKind === 'approval' ? 'approval_resolved' : 'note',
+        status: graphEventHasError(event) ? 'failed' : 'succeeded',
+        title: graphEventHasError(event) ? `${humanizeBlockerKind(blockerKind)} failed` : `${humanizeBlockerKind(blockerKind)} resolved`,
+        ...(detail ? { detail } : {}),
+        ...(normalizeText(stringPayload(event, 'approvalId')) ? { approvalId: normalizeText(stringPayload(event, 'approvalId')) } : {}),
+      };
+    }
     case 'verification_completed':
       return { ...shared, type: 'verification_completed', status: mapVerificationStatus(event), title: 'Verification completed', ...(detail ? { detail } : {}) };
     case 'recovery_proposed':
@@ -128,6 +150,10 @@ function mapGraphEventToBaseStatus(event: ExecutionGraphEvent): DashboardRunStat
       return 'awaiting_approval';
     case 'clarification_requested':
       return 'blocked';
+    case 'interruption_requested':
+      return normalizeText(stringPayload(event, 'kind')) === 'approval'
+        ? 'awaiting_approval'
+        : 'blocked';
     case 'graph_completed':
       return 'completed';
     case 'graph_failed':
@@ -217,6 +243,25 @@ function humanizeToolName(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function humanizeBlockerKind(value: string | undefined): string {
+  switch (value) {
+    case 'approval':
+      return 'Approval';
+    case 'clarification':
+      return 'Clarification';
+    case 'workspace_switch':
+      return 'Workspace switch';
+    case 'auth':
+      return 'Authentication';
+    case 'policy':
+      return 'Policy blocker';
+    case 'missing_context':
+      return 'Missing context';
+    default:
+      return 'Graph interruption';
+  }
 }
 
 function stringPayload(event: ExecutionGraphEvent, key: string): string | undefined {

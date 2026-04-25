@@ -5,6 +5,7 @@ export type ExecutionGraphStatus =
   | 'running'
   | 'awaiting_approval'
   | 'awaiting_clarification'
+  | 'blocked'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -26,6 +27,7 @@ export type ExecutionNodeStatus =
   | 'running'
   | 'awaiting_approval'
   | 'awaiting_clarification'
+  | 'blocked'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -110,7 +112,7 @@ export interface ExecutionCheckpointRef {
   graphId: string;
   eventId: string;
   sequence: number;
-  reason: 'phase_boundary' | 'approval_interrupt' | 'clarification_interrupt' | 'terminal' | 'interval';
+  reason: 'phase_boundary' | 'approval_interrupt' | 'clarification_interrupt' | 'blocker_interrupt' | 'terminal' | 'interval';
   status: ExecutionGraphStatus;
   createdAt: number;
 }

@@ -174,6 +174,58 @@ describe('ExecutionGraphStore', () => {
     ]);
   });
 
+  it('maps generic graph interruption blockers onto durable wait states', () => {
+    const store = new ExecutionGraphStore({
+      now: () => 100,
+    });
+    store.createGraph({
+      graphId: 'graph-1',
+      executionId: 'exec-1',
+      requestId: 'req-1',
+      intent: decision(),
+      nodes: [{
+        nodeId: 'node-1',
+        graphId: 'graph-1',
+        kind: 'mutate',
+        status: 'pending',
+        title: 'Mutation',
+        requiredInputIds: [],
+        outputArtifactTypes: [],
+        allowedToolCategories: [],
+      }],
+    });
+
+    store.appendEvent(event({
+      kind: 'interruption_requested',
+      sequence: 1,
+      nodeId: 'node-1',
+      payload: {
+        kind: 'workspace_switch',
+        prompt: 'Switch workspaces before continuing.',
+      },
+    }));
+    expect(store.getSnapshot('graph-1')?.graph.status).toBe('blocked');
+    expect(store.getSnapshot('graph-1')?.graph.nodes[0]?.status).toBe('blocked');
+
+    store.appendEvent(event({
+      kind: 'interruption_requested',
+      sequence: 2,
+      nodeId: 'node-1',
+      payload: {
+        kind: 'policy',
+        prompt: 'Policy approval is required.',
+      },
+    }));
+
+    const snapshot = store.getSnapshot('graph-1');
+    expect(snapshot?.graph.status).toBe('blocked');
+    expect(snapshot?.graph.nodes[0]?.status).toBe('blocked');
+    expect(snapshot?.graph.checkpoints.map((checkpoint) => checkpoint.reason)).toEqual([
+      'blocker_interrupt',
+      'blocker_interrupt',
+    ]);
+  });
+
   it('stores typed artifacts with graph snapshots and prunes artifact refs with content', () => {
     const store = new ExecutionGraphStore({
       now: () => 100,

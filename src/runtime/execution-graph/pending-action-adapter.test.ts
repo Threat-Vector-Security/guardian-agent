@@ -229,6 +229,150 @@ describe('execution graph pending-action adapter', () => {
       },
     });
   });
+
+  it('records generic workspace-switch graph interruptions with workspace metadata', () => {
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-graph-workspace-switch-actions.test.sqlite',
+      now: () => 3_000,
+    });
+    const event = createExecutionGraphEvent({
+      eventId: 'event-workspace-switch-1',
+      graphId: 'graph-workspace',
+      executionId: 'exec-workspace',
+      rootExecutionId: 'root-workspace',
+      requestId: 'request-workspace',
+      runId: 'request-workspace',
+      nodeId: 'node-plan',
+      nodeKind: 'plan',
+      kind: 'interruption_requested',
+      timestamp: 3_100,
+      sequence: 4,
+      producer: 'runtime',
+      channel: 'web',
+      agentId: 'guardian',
+      userId: 'user-1',
+      payload: {
+        kind: 'workspace_switch',
+        prompt: 'Switch to the requested workspace before continuing.',
+        currentSessionId: 'code-current',
+        currentSessionLabel: 'GuardianAgent',
+        targetSessionId: 'code-target',
+        targetSessionLabel: 'Test Tactical Game App',
+      },
+    });
+
+    const record = recordGraphPendingActionInterrupt({
+      store,
+      scope: {
+        agentId: 'guardian',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      },
+      event,
+      originalUserContent: 'Use Codex in Test Tactical Game App workspace.',
+      intent: {
+        route: 'coding_task',
+        operation: 'update',
+        summary: 'Run the task in the requested workspace.',
+      },
+      nowMs: 3_000,
+    });
+
+    expect(record).toMatchObject({
+      status: 'pending',
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'workspace_switch',
+        prompt: 'Switch to the requested workspace before continuing.',
+        currentSessionId: 'code-current',
+        currentSessionLabel: 'GuardianAgent',
+        targetSessionId: 'code-target',
+        targetSessionLabel: 'Test Tactical Game App',
+        metadata: {
+          graphId: 'graph-workspace',
+          nodeId: 'node-plan',
+          resumeToken: 'graph-workspace:node-plan:4',
+        },
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-workspace',
+          nodeId: 'node-plan',
+          nodeKind: 'plan',
+          resumeToken: 'graph-workspace:node-plan:4',
+          artifactIds: [],
+        },
+      },
+    });
+    expect(toPendingActionClientMetadata(record)).toMatchObject({
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'workspace_switch',
+        targetSessionLabel: 'Test Tactical Game App',
+      },
+    });
+  });
+
+  it('records generic policy graph interruptions with origin-surface policy', () => {
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-graph-policy-actions.test.sqlite',
+      now: () => 4_000,
+    });
+    const event = createExecutionGraphEvent({
+      eventId: 'event-policy-1',
+      graphId: 'graph-policy',
+      executionId: 'exec-policy',
+      rootExecutionId: 'root-policy',
+      requestId: 'request-policy',
+      runId: 'request-policy',
+      nodeId: 'node-mutate',
+      nodeKind: 'mutate',
+      kind: 'interruption_requested',
+      timestamp: 4_100,
+      sequence: 9,
+      producer: 'supervisor',
+      channel: 'web',
+      agentId: 'guardian',
+      userId: 'user-1',
+      payload: {
+        kind: 'policy',
+        service: 'filesystem',
+        prompt: 'Policy approval is required before writing outside the workspace.',
+      },
+    });
+
+    const record = recordGraphPendingActionInterrupt({
+      store,
+      scope: {
+        agentId: 'guardian',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      },
+      event,
+      originalUserContent: 'Write the report outside the workspace.',
+      nowMs: 4_000,
+    });
+
+    expect(record).toMatchObject({
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'policy',
+        prompt: 'Policy approval is required before writing outside the workspace.',
+        service: 'filesystem',
+        metadata: {
+          graphId: 'graph-policy',
+          nodeId: 'node-mutate',
+          resumeToken: 'graph-policy:node-mutate:9',
+        },
+      },
+    });
+  });
 });
 
 function buildWriteSpecRef(): ExecutionArtifactRef {

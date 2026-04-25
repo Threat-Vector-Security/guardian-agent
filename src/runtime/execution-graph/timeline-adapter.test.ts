@@ -110,6 +110,39 @@ describe('execution graph timeline adapter', () => {
     expect(clarification?.items[0]?.detail).not.toContain('raw prompt');
   });
 
+  it('projects generic graph interruptions without raw payload expansion', () => {
+    const interruption = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
+      eventId: 'event-workspace-switch',
+      graphId: 'graph-workspace',
+      executionId: 'exec-workspace',
+      rootExecutionId: 'exec-workspace',
+      requestId: 'req-workspace',
+      runId: 'req-workspace',
+      nodeId: 'node-plan',
+      nodeKind: 'plan',
+      kind: 'interruption_requested',
+      timestamp: 260,
+      sequence: 5,
+      producer: 'runtime',
+      payload: {
+        kind: 'workspace_switch',
+        prompt: 'Switch to the requested workspace before continuing.',
+        rawPrompt: 'This raw prompt should not appear.',
+      },
+    }));
+
+    expect(interruption?.baseStatus).toBe('blocked');
+    expect(interruption?.items[0]).toMatchObject({
+      type: 'note',
+      status: 'blocked',
+      source: 'execution_graph',
+      title: 'Workspace switch requested',
+      detail: 'Switch to the requested workspace before continuing.',
+      nodeId: 'node-plan',
+    });
+    expect(interruption?.items[0]?.detail).not.toContain('raw prompt');
+  });
+
   it('projects recovery proposals as warning timeline items', () => {
     const recovery = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
       eventId: 'event-recovery',
