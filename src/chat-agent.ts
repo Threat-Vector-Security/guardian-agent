@@ -10,7 +10,6 @@ import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import {
   buildCodeSessionWorkspaceAwarenessQuery,
   compactQuarantinedToolResult,
-  formatToolThreatWarnings,
   getCodeSessionPromptRelativePath,
   isRecord,
   readCodeRequestMetadata,
@@ -19,7 +18,6 @@ import {
   shouldRefreshCodeSessionWorkingSet,
   stripLeadingContextPrefix,
   summarizeCodeSessionFocus,
-  toBoolean,
   toString,
 } from './chat-agent-helpers.js';
 import type { ContextCompactionResult } from './util/context-budget.js';
@@ -106,9 +104,6 @@ import {
 } from './runtime/intent/gateway-plan-repair.js';
 import { buildContinuityAwareHistory } from './runtime/continuity-history.js';
 import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
-import {
-  parseWebSearchIntent,
-} from './runtime/search-intent.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
 import type { PrincipalRole } from './tools/types.js';
 import {
@@ -190,6 +185,12 @@ import {
 import {
   tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
+import {
+  tryDirectProviderRead as tryDirectProviderReadHelper,
+} from './runtime/chat-agent/direct-provider-read.js';
+import {
+  tryDirectWebSearch as tryDirectWebSearchHelper,
+} from './runtime/chat-agent/direct-web-search.js';
 import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
@@ -1871,11 +1872,13 @@ type DirectIntentShadowCandidate =
             directIntent?.decision,
             continuityThread,
           ),
-          provider_read: () => this.tryDirectProviderRead(
-            routedScopedMessage,
+          provider_read: () => tryDirectProviderReadHelper({
+            agentId: this.id,
+            tools: this.tools,
+            message: routedScopedMessage,
             ctx,
-            directIntent?.decision,
-          ),
+            decision: directIntent?.decision,
+          }),
           coding_session_control: () => this.tryDirectCodeSessionControlFromGateway(
             message,
             ctx,
@@ -1961,42 +1964,26 @@ type DirectIntentShadowCandidate =
           ),
           web_search: async () => {
             if (skipDirectWebSearch) return null;
-            let webSearchResult: string | null = null;
-            try {
-              webSearchResult = await this.tryDirectWebSearch(routedScopedMessage, ctx);
-            } catch {
-              webSearchResult = null;
-            }
-            if (!webSearchResult) return null;
-
-            const sanitizedWebSearch = this.sanitizeToolResultForLlm(
-              'web_search',
-              webSearchResult,
+            return tryDirectWebSearchHelper({
+              agentId: this.id,
+              tools: this.tools,
+              message: routedScopedMessage,
+              ctx,
+              llmMessages,
+              fallbackProviderOrder,
               defaultToolResultProviderKind,
-            );
-            const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
-              ? sanitizedWebSearch.sanitized
-              : String(sanitizedWebSearch.sanitized ?? '');
-            const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
-            const llmSearchPayload = warningPrefix
-              ? `${warningPrefix}\n${safeWebSearchResult}`
-              : safeWebSearchResult;
-
-            if (ctx.llm) {
-              try {
-                const llmFormat: ChatMessage[] = [
-                  ...llmMessages,
-                  { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
-                ];
-                const formatted = await this.chatWithFallback(ctx, llmFormat, undefined, fallbackProviderOrder);
-                finalContent = formatted.content || llmSearchPayload;
-              } catch {
-                finalContent = llmSearchPayload;
-              }
-            } else {
-              finalContent = llmSearchPayload;
-            }
-            return finalContent;
+              sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
+                toolName,
+                result,
+                providerKind,
+              ),
+              chatWithFallback: (nextCtx, messages, options, providerOrder) => this.chatWithFallback(
+                nextCtx,
+                messages,
+                options,
+                providerOrder,
+              ),
+            });
           },
         },
         onHandled: (candidate, result) => buildScopedDirectIntentResponse({
@@ -2657,121 +2644,6 @@ type DirectIntentShadowCandidate =
         },
       ),
     });
-  }
-
-  private async tryDirectProviderRead(
-    message: UserMessage,
-    ctx: AgentContext,
-    decision?: IntentGatewayDecision,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    if (decision?.executionClass !== 'provider_crud') return null;
-    if (!['read', 'inspect'].includes(decision.operation)) return null;
-
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const listResult = await this.tools.executeModelTool(
-      'llm_provider_list',
-      {},
-      toolRequest,
-    );
-    if (!toBoolean(listResult.success)) {
-      const msg = toString(listResult.message) || toString(listResult.error) || 'Provider inventory lookup failed.';
-      return `I tried to inspect the configured AI providers, but it failed: ${msg}`;
-    }
-
-    const output = isRecord(listResult.output) ? listResult.output : {};
-    const providers = Array.isArray(output.providers)
-      ? output.providers.filter((provider): provider is Record<string, unknown> => isRecord(provider))
-      : [];
-    if (providers.length === 0) {
-      return 'No AI providers are currently configured.';
-    }
-
-    const targetProvider = this.resolveDirectProviderInventoryTarget(message.content, providers);
-    if (decision.operation === 'inspect' && targetProvider) {
-      const providerName = toString(targetProvider.name).trim();
-      const modelsResult = await this.tools.executeModelTool(
-        'llm_provider_models',
-        { provider: providerName },
-        toolRequest,
-      );
-      if (toBoolean(modelsResult.success)) {
-        return this.formatDirectProviderModelsResponse(
-          targetProvider,
-          isRecord(modelsResult.output) ? modelsResult.output : {},
-        );
-      }
-    }
-
-    return this.formatDirectProviderInventoryResponse(providers);
-  }
-
-  private resolveDirectProviderInventoryTarget(
-    content: string,
-    providers: readonly Record<string, unknown>[],
-  ): Record<string, unknown> | null {
-    const normalized = content.trim().toLowerCase();
-    if (!normalized) return null;
-    const matches = providers
-      .filter((provider) => {
-        const name = toString(provider.name).trim().toLowerCase();
-        return !!name && normalized.includes(name);
-      })
-      .sort((left, right) => toString(right.name).length - toString(left.name).length);
-    return matches[0] ?? null;
-  }
-
-  private formatDirectProviderInventoryResponse(
-    providers: readonly Record<string, unknown>[],
-  ): string {
-    const lines = ['Configured AI providers:'];
-    for (const provider of providers) {
-      const name = toString(provider.name).trim() || '(unnamed)';
-      const type = toString(provider.type).trim() || 'unknown';
-      const model = toString(provider.model).trim() || 'unknown';
-      const tier = toString(provider.tier).trim().replace(/_/g, ' ') || 'unknown';
-      const connected = provider.connected === true ? 'connected' : 'not verified';
-      const flags: string[] = [];
-      if (provider.isDefault === true) flags.push('primary');
-      if (provider.isPreferredLocal === true) flags.push('preferred local');
-      if (provider.isPreferredManagedCloud === true) flags.push('preferred managed cloud');
-      if (provider.isPreferredFrontier === true) flags.push('preferred frontier');
-      const extras = flags.length > 0 ? ` · ${flags.join(', ')}` : '';
-      lines.push(`- ${name} [${tier} · ${type}] model ${model} · ${connected}${extras}`);
-    }
-    return lines.join('\n');
-  }
-
-  private formatDirectProviderModelsResponse(
-    provider: Record<string, unknown>,
-    output: Record<string, unknown>,
-  ): string {
-    const providerName = toString(provider.name).trim() || '(unnamed)';
-    const activeModel = toString(output.activeModel).trim() || toString(provider.model).trim() || 'unknown';
-    const models = Array.isArray(output.models)
-      ? output.models
-        .filter((value): value is string => typeof value === 'string')
-        .map((value) => value.trim())
-        .filter(Boolean)
-      : [];
-    if (models.length === 0) {
-      return `Configured provider ${providerName} is currently set to model ${activeModel}, but no available model catalog was returned.`;
-    }
-    return [
-      `Available models for ${providerName}:`,
-      `- Active model: ${activeModel}`,
-      ...models.slice(0, 25).map((model) => `- ${model}`),
-      ...(models.length > 25 ? [`- ...and ${models.length - 25} more`] : []),
-    ].join('\n');
   }
 
   private buildDirectSecondBrainMutationSuccessResponse(
@@ -4173,67 +4045,6 @@ type DirectIntentShadowCandidate =
       approvalResult.result?.output,
       focusState,
     );
-  }
-
-  private async tryDirectWebSearch(
-    message: UserMessage,
-    ctx: AgentContext,
-  ): Promise<string | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    const query = parseWebSearchIntent(message.content);
-    if (!query) return null;
-
-    const toolResult = await this.tools.executeModelTool(
-      'web_search',
-      { query, maxResults: 10 },
-      {
-        origin: 'assistant',
-        agentId: this.id,
-        userId: message.userId,
-        channel: message.channel,
-        requestId: message.id,
-        agentContext: { checkAction: ctx.checkAction },
-      },
-    );
-
-    if (!toBoolean(toolResult.success)) {
-      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Web search failed.';
-      return `I tried to search the web for "${query}" but it failed: ${msg}`;
-    }
-
-    const output = (toolResult.output && typeof toolResult.output === 'object'
-      ? toolResult.output
-      : null) as {
-        provider?: unknown;
-        results?: unknown;
-        answer?: unknown;
-      } | null;
-
-    const provider = output ? toString(output.provider) : 'unknown';
-    const results = output && Array.isArray(output.results)
-      ? output.results as Array<{ title?: unknown; url?: unknown; snippet?: unknown }>
-      : [];
-    const answer = output ? toString(output.answer) : '';
-
-    if (results.length === 0 && !answer) {
-      return `I searched the web for "${query}" (via ${provider}) but found no results.`;
-    }
-
-    const lines = [`Web search results for "${query}" (via ${provider}):\n`];
-    if (answer) {
-      lines.push(`Summary: ${answer}\n`);
-    }
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      const title = toString(r.title) || '(untitled)';
-      const url = toString(r.url);
-      const snippet = toString(r.snippet);
-      lines.push(`${i + 1}. **${title}**`);
-      if (url) lines.push(`   ${url}`);
-      if (snippet) lines.push(`   ${snippet}`);
-    }
-    return lines.join('\n');
   }
 
   private async tryDirectMemorySave(
