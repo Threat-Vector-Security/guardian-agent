@@ -184,6 +184,12 @@ Checkpoint after the tool-loop resume helper extraction:
 - `src/chat-agent.ts` still owns the live tool-loop orchestration path, but it no longer hand-builds `tool_loop` pending-action payloads. Future graph-interrupt migration can replace one helper contract instead of two partial builders.
 - Remaining tool-loop debt after this slice: `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts, and the live tool execution loop still needs further extraction out of the monolithic chat agent.
 
+Checkpoint after the coding-backend direct-route resume extraction:
+
+- `coding_backend_run` pending-action resume construction and approved/denied resume result formatting moved from `src/chat-agent.ts` into `src/runtime/chat-agent/coding-backend-resume.ts`.
+- `src/chat-agent.ts` still dispatches the direct coding backend request and stores the pending approval, but it no longer owns the stored direct-route resume payload shape or approval-result normalization.
+- Remaining direct-route debt after this slice: `coding_backend_run`, filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
