@@ -84,14 +84,14 @@ export function repairStructuredIntentGatewayRoute(
   if (route === 'unknown' && explicitAutomationControl) {
     return 'automation_control';
   }
-  if (route === 'unknown' && explicitAutomationOutput) {
-    return 'automation_output_task';
-  }
   if (route === 'unknown' && explicitProviderConfig) {
     return 'general_assistant';
   }
   if (route === 'unknown' && explicitCodingTaskRequest) {
     return 'coding_task';
+  }
+  if (route === 'unknown' && explicitAutomationOutput) {
+    return 'automation_output_task';
   }
   if (route === 'unknown' && isExplicitCodingSessionControlRequest(rawSourceContent)) {
     return 'coding_session_control';

@@ -355,12 +355,6 @@ function hasConcreteGraphMutationContract(
   if (decision.confidence === 'low') {
     return false;
   }
-  if (
-    decision.provenance?.route === 'repair.unstructured'
-    || decision.provenance?.operation === 'repair.unstructured'
-  ) {
-    return false;
-  }
   if (route === 'filesystem_task' && !decision.entities.path?.trim()) {
     return false;
   }

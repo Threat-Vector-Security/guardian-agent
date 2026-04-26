@@ -62,7 +62,6 @@ export function normalizeIntentGatewayProvenanceSource(
     case 'resolver.tool_inventory':
     case 'resolver.clarification':
     case 'repair.structured':
-    case 'repair.unstructured':
     case 'repair.automation_name':
     case 'derived.workload':
       return value;

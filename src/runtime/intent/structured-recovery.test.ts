@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeIntentGatewayDecision, splitSequentialRequestClauses } from './structured-recovery.js';
+import {
+  normalizeIntentGatewayDecision,
+  parseIntentGatewayDecision,
+  splitSequentialRequestClauses,
+} from './structured-recovery.js';
 
 describe('normalizeIntentGatewayDecision', () => {
+  it('does not infer a route from unstructured classifier prose', () => {
+    const parsed = parseIntentGatewayDecision({
+      content: 'I need to inspect the repo before answering. Which files should I check?',
+      model: 'test-gateway',
+      finishReason: 'stop',
+    }, {
+      sourceContent: 'Inspect this repo and tell me which files implement delegated worker progress. Do not edit anything.',
+    });
+
+    expect(parsed.available).toBe(false);
+    expect(parsed.rawStructuredDecision).toBeUndefined();
+    expect(parsed.decision.route).toBe('unknown');
+    expect(parsed.decision.provenance?.route).toBe('classifier.primary');
+  });
+
   it('does not silently promote a classified general assistant turn into coding_task', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

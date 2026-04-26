@@ -82,7 +82,6 @@ export type IntentGatewayProvenanceSource =
   | 'resolver.tool_inventory'
   | 'resolver.clarification'
   | 'repair.structured'
-  | 'repair.unstructured'
   | 'repair.automation_name'
   | 'derived.workload';
 

@@ -55,7 +55,7 @@ Known remaining problems and risks:
 
 - A live gated approval-resume test is still outstanding. The latest scratch write proved mutation execution, not approval pause/resume, because policy allowed the write without an approval interrupt.
 - Follow-up continuity is improved but not fully proven. A follow-up like "Based on your last answer..." can now recover a useful answer, but one replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-resume.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
-- One replay still showed an unstructured repair path for a follow-up after the classifier returned malformed prose. The system recovered, but this path should be audited before adding more complexity.
+- The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
 - The full `npm test` suite has not been rerun after the latest continuation/provider-fallback fixes. It must run before commit.
 - The web UI approval experience still needs a manual pass once a policy-gated action is identified reliably.
 
@@ -63,9 +63,8 @@ Recommended next slice before moving into the broader web UI phase:
 
 1. Identify or configure a harmless action that is definitely approval-gated under the current dev policy, then run a live web/API approval-resume smoke that proves pending action creation, decision submission, tool execution, and continuation response.
 2. Add/strengthen tests for follow-up anchoring against the immediately previous answer and its evidence artifacts, especially "based on your last answer" questions.
-3. Audit the unstructured repair path seen in the follow-up replay and either make it produce a structured Intent Gateway decision or fail into the existing clarification/recovery path.
-4. Run `npm test`, then rerun the short live API replay ladder.
-5. Commit only after the above passes or after explicitly documenting any remaining failures in this plan.
+3. Run `npm test`, then rerun the short live API replay ladder.
+4. Commit only after the above passes or after explicitly documenting any remaining failures in this plan.
 
 ### 2026-04-26 Architecture Refinement And Debt-Burn Phase
 
@@ -114,7 +113,7 @@ Refactor sequence:
 
 5. Centralize routing repair and provider fallback.
    - Keep one Intent Gateway classification/repair decision per turn.
-   - Move malformed classifier recovery into structured recovery or clarification.
+   - Keep malformed classifier recovery structured-only; prose-only classifier responses must fall into fallback/clarification rather than post-gateway raw-text repair.
    - Keep provider fallback ordering in execution profile/runtime services and remove duplicate retry policy from call sites as they are migrated.
 
 6. Make delegated work graph-native.

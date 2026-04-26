@@ -301,8 +301,6 @@ function needsMutationContractConfirmation(decision: IntentGatewayDecision): boo
   if (requiredWriteSteps.length === 0) {
     return false;
   }
-  const hasUnstructuredRepair = decision.provenance?.route === 'repair.unstructured'
-    || decision.provenance?.operation === 'repair.unstructured';
   const hasStructuredFilesystemTarget = !!decision.entities.path?.trim();
   const missingFilesystemTarget = decision.route === 'filesystem_task'
     && !hasStructuredFilesystemTarget;
@@ -313,7 +311,6 @@ function needsMutationContractConfirmation(decision: IntentGatewayDecision): boo
     return false;
   }
   return decision.confidence === 'low'
-    || hasUnstructuredRepair
     || missingFilesystemTarget
     || hasGenericWriteStep;
 }

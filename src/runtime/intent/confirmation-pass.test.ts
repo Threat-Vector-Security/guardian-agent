@@ -631,8 +631,8 @@ describe('confirmIntentGatewayDecisionIfNeeded', () => {
         preferredAnswerPath: 'tool_loop',
         simpleVsComplex: 'complex',
         provenance: {
-          route: 'repair.unstructured',
-          operation: 'repair.unstructured',
+          route: 'repair.structured',
+          operation: 'repair.structured',
         },
         plannedSteps: [
           {
@@ -718,8 +718,8 @@ describe('confirmIntentGatewayDecisionIfNeeded', () => {
         preferredAnswerPath: 'tool_loop',
         simpleVsComplex: 'complex',
         provenance: {
-          route: 'repair.unstructured',
-          operation: 'repair.unstructured',
+          route: 'repair.structured',
+          operation: 'repair.structured',
         },
         plannedSteps: [
           {

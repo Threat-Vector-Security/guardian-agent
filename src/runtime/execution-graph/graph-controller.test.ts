@@ -103,7 +103,7 @@ describe('graph-controller boundary', () => {
 
     expect(shouldUseGraphControlledExecution({
       taskContract: contract,
-      decision: baseDecision({ provenance: { route: 'repair.unstructured' } }),
+      decision: baseDecision({ confidence: 'low' }),
       executionProfile: localProfile,
     })).toBe(false);
   });

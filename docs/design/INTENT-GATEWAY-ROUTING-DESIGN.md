@@ -116,7 +116,6 @@ Current internal ownership:
 - `src/runtime/intent/structured-recovery.ts` owns structured parsing and final decision assembly from staged routing outputs
 - `src/runtime/intent/route-entity-resolution.ts` owns cross-route entity assembly on top of the scoped resolver helpers
 - `src/runtime/intent/clarification-resolver.ts` owns clarification, correction, and pending-action-aware route/operation repair
-- `src/runtime/intent/unstructured-recovery.ts` owns bounded recovery when classifier output is missing or malformed
 - `src/runtime/intent/workload-derivation.ts` owns deterministic workload metadata derivation
 - `src/runtime/intent/capability-resolver.ts` owns direct capability-lane candidate mapping after routing
 - `src/runtime/intent/entity-resolvers/*.ts` own route-scoped entity inference and repair
@@ -142,6 +141,7 @@ Shared recovery rules:
 - truncated or partially malformed flat JSON objects can still recover bounded scalar fields such as `route`, `operation`, `confidence`, and `resolution` so workload derivation and downstream provider-role selection keep the intended route signal
 - planned-step recovery may replace an overly collapsed classifier plan when the original user turn plainly contains ordered read/search plus write clauses; this is still bounded structured recovery, not execution routing from raw text
 - the repair path is bounded and schema-shaped; it exists to recover a valid structured decision, not to reinterpret the user turn heuristically
+- prose-only classifier responses are unavailable gateway records; fallback passes or clarification own recovery rather than a post-gateway raw-text router
 - recovered results keep their source mode visible in routing metadata and tests instead of pretending the primary path succeeded
 
 Workload metadata meanings:
