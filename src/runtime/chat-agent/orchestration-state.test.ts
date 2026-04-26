@@ -242,13 +242,6 @@ describe('ChatAgentOrchestrationState', () => {
           operation: 'update',
           originalUserContent: 'Use Codex in this coding workspace to inspect README.md.',
         },
-        resume: {
-          kind: 'direct_route',
-          payload: {
-            type: 'coding_backend_run',
-            backendId: 'codex',
-          },
-        },
         codeSessionId: 'code-session-1',
         expiresAt: nowMs + 30 * 60_000,
       },

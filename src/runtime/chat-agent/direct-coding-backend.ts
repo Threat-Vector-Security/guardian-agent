@@ -18,7 +18,6 @@ import type {
   PendingActionRecord,
 } from '../pending-actions.js';
 import { toPendingActionClientMetadata } from '../pending-actions.js';
-import { buildCodingBackendRunResumePayload } from './coding-backend-resume.js';
 import {
   buildCodingBackendResponseSource,
   selectCodingBackendDelegatedTask,
@@ -456,12 +455,6 @@ function buildCodingBackendPendingApprovalResponse(
       provenance: input.decision.provenance,
       entities: toPendingActionEntities(input.decision.entities),
       codeSessionId: input.effectiveCodeContext?.sessionId,
-      resume: buildCodingBackendRunResumePayload({
-        task: input.delegatedTask,
-        backendId: input.backendId,
-        codeSessionId: input.effectiveCodeContext?.sessionId,
-        workspaceRoot: input.effectiveCodeContext?.workspaceRoot,
-      }),
     },
   );
   deps.recordIntentRoutingTrace('direct_intent_response', {

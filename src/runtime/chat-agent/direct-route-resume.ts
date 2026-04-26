@@ -6,7 +6,6 @@ import type { PrincipalRole, ToolExecutionRequest } from '../../tools/types.js';
 
 export const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
 export const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
-export const DIRECT_ROUTE_RESUME_TYPE_CODING_BACKEND_RUN = 'coding_backend_run';
 export const DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
 
 export interface FilesystemSaveOutputResumePayload {
@@ -66,14 +65,6 @@ export interface SecondBrainMutationResumePayload {
   action: StoredSecondBrainMutationAction;
   fallbackId?: string;
   fallbackLabel?: string;
-}
-
-export interface CodingBackendRunResumePayload {
-  type: typeof DIRECT_ROUTE_RESUME_TYPE_CODING_BACKEND_RUN;
-  task: string;
-  backendId?: string;
-  codeSessionId?: string;
-  workspaceRoot?: string;
 }
 
 export interface AutomationAuthoringResumePayload {
@@ -291,22 +282,6 @@ export function normalizeFilesystemResumePrincipalRole(value: string | undefined
     default:
       return undefined;
   }
-}
-
-export function readCodingBackendRunResumePayload(
-  payload: Record<string, unknown> | undefined,
-): CodingBackendRunResumePayload | null {
-  if (!isRecord(payload)) return null;
-  if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_CODING_BACKEND_RUN) return null;
-  const task = toString(payload.task).trim();
-  if (!task) return null;
-  return {
-    type: DIRECT_ROUTE_RESUME_TYPE_CODING_BACKEND_RUN,
-    task,
-    backendId: toString(payload.backendId).trim() || undefined,
-    codeSessionId: toString(payload.codeSessionId).trim() || undefined,
-    workspaceRoot: toString(payload.workspaceRoot).trim() || undefined,
-  };
 }
 
 export function readAutomationAuthoringResumePayload(

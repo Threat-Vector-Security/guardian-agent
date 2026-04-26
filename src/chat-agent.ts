@@ -60,9 +60,6 @@ import {
   dispatchDirectIntentCandidates,
 } from './runtime/chat-agent/direct-intent-dispatch.js';
 import {
-  executeStoredCodingBackendRun,
-} from './runtime/chat-agent/coding-backend-resume.js';
-import {
   tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
 } from './runtime/chat-agent/direct-coding-backend.js';
 import {
@@ -6778,11 +6775,6 @@ type DirectIntentShadowCandidate =
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
       executeStoredSecondBrainMutation: (nextPendingAction, resume, approvalResult) => this.executeStoredSecondBrainMutation(
-        nextPendingAction,
-        resume,
-        approvalResult,
-      ),
-      executeStoredCodingBackendRun: (nextPendingAction, resume, approvalResult) => executeStoredCodingBackendRun(
         nextPendingAction,
         resume,
         approvalResult,
