@@ -764,13 +764,18 @@ type DirectIntentShadowCandidate =
 
   private tryDirectPendingApprovalStatusResponse(
     message: UserMessage,
+    options?: { exactOnly?: boolean },
   ): { content: string; metadata?: Record<string, unknown> } | null {
     if (!this.tools?.isEnabled()) return null;
     const normalized = stripLeadingContextPrefix(message.content).replace(/\s+/g, ' ').trim();
     if (!normalized) return null;
-    const asksForPendingApprovals = /^pending approvals?\??$/i.test(normalized)
-      || /(?:\bwhat\b|\bwhich\b|\bshow\b|\blist\b|\bare there\b|\bdo i have\b|\bany\b|\bcurrent\b).*(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b)/i.test(normalized)
+    const exactPendingApprovalStatus = /^pending approvals?\??$/i.test(normalized)
+      || /^approvals? pending\??$/i.test(normalized);
+    const broadPendingApprovalStatus = /(?:\bwhat\b|\bwhich\b|\bshow\b|\blist\b|\bare there\b|\bdo i have\b|\bany\b|\bcurrent\b).*(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b)/i.test(normalized)
       || /(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b).*\b(?:right now|currently|today)\b/i.test(normalized);
+    const asksForPendingApprovals = options?.exactOnly === true
+      ? exactPendingApprovalStatus
+      : exactPendingApprovalStatus || broadPendingApprovalStatus;
     if (!asksForPendingApprovals) return null;
 
     const surfaceId = this.getCodeSessionSurfaceId(message);
@@ -1359,6 +1364,29 @@ type DirectIntentShadowCandidate =
             ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
             : {}),
           ...(approvalResult.metadata ?? {}),
+        },
+      };
+    }
+
+    const directPendingApprovalStatusBeforeGateway = this.tryDirectPendingApprovalStatusResponse(message, { exactOnly: true });
+    if (directPendingApprovalStatusBeforeGateway) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          conversationKey,
+          message.content,
+          directPendingApprovalStatusBeforeGateway.content,
+        );
+      }
+      if (resolvedCodeSession) {
+        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+      }
+      return {
+        content: directPendingApprovalStatusBeforeGateway.content,
+        metadata: {
+          ...(preResolvedSkills.length > 0
+            ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+            : {}),
+          ...(directPendingApprovalStatusBeforeGateway.metadata ?? {}),
         },
       };
     }
