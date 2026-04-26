@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
-import { buildChatDirectRouteHandlers, type ChatDirectRouteHandlerCallbacks } from './direct-route-handlers.js';
+import {
+  buildChatDirectRouteHandlers,
+  type ChatDirectCodingRouteDeps,
+} from './direct-route-handlers.js';
+import type { DirectCodingBackendDeps } from './direct-coding-backend.js';
+import type { DirectPersonalAssistantDeps } from './direct-personal-assistant.js';
 import type { DirectRuntimeDepsInput } from './direct-runtime-deps.js';
 
 const originalMessage: UserMessage = {
@@ -39,11 +44,46 @@ function runtimeDeps(tools: DirectRuntimeDepsInput['tools']): DirectRuntimeDepsI
   };
 }
 
-function callbacks(): ChatDirectRouteHandlerCallbacks {
+function personalAssistantDeps(
+  overrides: Partial<DirectPersonalAssistantDeps> = {},
+): DirectPersonalAssistantDeps {
   return {
-    personalAssistant: vi.fn(async () => 'personal'),
-    codingSessionControl: vi.fn(async () => 'session-control'),
-    codingBackend: vi.fn(async () => 'coding'),
+    tools: { isEnabled: vi.fn(() => false) },
+    secondBrainService: null,
+    buildClarificationResponse: vi.fn(() => ({ content: 'clarify' })),
+    executeMutation: vi.fn(async () => ({ content: 'mutated' })),
+    ...overrides,
+  };
+}
+
+function codingRoutes(
+  tools: DirectRuntimeDepsInput['tools'],
+  overrides: {
+    backendDeps?: Partial<DirectCodingBackendDeps>;
+    sessionControlDeps?: Partial<ChatDirectCodingRouteDeps['sessionControlDeps']>;
+  } = {},
+): ChatDirectCodingRouteDeps {
+  return {
+    backendDeps: {
+      agentId: 'chat',
+      tools,
+      codeSessionStore: { getSession: vi.fn(() => null) },
+      parsePendingActionUserKey: vi.fn(() => ({ userId: 'owner', channel: 'web' })),
+      ensureExplicitCodingTaskWorkspaceTarget: vi.fn(async () => ({ status: 'unchanged' })),
+      recordIntentRoutingTrace: vi.fn(),
+      getPendingApprovalIds: vi.fn(() => []),
+      setPendingApprovals: vi.fn(),
+      syncPendingApprovalsFromExecutor: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: null })),
+      ...overrides.backendDeps,
+    },
+    sessionControlDeps: {
+      executeDirectCodeSessionTool: vi.fn(async () => ({ success: true, output: {} })),
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      onMessage: vi.fn(async () => ({ content: 'fallback' })),
+      ...overrides.sessionControlDeps,
+    },
   };
 }
 
@@ -67,38 +107,228 @@ function providerDecision(): IntentGatewayDecision {
 }
 
 describe('chat direct route handlers', () => {
-  it('keeps ChatAgent-owned routes as explicit callbacks', async () => {
-    const ownedCallbacks = callbacks();
+  it('wires personal assistant routing through shared Second Brain dependencies', async () => {
+    const getOverview = vi.fn(() => ({
+      nextEvent: null,
+      topTasks: [],
+      recentNotes: [],
+      enabledRoutineCount: 0,
+      usage: {
+        externalTokens: 0,
+        monthlyBudget: 10_000,
+      },
+    }));
+    const tools = { isEnabled: vi.fn(() => false) } as never;
     const handlers = buildChatDirectRouteHandlers({
       agentId: 'chat',
-      tools: { isEnabled: vi.fn(() => false) } as never,
-      runtimeDeps: runtimeDeps({ isEnabled: vi.fn(() => false) } as never),
+      tools,
+      runtimeDeps: runtimeDeps(tools),
       message: originalMessage,
       routedMessage,
       ctx,
       userKey: 'owner:web',
       conversationKey: { userId: 'owner', channel: 'web' },
       stateAgentId: 'chat',
+      decision: {
+        route: 'personal_assistant_task',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect Second Brain.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'personal_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+        entities: { personalItemType: 'overview' },
+      } as IntentGatewayDecision,
       llmMessages: [],
       defaultToolResultProviderKind: 'local',
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
-      callbacks: ownedCallbacks,
+      personalAssistantDeps: personalAssistantDeps({
+        secondBrainService: {
+          getOverview,
+        } as never,
+      }),
+      codingRoutes: codingRoutes(tools),
     });
 
-    await expect(handlers.personal_assistant?.({
+    const result = await handlers.personal_assistant?.({
       gatewayDirected: true,
       gatewayUnavailable: false,
       skipDirectWebSearch: false,
-    })).resolves.toBe('personal');
-    await expect(handlers.coding_backend?.({
+    });
+
+    expect(result).toContain('Second Brain overview:');
+    expect(getOverview).toHaveBeenCalledOnce();
+  });
+
+  it('wires coding backend dispatch through shared route dependencies', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        backendId: 'codex',
+        backendName: 'Codex',
+        assistantResponse: 'Implemented the requested change.',
+        codeSessionId: 'code-1',
+        durationMs: 32,
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries: vi.fn(() => new Map()),
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Run Codex on the task.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'local',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      entities: { codingBackend: 'codex' },
+    } as IntentGatewayDecision;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: runtimeDeps(tools),
+      message: { ...originalMessage, content: 'original request' },
+      routedMessage: { ...routedMessage, content: 'Fix the failing API regression.' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      codingRoutes: codingRoutes(tools),
+      personalAssistantDeps: personalAssistantDeps(),
+    });
+
+    const result = await handlers.coding_backend?.({
       gatewayDirected: true,
       gatewayUnavailable: false,
       skipDirectWebSearch: false,
-    })).resolves.toBe('coding');
-    expect(ownedCallbacks.personalAssistant).toHaveBeenCalledOnce();
-    expect(ownedCallbacks.codingBackend).toHaveBeenCalledOnce();
+    });
+
+    expect(result).toMatchObject({
+      content: 'Implemented the requested change.',
+      metadata: {
+        codingBackendDelegated: true,
+        codingBackendId: 'codex',
+        codeSessionResolved: true,
+        codeSessionId: 'code-1',
+      },
+    });
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'coding_backend_run',
+      {
+        task: 'Fix the failing API regression.',
+        backend: 'codex',
+      },
+      expect.objectContaining({
+        agentId: 'chat',
+        requestId: 'routed-message',
+        codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      }),
+    );
+  });
+
+  it('wires coding session control through shared route dependencies', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async () => ({
+      success: true,
+      output: {
+        session: {
+          id: 'code-1',
+          title: 'GuardianAgent',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'coding_session_control',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect current coding session.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      entities: {},
+    } as IntentGatewayDecision;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: runtimeDeps(tools),
+      message: { ...originalMessage, content: 'what coding workspace is this?' },
+      routedMessage: { ...routedMessage, content: 'routed content' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      codingRoutes: codingRoutes(tools, {
+        sessionControlDeps: {
+          executeDirectCodeSessionTool,
+        },
+      }),
+      personalAssistantDeps: personalAssistantDeps(),
+    });
+
+    const result = await handlers.coding_session_control?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toMatchObject({
+      content: expect.stringContaining('This chat is currently attached to:'),
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: 'code-1',
+      },
+    });
+    expect(executeDirectCodeSessionTool).toHaveBeenCalledWith(
+      'code_session_current',
+      {},
+      expect.objectContaining({
+        id: 'original-message',
+        content: 'what coding workspace is this?',
+      }),
+      ctx,
+    );
   });
 
   it('wires shared direct runtime routes without ChatAgent wrappers', async () => {
@@ -135,7 +365,8 @@ describe('chat direct route handlers', () => {
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
-      callbacks: callbacks(),
+      codingRoutes: codingRoutes(tools),
+      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.provider_read?.({
@@ -185,7 +416,8 @@ describe('chat direct route handlers', () => {
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave: vi.fn(),
-      callbacks: callbacks(),
+      codingRoutes: codingRoutes(tools),
+      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.memory_write?.({
@@ -254,7 +486,8 @@ describe('chat direct route handlers', () => {
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
       executeStoredFilesystemSave,
-      callbacks: callbacks(),
+      codingRoutes: codingRoutes(tools),
+      personalAssistantDeps: personalAssistantDeps(),
     });
 
     const result = await handlers.filesystem?.({

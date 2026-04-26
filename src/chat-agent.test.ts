@@ -12,7 +12,16 @@ import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from '
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
 import { buildToolLoopContinuationPayload, readToolLoopContinuationPayload } from './runtime/chat-agent/tool-loop-continuation.js';
 import { tryDirectAutomationControl } from './runtime/chat-agent/direct-automation.js';
+import {
+  tryDirectCodingBackendDelegation,
+  type DirectCodingBackendDeps,
+} from './runtime/chat-agent/direct-coding-backend.js';
 import { tryDirectGoogleWorkspaceRead } from './runtime/chat-agent/direct-mailbox-runtime.js';
+import {
+  tryDirectPersonalAssistantRead,
+  tryDirectPersonalAssistantWrite,
+  type DirectPersonalAssistantDeps,
+} from './runtime/chat-agent/direct-personal-assistant.js';
 import {
   buildDirectAutomationDeps,
   buildDirectMailboxDeps,
@@ -40,6 +49,89 @@ function createDirectRuntimeDeps(
     buildPendingApprovalBlockedResponse: vi.fn((_result, fallbackContent) => ({ content: fallbackContent })),
     ...overrides,
   };
+}
+
+function directPersonalAssistantDepsForAgent(agent: any): DirectPersonalAssistantDeps {
+  return {
+    tools: agent.tools,
+    secondBrainService: agent.secondBrainService,
+    buildClarificationResponse: (input) => agent.buildDirectSecondBrainClarificationResponse(input),
+    executeMutation: (input) => agent.executeDirectSecondBrainMutation(input),
+  };
+}
+
+function tryAgentDirectSecondBrainRead(
+  agent: any,
+  message: UserMessage,
+  decision?: any,
+  continuityThread?: any,
+) {
+  return tryDirectPersonalAssistantRead(
+    { message, decision, continuityThread },
+    directPersonalAssistantDepsForAgent(agent),
+  );
+}
+
+function tryAgentDirectSecondBrainWrite(
+  agent: any,
+  message: UserMessage,
+  ctx: AgentContext,
+  userKey: string,
+  decision?: any,
+  continuityThread?: any,
+) {
+  return tryDirectPersonalAssistantWrite(
+    { message, ctx, userKey, decision, continuityThread },
+    directPersonalAssistantDepsForAgent(agent),
+  );
+}
+
+function directCodingBackendDepsForAgent(agent: any): DirectCodingBackendDeps {
+  return {
+    agentId: agent.id,
+    tools: agent.tools,
+    codeSessionStore: agent.codeSessionStore,
+    parsePendingActionUserKey: (key) => agent.parsePendingActionUserKey(key),
+    ensureExplicitCodingTaskWorkspaceTarget: (input) => agent.ensureExplicitCodingTaskWorkspaceTarget(input),
+    recordIntentRoutingTrace: (stage, input) => agent.recordIntentRoutingTrace(stage, input),
+    getPendingApprovalIds: (userId, channel, surfaceId) => agent.getPendingApprovalIds(userId, channel, surfaceId),
+    setPendingApprovals: (key, ids, surfaceId, nowMs) => agent.setPendingApprovals(key, ids, surfaceId, nowMs),
+    syncPendingApprovalsFromExecutor: (
+      sourceUserId,
+      sourceChannel,
+      targetUserId,
+      targetChannel,
+      surfaceId,
+      originalUserContent,
+    ) => agent.syncPendingApprovalsFromExecutor(
+      sourceUserId,
+      sourceChannel,
+      targetUserId,
+      targetChannel,
+      surfaceId,
+      originalUserContent,
+    ),
+    setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => agent.setPendingApprovalAction(
+      userId,
+      channel,
+      surfaceId,
+      actionInput,
+    ),
+  };
+}
+
+function tryAgentDirectCodingBackendDelegation(
+  agent: any,
+  message: UserMessage,
+  ctx: AgentContext,
+  userKey: string,
+  decision?: any,
+  codeContext?: { sessionId?: string; workspaceRoot: string },
+) {
+  return tryDirectCodingBackendDelegation(
+    { message, ctx, userKey, decision, codeContext },
+    directCodingBackendDepsForAgent(agent),
+  );
 }
 
 function createToolLoopGraphPendingAction(input: {
@@ -1477,7 +1569,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       timestamp: Date.now(),
     };
 
-    const response = await (agent as any).tryDirectCodingBackendDelegation(
+    const response = await tryAgentDirectCodingBackendDelegation(agent,
       message,
       ctx,
       'owner:web',
@@ -1562,7 +1654,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       timestamp: Date.now(),
     };
 
-    const response = await (agent as any).tryDirectCodingBackendDelegation(
+    const response = await tryAgentDirectCodingBackendDelegation(agent,
       message,
       ctx,
       'owner:web',
@@ -1653,7 +1745,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       timestamp: Date.now(),
     };
 
-    const response = await (agent as any).tryDirectCodingBackendDelegation(
+    const response = await tryAgentDirectCodingBackendDelegation(agent,
       message,
       ctx,
       'owner:web',
@@ -2669,7 +2761,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       }]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-library',
         userId: 'owner',
@@ -2717,7 +2809,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     const agent = new ChatAgent('chat', 'Chat');
     (agent as any).secondBrainService = { listLinks };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-library-query',
         userId: 'owner',
@@ -2764,7 +2856,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       }]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-briefs',
         userId: 'owner',
@@ -2820,7 +2912,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       listRoutineCatalog: vi.fn(() => []),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-routines-disabled',
         userId: 'owner',
@@ -2934,7 +3026,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       ]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-routines-email',
         userId: 'owner',
@@ -2990,7 +3082,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     const agent = new ChatAgent('chat', 'Chat');
     (agent as any).secondBrainService = { listPeople };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-person-query',
         userId: 'owner',
@@ -3107,7 +3199,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       ]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-routines-meeting-prep',
         userId: 'owner',
@@ -3261,7 +3353,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       ]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-routines-follow-up',
         userId: 'owner',
@@ -3379,7 +3471,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       ]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-routines-focus',
         userId: 'owner',
@@ -3534,7 +3626,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-disable',
         userId: 'owner',
@@ -3675,7 +3767,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-settings',
         userId: 'owner',
@@ -3804,7 +3896,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-legacy-lookahead',
         userId: 'owner',
@@ -3899,7 +3991,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-existing',
         userId: 'owner',
@@ -3993,7 +4085,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-topic-watch',
         userId: 'owner',
@@ -4077,7 +4169,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-deadline-watch',
         userId: 'owner',
@@ -4183,7 +4275,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-update-topic-watch',
         userId: 'owner',
@@ -4315,7 +4407,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-update-schedule',
         userId: 'owner',
@@ -4445,7 +4537,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-scoped-weekly-review',
         userId: 'owner',
@@ -4533,7 +4625,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-scheduled-review',
         userId: 'owner',
@@ -4626,7 +4718,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-create-duplicate-scheduled-review',
         userId: 'owner',
@@ -4742,7 +4834,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-routine-update-scoped-focus',
         userId: 'owner',
@@ -4816,7 +4908,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 3, 7, 8, 0, 0));
 
     try {
-      const result = await (agent as any).tryDirectSecondBrainRead(
+      const result = await tryAgentDirectSecondBrainRead(agent,
         {
           id: 'msg-calendar',
           userId: 'owner',
@@ -4885,7 +4977,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-note-create',
         userId: 'owner',
@@ -4947,7 +5039,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-note-update',
         userId: 'owner',
@@ -5037,7 +5129,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-brief-create',
         userId: 'owner',
@@ -5103,7 +5195,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-brief-generate',
         userId: 'owner',
@@ -5176,7 +5268,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-brief-update',
         userId: 'owner',
@@ -5256,7 +5348,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-create',
         userId: 'owner',
@@ -5329,7 +5421,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     };
     const longWhitespace = ' '.repeat(2048);
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-create-unquoted',
         userId: 'owner',
@@ -5397,7 +5489,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-create-structured',
         userId: 'owner',
@@ -5464,7 +5556,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-create-multiline',
         userId: 'owner',
@@ -5521,7 +5613,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-create-missing',
         userId: 'owner',
@@ -5601,7 +5693,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-library-create',
         userId: 'owner',
@@ -5675,7 +5767,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-library-create-multiline',
         userId: 'owner',
@@ -5746,7 +5838,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-person-update',
         userId: 'owner',
@@ -5821,7 +5913,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       ]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-notes',
         userId: 'owner',
@@ -5913,7 +6005,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-task-create-multiline',
         userId: 'owner',
@@ -5984,7 +6076,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-task-done',
         userId: 'owner',
@@ -6077,7 +6169,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    await (agent as any).tryDirectSecondBrainWrite(
+    await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-task-rename',
         userId: 'owner',
@@ -6372,7 +6464,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     };
 
     try {
-      const result = await (agent as any).tryDirectSecondBrainWrite(
+      const result = await tryAgentDirectSecondBrainWrite(agent,
         {
           id: 'msg-event-create',
           userId: 'owner',
@@ -6449,7 +6541,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     };
 
     try {
-      const result = await (agent as any).tryDirectSecondBrainWrite(
+      const result = await tryAgentDirectSecondBrainWrite(agent,
         {
           id: 'msg-event-move',
           userId: 'owner',
@@ -6514,7 +6606,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       }]),
     };
 
-    const result = await (agent as any).tryDirectSecondBrainRead(
+    const result = await tryAgentDirectSecondBrainRead(agent,
       {
         id: 'msg-task-read-follow-up',
         userId: 'owner',
@@ -6593,7 +6685,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const result = await (agent as any).tryDirectSecondBrainWrite(
+    const result = await tryAgentDirectSecondBrainWrite(agent,
       {
         id: 'msg-note-delete',
         userId: 'owner',

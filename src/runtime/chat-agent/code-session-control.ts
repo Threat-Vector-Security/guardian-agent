@@ -13,28 +13,28 @@ import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import { isWorkspaceSwitchPendingActionSatisfied } from '../pending-action-resume.js';
 
-type CodeSessionResponse = { content: string; metadata?: Record<string, unknown> };
+export type CodeSessionResponse = { content: string; metadata?: Record<string, unknown> };
 
-type CodeSessionToolResult = {
+export type CodeSessionToolResult = {
   success?: unknown;
   message?: unknown;
   error?: unknown;
   output?: unknown;
 };
 
-type CodeSessionToolExecutor = (
+export type CodeSessionToolExecutor = (
   toolName: string,
   args: Record<string, unknown>,
   message: UserMessage,
   ctx: AgentContext,
 ) => Promise<CodeSessionToolResult>;
 
-type CodeSessionManagedSandboxGetter = (
+export type CodeSessionManagedSandboxGetter = (
   sessionId: string,
   ownerUserId?: string,
 ) => Promise<{ sandboxes: CodeSessionManagedSandbox[] }>;
 
-type CodingTaskResumer = (
+export type CodingTaskResumer = (
   message: UserMessage,
   ctx: AgentContext,
   userKey: string,
@@ -42,12 +42,12 @@ type CodingTaskResumer = (
   codeContext?: { sessionId?: string; workspaceRoot: string },
 ) => Promise<CodeSessionResponse | null>;
 
-type OnMessageFn = (
+export type OnMessageFn = (
   message: UserMessage,
   ctx: AgentContext,
 ) => Promise<AgentResponse>;
 
-interface EnsureExplicitCodingTaskWorkspaceTargetInput {
+export interface EnsureExplicitCodingTaskWorkspaceTargetInput {
   toolsEnabled: boolean;
   codeSessionStore?: Pick<CodeSessionStore, 'getSession' | 'listSessionsForUser'> | null;
   executeDirectCodeSessionTool: CodeSessionToolExecutor;
@@ -58,7 +58,7 @@ interface EnsureExplicitCodingTaskWorkspaceTargetInput {
   codeContext?: { workspaceRoot: string; sessionId?: string };
 }
 
-type EnsureExplicitCodingTaskWorkspaceTargetResult =
+export type EnsureExplicitCodingTaskWorkspaceTargetResult =
   | {
       status: 'unchanged';
     }
@@ -72,6 +72,26 @@ type EnsureExplicitCodingTaskWorkspaceTargetResult =
       status: 'blocked';
       response: { content: string; metadata?: Record<string, unknown> };
     };
+
+export interface CodeSessionControlDeps {
+  executeDirectCodeSessionTool: CodeSessionToolExecutor;
+  getCodeSessionManagedSandboxes?: CodeSessionManagedSandboxGetter;
+  getActivePendingAction: (
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+  ) => PendingActionRecord | null;
+  completePendingAction: (actionId: string) => void;
+  resumeCodingTask: CodingTaskResumer;
+  onMessage: OnMessageFn;
+}
+
+export interface CodeSessionControlGatewayInput extends CodeSessionControlDeps {
+  toolsEnabled: boolean;
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision;
+}
 
 export async function ensureExplicitCodingTaskWorkspaceTarget(
   input: EnsureExplicitCodingTaskWorkspaceTargetInput,
@@ -560,22 +580,9 @@ export async function handleCodeSessionAttach(input: {
   return resumed ?? response;
 }
 
-export async function tryDirectCodeSessionControlFromGateway(input: {
-  toolsEnabled: boolean;
-  executeDirectCodeSessionTool: CodeSessionToolExecutor;
-  getCodeSessionManagedSandboxes?: CodeSessionManagedSandboxGetter;
-  getActivePendingAction: (
-    userId: string,
-    channel: string,
-    surfaceId?: string,
-  ) => PendingActionRecord | null;
-  completePendingAction: (actionId: string) => void;
-  resumeCodingTask: CodingTaskResumer;
-  onMessage: OnMessageFn;
-  message: UserMessage;
-  ctx: AgentContext;
-  decision?: IntentGatewayDecision;
-}): Promise<CodeSessionResponse | null> {
+export async function tryDirectCodeSessionControlFromGateway(
+  input: CodeSessionControlGatewayInput,
+): Promise<CodeSessionResponse | null> {
   if (!input.toolsEnabled) return null;
   if (!input.decision || input.decision.route !== 'coding_session_control') return null;
 
