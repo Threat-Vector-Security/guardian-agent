@@ -7,6 +7,7 @@ import { ConversationService } from './runtime/conversation.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
 import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './runtime/intent-gateway.js';
+import { buildToolLoopResumePayload } from './runtime/chat-agent/tool-loop-resume.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 
 describe('LLMChatAgent direct intent metadata', () => {
@@ -7225,7 +7226,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       },
       resume: {
         kind: 'tool_loop',
-        payload: (agent as any).buildToolLoopResumePayload({
+        payload: buildToolLoopResumePayload({
           llmMessages: [
             { role: 'system', content: 'system prompt' },
             { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
@@ -7608,7 +7609,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       },
       resume: {
         kind: 'tool_loop',
-        payload: (agent as any).buildToolLoopResumePayload({
+        payload: buildToolLoopResumePayload({
           llmMessages: [
             { role: 'system', content: 'system prompt' },
             { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
