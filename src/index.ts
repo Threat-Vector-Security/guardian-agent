@@ -5844,6 +5844,8 @@ async function main(): Promise<void> {
         routingIntentGateway,
         () => configRef.current.assistant.responseStyle,
         () => configRef.current,
+        executionGraphStore,
+        runTimeline,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -5896,6 +5898,8 @@ async function main(): Promise<void> {
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
       () => configRef.current,
+      executionGraphStore,
+      runTimeline,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5939,6 +5943,8 @@ async function main(): Promise<void> {
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
       () => configRef.current,
+      executionGraphStore,
+      runTimeline,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -6008,6 +6014,8 @@ async function main(): Promise<void> {
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
       () => configRef.current,
+      executionGraphStore,
+      runTimeline,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -6052,6 +6060,9 @@ async function main(): Promise<void> {
       executionStore,
       routingIntentGateway,
       () => configRef.current.assistant.responseStyle,
+      undefined,
+      executionGraphStore,
+      runTimeline,
     );
     chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
     runtime.registerAgent(createAgentDefinition({

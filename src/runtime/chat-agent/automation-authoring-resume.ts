@@ -66,22 +66,6 @@ function readPendingActionPrompt(
   return prompt || null;
 }
 
-export function buildAutomationAuthoringResumePayload(
-  request: StoredAutomationAuthoringInput,
-): PendingActionRecord['resume'] {
-  return {
-    kind: 'capability_continuation',
-    payload: {
-      type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
-      originalUserContent: request.originalUserContent,
-      allowRemediation: request.allowRemediation,
-      ...(request.principalId ? { principalId: request.principalId } : {}),
-      ...(request.principalRole ? { principalRole: request.principalRole } : {}),
-      ...(request.codeContext ? { codeContext: { ...request.codeContext } } : {}),
-    },
-  };
-}
-
 export async function executeStoredAutomationAuthoring(input: {
   request: StoredAutomationAuthoringInput;
   agentId: string;
@@ -107,6 +91,34 @@ export async function executeStoredAutomationAuthoring(input: {
       missingFields?: string[];
       entities?: Record<string, unknown>;
       resume?: PendingActionRecord['resume'];
+      codeSessionId?: string;
+    },
+    nowMs?: number,
+  ) => PendingActionSetResult;
+  setCapabilityGraphPendingApprovalActionForRequest: (
+    userKey: string,
+    surfaceId: string | undefined,
+    action: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      entities?: Record<string, unknown>;
+      continuation: {
+        type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
+        originalUserContent: string;
+        allowRemediation: boolean;
+        principalId?: string;
+        principalRole?: string;
+        messageMetadata?: Record<string, unknown>;
+        codeContext?: { workspaceRoot: string; sessionId?: string };
+      };
       codeSessionId?: string;
     },
     nowMs?: number,
@@ -170,29 +182,38 @@ export async function executeStoredAutomationAuthoring(input: {
   const summaries = input.tools.getApprovalSummaries(trackedPendingApprovalIds);
   const prompt = readPendingActionPrompt(result.metadata)
     ?? input.formatPendingApprovalPrompt(trackedPendingApprovalIds, summaries);
-  const pendingActionResult = input.setPendingApprovalActionForRequest(
+  const pendingActionInput = {
+    prompt,
+    approvalIds: trackedPendingApprovalIds,
+    approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
+    originalUserContent: input.request.originalUserContent,
+    route: 'automation_authoring',
+    operation: 'create',
+    summary: 'Creates or updates a Guardian automation.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    ...(input.request.codeContext?.sessionId ? { codeSessionId: input.request.codeContext.sessionId } : {}),
+  } as const;
+  const pendingActionResult = result.metadata?.resumeAutomationAfterApprovals
+    ? input.setCapabilityGraphPendingApprovalActionForRequest(
+      input.request.userKey,
+      input.request.surfaceId,
+      {
+        ...pendingActionInput,
+        continuation: {
+          type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+          originalUserContent: input.request.originalUserContent,
+          allowRemediation: input.request.allowRemediation,
+          ...(input.request.principalId ? { principalId: input.request.principalId } : {}),
+          ...(input.request.principalRole ? { principalRole: input.request.principalRole } : {}),
+          ...(input.request.codeContext ? { codeContext: { ...input.request.codeContext } } : {}),
+        },
+      },
+    )
+    : input.setPendingApprovalActionForRequest(
     input.request.userKey,
     input.request.surfaceId,
-    {
-      prompt,
-      approvalIds: trackedPendingApprovalIds,
-      approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
-      originalUserContent: input.request.originalUserContent,
-      route: 'automation_authoring',
-      operation: 'create',
-      summary: 'Creates or updates a Guardian automation.',
-      turnRelation: 'new_request',
-      resolution: 'ready',
-      ...(result.metadata?.resumeAutomationAfterApprovals
-        ? {
-            resume: buildAutomationAuthoringResumePayload({
-              ...input.request,
-              requestId: randomUUID(),
-            }),
-          }
-        : {}),
-      ...(input.request.codeContext?.sessionId ? { codeSessionId: input.request.codeContext.sessionId } : {}),
-    },
+    pendingActionInput,
   );
   const merged = input.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
   return {

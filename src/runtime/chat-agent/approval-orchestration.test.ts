@@ -8,7 +8,7 @@ import {
 } from './approval-orchestration.js';
 
 describe('approval-orchestration', () => {
-  it('suppresses generic tool-completed copy when a capability approval resumes into a final response', async () => {
+  it('suppresses generic tool-completed copy when a graph approval resumes into a final response', async () => {
     const pendingAction = {
       id: 'pending-1',
       scope: {
@@ -30,9 +30,12 @@ describe('approval-orchestration', () => {
         originalUserContent: 'Save this note.',
       },
       resume: {
-        kind: 'capability_continuation',
+        kind: 'execution_graph',
         payload: {
-          type: 'filesystem_save_output',
+          graphId: 'graph-1',
+          nodeId: 'node-1',
+          resumeToken: 'resume-1',
+          artifactIds: [],
         },
       },
       createdAt: 1,
@@ -74,10 +77,9 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => ({
+      resumeStoredExecutionGraphPendingAction: vi.fn(async () => ({
         content: 'Note created: Smoke Test Note',
       })),
-      resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatResolvedApprovalResultResponse: vi.fn(() => null),
@@ -170,7 +172,6 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -238,7 +239,6 @@ describe('approval-orchestration', () => {
       metadata: { graphId: 'graph-1' },
     }));
     const resumeStoredToolLoopPendingAction = vi.fn(async () => null);
-    const resumeStoredCapabilityContinuationPendingAction = vi.fn(async () => null);
     const completePendingAction = vi.fn();
 
     const result = await handleApprovalMessage({
@@ -271,7 +271,6 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction,
-      resumeStoredCapabilityContinuationPendingAction,
       resumeStoredExecutionGraphPendingAction,
       normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -289,7 +288,6 @@ describe('approval-orchestration', () => {
       expect.objectContaining({ approvalId: 'approval-graph-1' }),
     );
     expect(resumeStoredToolLoopPendingAction).not.toHaveBeenCalled();
-    expect(resumeStoredCapabilityContinuationPendingAction).not.toHaveBeenCalled();
     expect(completePendingAction).not.toHaveBeenCalled();
   });
 
@@ -367,7 +365,6 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -439,7 +436,6 @@ describe('approval-orchestration', () => {
       stateAgentId: 'chat',
       completePendingAction,
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction,
       normalizeApprovalContinuationResponse: vi.fn((result) => result),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),

@@ -62,6 +62,35 @@ export async function executeStoredFilesystemSave(input: {
     },
     nowMs?: number,
   ) => PendingActionSetResult;
+  setCapabilityGraphPendingApprovalActionForRequest: (
+    userKey: string,
+    surfaceId: string | undefined,
+    action: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      entities?: Record<string, unknown>;
+      continuation: {
+        type: typeof CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
+        targetPath: string;
+        content: string;
+        originalUserContent: string;
+        allowPathRemediation: boolean;
+        principalId?: string;
+        principalRole?: string;
+        codeContext?: { workspaceRoot: string; sessionId?: string };
+      };
+      codeSessionId?: string;
+    },
+    nowMs?: number,
+  ) => PendingActionSetResult;
   buildPendingApprovalBlockedResponse: (
     result: PendingActionSetResult,
     fallbackContent: string,
@@ -176,7 +205,7 @@ function buildPendingFilesystemPathApprovalResponse(
   }
   const summaries = pendingIds.length > 0 ? input.tools?.getApprovalSummaries(pendingIds) : undefined;
   const prompt = input.formatPendingApprovalPrompt(pendingIds, summaries);
-  const pendingActionResult = input.setPendingApprovalActionForRequest(
+  const pendingActionResult = input.setCapabilityGraphPendingApprovalActionForRequest(
     input.request.userKey,
     input.request.surfaceId,
     {
@@ -189,18 +218,15 @@ function buildPendingFilesystemPathApprovalResponse(
       summary: 'Adds an allowed path so Guardian can save the previous assistant output, then resumes the save.',
       turnRelation: 'new_request',
       resolution: 'ready',
-      resume: {
-        kind: 'capability_continuation',
-        payload: {
-          type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
-          targetPath: input.request.targetPath,
-          content: input.request.content,
-          originalUserContent: input.request.originalUserContent,
-          allowPathRemediation: false,
-          ...(input.request.principalId ? { principalId: input.request.principalId } : {}),
-          ...(input.request.principalRole ? { principalRole: input.request.principalRole } : {}),
-          ...(input.request.codeContext ? { codeContext: { ...input.request.codeContext } } : {}),
-        },
+      continuation: {
+        type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+        targetPath: input.request.targetPath,
+        content: input.request.content,
+        originalUserContent: input.request.originalUserContent,
+        allowPathRemediation: false,
+        ...(input.request.principalId ? { principalId: input.request.principalId } : {}),
+        ...(input.request.principalRole ? { principalRole: input.request.principalRole } : {}),
+        ...(input.request.codeContext ? { codeContext: { ...input.request.codeContext } } : {}),
       },
       ...(input.request.codeContext?.sessionId ? { codeSessionId: input.request.codeContext.sessionId } : {}),
     },

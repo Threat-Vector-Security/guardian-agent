@@ -27,6 +27,7 @@ export interface AutomationAuthoringResumePayload {
   allowRemediation: boolean;
   principalId?: string;
   principalRole?: string;
+  messageMetadata?: Record<string, unknown>;
   codeContext?: {
     workspaceRoot: string;
     sessionId?: string;
@@ -202,6 +203,7 @@ export function readAutomationAuthoringResumePayload(
     allowRemediation: payload.allowRemediation !== false,
     ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
     ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
+    ...(isRecord(payload.messageMetadata) ? { messageMetadata: { ...payload.messageMetadata } } : {}),
     ...(codeContext ? { codeContext } : {}),
   };
 }

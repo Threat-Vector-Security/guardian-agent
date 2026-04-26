@@ -6151,6 +6151,7 @@ describe('WorkerManager', () => {
     });
 
     const pendingActionStore = createMemoryPendingActionStore();
+    const executionGraphStore = new ExecutionGraphStore();
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -6199,7 +6200,7 @@ describe('WorkerManager', () => {
         capabilityTokenMaxToolCalls: 0,
       } as never,
       undefined,
-      { pendingActionStore },
+      { pendingActionStore, executionGraphStore },
     );
 
     const createRequest = {
@@ -6309,6 +6310,7 @@ describe('WorkerManager', () => {
     });
 
     const pendingActionStore = createMemoryPendingActionStore();
+    const executionGraphStore = new ExecutionGraphStore();
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -6358,7 +6360,7 @@ describe('WorkerManager', () => {
         capabilityTokenMaxToolCalls: 0,
       } as never,
       undefined,
-      { pendingActionStore },
+      { pendingActionStore, executionGraphStore },
     );
 
     const createRequest = {

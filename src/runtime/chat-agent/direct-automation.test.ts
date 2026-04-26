@@ -88,6 +88,7 @@ function makeDeps(overrides: Partial<DirectAutomationDeps> = {}): DirectAutomati
     parsePendingActionUserKey: () => ({ userId: 'user-1', channel: 'web' }),
     setClarificationPendingAction: () => ({ action: makePendingAction('Which automation?') }),
     setPendingApprovalActionForRequest: () => ({ action: makePendingAction('Approve this automation.') }),
+    setCapabilityGraphPendingApprovalActionForRequest: () => ({ action: makePendingAction('Approve this automation.') }),
     buildPendingApprovalBlockedResponse: (_result, fallbackContent) => ({ content: fallbackContent }),
     ...overrides,
   };
@@ -186,7 +187,7 @@ describe('direct-automation', () => {
             },
           };
         },
-        setPendingApprovalActionForRequest: (_userKey, _surfaceId, input) => {
+        setCapabilityGraphPendingApprovalActionForRequest: (_userKey, _surfaceId, input) => {
           capturedPendingApprovalInput = input as unknown as Record<string, unknown>;
           return { action: makePendingAction('Approve this automation.') };
         },
@@ -205,13 +206,10 @@ describe('direct-automation', () => {
         route: 'classifier.primary',
         operation: 'classifier.primary',
       },
-      resume: {
-        kind: 'capability_continuation',
-        payload: {
-          type: 'automation_authoring',
-          originalUserContent: 'Create a daily briefing automation',
-          allowRemediation: true,
-        },
+      continuation: {
+        type: 'automation_authoring',
+        originalUserContent: 'Create a daily briefing automation',
+        allowRemediation: true,
       },
     });
     expect(response).toEqual({
