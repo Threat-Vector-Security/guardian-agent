@@ -740,7 +740,7 @@ describe('WorkerManager', () => {
   });
 
   it('does not use graph-controlled mutation for general assistant read/write plans', async () => {
-    const { shouldUseGraphControlledExecution } = await import('./worker-manager.js');
+    const { shouldUseGraphControlledExecution } = await import('../runtime/execution-graph/graph-controller.js');
     const decision = {
       route: 'general_assistant',
       confidence: 'high',
@@ -797,7 +797,7 @@ describe('WorkerManager', () => {
   });
 
   it('does not use graph-controlled mutation for low-confidence filesystem plans without a structured write target', async () => {
-    const { shouldUseGraphControlledExecution } = await import('./worker-manager.js');
+    const { shouldUseGraphControlledExecution } = await import('../runtime/execution-graph/graph-controller.js');
     const decision = {
       route: 'filesystem_task',
       confidence: 'low',
