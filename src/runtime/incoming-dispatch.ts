@@ -4,7 +4,11 @@ import { stripLeadingContextPrefix } from '../chat-agent-helpers.js';
 import { SHARED_TIER_AGENT_STATE_ID } from './agent-state-context.js';
 import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
 import type { ConversationService } from './conversation.js';
-import type { ContinuityThreadStore } from './continuity-threads.js';
+import {
+  hasContinuityThreadSurfaceLink,
+  shouldUseContinuityThreadForTurn,
+  type ContinuityThreadStore,
+} from './continuity-threads.js';
 import { buildContinuityAwareHistory } from './continuity-history.js';
 import type { IdentityService } from './identity.js';
 import {
@@ -219,24 +223,39 @@ export function createIncomingDispatchPreparer(args: {
       assistantId: stateAgentId,
       userId: canonicalUserId,
     });
-    const continuitySummary = args.summarizeContinuityThreadForGateway(continuity);
-    const recentHistory = buildContinuityAwareHistory({
-      conversationService: args.conversations,
-      codeSessionStore: args.codeSessionStore,
-      continuityThread: continuity,
-      currentConversationKey: {
-        agentId: stateAgentId,
-        userId: canonicalUserId,
-        channel,
-      },
-      currentUserId: canonicalUserId,
-      currentPrincipalId: msg.principalId,
-      resolvedCodeSession: resolvedCodeSession?.session ?? null,
-      query: buildIntentGatewayHistoryQuery({
-        content: normalizedContent,
-        continuity: continuitySummary,
-      }),
-    }).history;
+    const surfaceHadContinuityBeforeTurn = hasContinuityThreadSurfaceLink({
+      record: continuity,
+      channel,
+      surfaceId,
+    });
+    const continuityForGateway = shouldUseContinuityThreadForTurn({
+      record: continuity,
+      surfaceHadContinuityBeforeTurn,
+      hasPendingAction: !!pendingAction,
+      hasResolvedCodeSession: !!resolvedCodeSession,
+    })
+      ? continuity
+      : null;
+    const continuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
+    const recentHistory = continuity && !continuityForGateway
+      ? []
+      : buildContinuityAwareHistory({
+          conversationService: args.conversations,
+          codeSessionStore: args.codeSessionStore,
+          continuityThread: continuityForGateway,
+          currentConversationKey: {
+            agentId: stateAgentId,
+            userId: canonicalUserId,
+            channel,
+          },
+          currentUserId: canonicalUserId,
+          currentPrincipalId: msg.principalId,
+          resolvedCodeSession: resolvedCodeSession?.session ?? null,
+          query: buildIntentGatewayHistoryQuery({
+            content: normalizedContent,
+            continuity: continuitySummary,
+          }),
+        }).history;
     const gatewayInput: IntentGatewayInput = {
       content: normalizedContent,
       channel,
@@ -375,6 +394,7 @@ export function createIncomingDispatchPreparer(args: {
       channel,
       surfaceId: resolvedSurfaceId,
       touchAttachment: false,
+      allowSharedAttachment: false,
     });
     let classifiedGatewayPromise: Promise<IntentGatewayRecord | null> | null = null;
     const getGateway = (options: { force?: boolean } = {}): Promise<IntentGatewayRecord | null> => {

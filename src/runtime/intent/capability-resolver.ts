@@ -1,6 +1,8 @@
 import type { IntentGatewayDecision } from './types.js';
 import { getBuiltinToolCategory } from './capability-inventory.js';
 
+type PlannedStep = NonNullable<IntentGatewayDecision['plannedSteps']>[number];
+
 export type IntentCapabilityCandidate =
   | 'personal_assistant'
   | 'provider_read'
@@ -101,9 +103,15 @@ function requiredPlannedSteps(decision: IntentGatewayDecision) {
 
 function plannedStepExpectedCategories(decision: IntentGatewayDecision): string[] {
   return requiredPlannedSteps(decision)
-    .flatMap((step) => Array.isArray(step.expectedToolCategories) ? step.expectedToolCategories : [])
+    .flatMap((step) => expectedCategoriesForStep(step))
     .map((category) => category.trim())
     .filter(Boolean);
+}
+
+function expectedCategoriesForStep(step: PlannedStep): string[] {
+  return Array.isArray(step.expectedToolCategories)
+    ? step.expectedToolCategories
+    : [];
 }
 
 function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision): boolean {
@@ -117,11 +125,16 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
       || plannedStepExpectedCategories(decision).some((category) => !isSecondBrainDirectCategory(category));
   }
 
-  if (decision.route === 'automation_authoring' || decision.route === 'automation_control') {
-    if (requiresAutomationSynthesisWorker(requiredSteps)) {
-      return true;
-    }
-    return plannedStepExpectedCategories(decision).some((category) => !isAutomationDirectCategory(category));
+  if (decision.route === 'automation_authoring') {
+    return plannedStepExpectedCategories(decision).some((category) => !isAutomationAuthoringDirectCategory(category));
+  }
+
+  if (decision.route === 'automation_control') {
+    return requiredSteps.some((step) => {
+      const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+      return categories.length <= 0
+        || categories.some((category) => !isAutomationDirectCategory(category));
+    });
   }
 
   return false;
@@ -135,23 +148,19 @@ function isSecondBrainDirectCategory(category: string): boolean {
   return getBuiltinToolCategory(normalized) === 'memory' && normalized.startsWith('second_brain_');
 }
 
+function isAutomationAuthoringDirectCategory(category: string): boolean {
+  const normalized = category.trim();
+  if (!normalized) return true;
+  if (normalized === 'read' || normalized === 'search' || normalized === 'write') return true;
+  return isAutomationDirectCategory(normalized);
+}
+
 function isAutomationDirectCategory(category: string): boolean {
   const normalized = category.trim();
   if (!normalized) return true;
   if (normalized === 'automation' || normalized === 'scheduled_email_automation') return true;
   if (normalized.startsWith('automation_')) return true;
   return getBuiltinToolCategory(normalized) === 'automation';
-}
-
-function requiresAutomationSynthesisWorker(
-  requiredSteps: NonNullable<IntentGatewayDecision['plannedSteps']>,
-): boolean {
-  const hasAutomationEvidenceStep = requiredSteps.some((step) => (
-    step.kind !== 'answer'
-    && (step.expectedToolCategories?.some(isAutomationDirectCategory) ?? false)
-  ));
-  const hasAnswerStep = requiredSteps.some((step) => step.kind === 'answer');
-  return hasAutomationEvidenceStep && hasAnswerStep;
 }
 
 function dedupeCandidates(

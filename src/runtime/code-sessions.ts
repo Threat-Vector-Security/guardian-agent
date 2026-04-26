@@ -1252,6 +1252,7 @@ export class CodeSessionStore {
     channel: string;
     surfaceId: string;
     touchAttachment?: boolean;
+    allowSharedAttachment?: boolean;
   }): ResolvedCodeSessionContext | null {
     const explicitSessionId = args.requestedSessionId?.trim();
     if (explicitSessionId) {
@@ -1261,7 +1262,11 @@ export class CodeSessionStore {
     }
 
     const attachment = this.getActiveSurfaceAttachment(args.userId, args.channel, args.surfaceId)
-      ?? this.getSharedAttachment(args.userId, normalizePrincipalId(args.principalId));
+      ?? (
+        args.allowSharedAttachment === false
+          ? null
+          : this.getSharedAttachment(args.userId, normalizePrincipalId(args.principalId))
+      );
     if (!attachment) return null;
 
     if (args.touchAttachment && attachment.active) {

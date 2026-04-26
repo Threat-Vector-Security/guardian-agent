@@ -8532,6 +8532,150 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(messages.at(-1)?.content).toContain('Based on your last answer');
   });
 
+  it('does not inject stale owner continuity into fresh direct-assistant surfaces', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const conversationService = new ConversationService({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-surface-history.test.sqlite',
+      maxTurns: 50,
+      maxMessageChars: 20_000,
+      maxContextChars: 20_000,
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-surface-continuity.test.sqlite',
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-fresh-surface-code-session.test.sqlite',
+    });
+    const staleSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner',
+      title: 'Old Guardian Agent task',
+      workspaceRoot: process.cwd(),
+    });
+    continuityThreadStore.upsert({
+      assistantId: 'chat',
+      userId: 'owner',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      focusSummary: 'Old coding work.',
+      lastActionableRequest: 'Inspect the repo and find the timeline files.',
+      activeExecutionRefs: [
+        {
+          kind: 'execution',
+          id: 'execution:old-timeline-work',
+          label: 'Inspect the repo and find the timeline files.',
+        },
+        {
+          kind: 'code_session',
+          id: staleSession.id,
+        },
+      ],
+    }, nowMs);
+    conversationService.recordTurn(
+      { agentId: 'chat', userId: 'owner', channel: 'web' },
+      'remember marker-1234',
+      'I will remember marker-1234.',
+    );
+    conversationService.recordTurn(
+      {
+        agentId: 'chat',
+        userId: staleSession.conversationUserId,
+        channel: staleSession.conversationChannel,
+      },
+      'Inspect the repo and find the timeline files.',
+      'The stale answer mentioned run-timeline-context.js.',
+    );
+
+    const localChat = vi.fn(async () => ({
+      content: 'prod no context ok',
+      toolCalls: [],
+      model: 'test-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      conversationService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    (agent as any).continuityThreadStore = continuityThreadStore;
+
+    const response = await agent.onMessage!({
+      id: 'msg-fresh-surface-no-continuity',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      content: 'Reply with exactly: prod no context ok',
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'answer',
+          summary: 'Answer the current request directly.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.content).toBe('prod no context ok');
+    expect(localChat).toHaveBeenCalledOnce();
+    const messages = localChat.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    expect(messages.map((entry) => entry.content).join('\n')).not.toContain('marker-1234');
+    expect(messages.map((entry) => entry.content).join('\n')).not.toContain('run-timeline-context.js');
+    expect(messages.at(-1)?.content).toBe('Reply with exactly: prod no context ok');
+  });
+
   it('delegates structured general-assistant follow-ups that need tool synthesis', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

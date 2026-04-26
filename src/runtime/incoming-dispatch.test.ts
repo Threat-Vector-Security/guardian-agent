@@ -197,7 +197,14 @@ describe('createIncomingDispatchPreparer', () => {
             assistantId: 'chat',
             userId: 'web:alex',
           },
-          linkedSurfaces: [],
+          linkedSurfaces: [
+            {
+              channel: 'web',
+              surfaceId: 'config-panel',
+              active: true,
+              lastSeenAt: 1,
+            },
+          ],
           activeExecutionRefs: [
             { kind: 'execution', id: 'execution-1' },
             { kind: 'code_session', id: 'session-1' },
@@ -236,6 +243,100 @@ describe('createIncomingDispatchPreparer', () => {
 
     expect(result.gateway?.decision.turnRelation).toBe('follow_up');
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
+  it('does not inject stale continuity history into fresh unlinked surfaces', async () => {
+    const conversations = {
+      getHistoryForContext: vi.fn(() => [
+        { role: 'user' as const, content: 'remember marker-1234' },
+        { role: 'assistant' as const, content: 'I will remember marker-1234.' },
+      ]),
+      getSessionHistory: vi.fn(() => [
+        {
+          role: 'user' as const,
+          content: 'Inspect the repo and find the timeline files.',
+          timestamp: 1,
+        },
+      ]),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.recentHistory).toEqual([]);
+        expect(input.continuity).toBeNull();
+        return createGatewayRecord({
+          route: 'general_assistant',
+          operation: 'answer',
+          summary: 'Answer the current request only.',
+          turnRelation: 'new_request',
+          executionClass: 'direct_assistant',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      conversations,
+      routingIntentGateway,
+      continuityThreadStore: {
+        get: vi.fn(() => ({
+          continuityKey: 'chat:owner',
+          scope: {
+            assistantId: 'chat',
+            userId: 'owner',
+          },
+          linkedSurfaces: [
+            {
+              channel: 'web',
+              surfaceId: 'web-guardian-chat',
+              active: true,
+              lastSeenAt: 1,
+            },
+          ],
+          activeExecutionRefs: [
+            { kind: 'execution', id: 'old-execution' },
+            { kind: 'code_session', id: 'old-session' },
+          ],
+          focusSummary: 'Old coding work.',
+          lastActionableRequest: 'Inspect the repo and find the timeline files.',
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        })),
+      },
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => null),
+        getSession: vi.fn(() => ({
+          id: 'old-session',
+          ownerUserId: 'owner',
+          ownerPrincipalId: 'owner',
+          conversationUserId: 'code-session:old-session',
+          conversationChannel: 'code-session',
+        })),
+      },
+      summarizeContinuityThreadForGateway: vi.fn((thread) => thread ? ({
+        continuityKey: thread.continuityKey,
+        linkedSurfaceCount: thread.linkedSurfaces.length,
+        activeExecutionRefs: thread.activeExecutionRefs?.map((ref) => `${ref.kind}:${ref.id}`),
+      }) : null),
+      resolveSharedStateAgentId: vi.fn(() => 'chat'),
+      identity: {
+        resolveCanonicalUserId: () => 'owner',
+      },
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Reply with exactly: prod no context ok',
+      userId: 'browser-user-1',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+    });
+
+    expect(result.gateway?.decision.turnRelation).toBe('new_request');
+    expect(conversations.getHistoryForContext).not.toHaveBeenCalled();
+    expect(conversations.getSessionHistory).not.toHaveBeenCalled();
   });
 
   it('keeps gateway metadata for explicit coding sessions even when a channel default agent is configured', async () => {
@@ -698,12 +799,13 @@ describe('createIncomingDispatchPreparer', () => {
         preferredAnswerPath: 'tool_loop',
       })),
     };
+    const resolveForRequest = vi.fn((input: { allowSharedAttachment?: boolean }) => {
+      expect(input.allowSharedAttachment).toBe(false);
+      return null;
+    });
     const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
       codeSessionStore: {
-        resolveForRequest: vi.fn(() => ({
-          session: { agentId: 'external', resolvedRoot: 'S:\\Development\\GuardianAgent' },
-          attachment: { channel: 'web', surfaceId: 'code-panel' },
-        })),
+        resolveForRequest,
         getSession: vi.fn(() => null),
       },
       routingIntentGateway,
@@ -717,6 +819,12 @@ describe('createIncomingDispatchPreparer', () => {
       surfaceId: 'second-brain',
     });
 
+    expect(resolveForRequest).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'web',
+      surfaceId: 'second-brain',
+      touchAttachment: false,
+      allowSharedAttachment: false,
+    }));
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
     expect(result.decision).toEqual({
       agentId: 'local-agent',

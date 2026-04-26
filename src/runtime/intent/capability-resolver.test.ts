@@ -30,6 +30,61 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['scheduled_email_automation', 'automation']);
   });
 
+  it('keeps automation-save plus answer authoring plans on the direct compiler path', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'automation_authoring',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        plannedSteps: [
+          {
+            kind: 'write',
+            summary: 'Create the requested automation.',
+            expectedToolCategories: ['automation_save'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Tell the operator the automation is pending approval.',
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual(['scheduled_email_automation', 'automation']);
+  });
+
+  it('keeps generic content-derived automation steps on the automation compiler path', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'automation_authoring',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read the file when the saved automation runs.',
+            expectedToolCategories: ['read'],
+            required: true,
+          },
+          {
+            kind: 'search',
+            summary: 'Research public presence when the saved automation runs.',
+            expectedToolCategories: ['search'],
+            required: true,
+          },
+          {
+            kind: 'write',
+            summary: 'Write the output when the saved automation runs.',
+            expectedToolCategories: ['write'],
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual(['scheduled_email_automation', 'automation']);
+  });
+
   it('defers cross-domain automation plans to full orchestration', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

@@ -203,6 +203,8 @@ import {
 } from './runtime/pending-actions.js';
 import {
   ContinuityThreadStore,
+  hasContinuityThreadSurfaceLink,
+  shouldUseContinuityThreadForTurn,
   summarizeContinuityThreadForGateway,
   toContinuityThreadClientMetadata,
   type ContinuityThreadContinuationState,
@@ -952,6 +954,13 @@ interface DegradedDirectIntentResponseInput {
           },
         }
       : effectiveMessage;
+    const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
+    const existingContinuityThread = this.getContinuityThread(pendingActionUserId);
+    const surfaceHadContinuityBeforeTurn = hasContinuityThreadSurfaceLink({
+      record: existingContinuityThread,
+      channel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+    });
     let continuityThread = this.touchContinuityThread(
       pendingActionUserId,
       pendingActionChannel,
@@ -968,20 +977,48 @@ interface DegradedDirectIntentResponseInput {
       content: stripLeadingContextPrefix(effectiveMessage.content),
       codeSessionId: effectiveCodeContext?.sessionId,
     });
-    const continuitySummaryForHistory = summarizeContinuityThreadForGateway(continuityThread);
-    const priorHistory = buildContinuityAwareHistory({
-      conversationService: this.conversationService,
-      codeSessionStore: this.codeSessionStore,
-      continuityThread,
-      currentConversationKey: conversationKey,
-      currentUserId: pendingActionUserId,
-      currentPrincipalId: effectiveMessage.principalId,
-      resolvedCodeSession: resolvedCodeSession?.session ?? null,
-      query: buildIntentGatewayHistoryQuery({
-        content: stripLeadingContextPrefix(scopedMessage.content),
-        continuity: continuitySummaryForHistory,
-      }),
-    }).history;
+    const shouldUseContinuityForGateway = (gateway?: IntentGatewayRecord | null): boolean => (
+      shouldUseContinuityThreadForTurn({
+        record: continuityThread,
+        surfaceHadContinuityBeforeTurn,
+        hasPendingAction: !!pendingAction,
+        hasResolvedCodeSession: !!resolvedCodeSession?.session || !!effectiveCodeContext?.sessionId,
+        turnRelation: gateway?.decision.turnRelation,
+      })
+    );
+    let continuityThreadForContext: ContinuityThreadRecord | null = shouldUseContinuityForGateway()
+      ? continuityThread
+      : null;
+    const buildPriorHistory = (thread: ContinuityThreadRecord | null): Array<{ role: 'user' | 'assistant'; content: string }> => {
+      if (continuityThread && !thread) {
+        return [];
+      }
+      const continuitySummaryForHistory = summarizeContinuityThreadForGateway(thread);
+      return buildContinuityAwareHistory({
+        conversationService: this.conversationService,
+        codeSessionStore: this.codeSessionStore,
+        continuityThread: thread,
+        currentConversationKey: conversationKey,
+        currentUserId: pendingActionUserId,
+        currentPrincipalId: effectiveMessage.principalId,
+        resolvedCodeSession: resolvedCodeSession?.session ?? null,
+        query: buildIntentGatewayHistoryQuery({
+          content: stripLeadingContextPrefix(scopedMessage.content),
+          continuity: continuitySummaryForHistory,
+        }),
+      }).history;
+    };
+    let priorHistory = buildPriorHistory(continuityThreadForContext);
+    const refreshContinuityContextForGateway = (gateway?: IntentGatewayRecord | null): void => {
+      const nextContinuityThreadForContext = shouldUseContinuityForGateway(gateway)
+        ? continuityThread
+        : null;
+      if (nextContinuityThreadForContext === continuityThreadForContext) {
+        return;
+      }
+      continuityThreadForContext = nextContinuityThreadForContext;
+      priorHistory = buildPriorHistory(continuityThreadForContext);
+    };
     const buildScopedDirectIntentResponse = (input: Omit<DirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>) => this.buildDirectIntentResponse({
       ...input,
       surfaceUserId: pendingActionUserId,
@@ -1126,12 +1163,12 @@ interface DegradedDirectIntentResponseInput {
           stripLeadingContextPrefix(groundedScopedMessage.content),
         ) ?? preRoutedGateway
       : null;
-    const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
+    refreshContinuityContextForGateway(earlyGateway);
     let activeExecution = this.getActiveExecution({
       userId: pendingActionUserId,
       channel: pendingActionChannel,
       surfaceId: pendingActionSurfaceId,
-      continuityThread,
+      continuityThread: continuityThreadForContext,
       pendingAction,
       excludeExecutionId: executionIdentity.executionId,
     });
@@ -1167,7 +1204,7 @@ interface DegradedDirectIntentResponseInput {
       ? null
       : this.resolveRetryAfterFailureContinuationContent(
           groundedScopedMessage.content,
-          continuityThread,
+          continuityThreadForContext,
           activeExecution,
         );
     let routedScopedMessage = resolvedPendingActionContinuation
@@ -1197,12 +1234,13 @@ interface DegradedDirectIntentResponseInput {
       earlyGateway = earlyGateway ?? await this.classifyIntentGateway(routedScopedMessage, ctx, {
         recentHistory: priorHistory,
         pendingAction,
-        continuityThread,
+        continuityThread: continuityThreadForContext,
       });
+      refreshContinuityContextForGateway(earlyGateway);
       trackResolvedSkillsIfChanged(resolveSkillsForCurrentContext({
         gateway: earlyGateway,
         pendingAction,
-        continuityThread,
+        continuityThread: continuityThreadForContext,
         priorActiveSkills: preResolvedSkills,
       }));
       activeExecution = this.updateExecutionFromIntent({
@@ -1225,6 +1263,7 @@ interface DegradedDirectIntentResponseInput {
         routingContent: routedScopedMessage.content,
         codeSessionId: effectiveCodeContext?.sessionId,
       });
+      refreshContinuityContextForGateway(earlyGateway);
       const pendingActionSwitchDecision = await tryHandlePendingActionSwitchDecisionHelper({
         message,
         pendingAction,
@@ -1346,7 +1385,7 @@ interface DegradedDirectIntentResponseInput {
         currentContent: groundedScopedMessage.content,
         pendingAction,
         priorHistory,
-        continuityThread,
+        continuityThread: continuityThreadForContext,
         activeExecution,
       });
       if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
@@ -1375,6 +1414,7 @@ interface DegradedDirectIntentResponseInput {
         routingContent: routedScopedMessage.content,
         codeSessionId: effectiveCodeContext?.sessionId,
       });
+      refreshContinuityContextForGateway(earlyGateway);
       if (pendingAction && shouldClearPendingActionAfterTurnHelper(earlyGateway?.decision, pendingAction)) {
         this.completePendingAction(pendingAction.id);
       }
@@ -1515,7 +1555,7 @@ interface DegradedDirectIntentResponseInput {
       : undefined;
     const knowledgeBaseQuery = this.buildKnowledgeBaseContextQuery({
       messageContent: routedScopedMessage.content,
-      continuityThread,
+      continuityThread: continuityThreadForContext,
       pendingAction,
       resolvedCodeSession,
     });
@@ -1574,7 +1614,7 @@ interface DegradedDirectIntentResponseInput {
       runtimeNotices,
       pendingAction: this.buildPendingActionPromptContext(pendingAction),
       pendingApprovalNotice,
-      continuity: summarizeContinuityThreadForGateway(continuityThread),
+      continuity: summarizeContinuityThreadForGateway(continuityThreadForContext),
       ...(executionProfile ? { executionProfile } : {}),
       additionalSections,
     });
@@ -1599,7 +1639,7 @@ interface DegradedDirectIntentResponseInput {
       activeSkillCount: input.runtimeSkills.length,
       ...(input.skillPromptMaterial ? { skillPromptSelection: input.skillPromptMaterial.metadata } : {}),
       pendingAction,
-      continuityThread,
+      continuityThread: continuityThreadForContext,
       codeSessionId: input.codeSessionId,
       executionProfile: input.executionProfile ?? undefined,
       sectionFootprints: buildSectionFootprints(
@@ -1618,7 +1658,7 @@ interface DegradedDirectIntentResponseInput {
     });
     const buildPreservedExecutionState = () => buildPromptAssemblyPreservedExecutionState({
       pendingAction: this.buildPendingActionPromptContext(pendingAction),
-      continuity: summarizeContinuityThreadForGateway(continuityThread),
+      continuity: summarizeContinuityThreadForGateway(continuityThreadForContext),
       maintainedSummarySource,
     });
     const buildCompactionContext = (compaction?: ContextCompactionResult) => (
@@ -1671,7 +1711,7 @@ interface DegradedDirectIntentResponseInput {
       runtimeNotices,
       pendingAction,
       pendingApprovalNotice,
-      continuityThread,
+      continuityThread: continuityThreadForContext,
       additionalSections: promptAdditionalSections,
       executionProfile: selectedExecutionProfile ?? undefined,
     });
@@ -1705,7 +1745,7 @@ interface DegradedDirectIntentResponseInput {
           pendingActionChannel,
           pendingActionSurfaceId,
         ),
-        continuityThread,
+        continuityThread: continuityThreadForContext,
       }))
       : null;
     const directRuntimeDeps: DirectRuntimeDepsInput = {
@@ -1750,7 +1790,7 @@ interface DegradedDirectIntentResponseInput {
       stateAgentId,
       decision: directIntent?.decision,
       codeContext: effectiveCodeContext,
-      continuityThread,
+      continuityThread: continuityThreadForContext,
       llmMessages,
       fallbackProviderOrder,
       defaultToolResultProviderKind,
@@ -1987,7 +2027,7 @@ interface DegradedDirectIntentResponseInput {
           compaction: latestContextCompaction,
           executionProfile: workerExecutionProfile,
         });
-        const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
+        const continuitySummary = summarizeContinuityThreadForGateway(continuityThreadForContext);
         // Attach codeContext to the message metadata so the worker can forward it
         // through the broker to the tool executor for auto-approve decisions.
         const workerMetadata = attachPreRoutedIntentGatewayMetadata(

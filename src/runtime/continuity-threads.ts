@@ -247,6 +247,40 @@ function dedupeExecutionRefs(refs: ContinuityThreadExecutionRef[]): ContinuityTh
   return [...seen.values()];
 }
 
+export function hasContinuityThreadSurfaceLink(input: {
+  record: ContinuityThreadRecord | null | undefined;
+  channel?: string;
+  surfaceId?: string;
+}): boolean {
+  const channel = input.channel?.trim();
+  const surfaceId = input.surfaceId?.trim();
+  if (!input.record || !channel || !surfaceId) {
+    return false;
+  }
+  return input.record.linkedSurfaces.some((link) => (
+    link.active !== false
+    && link.channel === channel
+    && link.surfaceId === surfaceId
+  ));
+}
+
+export function shouldUseContinuityThreadForTurn(input: {
+  record: ContinuityThreadRecord | null | undefined;
+  surfaceHadContinuityBeforeTurn?: boolean;
+  hasPendingAction?: boolean;
+  hasResolvedCodeSession?: boolean;
+  turnRelation?: string | null;
+}): boolean {
+  if (!input.record) {
+    return false;
+  }
+  if (input.surfaceHadContinuityBeforeTurn || input.hasPendingAction || input.hasResolvedCodeSession) {
+    return true;
+  }
+  const turnRelation = input.turnRelation?.trim();
+  return !!turnRelation && turnRelation !== 'new_request';
+}
+
 export function summarizeContinuityThreadForGateway(
   record: ContinuityThreadRecord | null | undefined,
 ): {
