@@ -328,6 +328,12 @@ Checkpoint after the live tool-loop controller extraction:
 - The old inline response-source metadata builder, direct-answer recovery wrapper, and live-loop retry/correction prompt policies were removed from `src/chat-agent.ts`; the controller now owns that runtime metadata and correction policy for live model execution.
 - Remaining controller debt: `src/chat-agent.ts` still owns direct-route candidate dispatch, gateway repair, and many capability-specific dependency-wiring methods. The next extraction should target shared direct-route orchestration or graph-controller ownership, not another per-capability resume shim.
 
+Checkpoint after the direct provider/web-search runtime extraction:
+
+- Direct provider inventory/model reads now live in `src/runtime/chat-agent/direct-provider-read.ts` with focused coverage; `src/chat-agent.ts` no longer owns provider inventory target matching or formatting.
+- Direct web-search execution, search-result formatting, sanitization, and optional LLM summarization now live in `src/runtime/chat-agent/direct-web-search.ts` with focused coverage; `src/chat-agent.ts` only wires the direct candidate handler.
+- Remaining direct-route debt: direct candidate dispatch is still assembled inside `src/chat-agent.ts`, and larger direct runtimes still depend on ChatAgent-owned dependency builders. The next cleanup should move direct-route orchestration/wiring behind a shared runtime boundary.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
