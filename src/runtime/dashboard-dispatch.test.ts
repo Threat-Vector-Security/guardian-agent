@@ -423,4 +423,47 @@ describe('createDashboardMessageDispatcher', () => {
       tier: 'external',
     });
   });
+
+  it('does not label direct responses with the selected execution profile as response source', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-coding'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder-next',
+      credentialRef: 'llm.ollama-cloud-coding',
+    };
+    const options = createOptions({
+      configRef: { current: config },
+      runtime: {
+        dispatchMessage: vi.fn(async () => ({
+          content: 'There are no pending approvals.',
+          metadata: {
+            pendingActionStatus: 'none',
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    const result = await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'pending approvals?',
+        userId: 'web-user',
+        channel: 'web',
+        metadata: attachSelectedExecutionProfileMetadata(undefined, createSelectedExecutionProfile()),
+      },
+      routeDecision: {
+        agentId: 'external-agent',
+        confidence: 'high',
+        reason: 'tier route',
+        tier: 'external',
+      },
+    });
+
+    expect(result.content).toBe('There are no pending approvals.');
+    expect(result.metadata).toMatchObject({
+      pendingActionStatus: 'none',
+    });
+    expect(result.metadata?.responseSource).toBeUndefined();
+  });
 });

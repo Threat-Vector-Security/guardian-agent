@@ -197,6 +197,12 @@ Checkpoint after the pending-approval status helper extraction:
 - Broad status matching was narrowed so repo-inspection prompts such as `Which files implement pending approvals?` are not consumed by approval-status handling.
 - Focused coverage now exists at `src/runtime/chat-agent/pending-approval-status.test.ts`, with the existing chat-agent regression proving exact status queries bypass pre-routed coding-task continuity.
 
+Checkpoint after the dashboard response-source cleanup:
+
+- Dashboard dispatch no longer fabricates `responseSource` metadata from the selected execution profile when the runtime response did not report an actual model/provider source.
+- Selected execution profile metadata still enriches real model response-source records, for example when the runtime returns only `locality`.
+- Direct/control-plane responses such as pending-approval status now stream without false managed-cloud provider attribution, keeping provider trace nodes tied to actual provider calls.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
