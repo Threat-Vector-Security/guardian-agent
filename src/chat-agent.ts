@@ -28,9 +28,6 @@ import {
   looksLikeOngoingWorkResponse as _looksLikeOngoingWorkResponse,
 } from './util/assistant-response-shape.js';
 import {
-  isAnswerFirstSkillResponseSufficient as isAnswerFirstSkillResponseSufficientForSkills,
-} from './util/answer-first-skills.js';
-import {
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
 import type { ConversationKey } from './runtime/conversation.js';
@@ -916,14 +913,6 @@ type DirectIntentShadowCandidate =
     }
 
     return contexts;
-  }
-
-  private isAnswerFirstSkillResponseSufficient(
-    skills: readonly ResolvedSkill[],
-    content: string,
-    originalRequest?: string,
-  ): boolean {
-    return isAnswerFirstSkillResponseSufficientForSkills(skills, content, originalRequest);
   }
 
   private shouldHandleDirectAssistantInline(input: {
@@ -2398,23 +2387,6 @@ type DirectIntentShadowCandidate =
         providerOrder,
       ),
       resolveToolResultProviderKind: (nextCtx, provider) => this.resolveToolResultProviderKind(nextCtx, provider),
-      isAnswerFirstSkillResponseSufficient: (skills, content, originalRequest) => this.isAnswerFirstSkillResponseSufficient(
-        skills,
-        content,
-        originalRequest,
-      ),
-      shouldRetryPolicyUpdateCorrection: (messages, content, toolDefs) => this.shouldRetryPolicyUpdateCorrection(
-        messages,
-        content,
-        toolDefs,
-      ),
-      buildPolicyUpdateCorrectionPrompt: () => this.buildPolicyUpdateCorrectionPrompt(),
-      buildExplicitMemorySaveCorrectionPrompt: (requestContent) => this.buildExplicitMemorySaveCorrectionPrompt(requestContent),
-      shouldRetryTerminalResultCorrection: (content, correctionContext) => this.shouldRetryTerminalResultCorrection(
-        content,
-        correctionContext,
-      ),
-      buildTerminalResultCorrectionPrompt: () => this.buildTerminalResultCorrectionPrompt(),
       sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
         toolName,
         result,
@@ -3654,82 +3626,6 @@ type DirectIntentShadowCandidate =
 
   private looksLikeOngoingWorkResponse(content: string | undefined): boolean {
     return _looksLikeOngoingWorkResponse(content);
-  }
-
-  private shouldRetryTerminalResultCorrection(
-    content: string,
-    context: {
-      hasToolResults: boolean;
-      hasAnswerFirstContract: boolean;
-      hasToolExecutionContract: boolean;
-    },
-  ): boolean {
-    if (!this.looksLikeOngoingWorkResponse(content)) {
-      return false;
-    }
-    return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
-  }
-
-  private buildTerminalResultCorrectionPrompt(): string {
-    return [
-      'System correction: your previous reply narrated ongoing work instead of delivering a terminal result.',
-      'Continue the same request now.',
-      'If more tool calls are required, call them now instead of narrating what you will do next.',
-      'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
-      'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
-    ].join(' ');
-  }
-
-  private shouldRetryPolicyUpdateCorrection(
-    messages: ChatMessage[],
-    content: string | undefined,
-    toolDefs: Array<{ name: string }>,
-  ): boolean {
-    const lower = content?.trim().toLowerCase();
-    if (!lower) return false;
-    if (!toolDefs.some((tool) => tool.name === 'update_tool_policy')) return false;
-
-    const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.content.toLowerCase() ?? '';
-    const claimsToolMissing = lower.includes('update_tool_policy') && (
-      lower.includes('not available')
-      || lower.includes('unavailable')
-      || lower.includes('no such tool')
-      || lower.includes('no equivalent tool')
-      || lower.includes('search returned no results')
-      || lower.includes('search returned no matches')
-    );
-    const pushesManualConfig = lower.includes('manually add')
-      || lower.includes('manually update')
-      || lower.includes('edit the configuration file')
-      || lower.includes('update your guardian agent config')
-      || lower.includes('you will need to manually')
-      || lower.includes('i can, however, save it to')
-      || lower.includes('i can however save it to')
-      || lower.includes('instead save it to');
-    const asksForPolicyConfirmation = /\b(?:if you(?:['’]d)? like me to add|would you like me to add|please confirm(?: that)? you want me to add|i can request that approval now|we need policy approval to add)\b/.test(lower);
-    const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains|outside allowed paths|outside the authorized workspace root|outside the authorized workspace)/.test(`${latestUser}\n${lower}`);
-
-    return isPolicyScoped && (claimsToolMissing || pushesManualConfig || asksForPolicyConfirmation);
-  }
-
-  private buildPolicyUpdateCorrectionPrompt(): string {
-    return [
-      'System correction: update_tool_policy is available in your current tool list.',
-      'Do not tell the user to edit config manually for allowlist changes.',
-      'If the block is a filesystem path, call update_tool_policy with action "add_path".',
-      'If the block is a hostname/domain, call update_tool_policy with action "add_domain" using the normalized hostname only.',
-      'If the block is a command prefix, call update_tool_policy with action "add_command".',
-      'Use the tool now if policy is the blocker.',
-    ].join(' ');
-  }
-
-  private buildExplicitMemorySaveCorrectionPrompt(requestContent: string): string {
-    return [
-      'System correction: the user already made an explicit remember/save request.',
-      'Do not ask for confirmation or ask the user to restate it.',
-      'Call memory_save now using the requested scope if one was specified.',
-      `Original request: ${requestContent.trim()}`,
-    ].join(' ');
   }
 
   private resolveToolResultProviderKind(

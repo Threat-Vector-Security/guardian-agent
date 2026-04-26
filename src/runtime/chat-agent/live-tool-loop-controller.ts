@@ -19,8 +19,12 @@ import { isDirectMemorySaveRequest } from '../../util/memory-intent.js';
 import {
   buildAnswerFirstSkillCorrectionPrompt,
   buildAnswerFirstSkillFallbackResponse,
+  isAnswerFirstSkillResponseSufficient as isAnswerFirstSkillResponseSufficientForSkills,
   shouldUseAnswerFirstForSkills,
 } from '../../util/answer-first-skills.js';
+import {
+  looksLikeOngoingWorkResponse as looksLikeOngoingWorkResponseShape,
+} from '../../util/assistant-response-shape.js';
 import type { ContextCompactionResult } from '../../util/context-budget.js';
 import { withTaintedContentSystemPrompt } from '../../util/tainted-content.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
@@ -96,27 +100,6 @@ export interface LiveToolLoopControllerInput {
     fallbackProviderOrder?: string[],
   ) => Promise<ChatWithRoutingMetadataResult>;
   resolveToolResultProviderKind: (ctx: AgentContext, overrideProvider?: LLMProvider) => 'local' | 'external';
-  isAnswerFirstSkillResponseSufficient: (
-    skills: readonly ResolvedSkill[],
-    content: string,
-    originalRequest?: string,
-  ) => boolean;
-  shouldRetryPolicyUpdateCorrection: (
-    messages: ChatMessage[],
-    content: string | undefined,
-    toolDefs: Array<{ name: string }>,
-  ) => boolean;
-  buildPolicyUpdateCorrectionPrompt: () => string;
-  buildExplicitMemorySaveCorrectionPrompt: (requestContent: string) => string;
-  shouldRetryTerminalResultCorrection: (
-    content: string,
-    context: {
-      hasToolResults: boolean;
-      hasAnswerFirstContract: boolean;
-      hasToolExecutionContract: boolean;
-    },
-  ) => boolean;
-  buildTerminalResultCorrectionPrompt: () => string;
   sanitizeToolResultForLlm: (
     toolName: string,
     result: unknown,
@@ -379,7 +362,7 @@ export async function runLiveToolLoopController(
         const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
         if (
           answerFirstContent
-          && input.isAnswerFirstSkillResponseSufficient(input.activeSkills, answerFirstContent, answerFirstOriginalRequest)
+          && isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, answerFirstContent, answerFirstOriginalRequest)
           && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
         ) {
           finalContent = answerFirstContent;
@@ -411,14 +394,14 @@ export async function runLiveToolLoopController(
       finalContent = response.content;
       if (
         !forcedPolicyRetryUsed
-        && input.shouldRetryPolicyUpdateCorrection(input.llmMessages, finalContent, llmToolDefs)
+        && shouldRetryPolicyUpdateCorrection(input.llmMessages, finalContent, llmToolDefs)
       ) {
         forcedPolicyRetryUsed = true;
         response = await chatFn(
           [
             ...plannerMessages,
             { role: 'assistant', content: response.content ?? '' },
-            { role: 'user', content: input.buildPolicyUpdateCorrectionPrompt() },
+            { role: 'user', content: buildPolicyUpdateCorrectionPrompt() },
           ],
           { tools: llmToolDefs },
         );
@@ -433,7 +416,7 @@ export async function runLiveToolLoopController(
           [
             ...plannerMessages,
             { role: 'assistant', content: response.content ?? '' },
-            { role: 'user', content: input.buildExplicitMemorySaveCorrectionPrompt(input.requestIntentContent) },
+            { role: 'user', content: buildExplicitMemorySaveCorrectionPrompt(input.requestIntentContent) },
           ],
           { tools: llmToolDefs },
         );
@@ -449,7 +432,7 @@ export async function runLiveToolLoopController(
         forcedSkillShapeRetryCount < 2
         && (!response.toolCalls || response.toolCalls.length === 0)
         && answerFirstCorrectionPrompt
-        && !input.isAnswerFirstSkillResponseSufficient(input.activeSkills, response.content ?? '', answerFirstOriginalRequest)
+        && !isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, response.content ?? '', answerFirstOriginalRequest)
       ) {
         forcedSkillShapeRetryCount += 1;
         response = await chatFn(
@@ -472,7 +455,7 @@ export async function runLiveToolLoopController(
         !forcedSkillGroundingUsed
         && (!response.toolCalls || response.toolCalls.length === 0)
         && shouldPreferAnswerFirst
-        && !input.isAnswerFirstSkillResponseSufficient(input.activeSkills, response.content ?? '', answerFirstOriginalRequest)
+        && !isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, response.content ?? '', answerFirstOriginalRequest)
         && llmToolDefs.some((definition) => definition.name === 'fs_read')
       ) {
         const skillSourcePaths = [...new Set(
@@ -548,7 +531,7 @@ export async function runLiveToolLoopController(
       if (
         forcedIntermediateStatusRetryCount < 2
         && (!response.toolCalls || response.toolCalls.length === 0)
-        && input.shouldRetryTerminalResultCorrection(response.content ?? '', {
+        && shouldRetryTerminalResultCorrection(response.content ?? '', {
           hasToolResults: lastToolRoundResults.length > 0,
           hasAnswerFirstContract: !!answerFirstCorrectionPrompt,
           hasToolExecutionContract: false,
@@ -559,7 +542,7 @@ export async function runLiveToolLoopController(
           [
             ...plannerMessages,
             { role: 'assistant', content: response.content ?? '' },
-            { role: 'user', content: input.buildTerminalResultCorrectionPrompt() },
+            { role: 'user', content: buildTerminalResultCorrectionPrompt() },
           ],
           { tools: llmToolDefs },
         );
@@ -757,7 +740,7 @@ export async function runLiveToolLoopController(
         || input.looksLikeOngoingWorkResponse(finalContent)
         || (
           !!answerFirstFallbackResponse
-          && !input.isAnswerFirstSkillResponseSufficient(input.activeSkills, finalContent ?? '', answerFirstOriginalRequest)
+          && !isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, finalContent ?? '', answerFirstOriginalRequest)
         )
       )
       && lastToolRoundResults.length > 0
@@ -940,7 +923,7 @@ export async function runLiveToolLoopController(
     if (
       answerFirstFallbackResponse
       && (
-        !input.isAnswerFirstSkillResponseSufficient(input.activeSkills, finalContent ?? '', answerFirstOriginalRequest)
+        !isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, finalContent ?? '', answerFirstOriginalRequest)
         || input.looksLikeOngoingWorkResponse(finalContent)
       )
     ) {
@@ -1004,4 +987,80 @@ function recoverResponseToolCalls(response: ChatResponse, llmToolDefs: LlmToolDe
     toolCalls: recoveredToolCalls.toolCalls,
     finishReason: 'tool_calls',
   };
+}
+
+function shouldRetryTerminalResultCorrection(
+  content: string,
+  context: {
+    hasToolResults: boolean;
+    hasAnswerFirstContract: boolean;
+    hasToolExecutionContract: boolean;
+  },
+): boolean {
+  if (!looksLikeOngoingWorkResponseShape(content)) {
+    return false;
+  }
+  return context.hasToolResults || context.hasAnswerFirstContract || context.hasToolExecutionContract;
+}
+
+function buildTerminalResultCorrectionPrompt(): string {
+  return [
+    'System correction: your previous reply narrated ongoing work instead of delivering a terminal result.',
+    'Continue the same request now.',
+    'If more tool calls are required, call them now instead of narrating what you will do next.',
+    'If the work is already complete, answer with the actual result, exact outputs, and any requested verification.',
+    'Do not stop at phrases like "I\'ll inspect", "Let me", or "Now I\'ll".',
+  ].join(' ');
+}
+
+function shouldRetryPolicyUpdateCorrection(
+  messages: ChatMessage[],
+  content: string | undefined,
+  toolDefs: Array<{ name: string }>,
+): boolean {
+  const lower = content?.trim().toLowerCase();
+  if (!lower) return false;
+  if (!toolDefs.some((tool) => tool.name === 'update_tool_policy')) return false;
+
+  const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.content.toLowerCase() ?? '';
+  const claimsToolMissing = lower.includes('update_tool_policy') && (
+    lower.includes('not available')
+    || lower.includes('unavailable')
+    || lower.includes('no such tool')
+    || lower.includes('no equivalent tool')
+    || lower.includes('search returned no results')
+    || lower.includes('search returned no matches')
+  );
+  const pushesManualConfig = lower.includes('manually add')
+    || lower.includes('manually update')
+    || lower.includes('edit the configuration file')
+    || lower.includes('update your guardian agent config')
+    || lower.includes('you will need to manually')
+    || lower.includes('i can, however, save it to')
+    || lower.includes('i can however save it to')
+    || lower.includes('instead save it to');
+  const asksForPolicyConfirmation = /\b(?:if you(?:['’]d)? like me to add|would you like me to add|please confirm(?: that)? you want me to add|i can request that approval now|we need policy approval to add)\b/.test(lower);
+  const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains|outside allowed paths|outside the authorized workspace root|outside the authorized workspace)/.test(`${latestUser}\n${lower}`);
+
+  return isPolicyScoped && (claimsToolMissing || pushesManualConfig || asksForPolicyConfirmation);
+}
+
+function buildPolicyUpdateCorrectionPrompt(): string {
+  return [
+    'System correction: update_tool_policy is available in your current tool list.',
+    'Do not tell the user to edit config manually for allowlist changes.',
+    'If the block is a filesystem path, call update_tool_policy with action "add_path".',
+    'If the block is a hostname/domain, call update_tool_policy with action "add_domain" using the normalized hostname only.',
+    'If the block is a command prefix, call update_tool_policy with action "add_command".',
+    'Use the tool now if policy is the blocker.',
+  ].join(' ');
+}
+
+function buildExplicitMemorySaveCorrectionPrompt(requestContent: string): string {
+  return [
+    'System correction: the user already made an explicit remember/save request.',
+    'Do not ask for confirmation or ask the user to restate it.',
+    'Call memory_save now using the requested scope if one was specified.',
+    `Original request: ${requestContent.trim()}`,
+  ].join(' ');
 }
