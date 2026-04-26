@@ -6763,51 +6763,25 @@ describe('LLMChatAgent direct intent metadata', () => {
         error: vi.fn(),
       } as never,
     });
-    const agent = new ChatAgent('chat', 'Chat');
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-coding-backend-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'web-guardian-chat',
-      },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve the Codex run.',
-        approvalIds: ['approval-coding-backend-1'],
-      },
-      intent: {
-        route: 'coding_task',
-        operation: 'inspect',
-        originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json.',
-      },
-      resume: {
-        kind: 'direct_route',
-        payload: {
-          type: 'coding_backend_run',
-          task: 'Use Codex in this coding workspace to inspect README.md and package.json.',
-          backendId: 'codex',
-          codeSessionId: 'session-coding-backend-1',
-          workspaceRoot: '/repo',
-        },
-      },
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
-
-    const result = await (agent as any).continueDirectRouteAfterApproval(
-      pendingAction,
-      'approval-coding-backend-1',
-      'approved',
-      {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      decideApproval: vi.fn(async () => ({
         success: true,
         approved: true,
         executionSucceeded: true,
         message: "Tool 'coding_backend_run' completed.",
+        job: {
+          id: 'job-coding-backend-1',
+          toolName: 'coding_backend_run',
+          risk: 'mutating',
+          origin: 'assistant',
+          codeSessionId: 'session-coding-backend-1',
+          argsPreview: '{"backend":"codex"}',
+          argsRedacted: { backend: 'codex' },
+          status: 'succeeded',
+          createdAt: 1,
+          requiresApproval: true,
+        },
         result: {
           success: true,
           status: 'succeeded',
@@ -6821,6 +6795,77 @@ describe('LLMChatAgent direct intent metadata', () => {
             durationMs: 1250,
           },
         },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      listPendingApprovalIdsForUser: vi.fn(() => ['approval-coding-backend-1']),
+    };
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-coding-backend-approval-result.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      pendingActionStore,
+    );
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the Codex run.',
+        approvalIds: ['approval-coding-backend-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Codex in this coding workspace to inspect README.md and package.json.',
+      },
+      codeSessionId: 'session-coding-backend-1',
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const result = await (agent as any).tryHandleApproval(
+      {
+        id: 'msg-approve-coding-backend-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        content: 'yes',
+        timestamp: Date.now(),
+      },
+      {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
       },
     );
 
@@ -6849,51 +6894,25 @@ describe('LLMChatAgent direct intent metadata', () => {
         error: vi.fn(),
       } as never,
     });
-    const agent = new ChatAgent('chat', 'Chat');
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-coding-backend-failure-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'web-guardian-chat',
-      },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve the Claude Code run.',
-        approvalIds: ['approval-coding-backend-failure-1'],
-      },
-      intent: {
-        route: 'coding_task',
-        operation: 'inspect',
-        originalUserContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json.',
-      },
-      resume: {
-        kind: 'direct_route',
-        payload: {
-          type: 'coding_backend_run',
-          task: 'Use Claude Code in this coding workspace to inspect README.md and package.json.',
-          backendId: 'claude-code',
-          codeSessionId: 'session-coding-backend-failure-1',
-          workspaceRoot: '/repo',
-        },
-      },
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
-
-    const result = await (agent as any).continueDirectRouteAfterApproval(
-      pendingAction,
-      'approval-coding-backend-failure-1',
-      'approved',
-      {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      decideApproval: vi.fn(async () => ({
         success: true,
         approved: true,
         executionSucceeded: false,
         message: "Approval received for 'coding_backend_run', but execution failed: Claude Code could not complete the requested task.",
+        job: {
+          id: 'job-coding-backend-failure-1',
+          toolName: 'coding_backend_run',
+          risk: 'mutating',
+          origin: 'assistant',
+          codeSessionId: 'session-coding-backend-failure-1',
+          argsPreview: '{"backend":"claude-code"}',
+          argsRedacted: { backend: 'claude-code' },
+          status: 'failed',
+          createdAt: 1,
+          requiresApproval: true,
+        },
         result: {
           success: false,
           status: 'failed',
@@ -6908,6 +6927,77 @@ describe('LLMChatAgent direct intent metadata', () => {
             durationMs: 875,
           },
         },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      listPendingApprovalIdsForUser: vi.fn(() => ['approval-coding-backend-failure-1']),
+    };
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-coding-backend-approval-failure-result.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      pendingActionStore,
+    );
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the Claude Code run.',
+        approvalIds: ['approval-coding-backend-failure-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'inspect',
+        originalUserContent: 'Use Claude Code in this coding workspace to inspect README.md and package.json.',
+      },
+      codeSessionId: 'session-coding-backend-failure-1',
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const result = await (agent as any).tryHandleApproval(
+      {
+        id: 'msg-approve-coding-backend-failure-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        content: 'yes',
+        timestamp: Date.now(),
+      },
+      {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
       },
     );
 

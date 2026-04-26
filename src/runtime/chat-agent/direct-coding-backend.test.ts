@@ -285,17 +285,8 @@ describe('direct coding backend delegation', () => {
       originalUserContent: 'Ask Codex to make the architecture change.',
       route: 'coding_task',
       codeSessionId: 'code-1',
-      resume: {
-        kind: 'direct_route',
-        payload: {
-          type: 'coding_backend_run',
-          task: 'Ask Codex to make the architecture change.',
-          backendId: 'codex',
-          codeSessionId: 'code-1',
-          workspaceRoot: 'S:/Development/GuardianAgent',
-        },
-      },
     });
+    expect(capturedPendingActionInput?.resume).toBeUndefined();
     expect(response?.metadata?.pendingAction).toMatchObject({
       id: 'pending-1',
       blocker: {

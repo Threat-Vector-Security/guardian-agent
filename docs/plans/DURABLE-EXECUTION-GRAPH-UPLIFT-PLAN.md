@@ -191,18 +191,19 @@ Checkpoint after the tool-loop resume helper extraction:
 - `src/chat-agent.ts` still owns the live tool-loop orchestration path, but it no longer hand-builds `tool_loop` pending-action payloads. Future graph-interrupt migration can replace one helper contract instead of two partial builders.
 - Remaining tool-loop debt after this slice: `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts, and the live tool execution loop still needs further extraction out of the monolithic chat agent.
 
-Checkpoint after the coding-backend direct-route resume extraction:
+Checkpoint after the coding-backend direct-route resume deletion:
 
-- `coding_backend_run` pending-action resume construction and approved/denied resume result formatting moved from `src/chat-agent.ts` into `src/runtime/chat-agent/coding-backend-resume.ts`.
-- `src/chat-agent.ts` still dispatches the direct coding backend request and stores the pending approval, but it no longer owns the stored direct-route resume payload shape or approval-result normalization.
-- Remaining direct-route debt after this slice: `coding_backend_run`, filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+- `coding_backend_run` approvals no longer store a `direct_route` resume payload. The approval decision result already carries the backend execution output, so shared approval orchestration now renders that result directly.
+- `src/runtime/chat-agent/coding-backend-approval-result.ts` owns coding-backend approval-result response metadata without reconstructing a replay request.
+- The deleted `coding-backend-resume.ts` bridge removes one direct-route payload type from `direct-route-resume.ts` and `direct-route-runtime.ts`.
+- Remaining direct-route debt after this slice: filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
 Checkpoint after the direct coding-backend runtime extraction:
 
 - Direct coding-backend status checks, direct backend run dispatch, pending-approval storage, and routing trace emission moved from `src/chat-agent.ts` into `src/runtime/chat-agent/direct-coding-backend.ts`.
 - `src/chat-agent.ts` now only wires dependencies for that path, which gives the future graph-interrupt migration one direct coding-backend owner instead of another inline monolith branch.
 - Focused coverage at `src/runtime/chat-agent/direct-coding-backend.test.ts` verifies successful direct runs, recent-run status formatting, and the current shared pending-action resume contract.
-- Remaining direct-route debt after this slice is unchanged: `coding_backend_run`, filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+- Remaining direct-route debt after this slice: filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
 Checkpoint after the pending-approval status helper extraction:
 

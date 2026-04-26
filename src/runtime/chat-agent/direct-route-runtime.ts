@@ -25,10 +25,8 @@ import {
   normalizeFilesystemResumePrincipalRole,
   readFilesystemSaveOutputResumePayload,
   readSecondBrainMutationResumePayload,
-  readCodingBackendRunResumePayload,
   readAutomationAuthoringResumePayload,
   type SecondBrainMutationResumePayload,
-  type CodingBackendRunResumePayload,
   type AutomationAuthoringResumePayload,
 } from './direct-route-resume.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
@@ -280,11 +278,6 @@ export async function resumeStoredDirectRoutePendingAction(input: {
     resume: SecondBrainMutationResumePayload,
     approvalResult?: ToolApprovalDecisionResult,
   ) => Promise<DirectRouteRuntimeResponse>;
-  executeStoredCodingBackendRun?: (
-    pendingAction: PendingActionRecord,
-    resume: CodingBackendRunResumePayload,
-    approvalResult?: ToolApprovalDecisionResult,
-  ) => Promise<DirectRouteRuntimeResponse>;
   executeStoredAutomationAuthoring?: (
     pendingAction: PendingActionRecord,
     resume: AutomationAuthoringResumePayload,
@@ -300,15 +293,6 @@ export async function resumeStoredDirectRoutePendingAction(input: {
     return input.executeStoredAutomationAuthoring(
       input.pendingAction,
       automationAuthoringResume,
-      input.options?.approvalResult,
-    );
-  }
-
-  const codingBackendResume = readCodingBackendRunResumePayload(input.pendingAction.resume?.payload);
-  if (codingBackendResume && input.executeStoredCodingBackendRun) {
-    return input.executeStoredCodingBackendRun(
-      input.pendingAction,
-      codingBackendResume,
       input.options?.approvalResult,
     );
   }

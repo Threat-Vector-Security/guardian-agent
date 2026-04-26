@@ -10,6 +10,7 @@ import {
   APPROVAL_CONFIRM_PATTERN,
   APPROVAL_DENY_PATTERN,
 } from './approval-state.js';
+import { formatCodingBackendApprovalResult } from './coding-backend-approval-result.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface ApprovalOrchestrationResponse {
@@ -404,6 +405,33 @@ export async function handleApprovalMessage(input: {
         input.message.surfaceId,
       );
       const leadingResults = results.filter((line) => !isGenericSuccessfulToolCompletionMessage(line));
+      return {
+        content: [
+          leadingResults.join('\n'),
+          normalizedResponse.content,
+        ].filter(Boolean).join('\n\n'),
+        metadata: normalizedResponse.metadata,
+      };
+    }
+  }
+
+  if (decision === 'approved' && pendingAction) {
+    const approvalResult = targetIds.length === 1
+      ? approvalDecisionResults.get(targetIds[0])
+      : undefined;
+    const approvalResultResponse = formatCodingBackendApprovalResult(approvalResult);
+    if (approvalResultResponse) {
+      input.completePendingAction(pendingAction.id);
+      const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
+        approvalResultResponse,
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      );
+      const leadingResults = results.filter((line) => (
+        !isGenericSuccessfulToolCompletionMessage(line)
+        && line !== approvalResult?.message
+      ));
       return {
         content: [
           leadingResults.join('\n'),
