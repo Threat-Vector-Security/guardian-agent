@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
-import { resumeStoredDirectRoutePendingAction, tryDirectFilesystemIntent } from './direct-route-runtime.js';
+import { resumeStoredCapabilityContinuationPendingAction, tryDirectFilesystemIntent } from './direct-route-runtime.js';
 
 function message(content: string): UserMessage {
   return {
@@ -106,7 +106,7 @@ describe('direct route filesystem runtime', () => {
   });
 });
 
-describe('direct route resume runtime', () => {
+describe('capability continuation runtime', () => {
   it('dispatches automation authoring resume payloads to the automation authoring executor', async () => {
     const pendingAction = {
       id: 'pending-automation',
@@ -129,7 +129,7 @@ describe('direct route resume runtime', () => {
         originalUserContent: 'Create a daily automation.',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
           type: 'automation_authoring',
           originalUserContent: 'Create a daily automation.',
@@ -145,7 +145,7 @@ describe('direct route resume runtime', () => {
       content: 'Automation created.',
     }));
 
-    const result = await resumeStoredDirectRoutePendingAction({
+    const result = await resumeStoredCapabilityContinuationPendingAction({
       pendingAction,
       options: {
         approvalResult: {

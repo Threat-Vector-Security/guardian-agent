@@ -8,9 +8,9 @@ import { tryAutomationPreRoute } from '../automation-prerouter.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionApprovalSummary, PendingActionRecord } from '../pending-actions.js';
 import {
-  DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING,
+  CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
   normalizeFilesystemResumePrincipalRole,
-} from './direct-route-resume.js';
+} from './capability-continuation-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface StoredAutomationAuthoringInput {
@@ -70,9 +70,9 @@ export function buildAutomationAuthoringResumePayload(
   request: StoredAutomationAuthoringInput,
 ): PendingActionRecord['resume'] {
   return {
-    kind: 'direct_route',
+    kind: 'capability_continuation',
     payload: {
-      type: DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING,
+      type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
       originalUserContent: request.originalUserContent,
       allowRemediation: request.allowRemediation,
       ...(request.principalId ? { principalId: request.principalId } : {}),

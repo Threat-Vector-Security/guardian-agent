@@ -611,7 +611,7 @@ describe('intent-gateway-orchestration', () => {
         prompt: 'Original blocked request.',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: { previous: true },
       },
     });

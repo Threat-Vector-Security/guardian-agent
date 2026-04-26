@@ -149,7 +149,7 @@ import {
 import {
   normalizeFilesystemResumePrincipalRole,
   readAutomationAuthoringResumePayload,
-} from '../runtime/chat-agent/direct-route-resume.js';
+} from '../runtime/chat-agent/capability-continuation-resume.js';
 import {
   attachWorkerAutomationAuthoringResumeMetadata,
 } from '../worker/automation-resume.js';
