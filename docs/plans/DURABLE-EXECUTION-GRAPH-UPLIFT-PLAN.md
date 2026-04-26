@@ -72,7 +72,7 @@ The architecture audit found that Guardian now has most of the necessary primiti
 
 Root ownership problems to resolve:
 
-- `ChatAgent` still owns normal turn orchestration, direct capability dispatch, tool-loop resume, retry/continuation repair, and response shaping.
+- `ChatAgent` still owns normal turn orchestration, direct-route dependency assembly, tool-loop resume, retry/continuation repair, and response shaping. Route-specific direct capability dispatch is being moved behind shared runtime modules slice by slice.
 - `WorkerManager` still owns delegated execution, retries, recovery advice, graph setup, and graph persistence instead of acting as a graph node runner.
 - `PendingActionStore`, `ExecutionStore`, `ContinuityThreadStore`, `ExecutionGraphStore`, and `RunTimelineStore` each hold part of the same execution lifecycle without one authoritative owner.
 - Approval continuity is split across pending actions, live `ToolExecutor` approvals, capability-continuation replay, tool-loop replay, and execution-graph interrupts.
@@ -162,6 +162,14 @@ Checkpoint after the direct-mailbox helper extraction:
 - Gmail/Outlook read-intent resolution, continuation-kind mapping, reply-subject formatting, and mailbox address extraction moved into `src/runtime/chat-agent/direct-mailbox-helpers.ts`.
 - `src/chat-agent.ts` still owns the actual Gmail/Outlook tool execution and approval creation for now, but no longer owns the pure mailbox parsing/continuation rules inline.
 - Focused coverage now exists at `src/runtime/chat-agent/direct-mailbox-helpers.test.ts`, including decision-driven reads and paged-list continuation recovery.
+
+Checkpoint after the direct-route ownership cleanup:
+
+- `src/runtime/chat-agent/direct-route-handlers.ts` now owns direct-route dispatch for personal assistant/Second Brain, coding session control, and coding backend delegation instead of accepting route callbacks from `ChatAgent`.
+- `src/runtime/chat-agent/direct-personal-assistant.ts` owns Second Brain read/write/routine dispatch and item-type focus resolution. `ChatAgent` now only binds Second Brain services, clarification creation, and mutation execution.
+- Coding backend and coding session-control routes now share explicit dependency bundles and a single coding-task resumer, including the early `coding_session_control` path.
+- The old `ChatAgent` private route wrappers for Second Brain, coding backend delegation, and gateway-driven code session control were deleted in the same slice. Remaining `ChatAgent` orchestration debt is top-level turn assembly, dependency binding, response shaping, and the non-direct tool-loop/continuation paths.
+- Focused direct-route, coding-backend, and code-session-control tests passed, and `npm run check` passed for the slice.
 
 Checkpoint after the brokered worker automation-resume cleanup:
 

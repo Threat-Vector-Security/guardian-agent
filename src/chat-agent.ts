@@ -36,9 +36,7 @@ import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import {
   formatCodingBackendApprovalResult,
 } from './runtime/chat-agent/coding-backend-approval-result.js';
-import {
-  tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
-} from './runtime/chat-agent/direct-coding-backend.js';
+import type { DirectCodingBackendDeps } from './runtime/chat-agent/direct-coding-backend.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
@@ -77,6 +75,10 @@ import {
 } from './runtime/chat-agent/direct-route-orchestration.js';
 import {
   buildChatDirectRouteHandlers,
+  buildDirectCodingTaskResumer,
+  tryDirectChatCodeSessionControl,
+  type ChatDirectCodingRouteDeps,
+  type DirectCodeSessionControlDeps,
 } from './runtime/chat-agent/direct-route-handlers.js';
 import {
   attachPreRoutedIntentGatewayMetadata,
@@ -125,7 +127,6 @@ import {
 import {
   ensureExplicitCodingTaskWorkspaceTarget as ensureExplicitCodingTaskWorkspaceTargetHelper,
   handleCodeSessionAttach as handleCodeSessionAttachHelper,
-  tryDirectCodeSessionControlFromGateway as tryDirectCodeSessionControlFromGatewayHelper,
 } from './runtime/chat-agent/code-session-control.js';
 import {
   syncCodeSessionRuntimeState as syncCodeSessionRuntimeStateHelper,
@@ -152,15 +153,7 @@ import {
   buildStoredAutomationAuthoringInput,
   executeStoredAutomationAuthoring as executeStoredAutomationAuthoringHelper,
 } from './runtime/chat-agent/automation-authoring-resume.js';
-import {
-  tryDirectSecondBrainRead as tryDirectSecondBrainReadHelper,
-} from './runtime/chat-agent/direct-second-brain-read.js';
-import {
-  tryDirectSecondBrainRoutineWrite as tryDirectSecondBrainRoutineWriteHelper,
-} from './runtime/chat-agent/direct-second-brain-routine-write.js';
-import {
-  tryDirectSecondBrainWrite as tryDirectSecondBrainWriteHelper,
-} from './runtime/chat-agent/direct-second-brain-write.js';
+import type { DirectPersonalAssistantDeps } from './runtime/chat-agent/direct-personal-assistant.js';
 import {
   buildAssembledSystemPrompt as buildAssembledSystemPromptHelper,
   buildCodeSessionSystemContext as buildCodeSessionSystemContextHelper,
@@ -268,52 +261,9 @@ import {
 } from './runtime/chat-agent/provider-fallback.js';
 import {
   buildDirectHandlerResponseSource,
-  buildRoutineSemanticHints,
   buildSecondBrainFocusMetadata,
   buildSecondBrainFocusRemovalMetadata,
-  buildToolSafeRoutineTrigger,
-  collapseWhitespaceForSecondBrainParsing,
-  deriveRoutineTimingKind,
-  extractCustomSecondBrainRoutineCreate,
-  extractEmailAddressFromText,
-  extractExplicitNamedSecondBrainTitle,
-  extractNamedSecondBrainTitle,
-  extractPhoneNumberFromText,
-  extractQuotedLabeledValue,
-  extractQuotedPhrase,
-  extractRetitledSecondBrainTitle,
-  extractRoutineDeliveryDefaults,
-  extractRoutineDueWithinHours,
-  extractRoutineEnabledState,
-  extractRoutineFocusQuery,
-  extractRoutineIncludeOverdue,
-  extractRoutineLookaheadMinutes,
-  extractRoutineScheduleTiming,
-  extractRoutineTopicWatchQuery,
-  extractSecondBrainFallbackPersonName,
-  extractSecondBrainPersonRelationship,
-  extractSecondBrainRoutingBias,
-  extractSecondBrainTags,
-  extractSecondBrainTaskPriority,
-  extractSecondBrainTaskStatus,
-  extractSecondBrainTextBody,
-  extractUrlFromText,
-  findMatchingRoutineForCreate,
-  formatBriefKindLabelForUser,
-  getSecondBrainFocusEntry,
-  isSecondBrainFocusItemType,
-  normalizeRoutineNameForMatch,
-  normalizeRoutineQueryTokens,
-  normalizeRoutineSearchTokens,
-  normalizeRoutineTemplateIdForMatch,
-  normalizeSecondBrainInlineFieldValue,
   readSecondBrainFocusContinuationState,
-  resolveDirectSecondBrainReadQuery,
-  routineDeliveryChannels,
-  routineDueWithinHours,
-  routineIncludeOverdue,
-  routineTopicQuery,
-  summarizeRoutineTimingForUser,
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
 
@@ -1531,9 +1481,13 @@ interface DegradedDirectIntentResponseInput {
       }
 
       if (earlyGateway?.decision.route === 'coding_session_control') {
-        const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
-          message, ctx, earlyGateway.decision,
-        );
+        const sessionControlResult = await tryDirectChatCodeSessionControl({
+          tools: this.tools,
+          message,
+          ctx,
+          decision: earlyGateway.decision,
+          codingRoutes: this.buildDirectCodingRouteDeps(),
+        });
         if (sessionControlResult) {
           return buildScopedDirectIntentResponse({
             candidate: 'coding_session_control',
@@ -1812,33 +1766,8 @@ interface DegradedDirectIntentResponseInput {
         providerOrder,
       ),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      callbacks: {
-        personalAssistant: async () => (
-          await this.tryDirectSecondBrainWrite(
-            routedScopedMessage,
-            ctx,
-            pendingActionUserKey,
-            directIntent?.decision,
-            continuityThread,
-          )
-        ) ?? this.tryDirectSecondBrainRead(
-          routedScopedMessage,
-          directIntent?.decision,
-          continuityThread,
-        ),
-        codingSessionControl: () => this.tryDirectCodeSessionControlFromGateway(
-          message,
-          ctx,
-          directIntent?.decision,
-        ),
-        codingBackend: () => this.tryDirectCodingBackendDelegation(
-          routedScopedMessage,
-          ctx,
-          pendingActionUserKey,
-          directIntent?.decision,
-          effectiveCodeContext,
-        ),
-      },
+      personalAssistantDeps: this.buildDirectPersonalAssistantDeps(),
+      codingRoutes: this.buildDirectCodingRouteDeps(),
     });
     const directIntentResponse = await runDirectRouteOrchestration({
       skipDirectTools,
@@ -2329,180 +2258,13 @@ interface DegradedDirectIntentResponseInput {
     });
   }
 
-  private resolveDirectSecondBrainItemType(
-    decision: IntentGatewayDecision | undefined,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): string {
-    const requestedItemType = toString(decision?.entities.personalItemType).trim();
-    if (requestedItemType && requestedItemType !== 'unknown' && requestedItemType !== 'overview') {
-      return requestedItemType;
-    }
-    if (decision?.route !== 'personal_assistant_task' || decision.turnRelation !== 'follow_up') {
-      return requestedItemType;
-    }
-    const focusState = readSecondBrainFocusContinuationState(continuityThread);
-    if (focusState?.activeItemType) {
-      return focusState.activeItemType;
-    }
-    const availableTypes = Object.keys(focusState?.byType ?? {}).filter(isSecondBrainFocusItemType);
-    return availableTypes.length === 1 ? availableTypes[0] : requestedItemType;
-  }
-
-  private async tryDirectSecondBrainWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision?: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled() || decision?.route !== 'personal_assistant_task') {
-      return null;
-    }
-    if (!['create', 'save', 'update', 'delete', 'toggle'].includes(decision.operation)) {
-      return null;
-    }
-
-    const resolvedItemType = this.resolveDirectSecondBrainItemType(decision, continuityThread);
-    const focusState = readSecondBrainFocusContinuationState(continuityThread);
-
-    if (resolvedItemType === 'routine') {
-      if (!this.secondBrainService) return null;
-      return tryDirectSecondBrainRoutineWriteHelper({
-        secondBrainService: this.secondBrainService as SecondBrainService & {
-          listRoutineRecords?: () => Array<Record<string, unknown>>;
-          getRoutineRecordById?: (id: string) => Record<string, unknown> | null;
-        },
-        message,
-        ctx,
-        userKey,
-        decision,
-        focusState,
-        getFocusEntry: getSecondBrainFocusEntry,
-        buildFocusMetadata: buildSecondBrainFocusMetadata,
-        normalizeRoutineNameForMatch,
-        normalizeRoutineTemplateIdForMatch,
-        extractExplicitNamedTitle: extractExplicitNamedSecondBrainTitle,
-        extractRoutineDeliveryDefaults,
-        extractRoutineScheduleTiming,
-        extractRoutineFocusQuery,
-        extractCustomRoutineCreate: extractCustomSecondBrainRoutineCreate,
-        extractQuotedPhrase,
-        findMatchingRoutineForCreate,
-        routineTopicQuery,
-        extractRoutineEnabledState,
-        extractRoutingBias: extractSecondBrainRoutingBias,
-        extractRoutineLookaheadMinutes,
-        extractRoutineTopicWatchQuery,
-        extractRoutineDueWithinHours,
-        extractRoutineIncludeOverdue,
-        routineDeliveryChannels,
-        deriveRoutineTimingKind,
-        buildToolSafeRoutineTrigger,
-        executeMutation: (input) => this.executeDirectSecondBrainMutation(input),
-      });
-    }
-
-    return tryDirectSecondBrainWriteHelper({
+  private buildDirectPersonalAssistantDeps(): DirectPersonalAssistantDeps {
+    return {
+      tools: this.tools,
       secondBrainService: this.secondBrainService,
-      message,
-      ctx,
-      userKey,
-      decision,
-      resolvedItemType,
-      focusState,
-      getFocusEntry: getSecondBrainFocusEntry,
-      normalizeInlineFieldValue: normalizeSecondBrainInlineFieldValue,
-      extractQuotedLabeledValue,
-      extractExplicitNamedTitle: extractExplicitNamedSecondBrainTitle,
-      extractNamedTitle: extractNamedSecondBrainTitle,
-      extractRetitledTitle: extractRetitledSecondBrainTitle,
-      extractTextBody: extractSecondBrainTextBody,
-      extractTags: extractSecondBrainTags,
-      collapseWhitespace: collapseWhitespaceForSecondBrainParsing,
-      extractTaskPriority: extractSecondBrainTaskPriority,
-      extractTaskStatus: extractSecondBrainTaskStatus,
-      extractUrlFromText,
-      extractFallbackPersonName: extractSecondBrainFallbackPersonName,
-      extractEmailAddress: extractEmailAddressFromText,
-      extractPhoneNumber: extractPhoneNumberFromText,
-      extractPersonRelationship: extractSecondBrainPersonRelationship,
       buildClarificationResponse: (input) => this.buildDirectSecondBrainClarificationResponse(input),
       executeMutation: (input) => this.executeDirectSecondBrainMutation(input),
-    });
-  }
-
-  private async tryDirectSecondBrainRead(
-    message: UserMessage,
-    decision?: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService || decision?.route !== 'personal_assistant_task') {
-      return null;
-    }
-    if (!['inspect', 'read', 'search'].includes(decision.operation)) {
-      return null;
-    }
-
-    return tryDirectSecondBrainReadHelper({
-      secondBrainService: this.secondBrainService,
-      requestText: message.content,
-      decision,
-      continuityThread,
-      resolvedItemType: this.resolveDirectSecondBrainItemType(decision, continuityThread),
-      readFocusState: readSecondBrainFocusContinuationState,
-      getFocusEntry: getSecondBrainFocusEntry,
-      buildFocusMetadata: buildSecondBrainFocusMetadata,
-      buildFocusRemovalMetadata: buildSecondBrainFocusRemovalMetadata,
-      resolveReadQuery: resolveDirectSecondBrainReadQuery,
-      normalizeInlineFieldValue: normalizeSecondBrainInlineFieldValue,
-      formatBriefKindLabel: formatBriefKindLabelForUser,
-      normalizeRoutineQueryTokens,
-      normalizeRoutineSearchTokens,
-      deriveRoutineTimingKind: (routine) => deriveRoutineTimingKind(
-        routine as { timing?: { kind?: string }; trigger?: { mode?: string; eventType?: string } },
-      ),
-      summarizeRoutineTimingForUser: (routine) => summarizeRoutineTimingForUser(
-        routine as {
-          timing?: { label?: string };
-          trigger?: { mode?: string; cron?: string; eventType?: string; lookaheadMinutes?: unknown };
-        },
-      ),
-      routineTopicQuery: (routine) => routineTopicQuery(
-        routine as { topicQuery?: string; config?: { topicQuery?: string } },
-      ),
-      routineDueWithinHours: (routine) => routineDueWithinHours(
-        routine as { dueWithinHours?: number; config?: { dueWithinHours?: number } },
-      ),
-      routineIncludeOverdue: (routine) => routineIncludeOverdue(
-        routine as { includeOverdue?: boolean; config?: { includeOverdue?: boolean } },
-      ),
-      routineDeliveryChannels: (routine) => routineDeliveryChannels(
-        routine as { delivery?: string[]; deliveryDefaults?: string[] },
-      ),
-      buildRoutineSemanticHints: (routine) => buildRoutineSemanticHints(
-        routine as {
-          id?: string;
-          templateId?: string;
-          name?: string;
-          category?: string;
-          externalCommMode?: string;
-          topicQuery?: string;
-          dueWithinHours?: number;
-          includeOverdue?: boolean;
-          config?: {
-            topicQuery?: string;
-            dueWithinHours?: number;
-            includeOverdue?: boolean;
-          };
-          timing?: {
-            kind?: string;
-            label?: string;
-            schedule?: { cadence?: string; dayOfWeek?: string; dayOfMonth?: number; time?: string; minute?: number };
-          };
-          trigger?: { mode?: string; eventType?: string; cron?: string; lookaheadMinutes?: unknown };
-        },
-      ),
-    });
+    };
   }
 
   private buildDirectSecondBrainMutationSuccessResponse(
@@ -3208,53 +2970,62 @@ interface DegradedDirectIntentResponseInput {
     );
   }
 
-  private async tryDirectCodingBackendDelegation(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
-    codeContext?: { sessionId?: string; workspaceRoot: string },
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectCodingBackendDelegationHelper(
-      {
+  private buildDirectCodingBackendDeps(): DirectCodingBackendDeps {
+    return {
+      agentId: this.id,
+      tools: this.tools,
+      codeSessionStore: this.codeSessionStore,
+      parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
+      ensureExplicitCodingTaskWorkspaceTarget: (nextInput) => this.ensureExplicitCodingTaskWorkspaceTarget(nextInput),
+      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+      getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
+      setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
+      syncPendingApprovalsFromExecutor: (
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ) => this.syncPendingApprovalsFromExecutor(
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ),
+      setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => this.setPendingApprovalAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+    };
+  }
+
+  private buildDirectCodeSessionControlDeps(): DirectCodeSessionControlDeps {
+    return {
+      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
+        toolName,
+        args,
         message,
         ctx,
-        userKey,
-        decision,
-        codeContext,
-      },
-      {
-        agentId: this.id,
-        tools: this.tools,
-        codeSessionStore: this.codeSessionStore,
-        parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
-        ensureExplicitCodingTaskWorkspaceTarget: (nextInput) => this.ensureExplicitCodingTaskWorkspaceTarget(nextInput),
-        recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
-        getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
-        setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
-        syncPendingApprovalsFromExecutor: (
-          sourceUserId,
-          sourceChannel,
-          targetUserId,
-          targetChannel,
-          surfaceId,
-          originalUserContent,
-        ) => this.syncPendingApprovalsFromExecutor(
-          sourceUserId,
-          sourceChannel,
-          targetUserId,
-          targetChannel,
-          surfaceId,
-          originalUserContent,
-        ),
-        setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => this.setPendingApprovalAction(
-          userId,
-          channel,
-          surfaceId,
-          actionInput,
-        ),
-      },
-    );
+      ),
+      getCodeSessionManagedSandboxes: this.tools?.getCodeSessionManagedSandboxStatus
+        ? (sessionId, ownerUserId) => this.tools!.getCodeSessionManagedSandboxStatus({ sessionId, ownerUserId })
+        : undefined,
+      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
+      completePendingAction: (actionId) => this.completePendingAction(actionId),
+      onMessage: (message, ctx) => this.onMessage(message, ctx),
+    };
+  }
+
+  private buildDirectCodingRouteDeps(): ChatDirectCodingRouteDeps {
+    return {
+      backendDeps: this.buildDirectCodingBackendDeps(),
+      sessionControlDeps: this.buildDirectCodeSessionControlDeps(),
+    };
   }
 
   private async ensureExplicitCodingTaskWorkspaceTarget(input: {
@@ -3291,43 +3062,12 @@ interface DegradedDirectIntentResponseInput {
     });
   }
 
-  private async tryDirectCodeSessionControlFromGateway(
-    message: UserMessage,
-    ctx: AgentContext,
-    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectCodeSessionControlFromGatewayHelper({
-      toolsEnabled: this.tools?.isEnabled() === true,
-      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
-        toolName,
-        args,
-        message,
-        ctx,
-      ),
-      getCodeSessionManagedSandboxes: this.tools?.getCodeSessionManagedSandboxStatus
-        ? (sessionId, ownerUserId) => this.tools!.getCodeSessionManagedSandboxStatus({ sessionId, ownerUserId })
-        : undefined,
-      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
-      completePendingAction: (actionId) => this.completePendingAction(actionId),
-      resumeCodingTask: (message, ctx, userKey, decision, codeContext) => this.tryDirectCodingBackendDelegation(
-        message,
-        ctx,
-        userKey,
-        decision,
-        codeContext,
-      ),
-      onMessage: (message, ctx) => this.onMessage(message, ctx),
-      message,
-      ctx,
-      decision,
-    });
-  }
-
   private async handleCodeSessionAttach(
     message: UserMessage,
     ctx: AgentContext,
     target: string,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const backendDeps = this.buildDirectCodingBackendDeps();
     return handleCodeSessionAttachHelper({
       executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
         toolName,
@@ -3337,13 +3077,7 @@ interface DegradedDirectIntentResponseInput {
       ),
       getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
       completePendingAction: (actionId) => this.completePendingAction(actionId),
-      resumeCodingTask: (message, ctx, userKey, decision, codeContext) => this.tryDirectCodingBackendDelegation(
-        message,
-        ctx,
-        userKey,
-        decision,
-        codeContext,
-      ),
+      resumeCodingTask: buildDirectCodingTaskResumer(backendDeps),
       onMessage: (message, ctx) => this.onMessage(message, ctx),
       message,
       ctx,

@@ -3,10 +3,23 @@ import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js'
 import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import {
+  tryDirectCodeSessionControlFromGateway,
+  type CodeSessionControlDeps,
+  type CodingTaskResumer,
+} from './code-session-control.js';
 import { tryDirectAutomationAuthoring, tryDirectAutomationControl, tryDirectAutomationOutput, tryDirectBrowserAutomation } from './direct-automation.js';
+import {
+  tryDirectCodingBackendDelegation,
+  type DirectCodingBackendDeps,
+} from './direct-coding-backend.js';
 import type { DirectIntentDispatchResult } from './direct-intent-dispatch.js';
 import { tryDirectGoogleWorkspaceRead, tryDirectGoogleWorkspaceWrite } from './direct-mailbox-runtime.js';
 import { tryDirectMemoryRead, tryDirectMemorySave } from './direct-memory.js';
+import {
+  tryDirectPersonalAssistant,
+  type DirectPersonalAssistantDeps,
+} from './direct-personal-assistant.js';
 import { tryDirectProviderRead } from './direct-provider-read.js';
 import {
   buildDirectAutomationDeps,
@@ -26,12 +39,11 @@ type DirectCodeContext = {
   sessionId?: string;
 };
 
-type DirectHandlerCallback = () => Promise<DirectIntentDispatchResult | null>;
+export type DirectCodeSessionControlDeps = Omit<CodeSessionControlDeps, 'resumeCodingTask'>;
 
-export interface ChatDirectRouteHandlerCallbacks {
-  personalAssistant: DirectHandlerCallback;
-  codingSessionControl: DirectHandlerCallback;
-  codingBackend: DirectHandlerCallback;
+export interface ChatDirectCodingRouteDeps {
+  backendDeps: DirectCodingBackendDeps;
+  sessionControlDeps: DirectCodeSessionControlDeps;
 }
 
 export interface BuildChatDirectRouteHandlersInput {
@@ -65,7 +77,40 @@ export interface BuildChatDirectRouteHandlersInput {
   executeStoredFilesystemSave: (
     input: StoredFilesystemSaveInput,
   ) => Promise<DirectIntentDispatchResult>;
-  callbacks: ChatDirectRouteHandlerCallbacks;
+  personalAssistantDeps: DirectPersonalAssistantDeps;
+  codingRoutes: ChatDirectCodingRouteDeps;
+}
+
+export function buildDirectCodingTaskResumer(
+  backendDeps: DirectCodingBackendDeps,
+): CodingTaskResumer {
+  return (message, ctx, userKey, decision, codeContext) => tryDirectCodingBackendDelegation(
+    {
+      message,
+      ctx,
+      userKey,
+      decision,
+      codeContext,
+    },
+    backendDeps,
+  );
+}
+
+export function tryDirectChatCodeSessionControl(input: {
+  tools: DirectRuntimeDepsInput['tools'];
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision | null;
+  codingRoutes: ChatDirectCodingRouteDeps;
+}): Promise<DirectIntentDispatchResult | null> {
+  return tryDirectCodeSessionControlFromGateway({
+    ...input.codingRoutes.sessionControlDeps,
+    toolsEnabled: input.tools?.isEnabled() === true,
+    resumeCodingTask: buildDirectCodingTaskResumer(input.codingRoutes.backendDeps),
+    message: input.message,
+    ctx: input.ctx,
+    decision: input.decision ?? undefined,
+  });
 }
 
 export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlersInput): DirectIntentHandlerMap {
@@ -74,7 +119,13 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
   const scheduledEmailAutomationDeps = buildDirectScheduledEmailAutomationDeps(input.runtimeDeps);
 
   return {
-    personal_assistant: input.callbacks.personalAssistant,
+    personal_assistant: () => tryDirectPersonalAssistant({
+      message: input.routedMessage,
+      ctx: input.ctx,
+      userKey: input.userKey,
+      decision: input.decision ?? undefined,
+      continuityThread: input.continuityThread,
+    }, input.personalAssistantDeps),
     provider_read: () => tryDirectProviderRead({
       agentId: input.agentId,
       tools: input.tools,
@@ -82,8 +133,20 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       ctx: input.ctx,
       decision: input.decision,
     }),
-    coding_session_control: input.callbacks.codingSessionControl,
-    coding_backend: input.callbacks.codingBackend,
+    coding_session_control: () => tryDirectChatCodeSessionControl({
+      tools: input.tools,
+      message: input.message,
+      ctx: input.ctx,
+      decision: input.decision,
+      codingRoutes: input.codingRoutes,
+    }),
+    coding_backend: () => tryDirectCodingBackendDelegation({
+      message: input.routedMessage,
+      ctx: input.ctx,
+      userKey: input.userKey,
+      decision: input.decision ?? undefined,
+      codeContext: input.codeContext,
+    }, input.codingRoutes.backendDeps),
     filesystem: () => tryDirectFilesystemIntent({
       message: input.routedMessage,
       ctx: input.ctx,
