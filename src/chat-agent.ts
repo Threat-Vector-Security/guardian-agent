@@ -297,6 +297,7 @@ import {
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
 import {
+  chatWithAlternateProvider as chatWithAlternateProviderHelper,
   chatWithFallback as chatWithFallbackHelper,
   chatWithRoutingMetadata as chatWithRoutingMetadataHelper,
 } from './runtime/chat-agent/provider-fallback.js';
@@ -2493,19 +2494,21 @@ type DirectIntentShadowCandidate =
       if (this.qualityFallbackEnabled && this.lacksUsableAssistantContent(finalContent) && this.fallbackChain && providerLocality === 'local') {
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
-          const fbStartedAt = Date.now();
-          const fb = fallbackProviderOrder
-            ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', fallbackProviderOrder, llmMessages)
-            : await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
-          if (fb.response.content?.trim()) {
+          const fb = await chatWithAlternateProviderHelper({
+            primaryProviderName: ctx.llm?.name ?? 'unknown',
+            messages: llmMessages,
+            fallbackProviderOrder,
+            fallbackChain: this.fallbackChain,
+          });
+          if (fb?.response.content?.trim()) {
             finalContent = fb.response.content;
             responseSource = buildResponseSourceMetadata({
-              locality: getProviderLocalityFromName(fb.providerName),
+              locality: fb.providerLocality,
               providerName: fb.providerName,
               response: fb.response,
-              usedFallback: true,
+              usedFallback: fb.usedFallback,
               notice: 'Retried with an alternate model after a weak local response.',
-              durationMs: Date.now() - fbStartedAt,
+              durationMs: fb.durationMs,
             });
           }
         } catch { /* fallback also failed, keep original */ }
@@ -3007,18 +3010,24 @@ type DirectIntentShadowCandidate =
         try {
           let externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
           const fbMessages = [...llmMessages];
-          const fallbackStartedAt = Date.now();
-          const fallbackResult = fallbackProviderOrder
-            ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
-            : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+          const fallbackResult = await chatWithAlternateProviderHelper({
+            primaryProviderName: ctx.llm?.name ?? 'unknown',
+            messages: fbMessages,
+            options: { tools: externalToolDefs },
+            fallbackProviderOrder,
+            fallbackChain: this.fallbackChain,
+          });
+          if (!fallbackResult) {
+            throw new Error('No alternate providers available in fallback chain');
+          }
           const fbProvider = fallbackResult.providerName;
           responseSource = buildResponseSourceMetadata({
-            locality: getProviderLocalityFromName(fbProvider),
+            locality: fallbackResult.providerLocality,
             providerName: fbProvider,
             response: fallbackResult.response,
-            usedFallback: true,
+            usedFallback: fallbackResult.usedFallback,
             notice: 'Retried with an alternate model after a weak local response.',
-            durationMs: Date.now() - fallbackStartedAt,
+            durationMs: fallbackResult.durationMs,
           });
 
           // If the fallback LLM returned tool calls, execute them (single round)
@@ -3098,38 +3107,44 @@ type DirectIntentShadowCandidate =
                   ),
                 }) ?? undefined;
               } else {
-                const finalFbStartedAt = Date.now();
-                const finalFb = fallbackProviderOrder
-                  ? await this.fallbackChain.chatWithFallbackAfterProvider(fallbackResult.providerName, fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
-                  : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
-                if (finalFb.response.content?.trim()) {
+                const finalFb = await chatWithAlternateProviderHelper({
+                  primaryProviderName: fallbackResult.providerName,
+                  messages: fbMessages,
+                  options: { tools: externalToolDefs },
+                  fallbackProviderOrder,
+                  fallbackChain: this.fallbackChain,
+                });
+                if (finalFb?.response.content?.trim()) {
                   finalContent = finalFb.response.content;
                   responseSource = buildResponseSourceMetadata({
-                    locality: getProviderLocalityFromName(finalFb.providerName),
+                    locality: finalFb.providerLocality,
                     providerName: finalFb.providerName,
                     response: finalFb.response,
-                    usedFallback: true,
+                    usedFallback: finalFb.usedFallback,
                     notice: 'Retried with an alternate model after local execution degraded.',
-                    durationMs: Date.now() - finalFbStartedAt,
+                    durationMs: finalFb.durationMs,
                   });
                   log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
                 }
               }
             } else {
               // One more chat call to get the final text response from fallback
-              const finalFbStartedAt = Date.now();
-              const finalFb = fallbackProviderOrder
-                ? await this.fallbackChain.chatWithFallbackAfterProvider(fallbackResult.providerName, fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
-                : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
-              if (finalFb.response.content?.trim()) {
+              const finalFb = await chatWithAlternateProviderHelper({
+                primaryProviderName: fallbackResult.providerName,
+                messages: fbMessages,
+                options: { tools: externalToolDefs },
+                fallbackProviderOrder,
+                fallbackChain: this.fallbackChain,
+              });
+              if (finalFb?.response.content?.trim()) {
                 finalContent = finalFb.response.content;
                 responseSource = buildResponseSourceMetadata({
-                  locality: getProviderLocalityFromName(finalFb.providerName),
+                  locality: finalFb.providerLocality,
                   providerName: finalFb.providerName,
                   response: finalFb.response,
-                  usedFallback: true,
+                  usedFallback: finalFb.usedFallback,
                   notice: 'Retried with an alternate model after local execution degraded.',
-                  durationMs: Date.now() - finalFbStartedAt,
+                  durationMs: finalFb.durationMs,
                 });
                 log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
               }
@@ -3137,12 +3152,12 @@ type DirectIntentShadowCandidate =
           } else if (fallbackResult.response.content?.trim()) {
             finalContent = fallbackResult.response.content;
             responseSource = buildResponseSourceMetadata({
-              locality: getProviderLocalityFromName(fbProvider),
+              locality: fallbackResult.providerLocality,
               providerName: fbProvider,
               response: fallbackResult.response,
-              usedFallback: true,
+              usedFallback: fallbackResult.usedFallback,
               notice: 'Retried with an alternate model after a weak local response.',
-              durationMs: Date.now() - fallbackStartedAt,
+              durationMs: fallbackResult.durationMs,
             });
             log.info({ agent: this.id, provider: fbProvider },
               'Fallback provider produced successful response');

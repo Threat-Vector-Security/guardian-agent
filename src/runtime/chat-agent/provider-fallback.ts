@@ -39,6 +39,14 @@ export interface ChatWithRoutingMetadataResult {
   durationMs: number;
 }
 
+export interface AlternateProviderChatResult {
+  response: ChatResponse;
+  providerName: string;
+  providerLocality: 'local' | 'external';
+  usedFallback: boolean;
+  durationMs: number;
+}
+
 export function resolvePreferredProviderOrder(
   fallbackProviderOrder?: string[],
 ): string[] | undefined {
@@ -91,6 +99,34 @@ export async function chatWithFallback(input: ChatWithFallbackInput): Promise<Ch
       : await input.fallbackChain.chatWithFallback(input.messages, input.options);
     return result.response;
   }
+}
+
+export async function chatWithAlternateProvider(input: {
+  primaryProviderName?: string;
+  messages: ChatMessage[];
+  options?: ChatOptions;
+  fallbackProviderOrder?: string[];
+  fallbackChain?: ChatAgentFallbackChain;
+}): Promise<AlternateProviderChatResult | null> {
+  if (!input.fallbackChain) return null;
+  const preferredOrder = resolvePreferredProviderOrder(input.fallbackProviderOrder);
+  const primaryProviderName = input.primaryProviderName?.trim() || 'unknown';
+  const startedAt = Date.now();
+  const result = preferredOrder
+    ? await input.fallbackChain.chatWithFallbackAfterProvider(
+      primaryProviderName,
+      preferredOrder,
+      input.messages,
+      input.options,
+    )
+    : await input.fallbackChain.chatWithFallbackAfterPrimary(input.messages, input.options);
+  return {
+    response: result.response,
+    providerName: result.providerName,
+    providerLocality: getProviderLocalityFromName(result.providerName),
+    usedFallback: true,
+    durationMs: Math.max(0, Date.now() - startedAt),
+  };
 }
 
 export async function chatWithRoutingMetadata(

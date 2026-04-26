@@ -292,9 +292,9 @@ Checkpoint after the direct mailbox runtime extraction:
 
 Checkpoint after the provider fallback runtime extraction:
 
-- Chat-provider failover now lives in `src/runtime/chat-agent/provider-fallback.ts`: preferred provider order normalization, selected-provider first execution, primary failure fallback, routing metadata, and local tool-call parse recovery are handled by one runtime helper.
+- Chat-provider failover now lives in `src/runtime/chat-agent/provider-fallback.ts`: preferred provider order normalization, selected-provider first execution, primary failure fallback, alternate-provider retry, routing metadata, and local tool-call parse recovery are handled by one runtime helper.
 - `src/chat-agent.ts` still decides where model calls happen in the turn flow, but it no longer owns the provider fallback state machine inline. Stored tool-loop resume and live execution can now share the same fallback contract shape.
-- Remaining provider debt after this slice: some quality-fallback branches inside the larger live LLM/tool-loop controller still call the fallback chain directly. Those should move when the controller itself is lifted out of `src/chat-agent.ts`.
+- Remaining provider debt after this slice: quality-fallback branches inside the larger live LLM/tool-loop controller still decide when to retry, but they no longer call the fallback-chain API directly. The remaining work is to lift that controller itself out of `src/chat-agent.ts`.
 
 Exit criteria for this refinement phase:
 
