@@ -250,6 +250,13 @@ Checkpoint after the recent tool-report extraction:
 - `src/chat-agent.ts` still decides where the direct report response is offered in the turn flow, but no longer owns the job selection and formatting details inline.
 - Focused coverage now exists at `src/runtime/chat-agent/recent-tool-report.test.ts`, including code-session scoping, request grouping, unscoped job grouping, and explicit report-query gating.
 
+Checkpoint after the shared tool-loop round extraction:
+
+- Tool execution rounds now have one runtime owner in `src/runtime/chat-agent/tool-loop-round.ts` for assistant tool-call observation, conflict-aware execution, approval-id redaction before LLM reinjection, tool-result sanitization/taint propagation, deferred `find_tools` definition loading, pending-approval detection, and deferred remote-sandbox blockers.
+- The live chat-agent tool loop, fallback-provider tool execution path, and stored tool-loop approval resume path now call the shared round helper instead of each carrying their own partial copy of the same orchestration rules.
+- Focused coverage now exists at `src/runtime/chat-agent/tool-loop-round.test.ts` for approval redaction and deferred tool discovery.
+- Remaining tool-loop debt after this slice: `src/chat-agent.ts` still owns the larger LLM round/retry/recovery loop and `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts. The next architectural move is to lift the round controller itself, then replace replay resumes with graph interrupts.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.

@@ -1,7 +1,6 @@
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import {
   compactMessagesIfOverBudget,
-  formatToolResultForLLM,
   isRecord,
   summarizeToolRoundStatusMessage,
   toLLMToolDef,
@@ -12,9 +11,7 @@ import type { ToolApprovalDecisionResult, ToolExecutor } from '../../tools/execu
 import type {
   ContentTrustLevel,
   PrincipalRole,
-  ToolCategory,
   ToolExecutionRequest,
-  ToolRisk,
 } from '../../tools/types.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
 import { looksLikeOngoingWorkResponse } from '../../util/assistant-response-shape.js';
@@ -30,22 +27,19 @@ import {
   readToolLoopResumePayload,
 } from './tool-loop-resume.js';
 import {
-  executeToolsConflictAware,
-  isDeferredRemoteSandboxToolResult,
   pruneDeferredRemoteSandboxToolCalls,
 } from './tool-execution.js';
+import {
+  executeToolLoopRound,
+  type ToolLoopSanitizedResult,
+} from './tool-loop-round.js';
 
 export interface StoredToolLoopChatRunner {
   chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
   providerLocality: 'local' | 'external';
 }
 
-export interface StoredToolLoopSanitizedResult {
-  sanitized: unknown;
-  threats: string[];
-  trustLevel: ContentTrustLevel;
-  taintReasons: string[];
-}
+export type StoredToolLoopSanitizedResult = ToolLoopSanitizedResult;
 
 export function buildStoredToolLoopChatRunner(input: {
   ctx?: AgentContext;
@@ -293,12 +287,6 @@ export async function resumeStoredToolLoopPendingAction(input: {
       break;
     }
 
-    llmMessages.push({
-      role: 'assistant',
-      content: response.content ?? '',
-      toolCalls: response.toolCalls,
-    });
-
     const toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'> = {
       origin: 'assistant',
       agentId: input.agentId,
@@ -319,110 +307,32 @@ export async function resumeStoredToolLoopPendingAction(input: {
       requestText: resume.requestText,
     };
 
-    const toolResults = await Promise.allSettled(
-      executeToolsConflictAware({
+    const roundResult = await executeToolLoopRound({
+      response: {
+        ...response,
         toolCalls: response.toolCalls,
-        toolExecOrigin,
-        referenceTime: resume.referenceTime,
-        intentDecision: resume.intentDecision,
-        tools: input.tools,
-        secondBrainService: input.secondBrainService,
-      }),
-    );
-    lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
-      if (settled.status !== 'fulfilled') return acc;
-      acc.push({
-        toolName: settled.value.toolCall.name,
-        result: settled.value.result,
-      });
-      return acc;
-    }, []);
+      },
+      state: {
+        llmMessages,
+        allToolDefs,
+        llmToolDefs,
+        contentTrustLevel: currentContextTrustLevel,
+        taintReasons: currentTaintReasons,
+      },
+      toolExecOrigin,
+      referenceTime: resume.referenceTime,
+      intentDecision: resume.intentDecision,
+      tools: input.tools,
+      secondBrainService: input.secondBrainService,
+      toolResultProviderKind,
+      sanitizeToolResultForLlm: input.sanitizeToolResultForLlm,
+    });
+    lastToolRoundResults = roundResult.lastToolRoundResults;
+    currentContextTrustLevel = roundResult.contentTrustLevel;
 
-    const pendingIds: string[] = [];
-    let hasPending = false;
-    const deferredRemoteToolCallIds = new Set<string>();
-    for (const settled of toolResults) {
-      if (settled.status === 'fulfilled') {
-        const { toolCall, result: toolResult } = settled.value;
-        if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
-          pendingIds.push(String(toolResult.approvalId));
-          hasPending = true;
-        }
-        if (isDeferredRemoteSandboxToolResult(toolResult)) {
-          deferredRemoteToolCallIds.add(toolCall.id);
-        }
-        let resultForLlm = toolResult;
-        if (toolResult.status === 'pending_approval') {
-          const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
-          resultForLlm = { ...rest, message: 'This action needs your approval. The approval UI is shown to the user automatically.' };
-        }
-        const scannedToolResult = input.sanitizeToolResultForLlm(
-          toolCall.name,
-          resultForLlm,
-          toolResultProviderKind,
-        );
-        if (scannedToolResult.trustLevel === 'quarantined') {
-          currentContextTrustLevel = 'quarantined';
-        } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
-          currentContextTrustLevel = 'low_trust';
-        }
-        for (const reason of scannedToolResult.taintReasons) {
-          currentTaintReasons.add(reason);
-        }
-        llmMessages.push({
-          role: 'tool',
-          toolCallId: toolCall.id,
-          content: formatToolResultForLLM(
-            toolCall.name,
-            scannedToolResult.sanitized,
-            scannedToolResult.threats,
-          ),
-        });
-        if (toolCall.name === 'find_tools' && toolResult.success) {
-          const searchOutput = toolResult.output as {
-            tools?: Array<{
-              name: string;
-              description: string;
-              parameters: Record<string, unknown>;
-              risk: string;
-              category?: string;
-            }>;
-          } | undefined;
-          if (searchOutput?.tools) {
-            for (const discovered of searchOutput.tools) {
-              if (!llmToolDefs.some((definition) => definition.name === discovered.name)) {
-                const toolDefinition = {
-                  name: discovered.name,
-                  description: discovered.description,
-                  risk: discovered.risk as ToolRisk,
-                  parameters: discovered.parameters,
-                  category: discovered.category as ToolCategory | undefined,
-                };
-                allToolDefs.push(toolDefinition);
-                llmToolDefs.push(toLLMToolDef(toolDefinition, toolResultProviderKind));
-              }
-            }
-          }
-        }
-      } else {
-        const failedToolCall = response.toolCalls[toolResults.indexOf(settled)];
-        llmMessages.push({
-          role: 'tool',
-          toolCallId: failedToolCall?.id ?? '',
-          content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
-        });
-      }
-    }
-
-    if (hasPending) {
-      const allBlocked = toolResults.every(
-        (settled) => settled.status === 'fulfilled'
-          && (
-            (settled.value.result as Record<string, unknown>).status === 'pending_approval'
-            || isDeferredRemoteSandboxToolResult(settled.value.result as Record<string, unknown>)
-          ),
-      );
-      if (allBlocked) {
+    if (roundResult.hasPending) {
+      if (roundResult.allBlocked) {
+        const { toolResults, pendingIds, deferredRemoteToolCallIds } = roundResult;
         llmMessages.splice(-toolResults.length, toolResults.length);
         pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
         const originalMessage: UserMessage = {
