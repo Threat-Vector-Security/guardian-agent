@@ -17,8 +17,16 @@ import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } fr
 import { looksLikeOngoingWorkResponse } from '../../util/assistant-response-shape.js';
 import { withTaintedContentSystemPrompt } from '../../util/tainted-content.js';
 import { getProviderLocalityFromName } from '../model-routing-ux.js';
-import { buildPendingApprovalMetadata, formatPendingApprovalMessage } from '../pending-approval-copy.js';
-import type { PendingActionRecord } from '../pending-actions.js';
+import {
+  buildPendingApprovalMetadata,
+  formatPendingApprovalMessage,
+  shouldUseStructuredPendingApprovalMessage,
+} from '../pending-approval-copy.js';
+import {
+  toPendingActionClientMetadata,
+  type PendingActionApprovalSummary,
+  type PendingActionRecord,
+} from '../pending-actions.js';
 import type { SecondBrainService } from '../second-brain/second-brain-service.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
@@ -161,6 +169,115 @@ export function buildBlockedToolLoopPendingApprovalResume(input: {
     codeContext: input.codeContext,
     selectedExecutionProfile: input.selectedExecutionProfile,
   }) ?? undefined;
+}
+
+export function finalizeToolLoopPendingApprovals(input: {
+  pendingIds: string[];
+  pendingActionUserId: string;
+  pendingActionChannel: string;
+  pendingActionSurfaceId?: string;
+  pendingActionUserKey: string;
+  originalUserContent: string;
+  finalContent: string | undefined;
+  intentDecision?: IntentGatewayDecision | null;
+  resume?: PendingActionRecord['resume'];
+  codeSessionId?: string;
+  tools?: Pick<ToolExecutor, 'getApprovalSummaries'> | null;
+  getPendingApprovalIds: (
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+    nowMs?: number,
+  ) => string[];
+  setPendingApprovals: (
+    userKey: string,
+    ids: string[],
+    surfaceId?: string,
+    nowMs?: number,
+  ) => void;
+  setPendingApprovalAction: (
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    action: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      resume?: PendingActionRecord['resume'];
+      codeSessionId?: string;
+    },
+    nowMs?: number,
+  ) => PendingActionSetResult;
+  lacksUsableAssistantContent: (content: string | undefined) => boolean;
+}): {
+  finalContent: string;
+  pendingActionMeta?: Record<string, unknown>;
+} | null {
+  if (input.pendingIds.length <= 0) return null;
+  const existing = input.getPendingApprovalIds(
+    input.pendingActionUserId,
+    input.pendingActionChannel,
+    input.pendingActionSurfaceId,
+  );
+  const merged = [...new Set([...existing, ...input.pendingIds])];
+  input.setPendingApprovals(input.pendingActionUserKey, merged, input.pendingActionSurfaceId);
+  const summaries = input.tools?.getApprovalSummaries(merged);
+  const approvalSummaries = merged.map((id) => {
+    const summary = summaries?.get(id);
+    return {
+      id,
+      toolName: summary?.toolName ?? 'unknown',
+      argsPreview: summary?.argsPreview ?? '',
+      actionLabel: summary?.actionLabel ?? '',
+    };
+  });
+  const pendingApprovalPrompt = approvalSummaries.length > 0
+    ? formatPendingApprovalMessage(approvalSummaries)
+    : 'Approval required for the pending action.';
+  const decision = input.intentDecision;
+  const pendingActionResult = input.setPendingApprovalAction(
+    input.pendingActionUserId,
+    input.pendingActionChannel,
+    input.pendingActionSurfaceId,
+    {
+      prompt: pendingApprovalPrompt,
+      approvalIds: merged,
+      approvalSummaries,
+      originalUserContent: input.originalUserContent,
+      route: decision?.route,
+      operation: decision?.operation,
+      summary: decision?.summary,
+      turnRelation: decision?.turnRelation,
+      resolution: decision?.resolution,
+      missingFields: decision?.missingFields,
+      provenance: decision?.provenance,
+      entities: decision?.entities as Record<string, unknown> | undefined,
+      ...(input.resume ? { resume: input.resume } : {}),
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+    },
+  );
+  const pendingActionMeta = toPendingActionClientMetadata(pendingActionResult.action);
+  let finalContent = input.finalContent ?? '';
+  if (pendingActionResult.collisionPrompt) {
+    finalContent = pendingActionResult.collisionPrompt;
+  } else if (pendingActionResult.action?.blocker.approvalSummaries?.length) {
+    finalContent = formatPendingApprovalMessage(pendingActionResult.action.blocker.approvalSummaries);
+  } else if (shouldUseStructuredPendingApprovalMessage(finalContent) || input.lacksUsableAssistantContent(finalContent)) {
+    finalContent = pendingApprovalPrompt;
+  }
+  return {
+    finalContent,
+    pendingActionMeta,
+  };
 }
 
 export async function resumeStoredToolLoopPendingAction(input: {

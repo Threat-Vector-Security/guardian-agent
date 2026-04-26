@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildToolLoopResumePayload } from './tool-loop-resume.js';
 import {
   buildBlockedToolLoopPendingApprovalResume,
+  finalizeToolLoopPendingApprovals,
   resumeStoredToolLoopPendingAction,
 } from './tool-loop-runtime.js';
 import type { PendingActionRecord } from '../pending-actions.js';
@@ -91,6 +92,102 @@ describe('tool-loop-runtime', () => {
         },
       ],
     });
+  });
+
+  it('finalizes live tool-loop pending approvals through the shared pending-action contract', () => {
+    const setPendingApprovals = vi.fn();
+    const action: PendingActionRecord = {
+      id: 'pending-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approval required.',
+        approvalIds: ['approval-1', 'approval-2'],
+        approvalSummaries: [
+          {
+            id: 'approval-1',
+            toolName: 'fs_write',
+            argsPreview: '{"path":"tmp/out.txt"}',
+          },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'update',
+        originalUserContent: 'Write the file.',
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+    const setPendingApprovalAction = vi.fn(() => ({ action }));
+
+    const result = finalizeToolLoopPendingApprovals({
+      pendingIds: ['approval-2'],
+      pendingActionUserId: 'owner',
+      pendingActionChannel: 'web',
+      pendingActionSurfaceId: 'web-guardian-chat',
+      pendingActionUserKey: 'owner:web',
+      originalUserContent: 'Write the file.',
+      finalContent: '',
+      intentDecision: {
+        route: 'coding_task',
+        operation: 'update',
+        summary: 'Write the file.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        entities: {},
+      },
+      tools: {
+        getApprovalSummaries: vi.fn(() => new Map([
+          ['approval-1', { toolName: 'shell_safe', argsPreview: '{"cmd":"npm test"}' }],
+          ['approval-2', { toolName: 'fs_write', argsPreview: '{"path":"tmp/out.txt"}' }],
+        ])),
+      },
+      getPendingApprovalIds: vi.fn(() => ['approval-1']),
+      setPendingApprovals,
+      setPendingApprovalAction,
+      lacksUsableAssistantContent: (content) => !content?.trim(),
+    });
+
+    expect(setPendingApprovals).toHaveBeenCalledWith(
+      'owner:web',
+      ['approval-1', 'approval-2'],
+      'web-guardian-chat',
+    );
+    expect(setPendingApprovalAction).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      'web-guardian-chat',
+      expect.objectContaining({
+        approvalIds: ['approval-1', 'approval-2'],
+        route: 'coding_task',
+        operation: 'update',
+      }),
+    );
+    expect(result?.pendingActionMeta).toMatchObject({
+      id: 'pending-1',
+      blocker: {
+        kind: 'approval',
+      },
+    });
+    expect(result?.finalContent).toContain('Waiting for approval');
   });
 
   it('recovers a final answer from the approved tool result when the first resume turn is empty', async () => {
