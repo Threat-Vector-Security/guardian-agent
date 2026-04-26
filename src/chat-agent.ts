@@ -156,12 +156,12 @@ import {
   tryBuildDirectPendingApprovalStatusResponse,
 } from './runtime/chat-agent/pending-approval-status.js';
 import {
-  continueDirectRouteAfterApproval as continueDirectRouteAfterApprovalHelper,
+  continuePendingActionAfterApproval as continuePendingActionAfterApprovalHelper,
   handleApprovalMessage,
   syncPendingApprovalsFromExecutor as syncPendingApprovalsFromExecutorHelper,
 } from './runtime/chat-agent/approval-orchestration.js';
 import {
-  normalizeDirectRouteContinuationResponse as normalizeDirectRouteContinuationResponseHelper,
+  normalizeContinuationResponse as normalizeContinuationResponseHelper,
   readDirectContinuationStateMetadata,
   stripDirectContinuationStateMetadata,
 } from './runtime/chat-agent/direct-continuation-state.js';
@@ -395,11 +395,20 @@ export interface ChatAgentPublicApi extends BaseAgent {
     surfaceId?: string;
     approvalIds?: string[];
   }): void;
-  continueDirectRouteAfterApproval(
+  continuePendingActionAfterApproval(
     pendingAction: PendingActionRecord | null,
     approvalId: string,
     decision: 'approved' | 'denied',
     approvalResult?: ToolApprovalDecisionResult,
+    options?: {
+      resumeStoredExecutionGraphPendingAction?: (
+        pendingAction: PendingActionRecord,
+        options: {
+          approvalId: string;
+          approvalResult: ToolApprovalDecisionResult;
+        },
+      ) => Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
+    },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
 }
 
@@ -4729,7 +4738,7 @@ type DirectIntentShadowCandidate =
           },
         );
       },
-      normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
+      normalizeApprovalContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeContinuationResponse(
         response,
         userId,
         channel,
@@ -5036,22 +5045,39 @@ type DirectIntentShadowCandidate =
     }
   }
 
-  async continueDirectRouteAfterApproval(
+  async continuePendingActionAfterApproval(
     pendingAction: PendingActionRecord | null,
     approvalId: string,
     decision: 'approved' | 'denied',
     approvalResult?: ToolApprovalDecisionResult,
+    options?: {
+      resumeStoredExecutionGraphPendingAction?: (
+        pendingAction: PendingActionRecord,
+        options: {
+          approvalId: string;
+          approvalResult: ToolApprovalDecisionResult;
+        },
+      ) => Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
+    },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return continueDirectRouteAfterApprovalHelper({
+    return continuePendingActionAfterApprovalHelper({
       pendingAction,
       approvalId,
       decision,
       approvalResult,
       stateAgentId: this.stateAgentId,
+      completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       resumeStoredToolLoopPendingAction: (action, options) => this.resumeStoredToolLoopPendingAction(action, options),
       resumeStoredCapabilityContinuationPendingAction: (action, options) => this.resumeStoredCapabilityContinuationPendingAction(action, options),
-      normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
+      resumeStoredExecutionGraphPendingAction: options?.resumeStoredExecutionGraphPendingAction,
+      normalizeApprovalContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeContinuationResponse(
         response,
+        userId,
+        channel,
+        surfaceId,
+      ),
+      withCurrentPendingActionMetadata: (metadata, userId, channel, surfaceId) => this.withCurrentPendingActionMetadata(
+        metadata,
         userId,
         channel,
         surfaceId,
@@ -6681,13 +6707,13 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private normalizeDirectRouteContinuationResponse(
+  private normalizeContinuationResponse(
     response: { content: string; metadata?: Record<string, unknown> },
     userId: string,
     channel: string,
     surfaceId?: string,
   ): { content: string; metadata?: Record<string, unknown> } {
-    return normalizeDirectRouteContinuationResponseHelper({
+    return normalizeContinuationResponseHelper({
       response,
       userId,
       channel,

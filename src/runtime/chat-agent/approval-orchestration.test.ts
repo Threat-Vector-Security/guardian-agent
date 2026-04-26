@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentContext, UserMessage } from '../../agent/types.js';
-import { handleApprovalMessage, syncPendingApprovalsFromExecutor } from './approval-orchestration.js';
+import {
+  continuePendingActionAfterApproval,
+  handleApprovalMessage,
+  syncPendingApprovalsFromExecutor,
+} from './approval-orchestration.js';
 
 describe('approval-orchestration', () => {
   it('suppresses generic tool-completed copy when a capability approval resumes into a final response', async () => {
@@ -74,7 +78,7 @@ describe('approval-orchestration', () => {
         content: 'Note created: Smoke Test Note',
       })),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
-      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve it'),
@@ -168,7 +172,7 @@ describe('approval-orchestration', () => {
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
-      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve the remaining action'),
@@ -269,7 +273,7 @@ describe('approval-orchestration', () => {
       resumeStoredToolLoopPendingAction,
       resumeStoredCapabilityContinuationPendingAction,
       resumeStoredExecutionGraphPendingAction,
-      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
@@ -365,7 +369,7 @@ describe('approval-orchestration', () => {
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
-      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      normalizeApprovalContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
@@ -381,5 +385,74 @@ describe('approval-orchestration', () => {
       },
     });
     expect(completePendingAction).toHaveBeenCalledWith('pending-graph-missing-handler');
+  });
+
+  it('uses the shared continuation path for externally approved execution graph actions', async () => {
+    const pendingAction = {
+      id: 'pending-graph-api',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve graph write',
+        approvalIds: ['approval-graph-api'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Write the redacted scan output.',
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-api',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-api',
+          artifactIds: ['write-spec-api'],
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    } as const;
+    const resumeStoredExecutionGraphPendingAction = vi.fn(async () => ({
+      content: 'Graph resumed from API approval.',
+      metadata: { executionGraph: { graphId: 'graph-api', status: 'succeeded' } },
+    }));
+    const completePendingAction = vi.fn();
+
+    const response = await continuePendingActionAfterApproval({
+      pendingAction,
+      approvalId: 'approval-graph-api',
+      decision: 'approved',
+      approvalResult: {
+        success: true,
+        approved: true,
+        message: "Tool 'fs_write' completed.",
+      },
+      stateAgentId: 'chat',
+      completePendingAction,
+      resumeStoredToolLoopPendingAction: vi.fn(async () => null),
+      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
+      resumeStoredExecutionGraphPendingAction,
+      normalizeApprovalContinuationResponse: vi.fn((result) => result),
+      withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+    });
+
+    expect(response?.content).toBe('Graph resumed from API approval.');
+    expect(resumeStoredExecutionGraphPendingAction).toHaveBeenCalledWith(
+      pendingAction,
+      {
+        approvalId: 'approval-graph-api',
+        approvalResult: expect.objectContaining({ approved: true }),
+      },
+    );
+    expect(completePendingAction).not.toHaveBeenCalled();
   });
 });

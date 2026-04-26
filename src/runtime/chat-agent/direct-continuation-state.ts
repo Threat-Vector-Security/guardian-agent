@@ -27,7 +27,7 @@ export function stripDirectContinuationStateMetadata(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-export function normalizeDirectRouteContinuationResponse(input: {
+export function normalizeContinuationResponse(input: {
   response: { content: string; metadata?: Record<string, unknown> };
   userId: string;
   channel: string;

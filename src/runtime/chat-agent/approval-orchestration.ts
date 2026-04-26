@@ -24,12 +24,13 @@ function isGenericSuccessfulToolCompletionMessage(message: string): boolean {
     || /^Approved and executed(?: \([^)]+\))?\.$/.test(normalized);
 }
 
-export async function continueDirectRouteAfterApproval(input: {
+export async function continuePendingActionAfterApproval(input: {
   pendingAction: PendingActionRecord | null;
   approvalId: string;
   decision: 'approved' | 'denied';
   approvalResult?: ToolApprovalDecisionResult;
   stateAgentId: string;
+  completePendingAction: (actionId: string, nowMs?: number) => void;
   resumeStoredToolLoopPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
@@ -46,20 +47,79 @@ export async function continueDirectRouteAfterApproval(input: {
       approvalResult?: ToolApprovalDecisionResult;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  normalizeDirectRouteContinuationResponse: (
+  resumeStoredExecutionGraphPendingAction?: (
+    pendingAction: PendingActionRecord,
+    options: {
+      approvalId: string;
+      approvalResult: ToolApprovalDecisionResult;
+    },
+  ) => Promise<ApprovalOrchestrationResponse | null>;
+  normalizeApprovalContinuationResponse: (
     response: ApprovalOrchestrationResponse,
     userId: string,
     channel: string,
     surfaceId?: string,
   ) => ApprovalOrchestrationResponse;
+  withCurrentPendingActionMetadata?: (
+    metadata: Record<string, unknown> | undefined,
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+  ) => Record<string, unknown> | undefined;
 }): Promise<ApprovalOrchestrationResponse | null> {
   if (!input.pendingAction || input.decision !== 'approved') return null;
   if (input.pendingAction.scope.agentId !== input.stateAgentId) return null;
   const remainingApprovalIds = (input.pendingAction.blocker.approvalIds ?? [])
     .filter((id) => id !== input.approvalId.trim());
   if (remainingApprovalIds.length > 0) return null;
-  const resumeKind = input.pendingAction.resume?.kind;
-  if (resumeKind !== 'capability_continuation' && resumeKind !== 'tool_loop') return null;
+  const resume = input.pendingAction.resume;
+  if (!resume) return null;
+  const resumeKind = resume.kind;
+  if (resumeKind !== 'execution_graph' && resumeKind !== 'capability_continuation' && resumeKind !== 'tool_loop') return null;
+  if (resumeKind === 'execution_graph') {
+    const response = input.approvalResult?.success && input.resumeStoredExecutionGraphPendingAction
+      ? await input.resumeStoredExecutionGraphPendingAction(input.pendingAction, {
+        approvalId: input.approvalId,
+        approvalResult: input.approvalResult,
+      })
+      : null;
+    if (response) {
+      return input.normalizeApprovalContinuationResponse(
+        response,
+        input.pendingAction.scope.userId,
+        input.pendingAction.scope.channel,
+        input.pendingAction.scope.surfaceId,
+      );
+    }
+    const payload = resume.payload as { graphId?: unknown } | undefined;
+    const graphId = typeof payload?.graphId === 'string' ? payload.graphId : undefined;
+    input.completePendingAction(input.pendingAction.id);
+    const metadata = input.withCurrentPendingActionMetadata
+      ? input.withCurrentPendingActionMetadata(
+        {
+          executionGraph: {
+            ...(graphId ? { graphId } : {}),
+            status: 'failed',
+            reason: 'execution_graph_resume_unavailable',
+          },
+        },
+        input.pendingAction.scope.userId,
+        input.pendingAction.scope.channel,
+        input.pendingAction.scope.surfaceId,
+      )
+      : {
+          executionGraph: {
+            ...(graphId ? { graphId } : {}),
+            status: 'failed',
+            reason: 'execution_graph_resume_unavailable',
+          },
+        };
+    return {
+      content: 'Execution graph approval was resolved, but the persisted execution graph could not be resumed. Please retry the request.',
+      ...(metadata ? { metadata } : {}),
+    };
+  }
+
   const response = resumeKind === 'tool_loop'
     ? await input.resumeStoredToolLoopPendingAction(
       input.pendingAction,
@@ -75,7 +135,7 @@ export async function continueDirectRouteAfterApproval(input: {
       },
     );
   if (!response) return null;
-  return input.normalizeDirectRouteContinuationResponse(
+  return input.normalizeApprovalContinuationResponse(
     response,
     input.pendingAction.scope.userId,
     input.pendingAction.scope.channel,
@@ -201,7 +261,7 @@ export async function handleApprovalMessage(input: {
       approvalResult?: ToolApprovalDecisionResult;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  normalizeDirectRouteContinuationResponse: (
+  normalizeApprovalContinuationResponse: (
     response: ApprovalOrchestrationResponse,
     userId: string,
     channel: string,
@@ -338,82 +398,34 @@ export async function handleApprovalMessage(input: {
     };
   }
 
-  if (pendingAction?.resume?.kind === 'execution_graph') {
+  if (decision === 'approved' && pendingAction?.resume) {
     const approvalResult = targetIds.length === 1
       ? approvalDecisionResults.get(targetIds[0])
       : undefined;
-    const resumedResponse = approvalResult?.success
-      ? await input.resumeStoredExecutionGraphPendingAction(
-        pendingAction,
-        { approvalId: targetIds[0], approvalResult },
-      )
-      : null;
-    if (resumedResponse) {
-      const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
-        resumedResponse,
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
-      );
-      const leadingResults = results.filter((line) => !isGenericSuccessfulToolCompletionMessage(line));
-      return {
-        content: [
-          leadingResults.join('\n'),
-          normalizedResponse.content,
-        ].filter(Boolean).join('\n\n'),
-        metadata: normalizedResponse.metadata,
-      };
-    }
-    const payload = pendingAction.resume.payload as { graphId?: unknown } | undefined;
-    const graphId = typeof payload?.graphId === 'string' ? payload.graphId : undefined;
-    input.completePendingAction(pendingAction.id);
-    return {
-      content: [
-        results.join('\n'),
-        'Execution graph approval was resolved, but the persisted execution graph could not be resumed. Please retry the request.',
-      ].filter(Boolean).join('\n\n'),
-      metadata: input.withCurrentPendingActionMetadata(
-        {
-          executionGraph: {
-            ...(graphId ? { graphId } : {}),
-            status: 'failed',
-            reason: 'execution_graph_resume_unavailable',
-          },
-        },
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
+    const resumedResponse = await continuePendingActionAfterApproval({
+      pendingAction,
+      approvalId: targetIds[0],
+      decision,
+      approvalResult,
+      stateAgentId: pendingAction.scope.agentId,
+      completePendingAction: input.completePendingAction,
+      resumeStoredToolLoopPendingAction: (action, options) => input.resumeStoredToolLoopPendingAction(
+        action,
+        { ...options, ctx: input.ctx },
       ),
-    };
-  }
-
-  if (decision === 'approved' && (pendingAction?.resume?.kind === 'capability_continuation' || pendingAction?.resume?.kind === 'tool_loop')) {
-    const approvalResult = targetIds.length === 1
-      ? approvalDecisionResults.get(targetIds[0])
-      : undefined;
-    const resumedResponse = pendingAction.resume.kind === 'tool_loop'
-      ? await input.resumeStoredToolLoopPendingAction(
-        pendingAction,
-        { approvalId: targetIds[0], approvalResult, ctx: input.ctx },
-      )
-      : await input.resumeStoredCapabilityContinuationPendingAction(
-        pendingAction,
-        { approvalResult },
-      );
+      resumeStoredCapabilityContinuationPendingAction: input.resumeStoredCapabilityContinuationPendingAction,
+      resumeStoredExecutionGraphPendingAction: input.resumeStoredExecutionGraphPendingAction,
+      normalizeApprovalContinuationResponse: input.normalizeApprovalContinuationResponse,
+      withCurrentPendingActionMetadata: input.withCurrentPendingActionMetadata,
+    });
     if (resumedResponse) {
-      const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
-        resumedResponse,
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
-      );
       const leadingResults = results.filter((line) => !isGenericSuccessfulToolCompletionMessage(line));
       return {
         content: [
           leadingResults.join('\n'),
-          normalizedResponse.content,
+          resumedResponse.content,
         ].filter(Boolean).join('\n\n'),
-        metadata: normalizedResponse.metadata,
+        metadata: resumedResponse.metadata,
       };
     }
   }
@@ -425,7 +437,7 @@ export async function handleApprovalMessage(input: {
     const approvalResultResponse = input.formatResolvedApprovalResultResponse(pendingAction, approvalResult);
     if (approvalResultResponse) {
       input.completePendingAction(pendingAction.id);
-      const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
+      const normalizedResponse = input.normalizeApprovalContinuationResponse(
         approvalResultResponse,
         input.message.userId,
         input.message.channel,

@@ -244,7 +244,7 @@ describe('LLMChatAgent direct filesystem save', () => {
       expiresAt: 2,
     };
 
-    const response = await agent.continueDirectRouteAfterApproval(pendingAction, 'approval-path-1', 'approved');
+    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-path-1', 'approved');
 
     expect(response?.content).toBe('I saved the previous assistant output to `S:\\Development\\test5`.');
     expect(executeModelTool).toHaveBeenCalledWith(
@@ -324,7 +324,7 @@ describe('LLMChatAgent direct filesystem save', () => {
       expiresAt: 2,
     };
 
-    const response = await agent.continueDirectRouteAfterApproval(pendingAction, 'approval-write-1', 'approved');
+    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-write-1', 'approved');
 
     expect(response?.content).toBe('I saved the previous assistant output to `S:\\Development\\GuardianAgent\\artifacts\\review.txt`.');
     expect(executeModelTool.mock.calls[0]?.[2]).toMatchObject({
