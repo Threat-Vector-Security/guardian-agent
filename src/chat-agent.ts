@@ -19,8 +19,6 @@ import {
   isRecord,
   normalizeCodingBackendSelection,
   normalizeScheduledEmailBody,
-  parseRequestedEmailCount,
-  parseDirectGoogleWorkspaceIntent,
   readCodeRequestMetadata,
   sameCodeWorkspaceWorkingSet,
   shouldRefreshCodeSessionFocus,
@@ -146,7 +144,6 @@ import {
 } from './runtime/search-intent.js';
 import {
   buildPagedListContinuationState,
-  hasPagedListFollowUpRequest,
   readPagedListContinuationState,
   resolvePagedListWindow,
 } from './runtime/list-continuation.js';
@@ -368,13 +365,13 @@ import {
   summarizeRoutineTimingForUser,
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
-
-const GMAIL_UNREAD_CONTINUATION_KIND = 'gmail_unread_list';
-const GMAIL_RECENT_SENDERS_CONTINUATION_KIND = 'gmail_recent_senders_list';
-const GMAIL_RECENT_SUMMARY_CONTINUATION_KIND = 'gmail_recent_summary_list';
-const M365_UNREAD_CONTINUATION_KIND = 'm365_unread_list';
-const M365_RECENT_SENDERS_CONTINUATION_KIND = 'm365_recent_senders_list';
-const M365_RECENT_SUMMARY_CONTINUATION_KIND = 'm365_recent_summary_list';
+import {
+  buildReplySubject,
+  extractEmailAddress,
+  extractMicrosoft365EmailAddress,
+  getDirectMailboxContinuationKind,
+  resolveDirectMailboxReadIntent,
+} from './runtime/chat-agent/direct-mailbox-helpers.js';
 
 export interface ChatAgentClassDeps {
   log: Logger;
@@ -6475,9 +6472,9 @@ type DirectIntentShadowCandidate =
       return this.tryDirectMicrosoft365Read(message, ctx, userKey, decision, continuityThread);
     }
 
-    const intent = this.resolveDirectMailboxReadIntent('gmail', message.content, decision, continuityThread);
+    const intent = resolveDirectMailboxReadIntent('gmail', message.content, decision, continuityThread);
     if (!intent) return null;
-    const continuationKind = this.getDirectMailboxContinuationKind('gmail', intent.kind);
+    const continuationKind = getDirectMailboxContinuationKind('gmail', intent.kind);
     const priorWindow = continuationKind
       ? readPagedListContinuationState(continuityThread, continuationKind)
       : null;
@@ -6817,9 +6814,9 @@ type DirectIntentShadowCandidate =
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
-    const intent = this.resolveDirectMailboxReadIntent('m365', message.content, decision, continuityThread);
+    const intent = resolveDirectMailboxReadIntent('m365', message.content, decision, continuityThread);
     if (!intent) return null;
-    const continuationKind = this.getDirectMailboxContinuationKind('m365', intent.kind);
+    const continuationKind = getDirectMailboxContinuationKind('m365', intent.kind);
     const priorWindow = continuationKind
       ? readPagedListContinuationState(continuityThread, continuationKind)
       : null;
@@ -7003,88 +7000,6 @@ type DirectIntentShadowCandidate =
       : lines.join('\n');
   }
 
-  private getDirectMailboxContinuationKind(
-    provider: 'gmail' | 'm365',
-    kind: NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>>['kind'],
-  ): string {
-    if (provider === 'gmail') {
-      switch (kind) {
-        case 'gmail_recent_senders':
-          return GMAIL_RECENT_SENDERS_CONTINUATION_KIND;
-        case 'gmail_recent_summary':
-          return GMAIL_RECENT_SUMMARY_CONTINUATION_KIND;
-        case 'gmail_unread':
-        default:
-          return GMAIL_UNREAD_CONTINUATION_KIND;
-      }
-    }
-    switch (kind) {
-      case 'gmail_recent_senders':
-        return M365_RECENT_SENDERS_CONTINUATION_KIND;
-      case 'gmail_recent_summary':
-        return M365_RECENT_SUMMARY_CONTINUATION_KIND;
-      case 'gmail_unread':
-      default:
-        return M365_UNREAD_CONTINUATION_KIND;
-    }
-  }
-
-  private resolveDirectMailboxReadIntent(
-    provider: 'gmail' | 'm365',
-    content: string,
-    decision?: IntentGatewayDecision | null,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>> | null {
-    const decisionDriven = this.resolveDecisionMailboxReadIntent(provider, content, decision);
-    if (decisionDriven) return decisionDriven;
-    const parsed = parseDirectGoogleWorkspaceIntent(content);
-    if (parsed) return parsed;
-    if (!hasPagedListFollowUpRequest(content, decision?.turnRelation)) {
-      return null;
-    }
-    const continuationKinds = provider === 'gmail'
-      ? [
-          [GMAIL_UNREAD_CONTINUATION_KIND, 'gmail_unread'],
-          [GMAIL_RECENT_SENDERS_CONTINUATION_KIND, 'gmail_recent_senders'],
-          [GMAIL_RECENT_SUMMARY_CONTINUATION_KIND, 'gmail_recent_summary'],
-        ] as const
-      : [
-          [M365_UNREAD_CONTINUATION_KIND, 'gmail_unread'],
-          [M365_RECENT_SENDERS_CONTINUATION_KIND, 'gmail_recent_senders'],
-          [M365_RECENT_SUMMARY_CONTINUATION_KIND, 'gmail_recent_summary'],
-        ] as const;
-    for (const [continuationKind, kind] of continuationKinds) {
-      const prior = readPagedListContinuationState(continuityThread, continuationKind);
-      if (!prior) continue;
-      return {
-        kind,
-        count: Math.max(1, prior.limit),
-      };
-    }
-    return null;
-  }
-
-  private resolveDecisionMailboxReadIntent(
-    provider: 'gmail' | 'm365',
-    content: string,
-    decision?: IntentGatewayDecision | null,
-  ): NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>> | null {
-    if (!decision || decision.route !== 'email_task' || decision.operation !== 'read') {
-      return null;
-    }
-    const declaredProvider = decision.entities.emailProvider;
-    if (declaredProvider && ((provider === 'gmail' && declaredProvider !== 'gws')
-      || (provider === 'm365' && declaredProvider !== 'm365'))) {
-      return null;
-    }
-    const mailboxReadMode = decision.entities.mailboxReadMode;
-    if (!mailboxReadMode) return null;
-    return {
-      kind: mailboxReadMode === 'latest' ? 'gmail_recent_summary' : 'gmail_unread',
-      count: parseRequestedEmailCount(content),
-    };
-  }
-
   private async resolveLatestUnreadGmailReplyTarget(
     message: UserMessage,
     ctx: AgentContext,
@@ -7157,13 +7072,13 @@ type DirectIntentShadowCandidate =
     }
 
     const summary = summarizeGmailMessage(detailResult.output);
-    const to = this.extractEmailAddress(summary?.from);
+    const to = extractEmailAddress(summary?.from);
     if (!to) {
       return 'I found the newest unread Gmail message, but I could not determine the sender email address.';
     }
     return {
       to,
-      subject: this.buildReplySubject(toString(summary?.subject)),
+      subject: buildReplySubject(toString(summary?.subject)),
     };
   }
 
@@ -7217,13 +7132,13 @@ type DirectIntentShadowCandidate =
       : [];
     const newest = messages[0];
     if (!newest) return null;
-    const to = this.extractMicrosoft365EmailAddress(newest.from);
+    const to = extractMicrosoft365EmailAddress(newest.from);
     if (!to) {
       return 'I found the newest unread Outlook message, but I could not determine the sender email address.';
     }
     return {
       to,
-      subject: this.buildReplySubject(toString(newest.subject)),
+      subject: buildReplySubject(toString(newest.subject)),
     };
   }
 
@@ -7265,25 +7180,6 @@ type DirectIntentShadowCandidate =
       `I prepared a ${providerLabel} inbox check to resolve the reply target, but it needs approval first.`,
       prompt,
     ].filter(Boolean).join('\n\n'));
-  }
-
-  private buildReplySubject(subject: string): string {
-    const trimmed = subject.trim() || '(no subject)';
-    return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
-  }
-
-  private extractEmailAddress(value: string | undefined): string {
-    const text = toString(value).trim();
-    if (!text) return '';
-    const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-    return match?.[0]?.trim() ?? '';
-  }
-
-  private extractMicrosoft365EmailAddress(value: unknown): string {
-    if (!value || typeof value !== 'object') return '';
-    const record = value as Record<string, unknown>;
-    const emailAddress = isRecord(record.emailAddress) ? record.emailAddress : null;
-    return toString(emailAddress?.address).trim();
   }
 
   private async tryDirectFilesystemIntent(
