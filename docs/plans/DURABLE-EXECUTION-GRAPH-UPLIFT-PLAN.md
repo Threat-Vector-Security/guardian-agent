@@ -158,6 +158,12 @@ Checkpoint after the chat-agent direct-intent helper extraction:
 - `src/chat-agent.ts` is still the turn-orchestration entrypoint, but it no longer owns those parsing/formatting details inline. Future slices should keep extracting cohesive runtime modules before changing behavior.
 - Focused coverage now exists at `src/runtime/chat-agent/direct-intent-helpers.test.ts`, so these helpers can be refactored independently while the graph-owned orchestration work continues.
 
+Checkpoint after the direct-mailbox helper extraction:
+
+- Gmail/Outlook read-intent resolution, continuation-kind mapping, reply-subject formatting, and mailbox address extraction moved into `src/runtime/chat-agent/direct-mailbox-helpers.ts`.
+- `src/chat-agent.ts` still owns the actual Gmail/Outlook tool execution and approval creation for now, but no longer owns the pure mailbox parsing/continuation rules inline.
+- Focused coverage now exists at `src/runtime/chat-agent/direct-mailbox-helpers.test.ts`, including decision-driven reads and paged-list continuation recovery.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
