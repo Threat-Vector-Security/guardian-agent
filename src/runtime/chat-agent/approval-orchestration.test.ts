@@ -4,7 +4,7 @@ import type { AgentContext, UserMessage } from '../../agent/types.js';
 import { handleApprovalMessage, syncPendingApprovalsFromExecutor } from './approval-orchestration.js';
 
 describe('approval-orchestration', () => {
-  it('suppresses generic tool-completed copy when a direct-route approval resumes into a final response', async () => {
+  it('suppresses generic tool-completed copy when a capability approval resumes into a final response', async () => {
     const pendingAction = {
       id: 'pending-1',
       scope: {
@@ -26,7 +26,7 @@ describe('approval-orchestration', () => {
         originalUserContent: 'Save this note.',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
           type: 'filesystem_save_output',
         },
@@ -70,7 +70,7 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredDirectRoutePendingAction: vi.fn(async () => ({
+      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => ({
         content: 'Note created: Smoke Test Note',
       })),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
@@ -166,7 +166,7 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -234,7 +234,7 @@ describe('approval-orchestration', () => {
       metadata: { graphId: 'graph-1' },
     }));
     const resumeStoredToolLoopPendingAction = vi.fn(async () => null);
-    const resumeStoredDirectRoutePendingAction = vi.fn(async () => null);
+    const resumeStoredCapabilityContinuationPendingAction = vi.fn(async () => null);
     const completePendingAction = vi.fn();
 
     const result = await handleApprovalMessage({
@@ -267,7 +267,7 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction,
-      resumeStoredDirectRoutePendingAction,
+      resumeStoredCapabilityContinuationPendingAction,
       resumeStoredExecutionGraphPendingAction,
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -285,7 +285,7 @@ describe('approval-orchestration', () => {
       expect.objectContaining({ approvalId: 'approval-graph-1' }),
     );
     expect(resumeStoredToolLoopPendingAction).not.toHaveBeenCalled();
-    expect(resumeStoredDirectRoutePendingAction).not.toHaveBeenCalled();
+    expect(resumeStoredCapabilityContinuationPendingAction).not.toHaveBeenCalled();
     expect(completePendingAction).not.toHaveBeenCalled();
   });
 
@@ -363,7 +363,7 @@ describe('approval-orchestration', () => {
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredCapabilityContinuationPendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),

@@ -178,7 +178,7 @@ import {
 } from './runtime/chat-agent/recent-tool-report.js';
 import {
   normalizeFilesystemResumePrincipalRole,
-} from './runtime/chat-agent/direct-route-resume.js';
+} from './runtime/chat-agent/capability-continuation-resume.js';
 import {
   buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
   buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
@@ -222,7 +222,7 @@ import {
   tryDirectMemorySave as tryDirectMemorySaveHelper,
 } from './runtime/chat-agent/direct-memory.js';
 import {
-  resumeStoredDirectRoutePendingAction as resumeStoredDirectRoutePendingActionHelper,
+  resumeStoredCapabilityContinuationPendingAction as resumeStoredCapabilityContinuationPendingActionHelper,
   tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
 import {
@@ -4714,7 +4714,7 @@ type DirectIntentShadowCandidate =
       takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
       clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
       resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
-      resumeStoredDirectRoutePendingAction: (pendingAction, options) => this.resumeStoredDirectRoutePendingAction(pendingAction, options),
+      resumeStoredCapabilityContinuationPendingAction: (pendingAction, options) => this.resumeStoredCapabilityContinuationPendingAction(pendingAction, options),
       resumeStoredExecutionGraphPendingAction: (pendingAction, options) => {
         if (!workerManager || !options?.approvalId || !options.approvalResult) {
           return Promise.resolve(null);
@@ -5047,7 +5047,7 @@ type DirectIntentShadowCandidate =
       approvalResult,
       stateAgentId: this.stateAgentId,
       resumeStoredToolLoopPendingAction: (action, options) => this.resumeStoredToolLoopPendingAction(action, options),
-      resumeStoredDirectRoutePendingAction: (action, options) => this.resumeStoredDirectRoutePendingAction(action, options),
+      resumeStoredCapabilityContinuationPendingAction: (action, options) => this.resumeStoredCapabilityContinuationPendingAction(action, options),
       normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
         response,
         userId,
@@ -6662,11 +6662,11 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private async resumeStoredDirectRoutePendingAction(
+  private async resumeStoredCapabilityContinuationPendingAction(
     pendingAction: PendingActionRecord,
     options?: { pendingActionAlreadyCleared?: boolean; approvalResult?: ToolApprovalDecisionResult },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return resumeStoredDirectRoutePendingActionHelper({
+    return resumeStoredCapabilityContinuationPendingActionHelper({
       pendingAction,
       options,
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
@@ -6817,7 +6817,7 @@ type DirectIntentShadowCandidate =
 
   private async executeStoredAutomationAuthoring(
     pendingAction: PendingActionRecord,
-    resume: import('./runtime/chat-agent/direct-route-resume.js').AutomationAuthoringResumePayload,
+    resume: import('./runtime/chat-agent/capability-continuation-resume.js').AutomationAuthoringResumePayload,
     approvalResult?: ToolApprovalDecisionResult,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (!approvalResult || !approvalResult.approved) {

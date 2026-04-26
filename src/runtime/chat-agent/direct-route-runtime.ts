@@ -26,7 +26,7 @@ import {
   readFilesystemSaveOutputResumePayload,
   readAutomationAuthoringResumePayload,
   type AutomationAuthoringResumePayload,
-} from './direct-route-resume.js';
+} from './capability-continuation-resume.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
@@ -261,7 +261,7 @@ export async function tryDirectFilesystemSearch(input: DirectFilesystemIntentInp
   });
 }
 
-export async function resumeStoredDirectRoutePendingAction(input: {
+export async function resumeStoredCapabilityContinuationPendingAction(input: {
   pendingAction: PendingActionRecord;
   options?: {
     pendingActionAlreadyCleared?: boolean;

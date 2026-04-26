@@ -4,11 +4,11 @@ import type { AgentContext } from '../../agent/types.js';
 import { isRecord, toString } from '../../chat-agent-helpers.js';
 import type { PrincipalRole, ToolExecutionRequest } from '../../tools/types.js';
 
-export const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
-export const DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
+export const CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
+export const CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
 
 export interface FilesystemSaveOutputResumePayload {
-  type: typeof DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT;
+  type: typeof CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
   targetPath: string;
   content: string;
   originalUserContent: string;
@@ -22,7 +22,7 @@ export interface FilesystemSaveOutputResumePayload {
 }
 
 export interface AutomationAuthoringResumePayload {
-  type: typeof DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING;
+  type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
   originalUserContent: string;
   allowRemediation: boolean;
   principalId?: string;
@@ -119,7 +119,7 @@ export function readFilesystemSaveOutputResumePayload(
   payload: Record<string, unknown> | undefined,
 ): FilesystemSaveOutputResumePayload | null {
   if (!isRecord(payload)) return null;
-  if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
+  if (payload.type !== CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
   const targetPath = toString(payload.targetPath).trim();
   const content = toString(payload.content);
   const originalUserContent = toString(payload.originalUserContent).trim();
@@ -133,7 +133,7 @@ export function readFilesystemSaveOutputResumePayload(
       }
     : undefined;
   return {
-    type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
+    type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
     targetPath,
     content,
     originalUserContent,
@@ -185,7 +185,7 @@ export function readAutomationAuthoringResumePayload(
   payload: Record<string, unknown> | undefined,
 ): AutomationAuthoringResumePayload | null {
   if (!isRecord(payload)) return null;
-  if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING) return null;
+  if (payload.type !== CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING) return null;
   const originalUserContent = toString(payload.originalUserContent).trim();
   if (!originalUserContent) return null;
   const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
@@ -197,7 +197,7 @@ export function readAutomationAuthoringResumePayload(
       }
     : undefined;
   return {
-    type: DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING,
+    type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
     originalUserContent,
     allowRemediation: payload.allowRemediation !== false,
     ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),

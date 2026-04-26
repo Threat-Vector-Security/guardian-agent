@@ -217,12 +217,12 @@ Checkpoint after the WorkerManager direct-approval cache deletion:
 - Direct automation authoring approvals in `WorkerManager` no longer maintain a parallel session-local pending approval cache.
 - Direct approval messages now resolve the active approval blocker from the shared `PendingActionStore` for the current agent/user/channel/surface scope, then update that same pending-action record after approval or denial.
 - WorkerManager only intercepts pending approvals it owns: execution-graph approvals it can resume through `resumeExecutionGraphPendingAction`, or the remaining direct automation remediation replay path.
-- This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state instead of a `direct_route` payload.
+- This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the capability-continuation replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state.
 
 Checkpoint after the pending-action switch metadata cleanup:
 
-- Pending-action collision/switch candidates no longer use `resume.kind = "direct_route"` as a storage slot for UI bookkeeping.
-- Switch candidates now live under blocker metadata while preserving the original pending action resume untouched, so the direct-route resume channel only represents actual legacy capability replay.
+- Pending-action collision/switch candidates no longer use pending-action resume payloads as a storage slot for UI bookkeeping.
+- Switch candidates now live under blocker metadata while preserving the original pending action resume untouched, so resume payloads only represent actual capability or graph continuation.
 - Declining a switch removes the switch-candidate metadata instead of rewriting the pending action's resume payload.
 
 Checkpoint after the pending-approval status helper extraction:
@@ -256,6 +256,13 @@ Checkpoint after the shared tool-loop round extraction:
 - The live chat-agent tool loop, fallback-provider tool execution path, and stored tool-loop approval resume path now call the shared round helper instead of each carrying their own partial copy of the same orchestration rules.
 - Focused coverage now exists at `src/runtime/chat-agent/tool-loop-round.test.ts` for approval redaction and deferred tool discovery.
 - Remaining tool-loop debt after this slice: `src/chat-agent.ts` still owns the larger LLM round/retry/recovery loop and `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts. The next architectural move is to lift the round controller itself, then replace replay resumes with graph interrupts.
+
+Checkpoint after the capability-continuation resume cleanup:
+
+- `PendingActionResumeKind` no longer accepts the overloaded `direct_route` value. Remaining non-graph capability replay payloads now use `capability_continuation`, which makes the state contract explicit and removes the old route-replay implication.
+- The resume payload helpers moved to `src/runtime/chat-agent/capability-continuation-resume.ts`, and shared approval orchestration now calls `resumeStoredCapabilityContinuationPendingAction`.
+- No compatibility reader for the old `direct_route` value was retained. Existing durable pending-action rows with that obsolete resume kind are intentionally invalid under the refined contract.
+- Remaining continuation debt after this slice: filesystem-save and automation-authoring policy remediation still resume by replaying structured capability state. They are now isolated behind an explicit capability-continuation contract, but still need graph policy-interrupt equivalents before the replay channel can be deleted.
 
 Exit criteria for this refinement phase:
 

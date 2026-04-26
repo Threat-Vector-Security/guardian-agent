@@ -190,7 +190,7 @@ describe('ChatAgentOrchestrationState', () => {
           originalUserContent: 'Save the previous output.',
         },
         resume: {
-          kind: 'direct_route',
+          kind: 'capability_continuation',
           payload: {
             type: 'filesystem_save_output',
             targetPath: 'S:\\Development\\test5',
@@ -216,14 +216,14 @@ describe('ChatAgentOrchestrationState', () => {
     );
 
     expect(pendingAction?.id).toBe(created.id);
-    expect(pendingAction?.resume?.kind).toBe('direct_route');
+    expect(pendingAction?.resume?.kind).toBe('capability_continuation');
   });
 
-  it('stores pending-action switch candidates in blocker metadata instead of direct-route resume', () => {
+  it('stores pending-action switch candidates in blocker metadata instead of capability continuation resume', () => {
     const nowMs = 1_710_000_000_000;
     const store = createStore(nowMs);
     const previousResume = {
-      kind: 'direct_route' as const,
+      kind: 'capability_continuation' as const,
       payload: {
         type: 'filesystem_save_output',
         targetPath: 'S:\\Development\\test5',

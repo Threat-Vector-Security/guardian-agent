@@ -39,7 +39,7 @@ export async function continueDirectRouteAfterApproval(input: {
       ctx?: AgentContext;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  resumeStoredDirectRoutePendingAction: (
+  resumeStoredCapabilityContinuationPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
       pendingActionAlreadyCleared?: boolean;
@@ -59,7 +59,7 @@ export async function continueDirectRouteAfterApproval(input: {
     .filter((id) => id !== input.approvalId.trim());
   if (remainingApprovalIds.length > 0) return null;
   const resumeKind = input.pendingAction.resume?.kind;
-  if (resumeKind !== 'direct_route' && resumeKind !== 'tool_loop') return null;
+  if (resumeKind !== 'capability_continuation' && resumeKind !== 'tool_loop') return null;
   const response = resumeKind === 'tool_loop'
     ? await input.resumeStoredToolLoopPendingAction(
       input.pendingAction,
@@ -68,7 +68,7 @@ export async function continueDirectRouteAfterApproval(input: {
         approvalResult: input.approvalResult,
       },
     )
-    : await input.resumeStoredDirectRoutePendingAction(
+    : await input.resumeStoredCapabilityContinuationPendingAction(
       input.pendingAction,
       {
         approvalResult: input.approvalResult,
@@ -187,7 +187,7 @@ export async function handleApprovalMessage(input: {
       ctx?: AgentContext;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  resumeStoredDirectRoutePendingAction: (
+  resumeStoredCapabilityContinuationPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
       pendingActionAlreadyCleared?: boolean;
@@ -387,7 +387,7 @@ export async function handleApprovalMessage(input: {
     };
   }
 
-  if (decision === 'approved' && (pendingAction?.resume?.kind === 'direct_route' || pendingAction?.resume?.kind === 'tool_loop')) {
+  if (decision === 'approved' && (pendingAction?.resume?.kind === 'capability_continuation' || pendingAction?.resume?.kind === 'tool_loop')) {
     const approvalResult = targetIds.length === 1
       ? approvalDecisionResults.get(targetIds[0])
       : undefined;
@@ -396,7 +396,7 @@ export async function handleApprovalMessage(input: {
         pendingAction,
         { approvalId: targetIds[0], approvalResult, ctx: input.ctx },
       )
-      : await input.resumeStoredDirectRoutePendingAction(
+      : await input.resumeStoredCapabilityContinuationPendingAction(
         pendingAction,
         { approvalResult },
       );

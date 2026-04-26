@@ -170,7 +170,7 @@ describe('LLMChatAgent direct filesystem save', () => {
 
     expect(typeof response === 'string' ? response : response.content).toContain('add "S:\\Development" to the allowed paths');
     const pendingAction = (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat') as PendingActionRecord | null;
-    expect(pendingAction?.resume?.kind).toBe('direct_route');
+    expect(pendingAction?.resume?.kind).toBe('capability_continuation');
     expect(pendingAction?.resume?.payload).toMatchObject({
       type: 'filesystem_save_output',
       targetPath: 'S:\\Development\\test5',
@@ -183,7 +183,7 @@ describe('LLMChatAgent direct filesystem save', () => {
     pendingActionStore.close();
   });
 
-  it('continues a stored direct-route save after path approval using the captured output snapshot', async () => {
+  it('continues a stored capability save after path approval using the captured output snapshot', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
         debug: vi.fn(),
@@ -226,7 +226,7 @@ describe('LLMChatAgent direct filesystem save', () => {
         originalUserContent: 'Save that last output to test5',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
           type: 'filesystem_save_output',
           targetPath: 'S:\\Development\\test5',
@@ -306,7 +306,7 @@ describe('LLMChatAgent direct filesystem save', () => {
         originalUserContent: 'Save that last output to review.txt',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
           type: 'filesystem_save_output',
           targetPath: 'S:\\Development\\GuardianAgent\\artifacts\\review.txt',

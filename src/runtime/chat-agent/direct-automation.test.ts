@@ -206,7 +206,7 @@ describe('direct-automation', () => {
         operation: 'classifier.primary',
       },
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
           type: 'automation_authoring',
           originalUserContent: 'Create a daily briefing automation',

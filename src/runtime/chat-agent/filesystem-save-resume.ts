@@ -6,10 +6,10 @@ import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionApprovalSummary, PendingActionRecord } from '../pending-actions.js';
 import {
   buildDirectFilesystemToolRequest,
-  DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
+  CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
   getFilesystemPolicyRoot,
   isFilesystemPathPolicyError,
-} from './direct-route-resume.js';
+} from './capability-continuation-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface StoredFilesystemSaveInput {
@@ -190,9 +190,9 @@ function buildPendingFilesystemPathApprovalResponse(
       turnRelation: 'new_request',
       resolution: 'ready',
       resume: {
-        kind: 'direct_route',
+        kind: 'capability_continuation',
         payload: {
-          type: DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT,
+          type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
           targetPath: input.request.targetPath,
           content: input.request.content,
           originalUserContent: input.request.originalUserContent,
