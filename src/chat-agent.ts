@@ -214,6 +214,7 @@ import {
 import {
   buildBlockedToolLoopPendingApprovalResume,
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
+  finalizeToolLoopPendingApprovals as finalizeToolLoopPendingApprovalsHelper,
   recoverDirectAnswerAfterTools as recoverDirectAnswerAfterToolsHelper,
   resumeStoredToolLoopPendingAction as resumeStoredToolLoopPendingActionHelper,
 } from './runtime/chat-agent/tool-loop-runtime.js';
@@ -287,9 +288,7 @@ import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill, SkillPromptArtifactContext, SkillPromptMaterialResult } from './skills/types.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
-  formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
-  shouldUseStructuredPendingApprovalMessage,
 } from './runtime/pending-approval-copy.js';
 import {
   getProviderLocalityFromName,
@@ -3178,57 +3177,42 @@ type DirectIntentShadowCandidate =
         finalContent = answerFirstFallbackResponse;
       }
 
-      // Store pending approvals for this user so they can be approved/denied explicitly
-      if (pendingIds.length > 0) {
-        const existing = this.getPendingApprovalIds(
-          pendingActionUserId,
-          pendingActionChannel,
-          pendingActionSurfaceId,
-        );
-        const merged = [...new Set([...existing, ...pendingIds])];
-        this.setPendingApprovals(pendingActionUserKey, merged, pendingActionSurfaceId);
-        const summaries = this.tools?.getApprovalSummaries(merged);
-        const approvalSummaries = merged.map((id) => {
-          const summary = summaries?.get(id);
-          return {
-            id,
-            toolName: summary?.toolName ?? 'unknown',
-            argsPreview: summary?.argsPreview ?? '',
-            actionLabel: summary?.actionLabel ?? '',
-          };
-        });
-        const pendingApprovalPrompt = approvalSummaries.length > 0
-          ? formatPendingApprovalMessage(approvalSummaries)
-          : 'Approval required for the pending action.';
-        const pendingActionResult = this.setPendingApprovalAction(
-          pendingActionUserId,
-          pendingActionChannel,
-          pendingActionSurfaceId,
-          {
-            prompt: pendingApprovalPrompt,
-            approvalIds: merged,
-            approvalSummaries,
-            originalUserContent: routedScopedMessage.content,
-            route: directIntent?.decision.route,
-            operation: directIntent?.decision.operation,
-            summary: directIntent?.decision.summary,
-            turnRelation: directIntent?.decision.turnRelation,
-            resolution: directIntent?.decision.resolution,
-            missingFields: directIntent?.decision.missingFields,
-            provenance: directIntent?.decision.provenance,
-            entities: directIntent?.decision.entities as Record<string, unknown> | undefined,
-            ...(toolLoopPendingResume ? { resume: toolLoopPendingResume } : {}),
-            ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
-          },
-        );
-        pendingActionMeta = toPendingActionClientMetadata(pendingActionResult.action);
-        if (pendingActionResult.collisionPrompt) {
-          finalContent = pendingActionResult.collisionPrompt;
-        } else if (pendingActionResult.action?.blocker.approvalSummaries?.length) {
-          finalContent = formatPendingApprovalMessage(pendingActionResult.action.blocker.approvalSummaries);
-        } else if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.lacksUsableAssistantContent(finalContent)) {
-          finalContent = pendingApprovalPrompt;
-        }
+      const finalizedPendingApprovals = finalizeToolLoopPendingApprovalsHelper({
+        pendingIds,
+        pendingActionUserId,
+        pendingActionChannel,
+        pendingActionSurfaceId,
+        pendingActionUserKey,
+        originalUserContent: routedScopedMessage.content,
+        finalContent,
+        intentDecision: directIntent?.decision,
+        resume: toolLoopPendingResume,
+        codeSessionId: resolvedCodeSession?.session.id,
+        tools: this.tools,
+        getPendingApprovalIds: (userId, channel, surfaceId, nowMs) => this.getPendingApprovalIds(
+          userId,
+          channel,
+          surfaceId,
+          nowMs,
+        ),
+        setPendingApprovals: (userKey, ids, surfaceId, nowMs) => this.setPendingApprovals(
+          userKey,
+          ids,
+          surfaceId,
+          nowMs,
+        ),
+        setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
+          userId,
+          channel,
+          surfaceId,
+          action,
+          nowMs,
+        ),
+        lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
+      });
+      if (finalizedPendingApprovals) {
+        finalContent = finalizedPendingApprovals.finalContent;
+        pendingActionMeta = finalizedPendingApprovals.pendingActionMeta;
       }
 
       if ((!finalContent || this.looksLikeOngoingWorkResponse(finalContent)) && lastToolRoundResults.length > 0) {

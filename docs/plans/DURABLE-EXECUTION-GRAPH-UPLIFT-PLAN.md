@@ -296,6 +296,12 @@ Checkpoint after the provider fallback runtime extraction:
 - `src/chat-agent.ts` still decides where model calls happen in the turn flow, but it no longer owns the provider fallback state machine inline. Stored tool-loop resume and live execution can now share the same fallback contract shape.
 - Remaining provider debt after this slice: quality-fallback branches inside the larger live LLM/tool-loop controller still decide when to retry, but they no longer call the fallback-chain API directly. The remaining work is to lift that controller itself out of `src/chat-agent.ts`.
 
+Checkpoint after the live tool-loop pending approval finalization cleanup:
+
+- Live tool-loop pending approval finalization now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `finalizeToolLoopPendingApprovals`: approval-id merging, approval-summary rendering, pending-action creation, collision handling, and structured approval copy selection are no longer embedded in `src/chat-agent.ts`.
+- The live ChatAgent controller still decides when a turn has pending tool approvals, but the pending-action write path now has one runtime owner shared with the stored tool-loop resume helpers.
+- Remaining approval debt after this slice: the pending action still stores a `tool_loop` replay payload. Replacing that payload with graph interrupts and artifact-backed observations remains the next durable-execution step.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
