@@ -611,8 +611,13 @@ describe('intent-gateway-orchestration', () => {
         prompt: 'Original blocked request.',
       },
       resume: {
-        kind: 'capability_continuation',
-        payload: { previous: true },
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-previous',
+          nodeId: 'node-previous',
+          resumeToken: 'resume-previous',
+          artifactIds: [],
+        },
       },
     });
     const replacement = makePendingAction({

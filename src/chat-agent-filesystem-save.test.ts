@@ -8,6 +8,10 @@ import type { AgentContext, UserMessage } from './agent/types.js';
 import { createChatAgentClass } from './chat-agent.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
+import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
+import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
+import { recordCapabilityContinuationGraphApproval } from './runtime/chat-agent/capability-graph-continuation.js';
+import { CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT } from './runtime/chat-agent/capability-continuation-resume.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
 
 const createdFiles: string[] = [];
@@ -75,6 +79,72 @@ function createPolicy(): ToolPolicySnapshot {
   };
 }
 
+function createFilesystemGraphPendingAction(input: {
+  approvalId: string;
+  targetPath: string;
+  content: string;
+  originalUserContent: string;
+  codeContext?: { workspaceRoot: string; sessionId?: string };
+}): {
+  pendingAction: PendingActionRecord;
+  pendingActionStore: PendingActionStore;
+  executionGraphStore: ExecutionGraphStore;
+} {
+  const pendingActionStore = createPendingActionStore();
+  const executionGraphStore = new ExecutionGraphStore();
+  const result = recordCapabilityContinuationGraphApproval({
+    graphStore: executionGraphStore,
+    userKey: 'owner:web',
+    userId: 'owner',
+    channel: 'web',
+    surfaceId: 'web-guardian-chat',
+    agentId: 'chat',
+    requestId: 'msg-resume',
+    action: {
+      prompt: 'Approve path change',
+      approvalIds: [input.approvalId],
+      originalUserContent: input.originalUserContent,
+      route: 'filesystem_task',
+      operation: 'save',
+      summary: 'Resume the file save after path approval.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      continuation: {
+        type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+        targetPath: input.targetPath,
+        content: input.content,
+        originalUserContent: input.originalUserContent,
+        codeContext: input.codeContext,
+        allowPathRemediation: false,
+      },
+    },
+    setGraphPendingActionForRequest: (_userKey, _surfaceId, action, nowMs) => ({
+      action: recordGraphPendingActionInterrupt({
+        store: pendingActionStore,
+        scope: {
+          agentId: 'chat',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        },
+        event: action.event,
+        originalUserContent: action.originalUserContent,
+        intent: action.intent,
+        artifactRefs: action.artifactRefs,
+        approvalSummaries: action.approvalSummaries,
+        transferPolicy: action.transferPolicy,
+        expiresAt: action.expiresAt,
+        nowMs,
+      }),
+    }),
+    nowMs: 1,
+  });
+  if (!result.action) {
+    throw new Error('Expected graph pending action');
+  }
+  return { pendingAction: result.action, pendingActionStore, executionGraphStore };
+}
+
 describe('LLMChatAgent direct filesystem save', () => {
   it('stores a resumable pending action with the full previous assistant output when path approval is required', async () => {
     const ChatAgent = createChatAgentClass({
@@ -115,6 +185,7 @@ describe('LLMChatAgent direct filesystem save', () => {
         }],
       ]),
     } as never;
+    const executionGraphStore = new ExecutionGraphStore();
     const agent = new ChatAgent(
       'chat',
       'Chat',
@@ -141,6 +212,7 @@ describe('LLMChatAgent direct filesystem save', () => {
       undefined,
       pendingActionStore,
     );
+    agent.capabilityExecutionGraphStore = executionGraphStore;
     const conversationKey: ConversationKey = {
       agentId: 'chat',
       userId: 'owner',
@@ -170,13 +242,20 @@ describe('LLMChatAgent direct filesystem save', () => {
 
     expect(typeof response === 'string' ? response : response.content).toContain('add "S:\\Development" to the allowed paths');
     const pendingAction = (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat') as PendingActionRecord | null;
-    expect(pendingAction?.resume?.kind).toBe('capability_continuation');
-    expect(pendingAction?.resume?.payload).toMatchObject({
-      type: 'filesystem_save_output',
-      targetPath: 'S:\\Development\\test5',
-      content: previousOutput,
-      originalUserContent: 'Can you save that last output to a file called test5 in S:\\Development',
-      allowPathRemediation: false,
+    expect(pendingAction?.resume?.kind).toBe('execution_graph');
+    const artifactId = pendingAction?.graphInterrupt?.artifactRefs[0]?.artifactId;
+    expect(artifactId).toBeTruthy();
+    expect(executionGraphStore.getArtifact(pendingAction!.graphInterrupt!.graphId, artifactId!)).toMatchObject({
+      artifactType: 'CapabilityContinuation',
+      content: {
+        payload: {
+          type: 'filesystem_save_output',
+          targetPath: 'S:\\Development\\test5',
+          content: previousOutput,
+          originalUserContent: 'Can you save that last output to a file called test5 in S:\\Development',
+          allowPathRemediation: false,
+        },
+      },
     });
 
     conversationService.close();
@@ -205,46 +284,25 @@ describe('LLMChatAgent direct filesystem save', () => {
       executeModelTool,
     } as never;
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'chat');
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'web-guardian-chat',
+    const { pendingAction, pendingActionStore, executionGraphStore } = createFilesystemGraphPendingAction({
+      approvalId: 'approval-path-1',
+      targetPath: 'S:\\Development\\test5',
+      content: 'full assistant output snapshot',
+      originalUserContent: 'Save that last output to test5',
+      codeContext: {
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        sessionId: 'code-session-1',
       },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve path change',
-        approvalIds: ['approval-path-1'],
-      },
-      intent: {
-        route: 'filesystem_task',
-        operation: 'save',
-        originalUserContent: 'Save that last output to test5',
-      },
-      resume: {
-        kind: 'capability_continuation',
-        payload: {
-          type: 'filesystem_save_output',
-          targetPath: 'S:\\Development\\test5',
-          content: 'full assistant output snapshot',
-          originalUserContent: 'Save that last output to test5',
-          codeContext: {
-            workspaceRoot: 'S:\\Development\\GuardianAgent',
-            sessionId: 'code-session-1',
-          },
-          allowPathRemediation: false,
-        },
-      },
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
+    });
+    agent.pendingActionStore = pendingActionStore;
+    agent.capabilityExecutionGraphStore = executionGraphStore;
 
-    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-path-1', 'approved');
+    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-path-1', 'approved', {
+      success: true,
+      approved: true,
+      message: 'Approved.',
+    });
+    pendingActionStore.close();
 
     expect(response?.content).toBe('I saved the previous assistant output to `S:\\Development\\test5`.');
     expect(executeModelTool).toHaveBeenCalledWith(
@@ -285,46 +343,25 @@ describe('LLMChatAgent direct filesystem save', () => {
       executeModelTool,
     } as never;
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'chat');
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-2',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'web-guardian-chat',
+    const { pendingAction, pendingActionStore, executionGraphStore } = createFilesystemGraphPendingAction({
+      approvalId: 'approval-write-1',
+      targetPath: 'S:\\Development\\GuardianAgent\\artifacts\\review.txt',
+      content: 'full assistant output snapshot',
+      originalUserContent: 'Save that last output to review.txt',
+      codeContext: {
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        sessionId: 'code-session-1',
       },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve path change',
-        approvalIds: ['approval-write-1'],
-      },
-      intent: {
-        route: 'filesystem_task',
-        operation: 'save',
-        originalUserContent: 'Save that last output to review.txt',
-      },
-      resume: {
-        kind: 'capability_continuation',
-        payload: {
-          type: 'filesystem_save_output',
-          targetPath: 'S:\\Development\\GuardianAgent\\artifacts\\review.txt',
-          content: 'full assistant output snapshot',
-          originalUserContent: 'Save that last output to review.txt',
-          codeContext: {
-            workspaceRoot: 'S:\\Development\\GuardianAgent',
-            sessionId: 'code-session-1',
-          },
-          allowPathRemediation: false,
-        },
-      },
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
+    });
+    agent.pendingActionStore = pendingActionStore;
+    agent.capabilityExecutionGraphStore = executionGraphStore;
 
-    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-write-1', 'approved');
+    const response = await agent.continuePendingActionAfterApproval(pendingAction, 'approval-write-1', 'approved', {
+      success: true,
+      approved: true,
+      message: 'Approved.',
+    });
+    pendingActionStore.close();
 
     expect(response?.content).toBe('I saved the previous assistant output to `S:\\Development\\GuardianAgent\\artifacts\\review.txt`.');
     expect(executeModelTool.mock.calls[0]?.[2]).toMatchObject({

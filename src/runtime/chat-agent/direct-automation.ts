@@ -16,9 +16,8 @@ import type {
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import { toPendingActionEntities } from './intent-gateway-orchestration.js';
 import {
-  buildAutomationAuthoringResumePayload,
-  buildStoredAutomationAuthoringInput,
-} from './automation-authoring-resume.js';
+  CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+} from './capability-continuation-resume.js';
 
 interface DirectAutomationClarificationMetadata {
   blockerKind: PendingActionBlocker['kind'];
@@ -87,6 +86,34 @@ export interface DirectAutomationDeps {
       entities?: Record<string, unknown>;
       codeSessionId?: string;
       resume?: PendingActionRecord['resume'];
+    },
+  ) => { action: PendingActionRecord | null; collisionPrompt?: string };
+  setCapabilityGraphPendingApprovalActionForRequest: (
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      continuation: {
+        type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
+        originalUserContent: string;
+        allowRemediation: boolean;
+        principalId?: string;
+        principalRole?: string;
+        messageMetadata?: Record<string, unknown>;
+        codeContext?: { workspaceRoot: string; sessionId?: string };
+      };
+      codeSessionId?: string;
     },
   ) => { action: PendingActionRecord | null; collisionPrompt?: string };
   buildPendingApprovalBlockedResponse: (
@@ -219,41 +246,43 @@ export async function tryDirectAutomationAuthoring(input: {
       ? result.metadata.pendingAction.blocker.prompt
       : deps.formatPendingApprovalPrompt(trackedPendingApprovalIds);
     const summaries = deps.tools?.getApprovalSummaries(trackedPendingApprovalIds);
-    const pendingActionResult = deps.setPendingApprovalActionForRequest(
-      input.userKey,
-      input.message.surfaceId,
-      {
-        prompt,
-        approvalIds: trackedPendingApprovalIds,
-        approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
-        originalUserContent: input.message.content,
-        route: input.options?.intentDecision?.route ?? 'automation_authoring',
-        operation: input.options?.intentDecision?.operation ?? 'create',
-        summary: input.options?.intentDecision?.summary ?? 'Creates or updates a Guardian automation.',
-        turnRelation: input.options?.intentDecision?.turnRelation ?? 'new_request',
-        resolution: input.options?.intentDecision?.resolution ?? 'ready',
-        provenance: input.options?.intentDecision?.provenance,
-        entities: toPendingActionEntities(input.options?.intentDecision?.entities),
-        ...(result.metadata?.resumeAutomationAfterApprovals
-          ? {
-              resume: buildAutomationAuthoringResumePayload(buildStoredAutomationAuthoringInput({
-                originalUserContent: input.message.content,
-                userKey: input.userKey,
-                userId: input.message.userId,
-                channel: input.message.channel,
-                surfaceId: input.message.surfaceId,
-                principalId: input.message.principalId,
-                principalRole: input.message.principalRole,
-                requestId: input.message.id,
-                agentCheckAction: input.ctx.checkAction,
-                ...(input.codeContext?.workspaceRoot
-                  ? { codeContext: { workspaceRoot: input.codeContext.workspaceRoot } }
-                  : {}),
-              })),
-            }
-          : {}),
-      },
-    );
+    const pendingActionInput = {
+      prompt,
+      approvalIds: trackedPendingApprovalIds,
+      approvalSummaries: buildPendingApprovalMetadata(trackedPendingApprovalIds, summaries),
+      originalUserContent: input.message.content,
+      route: input.options?.intentDecision?.route ?? 'automation_authoring',
+      operation: input.options?.intentDecision?.operation ?? 'create',
+      summary: input.options?.intentDecision?.summary ?? 'Creates or updates a Guardian automation.',
+      turnRelation: input.options?.intentDecision?.turnRelation ?? 'new_request',
+      resolution: input.options?.intentDecision?.resolution ?? 'ready',
+      provenance: input.options?.intentDecision?.provenance,
+      entities: toPendingActionEntities(input.options?.intentDecision?.entities),
+    };
+    const pendingActionResult = result.metadata?.resumeAutomationAfterApprovals
+      ? deps.setCapabilityGraphPendingApprovalActionForRequest(
+        input.userKey,
+        input.message.surfaceId,
+        {
+          ...pendingActionInput,
+          continuation: {
+            type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+            originalUserContent: input.message.content,
+            allowRemediation: input.options?.allowRemediation !== false,
+            ...(input.message.principalId ? { principalId: input.message.principalId } : {}),
+            ...(input.message.principalRole ? { principalRole: input.message.principalRole } : {}),
+            ...(isRecord(input.message.metadata) ? { messageMetadata: { ...input.message.metadata } } : {}),
+            ...(input.codeContext?.workspaceRoot
+              ? { codeContext: { workspaceRoot: input.codeContext.workspaceRoot } }
+              : {}),
+          },
+        },
+      )
+      : deps.setPendingApprovalActionForRequest(
+        input.userKey,
+        input.message.surfaceId,
+        pendingActionInput,
+      );
     const mergedResult = deps.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
     result.content = mergedResult.content;
     result.metadata = {

@@ -190,10 +190,12 @@ describe('ChatAgentOrchestrationState', () => {
           originalUserContent: 'Save the previous output.',
         },
         resume: {
-          kind: 'capability_continuation',
+          kind: 'execution_graph',
           payload: {
-            type: 'filesystem_save_output',
-            targetPath: 'S:\\Development\\test5',
+            graphId: 'graph-1',
+            nodeId: 'node-1',
+            resumeToken: 'resume-1',
+            artifactIds: [],
           },
         },
         expiresAt: nowMs + 30 * 60_000,
@@ -216,17 +218,19 @@ describe('ChatAgentOrchestrationState', () => {
     );
 
     expect(pendingAction?.id).toBe(created.id);
-    expect(pendingAction?.resume?.kind).toBe('capability_continuation');
+    expect(pendingAction?.resume?.kind).toBe('execution_graph');
   });
 
-  it('stores pending-action switch candidates in blocker metadata instead of capability continuation resume', () => {
+  it('stores pending-action switch candidates in blocker metadata instead of graph resume', () => {
     const nowMs = 1_710_000_000_000;
     const store = createStore(nowMs);
     const previousResume = {
-      kind: 'capability_continuation' as const,
+      kind: 'execution_graph' as const,
       payload: {
-        type: 'filesystem_save_output',
-        targetPath: 'S:\\Development\\test5',
+        graphId: 'graph-previous',
+        nodeId: 'node-previous',
+        resumeToken: 'resume-previous',
+        artifactIds: [],
       },
     };
     store.replaceActive(

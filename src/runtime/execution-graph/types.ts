@@ -41,7 +41,8 @@ export type ExecutionArtifactType =
   | 'MutationReceipt'
   | 'VerificationResult'
   | 'RecoveryProposal'
-  | 'WorkerSuspension';
+  | 'WorkerSuspension'
+  | 'CapabilityContinuation';
 
 export interface ExecutionSecurityContext {
   agentId?: string;

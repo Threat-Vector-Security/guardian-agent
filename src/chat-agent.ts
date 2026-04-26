@@ -206,11 +206,14 @@ import {
   tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
 import {
-  resumeStoredCapabilityContinuationPendingAction as resumeStoredCapabilityContinuationPendingActionHelper,
-} from './runtime/chat-agent/capability-continuation-runtime.js';
-import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
+import {
+  emitCapabilityContinuationGraphResumeEvent,
+  readCapabilityContinuationGraphResume,
+  recordCapabilityContinuationGraphApproval,
+  type CapabilityContinuationPayload,
+} from './runtime/chat-agent/capability-graph-continuation.js';
 import {
   buildBlockedToolLoopPendingApprovalResume,
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
@@ -251,6 +254,8 @@ import {
   ExecutionStore,
   type ExecutionRecord,
 } from './runtime/executions.js';
+import type { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
+import type { RunTimelineStore } from './runtime/run-timeline.js';
 import {
   buildChatMessagesFromHistory,
   buildContextCompactionDiagnostics,
@@ -422,6 +427,8 @@ export interface ChatAgentConstructor {
     intentGateway?: IntentGateway,
     resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
     readConfig?: () => GuardianAgentConfig | undefined,
+    executionGraphStore?: ExecutionGraphStore,
+    runTimeline?: RunTimelineStore,
   ): ChatAgentPublicApi;
 }
 
@@ -506,6 +513,20 @@ type DirectIntentShadowCandidate =
   set executionStore(value: ExecutionStore | undefined) {
     this.orchestrationState.setExecutionStore(value);
   }
+  get capabilityExecutionGraphStore(): ExecutionGraphStore | undefined {
+    return this.executionGraphStore;
+  }
+  set capabilityExecutionGraphStore(value: ExecutionGraphStore | undefined) {
+    this.executionGraphStore = value;
+  }
+  get capabilityRunTimeline(): RunTimelineStore | undefined {
+    return this.runTimeline;
+  }
+  set capabilityRunTimeline(value: RunTimelineStore | undefined) {
+    this.runTimeline = value;
+  }
+  private executionGraphStore?: ExecutionGraphStore;
+  private runTimeline?: RunTimelineStore;
   /** Durable trace for intent gateway, tier routing, and direct execution decisions. */
   private intentRoutingTrace?: IntentRoutingTraceLog;
   /** Optional model fallback chain for retrying failed LLM calls. */
@@ -624,6 +645,8 @@ type DirectIntentShadowCandidate =
     intentGateway?: IntentGateway,
     resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
     readConfig?: () => GuardianAgentConfig | undefined,
+    executionGraphStore?: ExecutionGraphStore,
+    runTimeline?: RunTimelineStore,
   ) {
     super(id, name, { handleMessages: true });
     this.customSystemPrompt = systemPrompt;
@@ -671,6 +694,8 @@ type DirectIntentShadowCandidate =
     });
     this.intentGateway = intentGateway ?? new IntentGateway();
     this.readConfig = readConfig;
+    this.executionGraphStore = executionGraphStore;
+    this.runTimeline = runTimeline;
   }
 
   private recordIntentRoutingTrace(
@@ -4579,17 +4604,19 @@ type DirectIntentShadowCandidate =
       takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
       clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
       resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
-      resumeStoredCapabilityContinuationPendingAction: (pendingAction, options) => this.resumeStoredCapabilityContinuationPendingAction(pendingAction, options),
       resumeStoredExecutionGraphPendingAction: (pendingAction, options) => {
-        if (!workerManager || !options?.approvalId || !options.approvalResult) {
+        if (!options?.approvalId || !options.approvalResult) {
           return Promise.resolve(null);
         }
-        return workerManager.resumeExecutionGraphPendingAction(
+        return this.resumeStoredExecutionGraphPendingAction(
           pendingAction,
           {
             approvalId: options.approvalId,
             approvalResult: options.approvalResult,
           },
+          workerManager
+            ? (action, nextOptions) => workerManager.resumeExecutionGraphPendingAction(action, nextOptions)
+            : undefined,
         );
       },
       normalizeApprovalContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeContinuationResponse(
@@ -4793,6 +4820,52 @@ type DirectIntentShadowCandidate =
     return this.orchestrationState.setPendingApprovalActionForRequest(userKey, surfaceId, input, nowMs);
   }
 
+  private setCapabilityGraphPendingApprovalActionForRequest(
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      continuation: CapabilityContinuationPayload;
+      codeSessionId?: string;
+    },
+    nowMs: number = Date.now(),
+  ) {
+    if (!this.executionGraphStore) {
+      throw new Error('Execution graph store is required for capability approval continuation.');
+    }
+    const { userId, channel } = this.parsePendingActionUserKey(userKey);
+    return recordCapabilityContinuationGraphApproval({
+      graphStore: this.executionGraphStore,
+      runTimeline: this.runTimeline,
+      userKey,
+      userId,
+      channel,
+      surfaceId,
+      agentId: this.stateAgentId,
+      requestId: randomUUID(),
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+      action: input,
+      setGraphPendingActionForRequest: (nextUserKey, nextSurfaceId, action, nextNowMs) => this.orchestrationState.setGraphPendingActionInterruptForRequest(
+        nextUserKey,
+        nextSurfaceId,
+        action,
+        nextNowMs,
+      ),
+      nowMs,
+    });
+  }
+
   private buildPendingApprovalBlockedResponse(
     result: ReturnType<ChatAgentOrchestrationState['setPendingApprovalActionForRequest']>,
     fallbackContent: string,
@@ -4922,8 +4995,11 @@ type DirectIntentShadowCandidate =
       stateAgentId: this.stateAgentId,
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       resumeStoredToolLoopPendingAction: (action, options) => this.resumeStoredToolLoopPendingAction(action, options),
-      resumeStoredCapabilityContinuationPendingAction: (action, options) => this.resumeStoredCapabilityContinuationPendingAction(action, options),
-      resumeStoredExecutionGraphPendingAction: options?.resumeStoredExecutionGraphPendingAction,
+      resumeStoredExecutionGraphPendingAction: (action, nextOptions) => this.resumeStoredExecutionGraphPendingAction(
+        action,
+        nextOptions,
+        options?.resumeStoredExecutionGraphPendingAction,
+      ),
       normalizeApprovalContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeContinuationResponse(
         response,
         userId,
@@ -5159,6 +5235,11 @@ type DirectIntentShadowCandidate =
         action,
       ),
       setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      setCapabilityGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setCapabilityGraphPendingApprovalActionForRequest(
         nextUserKey,
         surfaceId,
         action,
@@ -5593,21 +5674,110 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private async resumeStoredCapabilityContinuationPendingAction(
+  private async resumeStoredExecutionGraphPendingAction(
     pendingAction: PendingActionRecord,
-    options?: { pendingActionAlreadyCleared?: boolean; approvalResult?: ToolApprovalDecisionResult },
+    options: { approvalId: string; approvalResult: ToolApprovalDecisionResult },
+    fallback?: (
+      pendingAction: PendingActionRecord,
+      options: { approvalId: string; approvalResult: ToolApprovalDecisionResult },
+    ) => Promise<{ content: string; metadata?: Record<string, unknown> } | null>,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return resumeStoredCapabilityContinuationPendingActionHelper({
+    const capabilityResume = readCapabilityContinuationGraphResume({
+      graphStore: this.executionGraphStore,
       pendingAction,
-      options,
-      completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
-      executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      executeStoredAutomationAuthoring: (nextPendingAction, resume, approvalResult) => this.executeStoredAutomationAuthoring(
-        nextPendingAction,
-        resume,
-        approvalResult,
-      ),
     });
+    if (!capabilityResume) {
+      return fallback ? fallback(pendingAction, options) : null;
+    }
+    if (!this.executionGraphStore) return null;
+    const nowMs = Date.now();
+    this.completePendingAction(pendingAction.id, nowMs);
+    emitCapabilityContinuationGraphResumeEvent({
+      graphStore: this.executionGraphStore,
+      runTimeline: this.runTimeline,
+      resume: capabilityResume,
+      kind: 'interruption_resolved',
+      payload: {
+        kind: 'approval',
+        approvalId: options.approvalId,
+        resumeToken: capabilityResume.resumeToken,
+        resultStatus: (options.approvalResult.approved ?? options.approvalResult.success) ? 'approved' : 'denied',
+      },
+      eventKey: 'approval-resolved',
+      nowMs,
+    });
+
+    if (!(options.approvalResult.approved ?? options.approvalResult.success)) {
+      emitCapabilityContinuationGraphResumeEvent({
+        graphStore: this.executionGraphStore,
+        runTimeline: this.runTimeline,
+        resume: capabilityResume,
+        kind: 'graph_failed',
+        payload: {
+          reason: options.approvalResult.message || 'Approval denied.',
+          continuationArtifactId: capabilityResume.artifact.artifactId,
+        },
+        eventKey: 'denied',
+        nowMs,
+      });
+      return {
+        content: options.approvalResult.message || 'Approval denied. I did not continue the pending action.',
+        metadata: {
+          executionGraph: {
+            graphId: capabilityResume.graph.graphId,
+            status: 'failed',
+            reason: 'approval_denied',
+          },
+        },
+      };
+    }
+
+    const result = capabilityResume.payload.type === 'filesystem_save_output'
+      ? await this.executeStoredFilesystemSave({
+        targetPath: capabilityResume.payload.targetPath,
+        content: capabilityResume.payload.content,
+        originalUserContent: capabilityResume.payload.originalUserContent,
+        userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
+        userId: pendingAction.scope.userId,
+        channel: pendingAction.scope.channel,
+        surfaceId: pendingAction.scope.surfaceId,
+        principalId: capabilityResume.payload.principalId ?? pendingAction.scope.userId,
+        principalRole: normalizeFilesystemResumePrincipalRole(capabilityResume.payload.principalRole) ?? 'owner',
+        requestId: randomUUID(),
+        codeContext: capabilityResume.payload.codeContext,
+        allowPathRemediation: capabilityResume.payload.allowPathRemediation,
+      })
+      : await this.executeStoredAutomationAuthoring(
+        pendingAction,
+        capabilityResume.payload,
+        options.approvalResult,
+      );
+    const response = typeof result === 'string' ? { content: result } : result;
+    const nextPendingAction = isRecord(response.metadata?.pendingAction)
+      ? response.metadata.pendingAction
+      : null;
+    emitCapabilityContinuationGraphResumeEvent({
+      graphStore: this.executionGraphStore,
+      runTimeline: this.runTimeline,
+      resume: capabilityResume,
+      kind: 'graph_completed',
+      payload: {
+        continuationArtifactId: capabilityResume.artifact.artifactId,
+        resultStatus: nextPendingAction ? 'pending_approval' : 'completed',
+      },
+      eventKey: 'completed',
+    });
+    return {
+      content: response.content,
+      metadata: {
+        ...(response.metadata ?? {}),
+        executionGraph: {
+          graphId: capabilityResume.graph.graphId,
+          status: nextPendingAction ? 'pending_approval' : 'completed',
+          continuationArtifactId: capabilityResume.artifact.artifactId,
+        },
+      },
+    };
   }
 
   private normalizeContinuationResponse(
@@ -5778,6 +5948,12 @@ type DirectIntentShadowCandidate =
         action,
         nowMs,
       ),
+      setCapabilityGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setCapabilityGraphPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
       buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
         result,
         fallbackContent,
@@ -5808,6 +5984,12 @@ type DirectIntentShadowCandidate =
       getPendingApprovals: (userKey, surfaceId, nowMs) => this.getPendingApprovals(userKey, surfaceId, nowMs),
       formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
       setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      setCapabilityGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setCapabilityGraphPendingApprovalActionForRequest(
         userKey,
         surfaceId,
         action,

@@ -40,13 +40,6 @@ export async function continuePendingActionAfterApproval(input: {
       ctx?: AgentContext;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  resumeStoredCapabilityContinuationPendingAction: (
-    pendingAction: PendingActionRecord,
-    options?: {
-      pendingActionAlreadyCleared?: boolean;
-      approvalResult?: ToolApprovalDecisionResult;
-    },
-  ) => Promise<ApprovalOrchestrationResponse | null>;
   resumeStoredExecutionGraphPendingAction?: (
     pendingAction: PendingActionRecord,
     options: {
@@ -75,7 +68,7 @@ export async function continuePendingActionAfterApproval(input: {
   const resume = input.pendingAction.resume;
   if (!resume) return null;
   const resumeKind = resume.kind;
-  if (resumeKind !== 'execution_graph' && resumeKind !== 'capability_continuation' && resumeKind !== 'tool_loop') return null;
+  if (resumeKind !== 'execution_graph' && resumeKind !== 'tool_loop') return null;
   if (resumeKind === 'execution_graph') {
     const response = input.approvalResult?.success && input.resumeStoredExecutionGraphPendingAction
       ? await input.resumeStoredExecutionGraphPendingAction(input.pendingAction, {
@@ -128,12 +121,7 @@ export async function continuePendingActionAfterApproval(input: {
         approvalResult: input.approvalResult,
       },
     )
-    : await input.resumeStoredCapabilityContinuationPendingAction(
-      input.pendingAction,
-      {
-        approvalResult: input.approvalResult,
-      },
-    );
+    : null;
   if (!response) return null;
   return input.normalizeApprovalContinuationResponse(
     response,
@@ -245,13 +233,6 @@ export async function handleApprovalMessage(input: {
       pendingActionAlreadyCleared?: boolean;
       approvalResult?: ToolApprovalDecisionResult;
       ctx?: AgentContext;
-    },
-  ) => Promise<ApprovalOrchestrationResponse | null>;
-  resumeStoredCapabilityContinuationPendingAction: (
-    pendingAction: PendingActionRecord,
-    options?: {
-      pendingActionAlreadyCleared?: boolean;
-      approvalResult?: ToolApprovalDecisionResult;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
   resumeStoredExecutionGraphPendingAction: (
@@ -413,7 +394,6 @@ export async function handleApprovalMessage(input: {
         action,
         { ...options, ctx: input.ctx },
       ),
-      resumeStoredCapabilityContinuationPendingAction: input.resumeStoredCapabilityContinuationPendingAction,
       resumeStoredExecutionGraphPendingAction: input.resumeStoredExecutionGraphPendingAction,
       normalizeApprovalContinuationResponse: input.normalizeApprovalContinuationResponse,
       withCurrentPendingActionMetadata: input.withCurrentPendingActionMetadata,

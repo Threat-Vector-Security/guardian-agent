@@ -37,11 +37,30 @@ export interface RecordGraphPendingActionInterruptInput {
   expiresAt?: number;
 }
 
+export interface BuildGraphPendingActionReplacementInput {
+  event: ExecutionGraphEvent;
+  originalUserContent: string;
+  intent?: Partial<PendingActionIntent>;
+  artifactRefs?: ExecutionArtifactRef[];
+  approvalSummaries?: PendingActionApprovalSummary[];
+  transferPolicy?: PendingActionTransferPolicy;
+  nowMs?: number;
+  expiresAt?: number;
+}
+
 const DEFAULT_PENDING_ACTION_TTL_MS = 30 * 60_000;
 
 export function recordGraphPendingActionInterrupt(
   input: RecordGraphPendingActionInterruptInput,
 ): PendingActionRecord | null {
+  const replacement = buildGraphPendingActionReplacement(input);
+  if (!replacement) return null;
+  return input.store.replaceActive(input.scope, replacement, input.nowMs ?? Date.now());
+}
+
+export function buildGraphPendingActionReplacement(
+  input: BuildGraphPendingActionReplacementInput,
+): Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'> | null {
   const blockerKind = readGraphBlockerKind(input.event);
   if (!blockerKind) return null;
   const approvalIds = readApprovalIds(input.event.payload);
@@ -60,7 +79,7 @@ export function recordGraphPendingActionInterrupt(
     missingFields: input.intent?.missingFields,
   });
   const resume = buildExecutionGraphResumePayload(graphInterrupt);
-  return input.store.replaceActive(input.scope, {
+  return {
     status: 'pending',
     transferPolicy: input.transferPolicy ?? defaultPendingActionTransferPolicy(blockerKind),
     blocker,
@@ -87,7 +106,7 @@ export function recordGraphPendingActionInterrupt(
     rootExecutionId: input.event.rootExecutionId,
     ...(input.event.codeSessionId ? { codeSessionId: input.event.codeSessionId } : {}),
     expiresAt: input.expiresAt ?? nowMs + DEFAULT_PENDING_ACTION_TTL_MS,
-  }, nowMs);
+  };
 }
 
 function readGraphBlockerKind(event: ExecutionGraphEvent): PendingActionBlockerKind | null {

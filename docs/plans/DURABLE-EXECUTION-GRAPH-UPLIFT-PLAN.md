@@ -135,21 +135,21 @@ Checkpoint after the first approval/resume debt-burn slice:
 - Chat-agent tool-loop approvals no longer keep an in-memory suspended-session replay cache. The durable `PendingActionRecord.resume` payload is the resume source for chat-level tool-loop approval continuation.
 - The old suspended approval scope helpers were removed with their tests; pending actions now own blocked-work lookup for chat approvals.
 - CLI and Telegram no longer synthesize a replay turn when the approval decision API already returns an explicit continuation directive. Direct continuation responses and pending-action resume metadata are authoritative for those flows.
-- Remaining approval/resume overlap after this slice: worker-manager direct automation continuations, worker-session automation continuations, worker suspended approvals, capability-continuation payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
+- Remaining approval/resume overlap after this slice: worker-manager direct automation continuations, worker-session automation continuations, worker suspended approvals, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
 
 Checkpoint after the chat automation-resume debt-burn slice:
 
-- Chat automation authoring remediation approvals now write a `capability_continuation` pending-action resume payload with `type: "automation_authoring"` instead of registering an in-memory ChatAgent continuation.
-- `approval-orchestration.ts` no longer owns a special automation retry path. Final approval resolution falls through to the shared pending-action capability-continuation resume path.
-- `capability-continuation-runtime.ts` dispatches stored automation-authoring resume payloads to `automation-authoring-resume.ts`, which reconstructs the authoring request from pending-action metadata and can create another pending action if follow-up remediation approvals are needed.
-- The temporary `automation-approval-continuation.ts` module and tests were deleted. The next debt-burn step was to apply the same pending-action/graph-resume ownership to `WorkerManager.directAutomationContinuations`; `WorkerSession` automation continuations remain to be migrated.
+- This was an intermediate bridge where chat automation authoring remediation approvals moved out of an in-memory ChatAgent continuation and into durable pending-action metadata.
+- That bridge is now superseded. Automation authoring remediation approvals use `execution_graph` pending actions with a `CapabilityContinuation` graph artifact; `capability_continuation` is no longer a pending-action resume kind.
+- `approval-orchestration.ts` no longer owns a special automation retry path. Final approval resolution goes through the shared execution-graph continuation path.
+- The temporary `automation-approval-continuation.ts` module and tests were deleted in this slice; the later graph-backed capability cleanup deleted the capability-continuation runtime as well.
 
 Checkpoint after the worker-manager direct automation debt-burn slice:
 
-- `WorkerManager.directAutomationContinuations` was deleted. Direct automation remediation approvals now store the authoring resume payload on the pending action and inline approval messages resume by reading that pending-action payload.
+- `WorkerManager.directAutomationContinuations` was deleted. Direct automation remediation approvals later moved fully to graph-owned continuation artifacts instead of storing replay payloads on the pending action.
 - The dashboard approval path no longer asks WorkerManager for a separate automation-continuation flag. Pending-action resume metadata is the continuation signal.
 - WorkerManager records direct automation pending actions under the resolved shared state agent id when the runtime provides a state-id resolver, so dashboard approval continuation stays aligned with ChatAgent state ownership.
-- Remaining approval/resume overlap at this checkpoint: brokered worker automation continuation state, worker suspended approvals, capability-continuation payloads, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
+- Remaining approval/resume overlap at this checkpoint: brokered worker automation continuation state, worker suspended approvals, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
 
 Checkpoint after the chat-agent direct-intent helper extraction:
 
@@ -168,7 +168,7 @@ Checkpoint after the brokered worker automation-resume cleanup:
 - `BrokeredWorkerSession.automationContinuation` was deleted. The worker no longer keeps a separate hidden automation-authoring continuation beside pending approvals.
 - Brokered automation remediation now returns an explicit `workerAutomationAuthoringResume` metadata payload. `WorkerManager` carries that payload with the worker suspended-approval state and sends it back to the worker as structured continuation metadata after the approval set resolves.
 - The worker handles that resume metadata before intent classification and reruns automation authoring with `assumeAuthoring: true`, preserving the original user content and code context from the supervisor-provided resume payload.
-- Remaining approval/resume overlap after this slice: worker suspended approvals still own brokered-worker approval continuity until they are replaced by graph interrupt resume; capability-continuation and tool-loop resume payloads still need graph interrupt equivalents before deletion.
+- Remaining approval/resume overlap after this slice: worker suspended approvals still owned brokered-worker approval continuity until they were replaced by graph interrupt resume; tool-loop resume payloads still need graph interrupt equivalents before deletion.
 
 Checkpoint after the brokered worker pending-action resume slice (superseded):
 
@@ -183,7 +183,7 @@ Checkpoint after the brokered worker graph-suspension and fallback removal slice
 - Dashboard/API approval resolution no longer consults WorkerManager's live suspended-worker map as a continuation source. It resumes `execution_graph` pending actions through the shared approval-continuation path.
 - Non-graph delegated worker approval metadata is sanitized instead of being advertised as resumable. If a delegated worker cannot produce graph-owned suspension state, it no longer creates a shared pending-action continuation facade.
 - The worker-specific resume serializer, `worker_approval` pending-action kind, live worker suspended-approval maps, and direct worker approval continuation path have been deleted.
-- Remaining approval/resume overlap after this slice: capability-continuation and chat-agent `tool_loop` resume payloads are still replay payloads rather than graph interrupts.
+- Remaining approval/resume overlap after this slice: chat-agent `tool_loop` resume payloads are still replay payloads rather than graph interrupts.
 
 Checkpoint after the tool-loop resume helper extraction:
 
@@ -196,28 +196,28 @@ Checkpoint after the coding-backend capability replay deletion:
 - `coding_backend_run` approvals no longer store a capability replay resume payload. The approval decision result already carries the backend execution output, so shared approval orchestration now renders that result directly.
 - `src/runtime/chat-agent/coding-backend-approval-result.ts` owns coding-backend approval-result response metadata without reconstructing a replay request.
 - The deleted `coding-backend-resume.ts` bridge removes one capability replay payload type from the approval continuation runtime.
-- Remaining capability-continuation debt after this slice: filesystem save and automation-authoring resumes are still replay payloads. They need graph interrupt equivalents before the capability-continuation channel can be removed.
+- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
 
 Checkpoint after the direct coding-backend runtime extraction:
 
 - Direct coding-backend status checks, direct backend run dispatch, pending-approval storage, and routing trace emission moved from `src/chat-agent.ts` into `src/runtime/chat-agent/direct-coding-backend.ts`.
 - `src/chat-agent.ts` now only wires dependencies for that path, which gives the future graph-interrupt migration one direct coding-backend owner instead of another inline monolith branch.
 - Focused coverage at `src/runtime/chat-agent/direct-coding-backend.test.ts` verifies successful direct runs, recent-run status formatting, and the current shared pending-action resume contract.
-- Remaining capability-continuation debt after this slice: filesystem save and automation-authoring resumes are still replay payloads. They need graph interrupt equivalents before the capability-continuation channel can be removed.
+- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
 
 Checkpoint after the Second Brain capability replay deletion:
 
 - Direct Second Brain mutation approvals no longer persist tool names, arguments, and original content as a capability replay payload.
 - Pending actions now carry only the user-facing mutation descriptor in intent entities, while shared approval orchestration asks `ChatAgent` to format approved tool results through the capability-specific result formatter.
 - `second-brain-resume.ts`, the Second Brain capability replay payload type, and the continuation-runtime branch for Second Brain replay have been deleted.
-- Remaining capability-continuation debt after this slice: filesystem save and automation-authoring resumes are still replay payloads. They need graph interrupt equivalents before the capability-continuation channel can be removed.
+- Remaining capability debt after this slice: filesystem save and automation-authoring remediation resumes still needed graph interrupt equivalents. That debt is now closed by the graph-backed capability continuation cleanup.
 
 Checkpoint after the WorkerManager direct-approval cache deletion:
 
 - Direct automation authoring approvals in `WorkerManager` no longer maintain a parallel session-local pending approval cache.
 - Direct approval messages now resolve the active approval blocker from the shared `PendingActionStore` for the current agent/user/channel/surface scope, then update that same pending-action record after approval or denial.
-- WorkerManager only intercepts pending approvals it owns: execution-graph approvals it can resume through `resumeExecutionGraphPendingAction`, or the remaining direct automation remediation replay path.
-- This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the capability-continuation replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state.
+- WorkerManager only intercepts pending approvals it owns: execution-graph approvals it can resume through `resumeExecutionGraphPendingAction`.
+- This removes the last WorkerManager-owned in-memory direct approval list. The later graph-backed capability continuation cleanup also removed the direct automation remediation replay payload.
 
 Checkpoint after the pending-action switch metadata cleanup:
 
@@ -257,20 +257,20 @@ Checkpoint after the shared tool-loop round extraction:
 - Focused coverage now exists at `src/runtime/chat-agent/tool-loop-round.test.ts` for approval redaction and deferred tool discovery.
 - Remaining tool-loop debt after this slice: `src/chat-agent.ts` still owns the larger LLM round/retry/recovery loop and `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts. The next architectural move is to lift the round controller itself, then replace replay resumes with graph interrupts.
 
-Checkpoint after the capability-continuation resume cleanup:
+Checkpoint after the capability-continuation bridge cleanup:
 
-- `PendingActionResumeKind` no longer accepts the overloaded `direct_route` value. Remaining non-graph capability replay payloads now use `capability_continuation`, which makes the state contract explicit and removes the old route-replay implication.
-- The resume payload helpers moved to `src/runtime/chat-agent/capability-continuation-resume.ts`, resume execution moved to `src/runtime/chat-agent/capability-continuation-runtime.ts`, and shared approval orchestration now calls `resumeStoredCapabilityContinuationPendingAction`.
+- `PendingActionResumeKind` no longer accepts the overloaded `direct_route` value. At this intermediate checkpoint, remaining non-graph capability replay payloads were isolated behind a `capability_continuation` bridge so the old route-replay implication could be removed.
+- The resume payload helpers moved to `src/runtime/chat-agent/capability-continuation-resume.ts`, resume execution temporarily moved to `src/runtime/chat-agent/capability-continuation-runtime.ts`, and shared approval orchestration temporarily called `resumeStoredCapabilityContinuationPendingAction`.
 - `src/runtime/chat-agent/direct-route-runtime.ts` now owns only direct filesystem intent handling; it no longer dispatches stored continuation approvals.
 - No compatibility reader for the old `direct_route` value was retained. Existing durable pending-action rows with that obsolete resume kind are intentionally invalid under the refined contract.
-- Remaining continuation debt after this slice: filesystem-save and automation-authoring policy remediation still resume by replaying structured capability state. They are now isolated behind an explicit capability-continuation contract, but still need graph policy-interrupt equivalents before the replay channel can be deleted.
+- This bridge is now retired. Filesystem-save and automation-authoring policy remediation no longer use a non-graph resume kind.
 
 Checkpoint after the shared approval-continuation cleanup:
 
 - Dashboard/API approval decisions no longer special-case `execution_graph` in `src/index.ts` before falling through to a ChatAgent-only continuation method.
-- `src/runtime/chat-agent/approval-orchestration.ts` now owns final approval continuation dispatch for `execution_graph`, `capability_continuation`, and `tool_loop` pending-action resumes.
+- `src/runtime/chat-agent/approval-orchestration.ts` now owns final approval continuation dispatch for `execution_graph` and `tool_loop` pending-action resumes.
 - The ChatAgent public method is now `continuePendingActionAfterApproval`, and continuation response normalization no longer carries direct-route naming.
-- Remaining approval-continuation debt after this slice: filesystem-save and automation-authoring policy remediation still use `capability_continuation`, and chat-level tool-loop approvals still use `tool_loop`; both need graph interrupt equivalents before replay payloads can be removed.
+- Remaining approval-continuation debt after this slice: chat-level tool-loop approvals still use `tool_loop` and need graph interrupt equivalents before replay payloads can be removed.
 
 Checkpoint after the blocked tool-loop resume builder cleanup:
 
@@ -301,6 +301,13 @@ Checkpoint after the live tool-loop pending approval finalization cleanup:
 - Live tool-loop pending approval finalization now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `finalizeToolLoopPendingApprovals`: approval-id merging, approval-summary rendering, pending-action creation, collision handling, and structured approval copy selection are no longer embedded in `src/chat-agent.ts`.
 - The live ChatAgent controller still decides when a turn has pending tool approvals, but the pending-action write path now has one runtime owner shared with the stored tool-loop resume helpers.
 - Remaining approval debt after this slice: the pending action still stores a `tool_loop` replay payload. Replacing that payload with graph interrupts and artifact-backed observations remains the next durable-execution step.
+
+Checkpoint after the graph-backed capability continuation cleanup:
+
+- `PendingActionResumeKind` now accepts only `execution_graph` and `tool_loop`; the non-graph `capability_continuation` resume kind, runtime dispatcher, and tests were deleted.
+- Filesystem-save path-remediation approvals and automation-authoring remediation approvals now create execution graphs, store resumable capability state as `CapabilityContinuation` artifacts, and expose standard `execution_graph` pending-action resume metadata.
+- `ChatAgent` and `WorkerManager` both resume these approvals through graph artifacts and emit graph interruption/resolution/completion events into the graph store and run timeline. Pending actions no longer carry executable capability replay payloads.
+- Remaining approval debt after this slice: chat-level `tool_loop` approvals still store replay payloads with model messages. The next durable-execution step is to turn those pauses into graph interrupts with artifact-backed tool observations.
 
 Exit criteria for this refinement phase:
 

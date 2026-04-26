@@ -15,6 +15,11 @@ import {
   type ExecutionRecord,
   type ExecutionScope,
 } from '../executions.js';
+import {
+  buildGraphPendingActionReplacement,
+} from '../execution-graph/pending-action-adapter.js';
+import type { ExecutionArtifactRef } from '../execution-graph/types.js';
+import type { ExecutionGraphEvent } from '../execution-graph/graph-events.js';
 import type { IntentGatewayRecord } from '../intent-gateway.js';
 import {
   defaultPendingActionTransferPolicy,
@@ -22,10 +27,12 @@ import {
   sanitizePendingActionPrompt,
   type PendingActionApprovalSummary,
   type PendingActionBlocker,
+  type PendingActionIntent,
   type PendingActionRecord,
   type PendingActionScope,
   PendingActionStore,
   reconcilePendingApprovalAction,
+  type PendingActionTransferPolicy,
   toPendingActionClientMetadata,
 } from '../pending-actions.js';
 import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
@@ -1109,6 +1116,35 @@ export class ChatAgentOrchestrationState {
       channel,
       surfaceId,
       input,
+      nowMs,
+    );
+  }
+
+  setGraphPendingActionInterruptForRequest(
+    userKey: string,
+    surfaceId: string | undefined,
+    input: {
+      event: ExecutionGraphEvent;
+      originalUserContent: string;
+      intent?: Partial<PendingActionIntent>;
+      artifactRefs?: ExecutionArtifactRef[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      transferPolicy?: PendingActionTransferPolicy;
+      expiresAt?: number;
+    },
+    nowMs: number = Date.now(),
+  ): PendingActionSetResult {
+    const { userId, channel } = this.parsePendingActionUserKey(userKey);
+    const replacement = buildGraphPendingActionReplacement({
+      ...input,
+      nowMs,
+    });
+    if (!replacement) return { action: null };
+    return this.replacePendingActionWithGuard(
+      userId,
+      channel,
+      surfaceId,
+      replacement,
       nowMs,
     );
   }
