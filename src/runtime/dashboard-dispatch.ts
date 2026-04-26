@@ -203,19 +203,19 @@ export function createDashboardMessageDispatcher(args: {
       const existingCodeContext = isRecord(metadata?.codeContext)
         ? metadata.codeContext
         : undefined;
-      const selectedSourceRecord = selectedResponseSource
+      const selectedSourceRecord = existingResponseSource && selectedResponseSource
         ? selectedResponseSource as unknown as Record<string, unknown>
         : undefined;
       const resolvedLocality = existingResponseSource?.locality === 'local' || existingResponseSource?.locality === 'external'
         ? existingResponseSource.locality
-        : selectedResponseSource?.locality;
+        : undefined;
       const resolvedProviderName = typeof existingResponseSource?.providerName === 'string' && existingResponseSource.providerName.trim()
         ? existingResponseSource.providerName
-        : selectedResponseSource?.providerName;
+        : undefined;
       const mismatchNotice = requestedTier && resolvedLocality && requestedTier !== resolvedLocality
         ? `Requested ${requestedTier} route, final response came from ${resolvedLocality}${resolvedProviderName ? ` (${resolvedProviderName})` : ''}.`
         : undefined;
-      const mergedResponseSource = existingResponseSource || selectedSourceRecord || requestedTier || mismatchNotice
+      const mergedResponseSource = existingResponseSource || mismatchNotice
         ? {
             ...(selectedSourceRecord ?? {}),
             ...(existingResponseSource ?? {}),
