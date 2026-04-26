@@ -1783,7 +1783,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
-  it('continues after an approved CLI action fails so the next turn is not hijacked', async () => {
+  it('does not synthesize a replay turn when an explicit CLI approval continuation fails', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
     const dispatches: Array<{ agentId: string; content: string }> = [];
     const { input, output, cli } = makeCli({
@@ -1802,13 +1802,13 @@ describe('CLIChannel with DashboardCallbacks', () => {
           };
         }
         if (dispatches.length === 2) {
-          expect(msg.content).toContain('Some actions failed');
+          expect(msg.content).toBe('What exact tool did you use?');
           return {
-            content: 'The requested write failed. I have finished that request and will wait for your next instruction.',
+            content: 'It used fs_write.',
           };
         }
         return {
-          content: 'It used fs_write.',
+          content: 'Unexpected extra dispatch.',
         };
       },
       onToolsApprovalDecision: async ({ approvalId, decision }) => {
@@ -1833,10 +1833,12 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
     expect(text).toContain('Waiting for approval to write S:/Development/Test100.');
     expect(text).toContain("'content' must be a non-empty string.");
-    expect(text).toContain('The requested write failed. I have finished that request and will wait for your next instruction.');
     expect(text).toContain('It used fs_write.');
     expect(decisions).toEqual([{ approvalId: 'approval-empty-1', decision: 'approved' }]);
-    expect(dispatches[1]?.content).toContain('Some actions failed — adjust your approach accordingly. Focus only on the current request.');
+    expect(dispatches.map((dispatch) => dispatch.content)).toEqual([
+      'Create an empty file called Test100 in the S Drive development directory.',
+      'What exact tool did you use?',
+    ]);
 
     await cli.stop();
   });

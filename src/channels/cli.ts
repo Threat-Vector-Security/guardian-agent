@@ -861,10 +861,8 @@ export class CLIChannel implements ChannelAdapter {
     const needsSyntheticContinuation = decision === 'approved'
       && agentId
       && (this.dashboard?.onStreamDispatch || this.dashboard?.onDispatch)
-      && (
-        results.some((result) => result.continueConversation)
-        || !hasExplicitContinuationDirective
-      );
+      && !hasExplicitContinuationDirective
+      && allSucceeded;
     if (needsSyntheticContinuation) {
       const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
       try {

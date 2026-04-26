@@ -153,7 +153,6 @@ import {
 } from './runtime/list-continuation.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
 import type { PrincipalRole, ToolJobRecord } from './tools/types.js';
-import { buildToolResultPayloadFromJob } from './tools/job-results.js';
 import {
   ChatAgentApprovalState,
   type ApprovalFollowUpCopy,
@@ -312,13 +311,6 @@ import {
   shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
-import {
-  buildApprovalContinuationScopeKey,
-  findSuspendedApprovalState,
-  normalizeApprovalContinuationScope,
-  selectSuspendedOriginalMessage,
-  type ApprovalContinuationScope,
-} from './runtime/approval-continuations.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
@@ -1897,7 +1889,6 @@ export interface ChatAgentClassDeps {
 
 export interface ChatAgentPublicApi extends BaseAgent {
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null;
-  hasSuspendedApproval(approvalId: string, scope?: ApprovalContinuationScope): boolean;
   hasAutomationApprovalContinuation(approvalId: string): boolean;
   syncPendingApprovalsFromExecutorForScope(args: {
     userId: string;
@@ -1957,14 +1948,6 @@ export interface ChatAgentConstructor {
 }
 
 export function createChatAgentClass({ log }: ChatAgentClassDeps): ChatAgentConstructor {
-interface SuspendedSession {
-  scope: Required<ApprovalContinuationScope>;
-  llmMessages: import('./llm/types.js').ChatMessage[];
-  pendingTools: StoredToolLoopPendingTool[];
-  originalMessage: UserMessage;
-  ctx: AgentContext;
-}
-
 interface DirectIntentResponseInput {
   candidate: DirectIntentShadowCandidate;
   result: string | { content: string; metadata?: Record<string, unknown> };
@@ -2023,8 +2006,6 @@ type DirectIntentShadowCandidate =
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
-  /** Suspended tool loops waiting for approval, keyed by logical chat surface. */
-  private suspendedSessions = new Map<string, SuspendedSession>();
   /** Approval follow-up copy, prompt formatting, and remediation continuations. */
   private readonly approvalState: ChatAgentApprovalState;
   /** Shared blocked-work and continuity helpers extracted from the chat-agent monolith. */
@@ -2695,25 +2676,7 @@ type DirectIntentShadowCandidate =
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
     const stateAgentId = this.stateAgentId;
     const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
-    const suspendedScope = normalizeApprovalContinuationScope({
-      userId: message.userId,
-      channel: message.channel,
-      surfaceId: pendingActionSurfaceId,
-    });
-    const suspendedSessionKey = buildApprovalContinuationScopeKey(suspendedScope);
-    const isContinuation = message.content.includes('[User approved the pending tool action(s)')
-      || message.content.includes('Tool actions have been decided');
-    const suspended = isContinuation ? this.suspendedSessions.get(suspendedSessionKey) : undefined;
-    const continuationMetadata = suspended?.originalMessage.metadata;
-    const effectiveMessage: UserMessage = continuationMetadata
-      ? {
-          ...message,
-          metadata: {
-            ...continuationMetadata,
-            ...(message.metadata ?? {}),
-          },
-        }
-      : message;
+    const effectiveMessage: UserMessage = message;
     const executionIdentity = readExecutionIdentityMetadata(effectiveMessage.metadata) ?? {
       executionId: effectiveMessage.id,
       rootExecutionId: effectiveMessage.id,
@@ -3296,9 +3259,7 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    const requestIntentContent = (isContinuation && suspended)
-      ? suspended.originalMessage.content
-      : routedScopedMessage.content;
+    const requestIntentContent = routedScopedMessage.content;
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(requestIntentContent);
     const existingPendingIds = this.getPendingApprovalIds(
       pendingActionUserId,
@@ -3478,83 +3439,67 @@ type DirectIntentShadowCandidate =
     let activeSkills: ResolvedSkill[] = [];
     let skillPromptMaterial: SkillPromptMaterialResult | undefined;
 
-    if (isContinuation && suspended) {
-      llmMessages = [...suspended.llmMessages];
-      const allJobs = this.tools?.listJobs(100) ?? [];
-      for (const pending of suspended.pendingTools) {
-        const job = allJobs.find(j => j.id === pending.jobId);
-        const resultObj = buildToolResultPayloadFromJob(job);
-        llmMessages.push({
-          role: 'tool',
-          toolCallId: pending.toolCallId,
-          content: JSON.stringify(resultObj),
-        });
-      }
-      this.suspendedSessions.delete(suspendedSessionKey);
-      skipDirectTools = true;
-    } else {
-      activeSkills = preResolvedSkills;
-      const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
-      if (activeSkills.length > 0) {
-        this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
-        skillPromptMaterial = buildSkillPromptMaterial(
-          this.skillRegistry!,
-          {
-            skills: activeSkills,
-            requestText: routedScopedMessage.content,
-            ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
-            artifactReferences: this.resolveSkillArtifactReferences(activeSkills, resolvedCodeSession),
-          },
-          createSkillPromptMaterialCache(),
-        );
-        this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, skillPromptMaterial);
-      }
-      const toolContext = this.tools?.getToolContext({
-        userId: conversationUserId,
-        principalId: message.principalId ?? conversationUserId,
-        channel: conversationChannel,
-        codeContext: effectiveCodeContext,
-        requestText: routedScopedMessage.content,
-        ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
-      }) ?? '';
-      const runtimeNotices = (this.tools?.getRuntimeNotices() ?? [])
-        .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
-      const promptAdditionalSections = this.buildPromptAdditionalSections(
-        skillPromptMaterial,
-        earlyGateway?.decision,
-        selectedExecutionProfile,
-        referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
+    activeSkills = preResolvedSkills;
+    const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
+    if (activeSkills.length > 0) {
+      this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
+      skillPromptMaterial = buildSkillPromptMaterial(
+        this.skillRegistry!,
+        {
+          skills: activeSkills,
+          requestText: routedScopedMessage.content,
+          ...(earlyGateway?.decision.route ? { route: earlyGateway.decision.route } : {}),
+          artifactReferences: this.resolveSkillArtifactReferences(activeSkills, resolvedCodeSession),
+        },
+        createSkillPromptMaterialCache(),
       );
-      const baseSystemPrompt = enrichedSystemPrompt;
-      enrichedSystemPrompt = this.buildAssembledSystemPrompt({
-        baseSystemPrompt,
-        knowledgeBases: promptKnowledge.knowledgeBases,
-        activeSkills,
-        toolContext,
-        runtimeNotices,
-        pendingAction,
-        pendingApprovalNotice,
-        continuityThread,
-        additionalSections: promptAdditionalSections,
-        executionProfile: selectedExecutionProfile ?? undefined,
-      });
-      contextAssemblyMeta = buildContextDiagnostics({
-        promptKnowledge,
-        runtimeSkills: activeSkills,
-        skillPromptMaterial,
-        toolContext,
-        runtimeNotices,
-        baseSystemPrompt,
-        codeSessionId: resolvedCodeSession?.session.id,
-        additionalSections: promptAdditionalSections,
-        executionProfile: selectedExecutionProfile,
-      });
-      llmMessages = buildChatMessagesFromHistory({
-        systemPrompt: enrichedSystemPrompt,
-        history: priorHistory,
-        userContent: routedScopedMessage.content,
-      });
+      this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, skillPromptMaterial);
     }
+    const toolContext = this.tools?.getToolContext({
+      userId: conversationUserId,
+      principalId: message.principalId ?? conversationUserId,
+      channel: conversationChannel,
+      codeContext: effectiveCodeContext,
+      requestText: routedScopedMessage.content,
+      ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
+    }) ?? '';
+    const runtimeNotices = (this.tools?.getRuntimeNotices() ?? [])
+      .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
+    const promptAdditionalSections = this.buildPromptAdditionalSections(
+      skillPromptMaterial,
+      earlyGateway?.decision,
+      selectedExecutionProfile,
+      referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
+    );
+    const baseSystemPrompt = enrichedSystemPrompt;
+    enrichedSystemPrompt = this.buildAssembledSystemPrompt({
+      baseSystemPrompt,
+      knowledgeBases: promptKnowledge.knowledgeBases,
+      activeSkills,
+      toolContext,
+      runtimeNotices,
+      pendingAction,
+      pendingApprovalNotice,
+      continuityThread,
+      additionalSections: promptAdditionalSections,
+      executionProfile: selectedExecutionProfile ?? undefined,
+    });
+    contextAssemblyMeta = buildContextDiagnostics({
+      promptKnowledge,
+      runtimeSkills: activeSkills,
+      skillPromptMaterial,
+      toolContext,
+      runtimeNotices,
+      baseSystemPrompt,
+      codeSessionId: resolvedCodeSession?.session.id,
+      additionalSections: promptAdditionalSections,
+      executionProfile: selectedExecutionProfile,
+    });
+    llmMessages = buildChatMessagesFromHistory({
+      systemPrompt: enrichedSystemPrompt,
+      history: priorHistory,
+      userContent: routedScopedMessage.content,
+    });
 
     let finalContent = '';
     let pendingActionMeta: Record<string, unknown> | undefined;
@@ -4685,42 +4630,24 @@ type DirectIntentShadowCandidate =
             llmMessages.splice(-toolResults.length, toolResults.length);
             pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
 
-            // Suspended Execution: cache the loop state so we can resume directly
-            // when the user approves via out-of-band UI.
             const pendingTools: StoredToolLoopPendingTool[] = toolResults
               .filter((s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval')
               .map((s) => {
-                 const result = (s as any).value.result as Record<string, unknown>;
-                 const toolCall = (s as any).value.toolCall;
-                 return {
-                   approvalId: String(result.approvalId),
-                   toolCallId: toolCall.id,
-                   jobId: String(result.jobId),
-                   name: toolCall.name,
-                 };
+                const result = (s as any).value.result as Record<string, unknown>;
+                const toolCall = (s as any).value.toolCall;
+                return {
+                  approvalId: String(result.approvalId),
+                  toolCallId: toolCall.id,
+                  jobId: String(result.jobId),
+                  name: toolCall.name,
+                };
               });
-              
-            this.suspendedSessions.set(suspendedSessionKey, {
-              scope: suspendedScope,
-              llmMessages: [...llmMessages],
-              pendingTools,
-              originalMessage: selectSuspendedOriginalMessage({
-                isContinuation,
-                existing: suspended?.originalMessage,
-                current: routedScopedMessage,
-              }),
-              ctx,
-            });
             toolLoopPendingResume = {
               kind: 'tool_loop',
               payload: this.buildToolLoopResumePayload({
                 llmMessages,
                 pendingTools,
-                originalMessage: selectSuspendedOriginalMessage({
-                  isContinuation,
-                  existing: suspended?.originalMessage,
-                  current: routedScopedMessage,
-                }),
+                originalMessage: routedScopedMessage,
                 requestText: stripLeadingContextPrefix(routedScopedMessage.content),
                 referenceTime: message.timestamp,
                 allowModelMemoryMutation,
@@ -4958,27 +4885,12 @@ type DirectIntentShadowCandidate =
                     jobId: String(s.value.result.jobId),
                     name: s.value.toolCall.name,
                   }));
-                this.suspendedSessions.set(suspendedSessionKey, {
-                  scope: suspendedScope,
-                  llmMessages: [...fbMessages],
-                  pendingTools,
-                  originalMessage: selectSuspendedOriginalMessage({
-                    isContinuation,
-                    existing: suspended?.originalMessage,
-                    current: routedScopedMessage,
-                  }),
-                  ctx,
-                });
                 toolLoopPendingResume = {
                   kind: 'tool_loop',
                   payload: this.buildToolLoopResumePayload({
                     llmMessages: fbMessages,
                     pendingTools,
-                    originalMessage: selectSuspendedOriginalMessage({
-                      isContinuation,
-                      existing: suspended?.originalMessage,
-                      current: routedScopedMessage,
-                    }),
+                    originalMessage: routedScopedMessage,
                     requestText: stripLeadingContextPrefix(routedScopedMessage.content),
                     referenceTime: message.timestamp,
                     allowModelMemoryMutation,
@@ -7264,13 +7176,6 @@ type DirectIntentShadowCandidate =
     return this.approvalState.takeApprovalFollowUp(approvalId, decision);
   }
 
-  hasSuspendedApproval(
-    approvalId: string,
-    scope?: ApprovalContinuationScope,
-  ): boolean {
-    return !!findSuspendedApprovalState(this.suspendedSessions.values(), approvalId, scope);
-  }
-
   hasAutomationApprovalContinuation(approvalId: string): boolean {
     return this.approvalState.hasAutomationApprovalContinuation(approvalId);
   }
@@ -7296,20 +7201,6 @@ type DirectIntentShadowCandidate =
     approvalIds?: string[];
   }): void {
     const approvalIds = new Set((args.approvalIds ?? []).map((id) => id.trim()).filter(Boolean));
-    const normalizedScope = normalizeApprovalContinuationScope({
-      userId: args.userId,
-      channel: args.channel,
-      surfaceId: args.surfaceId,
-    });
-    for (const [key, session] of this.suspendedSessions.entries()) {
-      const matchesScope = session.scope.userId === normalizedScope.userId
-        && session.scope.channel === normalizedScope.channel
-        && session.scope.surfaceId === normalizedScope.surfaceId;
-      const matchesApproval = session.pendingTools.some((tool) => approvalIds.has(tool.approvalId));
-      if (matchesScope || matchesApproval) {
-        this.suspendedSessions.delete(key);
-      }
-    }
     for (const approvalId of approvalIds) {
       this.clearApprovalFollowUp(approvalId);
     }
@@ -9274,29 +9165,7 @@ type DirectIntentShadowCandidate =
         result,
         providerKind,
       ),
-          lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
-      storeSuspendedSession: ({ scope, llmMessages, pendingTools, originalMessage, ctx }) => {
-        const normalizedScope = normalizeApprovalContinuationScope(scope);
-        this.suspendedSessions.set(
-          buildApprovalContinuationScopeKey(normalizedScope),
-          {
-            scope: normalizedScope,
-            llmMessages,
-            pendingTools,
-            originalMessage,
-            ...(ctx
-              ? { ctx }
-              : {
-                  ctx: {
-                    agentId: this.id,
-                    emit: async () => {},
-                    checkAction: () => {},
-                    capabilities: [],
-                  } as AgentContext,
-                }),
-          },
-        );
-      },
+      lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
       setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
         userId,
         channel,

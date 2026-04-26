@@ -162,7 +162,6 @@ describe('tool-loop-runtime', () => {
         trustLevel: 'trusted',
         taintReasons: [],
       })),
-      storeSuspendedSession: vi.fn(),
       setPendingApprovalAction: vi.fn(() => {
         throw new Error('unexpected pending approval');
       }),
@@ -305,7 +304,6 @@ describe('tool-loop-runtime', () => {
         taintReasons: [],
       })),
       isResponseDegraded: vi.fn(() => false),
-      storeSuspendedSession: vi.fn(),
       setPendingApprovalAction: vi.fn(() => {
         throw new Error('unexpected pending approval');
       }),
