@@ -284,6 +284,12 @@ Checkpoint after the scheduled-email direct runtime extraction:
 - This keeps scheduled-email direct execution aligned with the existing direct automation modules instead of leaving another per-capability flow embedded in the monolith.
 - Remaining direct mailbox debt after this slice: Gmail/Outlook direct read, write, and reply-target lookup still live in `src/chat-agent.ts` and should move behind a shared mailbox runtime before graph-interrupt migration.
 
+Checkpoint after the direct mailbox runtime extraction:
+
+- Gmail and Outlook direct read/write execution, reply-target lookup, mailbox pagination, and email approval wrapping now live in `src/runtime/chat-agent/direct-mailbox-runtime.ts`.
+- `src/chat-agent.ts` now delegates mailbox actions through `DirectMailboxDeps`, matching the existing direct automation and scheduled-email runtime shape instead of owning provider-specific branches inline.
+- Remaining mailbox debt after this slice: mailbox direct runtime still produces chat-level pending approvals rather than execution-graph interrupts; that should be addressed with the broader pending-action graph interrupt migration.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
