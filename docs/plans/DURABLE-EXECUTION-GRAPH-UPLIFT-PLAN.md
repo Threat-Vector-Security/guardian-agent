@@ -203,6 +203,12 @@ Checkpoint after the dashboard response-source cleanup:
 - Selected execution profile metadata still enriches real model response-source records, for example when the runtime returns only `locality`.
 - Direct/control-plane responses such as pending-approval status now stream without false managed-cloud provider attribution, keeping provider trace nodes tied to actual provider calls.
 
+Checkpoint after the code-session runtime-state extraction:
+
+- Code-session runtime projection moved from `src/chat-agent.ts` into `src/runtime/chat-agent/code-session-runtime-state.ts`: plan-summary formatting, planned workflow extraction, pending approval projection, recent-job projection, compacted-context updates, workflow derivation, and session status selection now have one helper boundary.
+- `src/chat-agent.ts` still triggers session state synchronization at turn boundaries, but it no longer owns the data-shaping logic for code-session work state. This keeps the monolith closer to turn orchestration while code-session state can evolve and be tested independently.
+- Focused coverage now exists at `src/runtime/chat-agent/code-session-runtime-state.test.ts`, including plan summary formatting, workflow extraction, and store-update projection.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
