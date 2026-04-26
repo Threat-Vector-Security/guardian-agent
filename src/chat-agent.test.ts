@@ -6274,6 +6274,64 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(pendingActionStore.get(created.id)?.status).toBe('completed');
   });
 
+  it('answers exact approval-status queries before attached coding-session routing', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      executeModelTool: vi.fn(),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-exact-approval-status',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'pending approvals?',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        mode: 'primary',
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_task',
+          operation: 'inspect',
+          summary: 'Attached coding-session routing selected by stale continuity.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'tools',
+          entities: {},
+        },
+      }),
+    }, ctx);
+
+    expect(response.content).toBe('There are no pending approvals.');
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
+
   it('creates a local Second Brain calendar event with place and description directly', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
