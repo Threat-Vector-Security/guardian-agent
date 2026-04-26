@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import {
   formatDirectFilesystemSearchResponse,
@@ -8,7 +6,7 @@ import {
   toNumber,
   toString,
 } from '../../chat-agent-helpers.js';
-import type { ToolApprovalDecisionResult, ToolExecutor } from '../../tools/executor.js';
+import type { ToolExecutor } from '../../tools/executor.js';
 import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import {
@@ -23,9 +21,6 @@ import {
 } from '../search-intent.js';
 import {
   normalizeFilesystemResumePrincipalRole,
-  readFilesystemSaveOutputResumePayload,
-  readAutomationAuthoringResumePayload,
-  type AutomationAuthoringResumePayload,
 } from './capability-continuation-resume.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
@@ -259,55 +254,4 @@ export async function tryDirectFilesystemSearch(input: DirectFilesystemIntentInp
     truncated,
     matches,
   });
-}
-
-export async function resumeStoredCapabilityContinuationPendingAction(input: {
-  pendingAction: PendingActionRecord;
-  options?: {
-    pendingActionAlreadyCleared?: boolean;
-    approvalResult?: ToolApprovalDecisionResult;
-  };
-  completePendingAction: (actionId: string, nowMs?: number) => void;
-  executeStoredFilesystemSave: (
-    input: StoredFilesystemSaveInput,
-  ) => Promise<string | DirectRouteRuntimeResponse>;
-  executeStoredAutomationAuthoring?: (
-    pendingAction: PendingActionRecord,
-    resume: AutomationAuthoringResumePayload,
-    approvalResult?: ToolApprovalDecisionResult,
-  ) => Promise<DirectRouteRuntimeResponse>;
-}): Promise<DirectRouteRuntimeResponse | null> {
-  if (!input.options?.pendingActionAlreadyCleared) {
-    input.completePendingAction(input.pendingAction.id);
-  }
-
-  const automationAuthoringResume = readAutomationAuthoringResumePayload(input.pendingAction.resume?.payload);
-  if (automationAuthoringResume && input.executeStoredAutomationAuthoring) {
-    return input.executeStoredAutomationAuthoring(
-      input.pendingAction,
-      automationAuthoringResume,
-      input.options?.approvalResult,
-    );
-  }
-
-  const filesystemResume = readFilesystemSaveOutputResumePayload(input.pendingAction.resume?.payload);
-  if (filesystemResume) {
-    const result = await input.executeStoredFilesystemSave({
-      targetPath: filesystemResume.targetPath,
-      content: filesystemResume.content,
-      originalUserContent: filesystemResume.originalUserContent,
-      userKey: `${input.pendingAction.scope.userId}:${input.pendingAction.scope.channel}`,
-      userId: input.pendingAction.scope.userId,
-      channel: input.pendingAction.scope.channel,
-      surfaceId: input.pendingAction.scope.surfaceId,
-      principalId: filesystemResume.principalId ?? input.pendingAction.scope.userId,
-      principalRole: normalizeFilesystemResumePrincipalRole(filesystemResume.principalRole) ?? 'owner',
-      requestId: randomUUID(),
-      codeContext: filesystemResume.codeContext,
-      allowPathRemediation: filesystemResume.allowPathRemediation,
-    });
-    return typeof result === 'string' ? { content: result } : result;
-  }
-
-  return null;
 }

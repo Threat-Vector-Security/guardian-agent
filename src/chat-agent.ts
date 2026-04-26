@@ -222,9 +222,11 @@ import {
   tryDirectMemorySave as tryDirectMemorySaveHelper,
 } from './runtime/chat-agent/direct-memory.js';
 import {
-  resumeStoredCapabilityContinuationPendingAction as resumeStoredCapabilityContinuationPendingActionHelper,
   tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
+import {
+  resumeStoredCapabilityContinuationPendingAction as resumeStoredCapabilityContinuationPendingActionHelper,
+} from './runtime/chat-agent/capability-continuation-runtime.js';
 import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
