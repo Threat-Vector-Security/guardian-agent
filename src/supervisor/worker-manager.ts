@@ -294,7 +294,8 @@ export interface WorkerDelegationMetadata {
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
-  pendingActionStore?: Pick<PendingActionStore, 'replaceActive' | 'complete' | 'update' | 'findActiveByApprovalId' | 'listActiveByApprovalId'>;
+  pendingActionStore?: Pick<PendingActionStore, 'replaceActive' | 'complete' | 'update' | 'findActiveByApprovalId' | 'listActiveByApprovalId'>
+    & Partial<Pick<PendingActionStore, 'resolveActiveForSurface'>>;
   executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact' | 'getSnapshot' | 'getArtifact' | 'listArtifacts'>;
   resolveStateAgentId?: (agentId?: string) => string | undefined;
   now?: () => number;
@@ -543,7 +544,6 @@ interface WorkerJobFollowUpActionResult {
 export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
-  private readonly directPendingApprovals = new Map<string, { ids: string[]; expiresAt: number }>();
   private readonly delegatedFollowUpPayloads = new Map<string, {
     content: string;
     agentId: string;
@@ -3101,7 +3101,6 @@ export class WorkerManager {
     }
     this.workers.clear();
     this.sessionToWorker.clear();
-    this.directPendingApprovals.clear();
     this.delegatedFollowUpPayloads.clear();
   }
 
@@ -3176,7 +3175,8 @@ export class WorkerManager {
   private async tryHandleDirectApprovalMessage(
     input: WorkerMessageRequest,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const pendingIds = this.getDirectPendingApprovalIds(input.sessionId);
+    const pendingAction = this.findDirectApprovalPendingAction(input);
+    const pendingIds = pendingAction?.blocker.approvalIds ?? [];
     if (pendingIds.length === 0) return null;
 
     const trimmed = input.message.content.trim();
@@ -3193,7 +3193,9 @@ export class WorkerManager {
       .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
     const targetIds = explicitIds.length > 0 ? explicitIds : pendingIds;
 
-    const directAutomationPendingAction = this.findDirectAutomationPendingAction(targetIds);
+    const directAutomationPendingAction = readAutomationAuthoringResumePayload(pendingAction?.resume?.payload)
+      ? pendingAction
+      : this.findDirectAutomationPendingAction(targetIds);
     const results: string[] = [];
     const approvedIds = new Set<string>();
     const failedIds = new Set<string>();
@@ -3213,7 +3215,6 @@ export class WorkerManager {
       results.push(decided.message);
     }
 
-    this.consumeDirectPendingApprovals(input.sessionId, targetIds);
     this.updatePendingActionsAfterDirectApprovalDecision(targetIds, decision, approvedIds, failedIds);
 
     if (directAutomationPendingAction) {
@@ -3332,11 +3333,6 @@ export class WorkerManager {
       },
       trackPendingApproval: (approvalId) => {
         trackedPendingApprovalIds.push(approvalId);
-        const existingIds = this.getDirectPendingApprovalIds(input.sessionId);
-        this.directPendingApprovals.set(input.sessionId, {
-          ids: [...new Set([...existingIds, approvalId])],
-          expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
-        });
       },
       formatPendingApprovalPrompt: (ids) => {
         const meta = this.resolveDirectPendingApprovalMetadata(ids);
@@ -3383,30 +3379,6 @@ export class WorkerManager {
     });
   }
 
-  private getDirectPendingApprovalIds(sessionId: string, nowMs: number = Date.now()): string[] {
-    const pending = this.directPendingApprovals.get(sessionId);
-    if (!pending) return [];
-    if (pending.expiresAt <= nowMs) {
-      this.directPendingApprovals.delete(sessionId);
-      return [];
-    }
-    return [...pending.ids];
-  }
-
-  private consumeDirectPendingApprovals(sessionId: string, consumedIds: string[]): void {
-    const pending = this.directPendingApprovals.get(sessionId);
-    if (!pending) return;
-    const remaining = pending.ids.filter((id) => !consumedIds.includes(id));
-    if (remaining.length === 0) {
-      this.directPendingApprovals.delete(sessionId);
-      return;
-    }
-    this.directPendingApprovals.set(sessionId, {
-      ids: remaining,
-      expiresAt: pending.expiresAt,
-    });
-  }
-
   private findDirectAutomationPendingAction(approvalIds: string[]): PendingActionRecord | null {
     const store = this.observability.pendingActionStore;
     if (!store) return null;
@@ -3417,6 +3389,21 @@ export class WorkerManager {
       }
     }
     return null;
+  }
+
+  private findDirectApprovalPendingAction(input: WorkerMessageRequest): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    if (!store) return null;
+    if (typeof store.resolveActiveForSurface !== 'function') return null;
+    const surfaceId = input.message.surfaceId?.trim() || input.message.channel;
+    const pendingAction = store.resolveActiveForSurface({
+      agentId: this.resolvePendingActionAgentId(input.agentId),
+      userId: input.userId,
+      channel: input.message.channel,
+      surfaceId,
+    }, this.observability.now?.() ?? Date.now());
+    if (pendingAction?.blocker.kind !== 'approval') return null;
+    return (pendingAction.blocker.approvalIds?.length ?? 0) > 0 ? pendingAction : null;
   }
 
   private updatePendingActionsAfterDirectApprovalDecision(
@@ -3533,12 +3520,7 @@ export class WorkerManager {
     channel: string;
     approvalIds?: string[];
   }): void {
-    const approvalIds = new Set((args.approvalIds ?? []).map((id) => id.trim()).filter(Boolean));
-    for (const [sessionId, pending] of this.directPendingApprovals.entries()) {
-      if (pending.ids.some((id) => approvalIds.has(id))) {
-        this.directPendingApprovals.delete(sessionId);
-      }
-    }
+    void args;
   }
 
   private async getOrSpawnWorker(

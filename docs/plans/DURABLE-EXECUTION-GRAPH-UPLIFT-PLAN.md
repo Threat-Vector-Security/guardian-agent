@@ -212,6 +212,12 @@ Checkpoint after the Second Brain direct-route resume deletion:
 - `second-brain-resume.ts`, the Second Brain direct-route payload type, and the direct-route runtime branch for Second Brain replay have been deleted.
 - Remaining direct-route debt after this slice: filesystem save and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
+Checkpoint after the WorkerManager direct-approval cache deletion:
+
+- Direct automation authoring approvals in `WorkerManager` no longer maintain a parallel session-local pending approval cache.
+- Direct approval messages now resolve the active approval blocker from the shared `PendingActionStore` for the current agent/user/channel/surface scope, then update that same pending-action record after approval or denial.
+- This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state instead of a `direct_route` payload.
+
 Checkpoint after the pending-approval status helper extraction:
 
 - Pending-approval status query recognition and response construction moved from `src/chat-agent.ts` into `src/runtime/chat-agent/pending-approval-status.ts`.
@@ -705,7 +711,7 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
-Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Brokered delegated worker approvals now persist `WorkerSuspension` graph artifacts and resume only through `execution_graph` pending actions, including fresh-worker recovery after the original worker/manager instance is gone; the old worker-specific resume kind and live suspended-approval cache are gone. Chat-agent tool-loop approvals no longer keep a parallel in-memory suspended-session cache; the pending-action resume payload is the only chat-level tool-loop resume source. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Generic graph interruption events can now carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; migrating every legacy producer to emit those graph events is still pending.
+Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Brokered delegated worker approvals now persist `WorkerSuspension` graph artifacts and resume only through `execution_graph` pending actions, including fresh-worker recovery after the original worker/manager instance is gone; the old worker-specific resume kind and live suspended-approval cache are gone. WorkerManager direct automation approval prompts no longer keep a parallel in-memory pending-approval list and resolve approvals from the shared `PendingActionStore`. Chat-agent tool-loop approvals no longer keep a parallel in-memory suspended-session cache; the pending-action resume payload is the only chat-level tool-loop resume source. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Generic graph interruption events can now carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; migrating every legacy producer to emit those graph events is still pending.
 
 Files:
 
