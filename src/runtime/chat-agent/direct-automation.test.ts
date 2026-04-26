@@ -84,10 +84,6 @@ function makeDeps(overrides: Partial<DirectAutomationDeps> = {}): DirectAutomati
       getApprovalSummaries: () => new Map(),
     } as DirectAutomationDeps['tools'],
     setApprovalFollowUp: () => undefined,
-    automationContinuations: {
-      clear: () => undefined,
-      set: () => undefined,
-    },
     formatPendingApprovalPrompt: (ids) => `Approve: ${ids.join(', ')}`,
     parsePendingActionUserKey: () => ({ userId: 'user-1', channel: 'web' }),
     setClarificationPendingAction: () => ({ action: makePendingAction('Which automation?') }),
@@ -160,8 +156,7 @@ describe('direct-automation', () => {
     expect(response?.metadata).not.toHaveProperty('clarification');
   });
 
-  it('wraps automation-authoring approvals in shared pending-action state and continuation', async () => {
-    const setAutomationApprovalContinuation = vi.fn();
+  it('wraps automation-authoring approvals in shared pending-action resume state', async () => {
     let capturedPendingApprovalInput: Record<string, unknown> | null = null;
 
     const response = await tryDirectAutomationAuthoring(
@@ -199,10 +194,6 @@ describe('direct-automation', () => {
           content: 'Approval required.',
           metadata: { pendingAction: { id: 'pending-1' } },
         }),
-        automationContinuations: {
-          clear: () => undefined,
-          set: setAutomationApprovalContinuation,
-        },
       }),
     );
 
@@ -214,13 +205,15 @@ describe('direct-automation', () => {
         route: 'classifier.primary',
         operation: 'classifier.primary',
       },
+      resume: {
+        kind: 'direct_route',
+        payload: {
+          type: 'automation_authoring',
+          originalUserContent: 'Create a daily briefing automation',
+          allowRemediation: true,
+        },
+      },
     });
-    expect(setAutomationApprovalContinuation).toHaveBeenCalledWith(
-      'user-1:web',
-      expect.objectContaining({ content: 'Create a daily briefing automation' }),
-      TEST_CONTEXT,
-      ['approval-1'],
-    );
     expect(response).toEqual({
       content: 'Approval required.',
       metadata: {

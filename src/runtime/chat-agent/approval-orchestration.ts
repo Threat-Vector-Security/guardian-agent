@@ -11,10 +11,6 @@ import {
   APPROVAL_DENY_PATTERN,
 } from './approval-state.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
-import {
-  resolveAutomationApprovalDecisionContinuation,
-  type AutomationApprovalContinuationStore,
-} from './automation-approval-continuation.js';
 
 export interface ApprovalOrchestrationResponse {
   content: string;
@@ -182,17 +178,6 @@ export async function handleApprovalMessage(input: {
   completePendingAction: (actionId: string, nowMs?: number) => void;
   takeApprovalFollowUp: (approvalId: string, decision: 'approved' | 'denied') => string | null;
   clearApprovalFollowUp: (approvalId: string) => void;
-  automationContinuations: AutomationApprovalContinuationStore;
-  tryDirectAutomationAuthoring: (
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    codeContext?: { workspaceRoot: string; sessionId?: string },
-    options?: {
-      allowRemediation?: boolean;
-      assumeAuthoring?: boolean;
-    },
-  ) => Promise<ApprovalOrchestrationResponse | null>;
   resumeStoredToolLoopPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
@@ -276,8 +261,6 @@ export async function handleApprovalMessage(input: {
   const remaining = pendingIds.filter((id) => !targetIds.includes(id));
   input.setPendingApprovals(userKey, remaining, input.message.surfaceId);
   const results: string[] = [];
-  const approvedIds = new Set<string>();
-  const failedIds = new Set<string>();
   const approvalDecisionResults = new Map<string, ToolApprovalDecisionResult>();
   for (const approvalId of targetIds) {
     try {
@@ -289,11 +272,9 @@ export async function handleApprovalMessage(input: {
       );
       approvalDecisionResults.set(approvalId, result);
       if (result.success) {
-        if (decision === 'approved') approvedIds.add(approvalId);
         const followUp = input.takeApprovalFollowUp(approvalId, decision);
         results.push(followUp ?? result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
       } else {
-        failedIds.add(approvalId);
         input.clearApprovalFollowUp(approvalId);
         const failure = result.message ?? `${decision === 'approved' ? 'Approval' : 'Denial'} failed (${approvalId}).`;
         results.push(
@@ -303,42 +284,9 @@ export async function handleApprovalMessage(input: {
         );
       }
     } catch (err) {
-      failedIds.add(approvalId);
       input.clearApprovalFollowUp(approvalId);
       results.push(`Error processing ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-
-  const automationContinuation = await resolveAutomationApprovalDecisionContinuation({
-    userKey,
-    message: input.message,
-    ctx: input.ctx,
-    decision,
-    targetIds,
-    approvedIds,
-    failedIds,
-    continuations: input.automationContinuations,
-    tools: input.tools,
-    runAutomationAuthoring: (automationMessage, automationCtx, automationUserKey, options) => input.tryDirectAutomationAuthoring(
-      automationMessage,
-      automationCtx,
-      automationUserKey,
-      undefined,
-      options,
-    ),
-  });
-  if (automationContinuation) {
-    results.push('');
-    results.push(automationContinuation.content);
-    return {
-      content: results.join('\n'),
-      metadata: input.withCurrentPendingActionMetadata(
-        automationContinuation.metadata,
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
-      ),
-    };
   }
 
   if (remaining.length > 0) {

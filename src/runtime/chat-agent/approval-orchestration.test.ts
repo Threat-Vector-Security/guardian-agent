@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import { handleApprovalMessage, syncPendingApprovalsFromExecutor } from './approval-orchestration.js';
-import { InMemoryAutomationApprovalContinuationStore } from './automation-approval-continuation.js';
 
 describe('approval-orchestration', () => {
   it('suppresses generic tool-completed copy when a direct-route approval resumes into a final response', async () => {
@@ -70,8 +69,6 @@ describe('approval-orchestration', () => {
       completePendingAction: vi.fn(),
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
-      automationContinuations: new InMemoryAutomationApprovalContinuationStore(),
-      tryDirectAutomationAuthoring: vi.fn(async () => null),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredDirectRoutePendingAction: vi.fn(async () => ({
         content: 'Note created: Smoke Test Note',
@@ -167,8 +164,6 @@ describe('approval-orchestration', () => {
       completePendingAction: vi.fn(),
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
-      automationContinuations: new InMemoryAutomationApprovalContinuationStore(),
-      tryDirectAutomationAuthoring: vi.fn(async () => null),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
@@ -269,8 +264,6 @@ describe('approval-orchestration', () => {
       completePendingAction,
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
-      automationContinuations: new InMemoryAutomationApprovalContinuationStore(),
-      tryDirectAutomationAuthoring: vi.fn(async () => null),
       resumeStoredToolLoopPendingAction,
       resumeStoredDirectRoutePendingAction,
       resumeStoredExecutionGraphPendingAction,
@@ -366,8 +359,6 @@ describe('approval-orchestration', () => {
       completePendingAction,
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
-      automationContinuations: new InMemoryAutomationApprovalContinuationStore(),
-      tryDirectAutomationAuthoring: vi.fn(async () => null),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),

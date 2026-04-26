@@ -192,9 +192,9 @@ import {
   tryDirectBrowserAutomation as tryDirectBrowserAutomationHelper,
 } from './runtime/chat-agent/direct-automation.js';
 import {
-  continueAutomationAfterApproval as continueAutomationAfterApprovalHelper,
-  InMemoryAutomationApprovalContinuationStore,
-} from './runtime/chat-agent/automation-approval-continuation.js';
+  buildStoredAutomationAuthoringInput,
+  executeStoredAutomationAuthoring as executeStoredAutomationAuthoringHelper,
+} from './runtime/chat-agent/automation-authoring-resume.js';
 import {
   tryDirectSecondBrainRead as tryDirectSecondBrainReadHelper,
 } from './runtime/chat-agent/direct-second-brain-read.js';
@@ -1893,7 +1893,6 @@ export interface ChatAgentClassDeps {
 
 export interface ChatAgentPublicApi extends BaseAgent {
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null;
-  hasAutomationApprovalContinuation(approvalId: string): boolean;
   syncPendingApprovalsFromExecutorForScope(args: {
     userId: string;
     channel: string;
@@ -1910,10 +1909,6 @@ export interface ChatAgentPublicApi extends BaseAgent {
     approvalId: string,
     decision: 'approved' | 'denied',
     approvalResult?: ToolApprovalDecisionResult,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
-  continueAutomationAfterApproval(
-    approvalId: string,
-    decision: 'approved' | 'denied',
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null>;
 }
 
@@ -2012,7 +2007,6 @@ type DirectIntentShadowCandidate =
   private maxToolRounds: number;
   /** Approval follow-up copy and prompt formatting. */
   private readonly approvalState: ChatAgentApprovalState;
-  private readonly automationApprovalContinuations = new InMemoryAutomationApprovalContinuationStore();
   /** Shared blocked-work and continuity helpers extracted from the chat-agent monolith. */
   private readonly orchestrationState: ChatAgentOrchestrationState;
   get pendingActionStore(): PendingActionStore | undefined {
@@ -6847,14 +6841,6 @@ type DirectIntentShadowCandidate =
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
       clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
-      automationContinuations: this.automationApprovalContinuations,
-      tryDirectAutomationAuthoring: (automationMessage, automationCtx, userKey, codeContext, options) => this.tryDirectAutomationAuthoring(
-        automationMessage,
-        automationCtx,
-        userKey,
-        codeContext,
-        options,
-      ),
       resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
       resumeStoredDirectRoutePendingAction: (pendingAction, options) => this.resumeStoredDirectRoutePendingAction(pendingAction, options),
       resumeStoredExecutionGraphPendingAction: (pendingAction, options) => {
@@ -7146,10 +7132,6 @@ type DirectIntentShadowCandidate =
     return this.approvalState.takeApprovalFollowUp(approvalId, decision);
   }
 
-  hasAutomationApprovalContinuation(approvalId: string): boolean {
-    return this.automationApprovalContinuations.hasApprovalId(approvalId);
-  }
-
   syncPendingApprovalsFromExecutorForScope(args: {
     userId: string;
     channel: string;
@@ -7174,7 +7156,6 @@ type DirectIntentShadowCandidate =
     for (const approvalId of approvalIds) {
       this.clearApprovalFollowUp(approvalId);
     }
-    this.automationApprovalContinuations.clear(`${args.userId}:${args.channel}`);
   }
 
   async continueDirectRouteAfterApproval(
@@ -7196,24 +7177,6 @@ type DirectIntentShadowCandidate =
         userId,
         channel,
         surfaceId,
-      ),
-    });
-  }
-
-  async continueAutomationAfterApproval(
-    approvalId: string,
-    decision: 'approved' | 'denied',
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return continueAutomationAfterApprovalHelper({
-      approvalId,
-      decision,
-      continuations: this.automationApprovalContinuations,
-      runAutomationAuthoring: (message, ctx, userKey, options) => this.tryDirectAutomationAuthoring(
-        message,
-        ctx,
-        userKey,
-        undefined,
-        options,
       ),
     });
   }
@@ -7492,7 +7455,6 @@ type DirectIntentShadowCandidate =
       agentId: this.id,
       tools: this.tools,
       setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      automationContinuations: this.automationApprovalContinuations,
       formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
       parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
       setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
@@ -8915,6 +8877,11 @@ type DirectIntentShadowCandidate =
         resume,
         approvalResult,
       ),
+      executeStoredAutomationAuthoring: (nextPendingAction, resume, approvalResult) => this.executeStoredAutomationAuthoring(
+        nextPendingAction,
+        resume,
+        approvalResult,
+      ),
     });
   }
 
@@ -9049,6 +9016,45 @@ type DirectIntentShadowCandidate =
       setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
         userId,
         channel,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
+  }
+
+  private async executeStoredAutomationAuthoring(
+    pendingAction: PendingActionRecord,
+    resume: import('./runtime/chat-agent/direct-route-resume.js').AutomationAuthoringResumePayload,
+    approvalResult?: ToolApprovalDecisionResult,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    if (!approvalResult || !approvalResult.approved) {
+      return { content: 'The automation authoring remediation was not approved.' };
+    }
+
+    return executeStoredAutomationAuthoringHelper({
+      request: buildStoredAutomationAuthoringInput({
+        originalUserContent: resume.originalUserContent,
+        userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
+        userId: pendingAction.scope.userId,
+        channel: pendingAction.scope.channel,
+        surfaceId: pendingAction.scope.surfaceId,
+        principalId: resume.principalId ?? pendingAction.scope.userId,
+        principalRole: resume.principalRole,
+        requestId: randomUUID(),
+        ...(resume.codeContext ? { codeContext: { ...resume.codeContext } } : {}),
+        allowRemediation: resume.allowRemediation,
+      }),
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
+        userKey,
         surfaceId,
         action,
         nowMs,

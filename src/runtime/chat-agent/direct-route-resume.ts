@@ -7,6 +7,7 @@ import type { PrincipalRole, ToolExecutionRequest } from '../../tools/types.js';
 export const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
 export const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
 export const DIRECT_ROUTE_RESUME_TYPE_CODING_BACKEND_RUN = 'coding_backend_run';
+export const DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
 
 export interface FilesystemSaveOutputResumePayload {
   type: typeof DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT;
@@ -73,6 +74,18 @@ export interface CodingBackendRunResumePayload {
   backendId?: string;
   codeSessionId?: string;
   workspaceRoot?: string;
+}
+
+export interface AutomationAuthoringResumePayload {
+  type: typeof DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING;
+  originalUserContent: string;
+  allowRemediation: boolean;
+  principalId?: string;
+  principalRole?: string;
+  codeContext?: {
+    workspaceRoot: string;
+    sessionId?: string;
+  };
 }
 
 export function buildDirectFilesystemToolRequest(input: {
@@ -293,5 +306,30 @@ export function readCodingBackendRunResumePayload(
     backendId: toString(payload.backendId).trim() || undefined,
     codeSessionId: toString(payload.codeSessionId).trim() || undefined,
     workspaceRoot: toString(payload.workspaceRoot).trim() || undefined,
+  };
+}
+
+export function readAutomationAuthoringResumePayload(
+  payload: Record<string, unknown> | undefined,
+): AutomationAuthoringResumePayload | null {
+  if (!isRecord(payload)) return null;
+  if (payload.type !== DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING) return null;
+  const originalUserContent = toString(payload.originalUserContent).trim();
+  if (!originalUserContent) return null;
+  const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
+    ? {
+        workspaceRoot: toString(payload.codeContext.workspaceRoot).trim(),
+        ...(toString(payload.codeContext.sessionId).trim()
+          ? { sessionId: toString(payload.codeContext.sessionId).trim() }
+          : {}),
+      }
+    : undefined;
+  return {
+    type: DIRECT_ROUTE_RESUME_TYPE_AUTOMATION_AUTHORING,
+    originalUserContent,
+    allowRemediation: payload.allowRemediation !== false,
+    ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
+    ...(toString(payload.principalRole).trim() ? { principalRole: toString(payload.principalRole).trim() } : {}),
+    ...(codeContext ? { codeContext } : {}),
   };
 }
