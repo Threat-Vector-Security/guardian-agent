@@ -55,10 +55,6 @@ import type { ConversationKey } from './runtime/conversation.js';
 import { ConversationService } from './runtime/conversation.js';
 import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
-import {
-  deriveCodeSessionWorkflowState,
-  type CodeSessionWorkflowType,
-} from './runtime/coding-workflows.js';
 import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import {
   buildToolLoopPendingApprovalResume,
@@ -174,6 +170,9 @@ import {
   handleCodeSessionAttach as handleCodeSessionAttachHelper,
   tryDirectCodeSessionControlFromGateway as tryDirectCodeSessionControlFromGatewayHelper,
 } from './runtime/chat-agent/code-session-control.js';
+import {
+  syncCodeSessionRuntimeState as syncCodeSessionRuntimeStateHelper,
+} from './runtime/chat-agent/code-session-runtime-state.js';
 import {
   normalizeFilesystemResumePrincipalRole,
   type SecondBrainMutationResumePayload,
@@ -4261,68 +4260,6 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private formatCodePlanSummary(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
-    const planResult = results.find((entry) => entry.toolName === 'code_plan');
-    if (!planResult || !isRecord(planResult.result.output)) return '';
-    const output = planResult.result.output as Record<string, unknown>;
-    const goal = toString(output.goal);
-    const workflow = isRecord(output.workflow) ? output.workflow : null;
-    const execution = isRecord(output.execution) ? output.execution : null;
-    const isolation = execution && isRecord(execution.isolation) ? execution.isolation : null;
-    const plan = Array.isArray(output.plan) ? output.plan.map((step) => `- ${String(step)}`) : [];
-    const verification = Array.isArray(output.verification)
-      ? output.verification.map((step) => `- ${String(step)}`)
-      : [];
-    const isolationLevel = toString(isolation?.level).trim();
-    const isolationLines = isolation && isolationLevel && isolationLevel !== 'none'
-      ? [
-          isolationLevel
-            ? `- Level: ${isolationLevel}`
-            : '',
-          toString(isolation.backendKind).trim()
-            ? `- Backend: ${toString(isolation.backendKind).trim()}`
-            : '',
-          toString(isolation.profileId).trim()
-            ? `- Profile: ${toString(isolation.profileId).trim()}`
-            : '',
-          Array.isArray(isolation.candidateOperations) && isolation.candidateOperations.length > 0
-            ? `- Candidate operations: ${isolation.candidateOperations.map((value) => String(value)).join(', ')}`
-            : '',
-          toString(isolation.reason).trim()
-            ? `- Reason: ${toString(isolation.reason).trim()}`
-            : '',
-        ].filter((value) => value)
-      : [];
-    const sections = [
-      goal ? `Goal: ${goal}` : '',
-      workflow?.label ? `Workflow: ${toString(workflow.label)}` : '',
-      plan.length > 0 ? `Plan:\n${plan.join('\n')}` : '',
-      verification.length > 0 ? `Verification:\n${verification.join('\n')}` : '',
-      isolationLines.length > 0 ? `Isolation:\n${isolationLines.join('\n')}` : '',
-    ].filter((value) => value);
-    return sections.join('\n\n');
-  }
-
-  private extractPlannedWorkflowType(
-    results: Array<{ toolName: string; result: Record<string, unknown> }>,
-  ): CodeSessionWorkflowType | null {
-    const planResult = results.find((entry) => entry.toolName === 'code_plan');
-    if (!planResult || !isRecord(planResult.result.output)) return null;
-    const output = planResult.result.output as Record<string, unknown>;
-    const workflow = isRecord(output.workflow) ? output.workflow : null;
-    const value = toString(workflow?.type).trim();
-    if (value === 'implementation'
-      || value === 'bug_fix'
-      || value === 'code_review'
-      || value === 'refactor'
-      || value === 'test_repair'
-      || value === 'dependency_review'
-      || value === 'spec_to_plan') {
-      return value;
-    }
-    return null;
-  }
-
   private syncCodeSessionRuntimeState(
     session: CodeSessionRecord,
     conversationUserId: string,
@@ -4335,108 +4272,16 @@ type DirectIntentShadowCandidate =
       requestId?: string;
     },
   ): void {
-    if (!this.codeSessionStore) return;
-    const sessionPendingApprovals = this.tools?.listPendingApprovalsForCodeSession(session.id, 20) ?? [];
-    const pending = sessionPendingApprovals.length === 0
-      ? this.getPendingApprovals(`${conversationUserId}:${conversationChannel}`)
-      : null;
-    const approvalSummaries = pending?.ids.length
-      ? this.tools?.getApprovalSummaries(pending.ids)
-      : undefined;
-    const pendingApprovals = sessionPendingApprovals.length > 0
-      ? sessionPendingApprovals
-      : pending?.ids.length
-        ? pending.ids.map((id) => {
-            const summary = approvalSummaries?.get(id);
-            return {
-              id,
-              toolName: summary?.toolName ?? 'unknown',
-              argsPreview: summary?.argsPreview ?? '',
-              actionLabel: summary?.actionLabel ?? '',
-            };
-          })
-        : [];
-    const sessionJobs = this.tools?.listJobsForCodeSession(session.id, 100) ?? [];
-    const recentJobs = (sessionJobs.length > 0
-      ? sessionJobs
-      : (this.tools?.listJobs(100) ?? [])
-        .filter((job) => job.userId === conversationUserId && job.channel === conversationChannel))
-      .slice(0, 20)
-      .map((job) => ({
-        id: job.id,
-        toolName: job.toolName,
-        status: job.status,
-        createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        completedAt: job.completedAt,
-        durationMs: job.durationMs,
-        resultPreview: job.resultPreview,
-        argsPreview: job.argsPreview,
-        error: job.error,
-        verificationStatus: job.verificationStatus,
-        verificationEvidence: job.verificationEvidence,
-        approvalId: job.approvalId,
-        requestId: job.requestId,
-        remoteExecution: job.remoteExecution
-          ? { ...job.remoteExecution }
-          : undefined,
-      }));
-    const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
-    const workflow = deriveCodeSessionWorkflowState({
-      focusSummary: session.workState.focusSummary,
-      planSummary,
-      pendingApprovals,
-      recentJobs,
-      verification: session.workState.verification,
-      previous: session.workState.workflow,
-      plannedWorkflowType: this.extractPlannedWorkflowType(lastToolRoundResults),
-      hasRepoEvidence: Boolean(
-        session.workState.workspaceProfile?.summary
-          || session.workState.workspaceMap?.indexedFileCount
-          || session.workState.workingSet?.files?.length,
-      ),
-      workspaceTrustState: getEffectiveCodeWorkspaceTrustState(
-        session.workState.workspaceTrust,
-        session.workState.workspaceTrustReview,
-      ) ?? session.workState.workspaceTrust?.state ?? null,
-      remoteExecutionTargets: this.tools?.getRemoteExecutionTargets?.(),
-    });
-    const nextCompactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
-      || (
-        runtimeState?.contextAssembly?.contextCompactionApplied
-          && typeof runtimeState.contextAssembly.contextCharsBeforeCompaction === 'number'
-          && typeof runtimeState.contextAssembly.contextCharsAfterCompaction === 'number'
-          ? `Older context was compacted from ${runtimeState.contextAssembly.contextCharsBeforeCompaction} to ${runtimeState.contextAssembly.contextCharsAfterCompaction} chars.${Array.isArray(runtimeState.contextAssembly.contextCompactionStages) && runtimeState.contextAssembly.contextCompactionStages.length > 0 ? ` Stages: ${runtimeState.contextAssembly.contextCompactionStages.join(', ')}.` : ''}`
-          : session.workState.compactedSummary
-      );
-    const compactedSummaryUpdatedAt = nextCompactedSummary && nextCompactedSummary !== session.workState.compactedSummary
-      ? Date.now()
-      : session.workState.compactedSummaryUpdatedAt;
-    const compactedSummary = nextCompactedSummary;
-    const status = pendingApprovals.length > 0
-      ? 'awaiting_approval'
-      : recentJobs.some((job) => job.status === 'failed' || job.status === 'denied')
-        ? 'blocked'
-        : recentJobs.some((job) => job.status === 'running')
-          ? 'active'
-          : 'active';
-
-    this.codeSessionStore.updateSession({
-      sessionId: session.id,
-      ownerUserId: session.ownerUserId,
-      status,
-      workState: {
-        ...session.workState,
-        focusSummary: session.workState.focusSummary,
-        workspaceProfile: session.workState.workspaceProfile,
-        planSummary,
-        compactedSummary,
-        compactedSummaryUpdatedAt,
-        workflow,
-        activeSkills: activeSkills.map((skill) => skill.id),
-        pendingApprovals,
-        recentJobs,
-      },
+    syncCodeSessionRuntimeStateHelper({
+      codeSessionStore: this.codeSessionStore,
+      tools: this.tools,
+      session,
+      conversationUserId,
+      conversationChannel,
+      activeSkills,
+      lastToolRoundResults,
+      runtimeState,
+      getPendingApprovals: (userKey) => this.getPendingApprovals(userKey),
     });
   }
 
