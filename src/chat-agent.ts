@@ -157,6 +157,9 @@ import {
   type ApprovalFollowUpCopy,
 } from './runtime/chat-agent/approval-state.js';
 import {
+  tryBuildDirectPendingApprovalStatusResponse,
+} from './runtime/chat-agent/pending-approval-status.js';
+import {
   continueDirectRouteAfterApproval as continueDirectRouteAfterApprovalHelper,
   handleApprovalMessage,
   syncPendingApprovalsFromExecutor as syncPendingApprovalsFromExecutorHelper,
@@ -766,40 +769,13 @@ type DirectIntentShadowCandidate =
     message: UserMessage,
     options?: { exactOnly?: boolean },
   ): { content: string; metadata?: Record<string, unknown> } | null {
-    if (!this.tools?.isEnabled()) return null;
-    const normalized = stripLeadingContextPrefix(message.content).replace(/\s+/g, ' ').trim();
-    if (!normalized) return null;
-    const exactPendingApprovalStatus = /^pending approvals?\??$/i.test(normalized)
-      || /^approvals? pending\??$/i.test(normalized);
-    const broadPendingApprovalStatus = /(?:\bwhat\b|\bwhich\b|\bshow\b|\blist\b|\bare there\b|\bdo i have\b|\bany\b|\bcurrent\b).*(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b)/i.test(normalized)
-      || /(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b).*\b(?:right now|currently|today)\b/i.test(normalized);
-    const asksForPendingApprovals = options?.exactOnly === true
-      ? exactPendingApprovalStatus
-      : exactPendingApprovalStatus || broadPendingApprovalStatus;
-    if (!asksForPendingApprovals) return null;
-
-    const surfaceId = this.getCodeSessionSurfaceId(message);
-    let pendingAction = this.getPendingApprovalAction(message.userId, message.channel, surfaceId);
-    if (!pendingAction) {
-      const liveApprovalIds = this.tools.listPendingApprovalIdsForUser?.(message.userId, message.channel, {
-        includeUnscoped: message.channel === 'web',
-      }) ?? [];
-      if (liveApprovalIds.length > 0) {
-        this.setPendingApprovals(`${message.userId}:${message.channel}`, liveApprovalIds, surfaceId);
-        pendingAction = this.getPendingApprovalAction(message.userId, message.channel, surfaceId);
-      }
-    }
-
-    const approvalIds = pendingAction?.blocker.approvalIds ?? [];
-    const summaries = approvalIds.length > 0
-      ? this.tools.getApprovalSummaries?.(approvalIds)
-      : undefined;
-    const content = this.formatPendingApprovalPrompt(approvalIds, summaries);
-    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
-    return {
-      content,
-      metadata: pendingActionMeta ? { pendingAction: pendingActionMeta } : undefined,
-    };
+    return tryBuildDirectPendingApprovalStatusResponse(message, {
+      tools: this.tools,
+      getCodeSessionSurfaceId: (nextMessage) => this.getCodeSessionSurfaceId(nextMessage),
+      getPendingApprovalAction: (userId, channel, surfaceId) => this.getPendingApprovalAction(userId, channel, surfaceId),
+      setPendingApprovals: (userKey, ids, surfaceId) => this.setPendingApprovals(userKey, ids, surfaceId),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+    }, options);
   }
 
   private tryDirectAutomationCapabilitiesResponse(content: string): string | null {

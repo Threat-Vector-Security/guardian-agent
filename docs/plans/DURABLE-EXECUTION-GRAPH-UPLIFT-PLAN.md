@@ -190,6 +190,13 @@ Checkpoint after the coding-backend direct-route resume extraction:
 - `src/chat-agent.ts` still dispatches the direct coding backend request and stores the pending approval, but it no longer owns the stored direct-route resume payload shape or approval-result normalization.
 - Remaining direct-route debt after this slice: `coding_backend_run`, filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
+Checkpoint after the pending-approval status helper extraction:
+
+- Pending-approval status query recognition and response construction moved from `src/chat-agent.ts` into `src/runtime/chat-agent/pending-approval-status.ts`.
+- Exact approval-status prompts such as `pending approvals?` are treated as approval-continuity/status control-plane queries before stale attached coding-session routing can absorb them.
+- Broad status matching was narrowed so repo-inspection prompts such as `Which files implement pending approvals?` are not consumed by approval-status handling.
+- Focused coverage now exists at `src/runtime/chat-agent/pending-approval-status.test.ts`, with the existing chat-agent regression proving exact status queries bypass pre-routed coding-task continuity.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
