@@ -1728,8 +1728,7 @@ function buildDashboardCallbacks(
     }
     const continueConversation = !!pendingActionForApproval?.resume
       || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
-    const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
-      || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
+    const continueAutomation = !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
     const shouldContinue = continueConversation || continueAutomation;
     const allowContinuation = shouldContinueConversationAfterApprovalDecision({
       decision: input.decision,
@@ -1738,15 +1737,6 @@ function buildDashboardCallbacks(
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
     if (allowContinuation) {
       continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;
-      if (!continuedResponse) {
-        for (const agent of chatAgents.values()) {
-          const followUp = await agent.continueAutomationAfterApproval(input.approvalId, input.decision);
-          if (followUp) {
-            continuedResponse = followUp;
-            break;
-          }
-        }
-      }
       if (!continuedResponse && pendingActionForApproval?.resume?.kind === 'execution_graph') {
         continuedResponse = await runtime.workerManager?.resumeExecutionGraphPendingAction(
           pendingActionForApproval,

@@ -15,7 +15,10 @@ import type {
 } from '../pending-actions.js';
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import { toPendingActionEntities } from './intent-gateway-orchestration.js';
-import type { AutomationApprovalContinuationStore } from './automation-approval-continuation.js';
+import {
+  buildAutomationAuthoringResumePayload,
+  buildStoredAutomationAuthoringInput,
+} from './automation-authoring-resume.js';
 
 interface DirectAutomationClarificationMetadata {
   blockerKind: PendingActionBlocker['kind'];
@@ -40,7 +43,6 @@ export interface DirectAutomationDeps {
     approvalId: string,
     copy: { approved: string; denied: string },
   ) => void;
-  automationContinuations: Pick<AutomationApprovalContinuationStore, 'clear' | 'set'>;
   formatPendingApprovalPrompt: (
     ids: string[],
     summaries?: Map<string, { toolName: string; argsPreview: string }>,
@@ -84,6 +86,7 @@ export interface DirectAutomationDeps {
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       codeSessionId?: string;
+      resume?: PendingActionRecord['resume'];
     },
   ) => { action: PendingActionRecord | null; collisionPrompt?: string };
   buildPendingApprovalBlockedResponse: (
@@ -208,7 +211,6 @@ export async function tryDirectAutomationAuthoring(input: {
     resolvePendingApprovalMetadata: (ids, fallback) => resolvePendingApprovalMetadata(deps.tools, ids, fallback),
   }, input.options);
   if (!result) {
-    deps.automationContinuations.clear(input.userKey);
     return null;
   }
   if (trackedPendingApprovalIds.length > 0) {
@@ -232,6 +234,24 @@ export async function tryDirectAutomationAuthoring(input: {
         resolution: input.options?.intentDecision?.resolution ?? 'ready',
         provenance: input.options?.intentDecision?.provenance,
         entities: toPendingActionEntities(input.options?.intentDecision?.entities),
+        ...(result.metadata?.resumeAutomationAfterApprovals
+          ? {
+              resume: buildAutomationAuthoringResumePayload(buildStoredAutomationAuthoringInput({
+                originalUserContent: input.message.content,
+                userKey: input.userKey,
+                userId: input.message.userId,
+                channel: input.message.channel,
+                surfaceId: input.message.surfaceId,
+                principalId: input.message.principalId,
+                principalRole: input.message.principalRole,
+                requestId: input.message.id,
+                agentCheckAction: input.ctx.checkAction,
+                ...(input.codeContext?.workspaceRoot
+                  ? { codeContext: { workspaceRoot: input.codeContext.workspaceRoot } }
+                  : {}),
+              })),
+            }
+          : {}),
       },
     );
     const mergedResult = deps.buildPendingApprovalBlockedResponse(pendingActionResult, result.content);
@@ -240,11 +260,6 @@ export async function tryDirectAutomationAuthoring(input: {
       ...(result.metadata ?? {}),
       ...(mergedResult.metadata ?? {}),
     };
-  }
-  if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
-    deps.automationContinuations.set(input.userKey, input.message, input.ctx, trackedPendingApprovalIds);
-  } else {
-    deps.automationContinuations.clear(input.userKey);
   }
   return result;
 }

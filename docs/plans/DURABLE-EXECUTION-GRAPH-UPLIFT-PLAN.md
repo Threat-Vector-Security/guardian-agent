@@ -136,14 +136,14 @@ Checkpoint after the first approval/resume debt-burn slice:
 - Chat-agent tool-loop approvals no longer keep an in-memory suspended-session replay cache. The durable `PendingActionRecord.resume` payload is the resume source for chat-level tool-loop approval continuation.
 - The old suspended approval scope helpers were removed with their tests; pending actions now own blocked-work lookup for chat approvals.
 - CLI and Telegram no longer synthesize a replay turn when the approval decision API already returns an explicit continuation directive. Direct continuation responses and pending-action resume metadata are authoritative for those flows.
-- Remaining approval/resume overlap after this slice: chat automation approval continuations, worker-manager direct automation continuations, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
+- Remaining approval/resume overlap after this slice: worker-manager direct automation continuations, worker-session automation continuations, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
 
-Checkpoint after the automation-continuation modularization slice:
+Checkpoint after the chat automation-resume debt-burn slice:
 
-- Chat automation approval continuation state moved out of `ChatAgentApprovalState` into `automation-approval-continuation.ts`, with focused store/resume tests.
-- `approval-orchestration.ts` now delegates automation retry/partial-approval bookkeeping to that module instead of owning the continuation algorithm inline.
-- `direct-automation.ts` depends on a continuation store interface rather than bespoke `set`/`clear` callbacks, and `ChatAgent` now has one direct-automation dependency boundary instead of repeated callback blocks.
-- This is a modularization step, not the final architecture. The continuation store is still in-memory; the next debt-burn step is to replace its backing state with graph interrupt / pending-action resume metadata, then delete the in-memory implementation.
+- Chat automation authoring remediation approvals now write a `direct_route` pending-action resume payload with `type: "automation_authoring"` instead of registering an in-memory ChatAgent continuation.
+- `approval-orchestration.ts` no longer owns a special automation retry path. Final approval resolution falls through to the shared pending-action direct-route resume path.
+- `direct-route-runtime.ts` dispatches stored automation-authoring resume payloads to `automation-authoring-resume.ts`, which reconstructs the authoring request from pending-action metadata and can create another pending action if follow-up remediation approvals are needed.
+- The temporary `automation-approval-continuation.ts` module and tests were deleted. The next debt-burn step is to apply the same pending-action/graph-resume ownership to `WorkerManager.directAutomationContinuations` and `WorkerSession` automation continuations, then remove those maps.
 
 Exit criteria for this refinement phase:
 
