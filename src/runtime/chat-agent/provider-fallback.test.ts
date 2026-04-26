@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext } from '../../agent/types.js';
 import type { ChatMessage, ChatResponse } from '../../llm/types.js';
 import {
+  chatWithAlternateProvider,
   chatWithFallback,
   chatWithRoutingMetadata,
   resolvePreferredProviderOrder,
@@ -100,5 +101,39 @@ describe('provider fallback runtime', () => {
 
     expect(result.content).toBe('fallback');
     expect(fallbackChain.chatWithFallback).toHaveBeenCalledWith(messages, undefined);
+  });
+
+  it('centralizes alternate-provider retry after a named provider', async () => {
+    const fallbackChain = {
+      chatWithProviderOrder: vi.fn(),
+      chatWithFallback: vi.fn(),
+      chatWithFallbackAfterPrimary: vi.fn(),
+      chatWithFallbackAfterProvider: vi.fn(async () => ({
+        providerName: 'openai',
+        usedFallback: true,
+        skipped: ['ollama'],
+        response: response('alternate'),
+      })),
+    };
+
+    const result = await chatWithAlternateProvider({
+      primaryProviderName: 'ollama',
+      messages,
+      fallbackProviderOrder: ['ollama', 'openai'],
+      fallbackChain,
+    });
+
+    expect(result).toMatchObject({
+      providerName: 'openai',
+      providerLocality: 'external',
+      usedFallback: true,
+      response: { content: 'alternate' },
+    });
+    expect(fallbackChain.chatWithFallbackAfterProvider).toHaveBeenCalledWith(
+      'ollama',
+      ['ollama', 'openai'],
+      messages,
+      undefined,
+    );
   });
 });
