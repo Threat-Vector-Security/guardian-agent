@@ -321,6 +321,13 @@ Checkpoint after the chat-continuation naming cleanup:
 - Suspended tool-loop payload helpers now live under `src/runtime/chat-agent/tool-loop-continuation.ts`; the source API now describes graph continuation artifacts instead of pending-action replay resumes.
 - The serialized payload type strings were kept semantically stable because they identify the continuation payload shape, not the retired pending-action resume kind.
 
+Checkpoint after the live tool-loop controller extraction:
+
+- Live no-tools chat, tool-loop execution, provider routing, quality fallback, answer-first recovery, web-search prefetch recovery, pending-approval finalization, and suspended tool-loop graph continuation creation now live in `src/runtime/chat-agent/live-tool-loop-controller.ts`.
+- `src/chat-agent.ts` still assembles turn context and renders the final response, but no longer owns the live LLM/tool-loop state machine inline.
+- The old inline response-source metadata builder and direct-answer recovery wrapper were removed from `src/chat-agent.ts`; the controller now owns that runtime metadata for live model execution.
+- Remaining controller debt: `src/chat-agent.ts` still owns direct-route candidate dispatch, gateway repair, and many capability-specific dependency-wiring methods. The next extraction should target shared direct-route orchestration or graph-controller ownership, not another per-capability resume shim.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.

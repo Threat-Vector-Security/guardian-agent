@@ -9,10 +9,8 @@ import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import {
   buildCodeSessionWorkspaceAwarenessQuery,
-  compactMessagesIfOverBudget,
   compactQuarantinedToolResult,
   formatToolThreatWarnings,
-  formatToolResultForLLM,
   getCodeSessionPromptRelativePath,
   isRecord,
   readCodeRequestMetadata,
@@ -21,25 +19,18 @@ import {
   shouldRefreshCodeSessionWorkingSet,
   stripLeadingContextPrefix,
   summarizeCodeSessionFocus,
-  summarizeToolRoundStatusMessage,
   toBoolean,
-  toLLMToolDef,
   toString,
 } from './chat-agent-helpers.js';
-import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import type { ContextCompactionResult } from './util/context-budget.js';
 import {
   lacksUsableAssistantContent as _lacksUsableAssistantContent,
   looksLikeOngoingWorkResponse as _looksLikeOngoingWorkResponse,
 } from './util/assistant-response-shape.js';
 import {
-  buildAnswerFirstSkillFallbackResponse,
-  buildAnswerFirstSkillCorrectionPrompt,
   isAnswerFirstSkillResponseSufficient as isAnswerFirstSkillResponseSufficientForSkills,
-  shouldUseAnswerFirstForSkills,
 } from './util/answer-first-skills.js';
 import {
-  isDirectMemorySaveRequest,
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
 import type { ConversationKey } from './runtime/conversation.js';
@@ -56,9 +47,6 @@ import {
 import {
   tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
 } from './runtime/chat-agent/direct-coding-backend.js';
-import {
-  executeToolLoopRound,
-} from './runtime/chat-agent/tool-loop-round.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
@@ -215,12 +203,12 @@ import {
   type ChatContinuationPayload,
 } from './runtime/chat-agent/chat-continuation-graph.js';
 import {
-  buildBlockedToolLoopPendingApprovalContinuation,
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
-  finalizeToolLoopPendingApprovals as finalizeToolLoopPendingApprovalsHelper,
-  recoverDirectAnswerAfterTools as recoverDirectAnswerAfterToolsHelper,
   resumeStoredToolLoopContinuation as resumeStoredToolLoopContinuationHelper,
 } from './runtime/chat-agent/tool-loop-runtime.js';
+import {
+  runLiveToolLoopController,
+} from './runtime/chat-agent/live-tool-loop-controller.js';
 import {
   ChatAgentOrchestrationState,
 } from './runtime/chat-agent/orchestration-state.js';
@@ -293,19 +281,14 @@ import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill, SkillPromptArtifactContext, SkillPromptMaterialResult } from './skills/types.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
-  isPhantomPendingApprovalMessage,
-} from './runtime/pending-approval-copy.js';
-import {
   getProviderLocalityFromName,
   readResponseSourceMetadata,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
 import {
-  chatWithAlternateProvider as chatWithAlternateProviderHelper,
   chatWithFallback as chatWithFallbackHelper,
   chatWithRoutingMetadata as chatWithRoutingMetadataHelper,
 } from './runtime/chat-agent/provider-fallback.js';
-import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from './util/structured-json.js';
 import {
   buildDirectHandlerResponseSource,
   buildRoutineSemanticHints,
@@ -935,35 +918,12 @@ type DirectIntentShadowCandidate =
     return contexts;
   }
 
-  private shouldPreferAnswerFirstForSkills(
-    skills: readonly ResolvedSkill[],
-    originalRequest?: string,
-  ): boolean {
-    return shouldUseAnswerFirstForSkills(skills, originalRequest);
-  }
-
   private isAnswerFirstSkillResponseSufficient(
     skills: readonly ResolvedSkill[],
     content: string,
     originalRequest?: string,
   ): boolean {
     return isAnswerFirstSkillResponseSufficientForSkills(skills, content, originalRequest);
-  }
-
-  private async tryRecoverDirectAnswerAfterTools(
-    llmMessages: ChatMessage[],
-    chatFn: (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => Promise<import('./llm/types.js').ChatResponse>,
-    currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel,
-    currentTaintReasons: Set<string>,
-  ): Promise<string> {
-    return recoverDirectAnswerAfterToolsHelper({
-      llmMessages,
-      chatFn,
-      currentContextTrustLevel,
-      currentTaintReasons,
-        lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
-        looksLikeOngoingWorkResponse: (content) => this.looksLikeOngoingWorkResponse(content),
-    });
   }
 
   private shouldHandleDirectAssistantInline(input: {
@@ -1764,59 +1724,6 @@ type DirectIntentShadowCandidate =
     const buildCompactionContext = (compaction?: ContextCompactionResult) => (
       compaction?.applied ? buildContextCompactionDiagnostics(compaction) : undefined
     );
-    const buildResponseSourceMetadata = (input: {
-      locality: 'local' | 'external';
-      providerName: string;
-      response: import('./llm/types.js').ChatResponse;
-      usedFallback: boolean;
-      notice?: string;
-      durationMs?: number;
-    }): ResponseSourceMetadata => {
-      const actualProviderName = input.providerName.trim();
-      const useSelectedExecutionProfile = !!selectedExecutionProfile
-        && (
-          !actualProviderName
-          || actualProviderName === selectedExecutionProfile.providerName
-          || actualProviderName === selectedExecutionProfile.providerType
-        );
-      const providerName = useSelectedExecutionProfile
-        ? selectedExecutionProfile.providerType
-        : actualProviderName;
-      const providerProfileName = useSelectedExecutionProfile
-        && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
-        ? selectedExecutionProfile.providerName
-        : undefined;
-      return {
-        locality: input.locality,
-        ...(providerName ? { providerName } : {}),
-        ...(providerProfileName ? { providerProfileName } : {}),
-        ...((useSelectedExecutionProfile ? selectedExecutionProfile.providerTier : getProviderTier(providerName))
-          ? { providerTier: (useSelectedExecutionProfile ? selectedExecutionProfile.providerTier : getProviderTier(providerName)) }
-          : {}),
-        ...(input.response.model?.trim() ? { model: input.response.model.trim() } : {}),
-        usedFallback: input.usedFallback,
-        ...(input.notice ? { notice: input.notice } : {}),
-        ...(typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
-          ? { durationMs: Math.max(0, input.durationMs) }
-          : {}),
-        ...(input.response.usage
-          ? {
-              usage: {
-                promptTokens: input.response.usage.promptTokens,
-                completionTokens: input.response.usage.completionTokens,
-                totalTokens: input.response.usage.totalTokens,
-                ...(typeof input.response.usage.cacheCreationTokens === 'number'
-                  ? { cacheCreationTokens: input.response.usage.cacheCreationTokens }
-                  : {}),
-                ...(typeof input.response.usage.cacheReadTokens === 'number'
-                  ? { cacheReadTokens: input.response.usage.cacheReadTokens }
-                  : {}),
-              },
-            }
-          : {}),
-      };
-    };
-
     let llmMessages: import('./llm/types.js').ChatMessage[];
     let skipDirectTools = false;
     let enrichedSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
@@ -1888,7 +1795,6 @@ type DirectIntentShadowCandidate =
     let finalContent = '';
     let pendingActionMeta: Record<string, unknown> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
-    let toolLoopPendingContinuation: import('./runtime/chat-agent/tool-loop-continuation.js').ToolLoopContinuationPayload | undefined;
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
@@ -2453,817 +2359,106 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    if (!ctx.llm) {
-      return { content: 'No LLM provider configured.' };
-    }
-
-    // If GWS provider is configured and the structured interpretation says this is
-    // workspace/email work, prefer the external provider for the tool-calling loop.
-    // swap to the external model for the tool-calling loop so it handles
-    // structured tool calls correctly (local models often struggle with complex schemas).
-    const gwsProvider = this.enabledManagedProviders?.has('gws')
-      && (directIntent?.decision.route === 'workspace_task' || directIntent?.decision.route === 'email_task')
-      ? this.resolveGwsProvider?.()
-      : undefined;
-    let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
-      const mergedOpts = { ...opts, signal: message.abortSignal };
-      if (gwsProvider) {
-        try {
-          const startedAt = Date.now();
-          const response = await gwsProvider.chat(msgs, mergedOpts);
-          responseSource = buildResponseSourceMetadata({
-            locality: 'external',
-            providerName: gwsProvider.name,
-            response,
-            usedFallback: false,
-            durationMs: Date.now() - startedAt,
-          });
-          return response;
-        } catch (err) {
-          log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
-            'GWS provider failed, falling back to default');
-          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
-          responseSource = buildResponseSourceMetadata({
-            locality: fallback.providerLocality,
-            providerName: fallback.providerName,
-            response: fallback.response,
-            usedFallback: fallback.usedFallback,
-            notice: fallback.notice,
-            durationMs: fallback.durationMs,
-          });
-          return fallback.response;
-        }
-      }
-      const routed = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
-      responseSource = buildResponseSourceMetadata({
-        locality: routed.providerLocality,
-        providerName: routed.providerName,
-        response: routed.response,
-        usedFallback: routed.usedFallback,
-        notice: routed.notice,
-        durationMs: routed.durationMs,
-      });
-      return routed.response;
-    };
-    let toolResultProviderKind = gwsProvider
-      ? 'external'
-      : defaultToolResultProviderKind;
-
-    const providerLocality = this.resolveToolResultProviderKind(ctx);
-
-    if (!this.tools?.isEnabled()) {
-      const response = await chatFn(llmMessages);
-      finalContent = response.content;
-      // Quality-based fallback for non-tool path
-      if (this.qualityFallbackEnabled && this.lacksUsableAssistantContent(finalContent) && this.fallbackChain && providerLocality === 'local') {
-        log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
-        try {
-          const fb = await chatWithAlternateProviderHelper({
-            primaryProviderName: ctx.llm?.name ?? 'unknown',
-            messages: llmMessages,
-            fallbackProviderOrder,
-            fallbackChain: this.fallbackChain,
-          });
-          if (fb?.response.content?.trim()) {
-            finalContent = fb.response.content;
-            responseSource = buildResponseSourceMetadata({
-              locality: fb.providerLocality,
-              providerName: fb.providerName,
-              response: fb.response,
-              usedFallback: fb.usedFallback,
-              notice: 'Retried with an alternate model after a weak local response.',
-              durationMs: fb.durationMs,
-            });
-          }
-        } catch { /* fallback also failed, keep original */ }
-      }
-    } else {
-      let rounds = 0;
-      // Deferred loading: start with always-loaded tools, expand via find_tools.
-      // In code sessions, only eager-load a small read-first coding subset.
-      const baseToolDefs = this.tools.listAlwaysLoadedDefinitions();
-      const eagerBrowserToolDefs = directBrowserIntent
-        ? this.tools.listToolDefinitions().filter((definition) => definition.name.startsWith('browser_'))
-        : [];
-      const allToolDefs = [
-        ...baseToolDefs,
-        ...(resolvedCodeSession
-          ? this.tools.listCodeSessionEagerToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))
-          : []),
-        ...eagerBrowserToolDefs.filter((d) => !baseToolDefs.some((b) => b.name === d.name)),
-      ];
-      // Local models get full descriptions for better tool selection; external models get short
-      let llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, providerLocality));
-      const pendingIds: string[] = [];
-      const contextBudget = this.contextBudget;
-      let forcedPolicyRetryUsed = false;
-      let forcedSkillShapeRetryCount = 0;
-      let forcedSkillGroundingUsed = false;
-      let forcedIntermediateStatusRetryCount = 0;
-      let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
-      const currentTaintReasons = new Set<string>();
-      let seededAnswerFirstResponse: import('./llm/types.js').ChatResponse | null = null;
-      const answerFirstOriginalRequest = stripLeadingContextPrefix(requestIntentContent);
-      const answerFirstCorrectionPrompt = this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
-        ? buildAnswerFirstSkillCorrectionPrompt(activeSkills, stripLeadingContextPrefix(requestIntentContent))
-        : undefined;
-      const answerFirstFallbackResponse = this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
-        ? buildAnswerFirstSkillFallbackResponse(activeSkills, stripLeadingContextPrefix(requestIntentContent))
-        : undefined;
-      if (this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)) {
-        try {
-          let answerFirstResponse = await chatFn(
-            withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
-            { tools: [] },
-          );
-          if (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0) {
-            const recoveredToolCalls = recoverToolCallsFromStructuredText(answerFirstResponse.content ?? '', llmToolDefs);
-            if (recoveredToolCalls?.toolCalls.length) {
-              answerFirstResponse = {
-                ...answerFirstResponse,
-                toolCalls: recoveredToolCalls.toolCalls,
-                finishReason: 'tool_calls',
-                content: '',
-              };
-            }
-          }
-          const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
-          if (
-            answerFirstContent
-            && this.isAnswerFirstSkillResponseSufficient(activeSkills, answerFirstContent, answerFirstOriginalRequest)
-            && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
-          ) {
-            finalContent = answerFirstContent;
-          } else if (answerFirstResponse.toolCalls?.length) {
-            seededAnswerFirstResponse = answerFirstResponse;
-          }
-        } catch {
-          finalContent = '';
-        }
-      }
-      while (rounds < this.maxToolRounds) {
-        if (finalContent) break;
-        // Context window awareness: if approaching budget, summarize oldest tool results
-        const compactionResult = compactMessagesIfOverBudget(llmMessages, contextBudget);
-        if (compactionResult.applied) {
-          latestContextCompaction = compactionResult;
-        }
-
-        const plannerMessages = withTaintedContentSystemPrompt(
-          llmMessages,
-          currentContextTrustLevel,
-          currentTaintReasons,
-        );
-
-        let response = rounds === 0 && seededAnswerFirstResponse
-          ? seededAnswerFirstResponse
-          : await chatFn(plannerMessages, { tools: llmToolDefs });
-        seededAnswerFirstResponse = null;
-        finalContent = response.content;
-        if (
-          !forcedPolicyRetryUsed
-          && this.shouldRetryPolicyUpdateCorrection(llmMessages, finalContent, llmToolDefs)
-        ) {
-          forcedPolicyRetryUsed = true;
-          response = await chatFn(
-            [
-              ...plannerMessages,
-              { role: 'assistant', content: response.content ?? '' },
-              { role: 'user', content: this.buildPolicyUpdateCorrectionPrompt() },
-            ],
-            { tools: llmToolDefs },
-          );
-          finalContent = response.content;
-        }
-        if (
-          rounds === 0
-          && (!response.toolCalls || response.toolCalls.length === 0)
-          && isDirectMemorySaveRequest(stripLeadingContextPrefix(requestIntentContent))
-        ) {
-          response = await chatFn(
-            [
-              ...plannerMessages,
-              { role: 'assistant', content: response.content ?? '' },
-              { role: 'user', content: this.buildExplicitMemorySaveCorrectionPrompt(requestIntentContent) },
-            ],
-            { tools: llmToolDefs },
-          );
-          finalContent = response.content;
-        }
-        if (!response.toolCalls || response.toolCalls.length === 0) {
-          const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
-          if (recoveredToolCalls?.toolCalls.length) {
-            response = {
-              ...response,
-              toolCalls: recoveredToolCalls.toolCalls,
-              finishReason: 'tool_calls',
-            };
-            finalContent = '';
-          }
-        }
-        if (
-          forcedSkillShapeRetryCount < 2
-          && (!response.toolCalls || response.toolCalls.length === 0)
-          && answerFirstCorrectionPrompt
-          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '', answerFirstOriginalRequest)
-        ) {
-          forcedSkillShapeRetryCount += 1;
-          response = await chatFn(
-            [
-              ...plannerMessages,
-              { role: 'assistant', content: response.content ?? '' },
-              { role: 'user', content: answerFirstCorrectionPrompt },
-            ],
-            { tools: llmToolDefs },
-          );
-          finalContent = response.content;
-          if (!response.toolCalls || response.toolCalls.length === 0) {
-            const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
-            if (recoveredToolCalls?.toolCalls.length) {
-              response = {
-                ...response,
-                toolCalls: recoveredToolCalls.toolCalls,
-                finishReason: 'tool_calls',
-              };
-              finalContent = '';
-            }
-          }
-        }
-        if (
-          !forcedSkillGroundingUsed
-          && (!response.toolCalls || response.toolCalls.length === 0)
-          && this.shouldPreferAnswerFirstForSkills(activeSkills, answerFirstOriginalRequest)
-          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '', answerFirstOriginalRequest)
-          && llmToolDefs.some((definition) => definition.name === 'fs_read')
-        ) {
-          const skillSourcePaths = [...new Set(
-            activeSkills
-              .filter((skill) => shouldUseAnswerFirstForSkills([skill], answerFirstOriginalRequest))
-              .map((skill) => skill.sourcePath?.trim() ?? '')
-              .filter((value) => value.length > 0),
-          )].slice(0, 2);
-          if (skillSourcePaths.length > 0) {
-            forcedSkillGroundingUsed = true;
-            for (const [index, skillPath] of skillSourcePaths.entries()) {
-              const prefetched = await this.tools.executeModelTool(
-                'fs_read',
-                { path: skillPath },
-                {
-                  origin: 'assistant',
-                  agentId: this.id,
-                  userId: conversationUserId,
-                  principalId: message.principalId ?? conversationUserId,
-                  principalRole: message.principalRole ?? 'owner',
-                  channel: conversationChannel,
-                  requestId: message.id,
-                  agentContext: { checkAction: ctx.checkAction },
-                  codeContext: effectiveCodeContext,
-                },
-              );
-              const scannedToolResult = this.sanitizeToolResultForLlm(
-                'fs_read',
-                prefetched,
-                toolResultProviderKind,
-              );
-              if (scannedToolResult.trustLevel === 'quarantined') {
-                currentContextTrustLevel = 'quarantined';
-              } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
-                currentContextTrustLevel = 'low_trust';
-              }
-              for (const reason of scannedToolResult.taintReasons) {
-                currentTaintReasons.add(reason);
-              }
-              const toolCallId = `skill-grounding-${index + 1}`;
-              llmMessages.push({
-                role: 'assistant',
-                content: '',
-                toolCalls: [{
-                  id: toolCallId,
-                  name: 'fs_read',
-                  arguments: JSON.stringify({ path: skillPath }),
-                }],
-              });
-              llmMessages.push({
-                role: 'tool',
-                toolCallId,
-                content: formatToolResultForLLM(
-                  'fs_read',
-                  scannedToolResult.sanitized,
-                  scannedToolResult.threats,
-                ),
-              });
-            }
-            response = await chatFn(
-              withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
-              { tools: llmToolDefs },
-            );
-            finalContent = response.content;
-            if (!response.toolCalls || response.toolCalls.length === 0) {
-              const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
-              if (recoveredToolCalls?.toolCalls.length) {
-                response = {
-                  ...response,
-                  toolCalls: recoveredToolCalls.toolCalls,
-                  finishReason: 'tool_calls',
-                };
-                finalContent = '';
-              }
-            }
-          }
-        }
-        if (
-          forcedIntermediateStatusRetryCount < 2
-          && (!response.toolCalls || response.toolCalls.length === 0)
-        && this.shouldRetryTerminalResultCorrection(response.content ?? '', {
-            hasToolResults: lastToolRoundResults.length > 0,
-            hasAnswerFirstContract: !!answerFirstCorrectionPrompt,
-            hasToolExecutionContract: false,
-          })
-        ) {
-          forcedIntermediateStatusRetryCount += 1;
-          response = await chatFn(
-            [
-              ...plannerMessages,
-              { role: 'assistant', content: response.content ?? '' },
-          { role: 'user', content: this.buildTerminalResultCorrectionPrompt() },
-            ],
-            { tools: llmToolDefs },
-          );
-          finalContent = response.content;
-          if (!response.toolCalls || response.toolCalls.length === 0) {
-            const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
-            if (recoveredToolCalls?.toolCalls.length) {
-              response = {
-                ...response,
-                toolCalls: recoveredToolCalls.toolCalls,
-                finishReason: 'tool_calls',
-              };
-              finalContent = '';
-            }
-          }
-        }
-        if (response.toolCalls?.length) {
-          response = {
-            ...response,
-            toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
-          };
-        }
-        if (!response.toolCalls || response.toolCalls.length === 0) {
-          // Safety net for local models: if finishReason is 'stop' (no tool calls)
-          // but the message clearly needed web search, pre-fetch results and re-prompt.
-          // This catches cases where Ollama/local models fail to emit tool calls.
-          if (rounds === 0 && response.finishReason === 'stop' && this.tools) {
-            const searchQuery = (!resolvedCodeSession && !effectiveCodeContext)
-              ? parseWebSearchIntent(message.content)
-              : null;
-            if (searchQuery) {
-              const prefetched = await this.tools.executeModelTool(
-                'web_search',
-                { query: searchQuery, maxResults: 5 },
-                {
-                  origin: 'assistant',
-                  agentId: this.id,
-                  userId: conversationUserId,
-                  channel: conversationChannel,
-                  requestId: message.id,
-                  agentContext: { checkAction: ctx.checkAction },
-                  codeContext: effectiveCodeContext,
-                },
-              );
-              if (toBoolean(prefetched.success) && prefetched.output) {
-                const prefetchedScan = this.sanitizeToolResultForLlm('web_search', prefetched, toolResultProviderKind);
-                if (prefetchedScan.trustLevel === 'quarantined') {
-                  currentContextTrustLevel = 'quarantined';
-                } else if (prefetchedScan.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
-                  currentContextTrustLevel = 'low_trust';
-                }
-                for (const reason of prefetchedScan.taintReasons) {
-                  currentTaintReasons.add(reason);
-                }
-                const safePrefetched = prefetchedScan.sanitized && typeof prefetchedScan.sanitized === 'object'
-                  ? prefetchedScan.sanitized as Record<string, unknown>
-                  : prefetched;
-                const output = (safePrefetched && typeof safePrefetched === 'object' && safePrefetched.output && typeof safePrefetched.output === 'object'
-                  ? safePrefetched.output
-                  : prefetched.output) as { answer?: unknown; results?: unknown; provider?: unknown };
-                const answer = toString(output.answer);
-                const results = Array.isArray(output.results) ? output.results : [];
-                const warningPrefix = formatToolThreatWarnings(prefetchedScan.threats);
-                // If Perplexity returned a synthesized answer, inject it directly
-                if (answer) {
-                  llmMessages.push({
-                    role: 'user',
-                    content: `${warningPrefix ? `${warningPrefix}\n` : ''}[web_search results for "${searchQuery}"]:\n${answer}\n\nSources:\n${results.map((r: { url?: string }, i: number) => `${i + 1}. ${r.url ?? ''}`).join('\n')}\n\nPlease use these results to answer the user's question.`,
-                  });
-                } else if (results.length > 0) {
-                  const snippets = results.map((r: { title?: string; url?: string; snippet?: string }, i: number) =>
-                    `${i + 1}. ${r.title ?? '(untitled)'} — ${r.url ?? ''}\n   ${r.snippet ?? ''}`
-                  ).join('\n');
-                  llmMessages.push({
-                    role: 'user',
-                    content: `${warningPrefix ? `${warningPrefix}\n` : ''}[web_search results for "${searchQuery}"]:\n${snippets}\n\nPlease synthesize these results to answer the user's question.`,
-                  });
-                }
-                // Re-prompt the LLM with the search results
-                if (answer || results.length > 0) {
-                  const retryResponse = await chatFn(
-                    withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
-                  );
-                  finalContent = retryResponse.content;
-                }
-              }
-            }
-          }
-          break;
-        }
-
-        const toolExecOrigin = {
-          origin: 'assistant' as const,
-          agentId: this.id,
-          userId: conversationUserId,
-          surfaceId: message.surfaceId,
-          principalId: message.principalId ?? conversationUserId,
-          principalRole: message.principalRole ?? 'owner',
-          channel: conversationChannel,
-          requestId: message.id,
-          contentTrustLevel: currentContextTrustLevel,
-          taintReasons: [...currentTaintReasons],
-          derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
-          allowModelMemoryMutation,
-          agentContext: { checkAction: ctx.checkAction },
-          codeContext: effectiveCodeContext,
-          activeSkills: activeSkills.map((skill) => skill.id),
-          requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-        };
-
-        const roundResult = await executeToolLoopRound({
-          response: {
-            ...response,
-            toolCalls: response.toolCalls,
-          },
-          state: {
-            llmMessages,
-            allToolDefs,
-            llmToolDefs,
-            contentTrustLevel: currentContextTrustLevel,
-            taintReasons: currentTaintReasons,
-          },
-          toolExecOrigin,
-          referenceTime: message.timestamp,
-          intentDecision: directIntent?.decision,
-          tools: this.tools!,
-          secondBrainService: this.secondBrainService,
-          toolResultProviderKind,
-          sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
-            toolName,
-            result,
-            providerKind,
-          ),
-        });
-        pendingIds.push(...roundResult.pendingIds);
-        lastToolRoundResults = roundResult.lastToolRoundResults;
-        currentContextTrustLevel = roundResult.contentTrustLevel;
-
-        if (roundResult.hasPending) {
-          if (roundResult.allBlocked) {
-            toolLoopPendingContinuation = buildBlockedToolLoopPendingApprovalContinuation({
-              toolResults: roundResult.toolResults,
-              llmMessages,
-              deferredRemoteToolCallIds: roundResult.deferredRemoteToolCallIds,
-              originalMessage: routedScopedMessage,
-              requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-              referenceTime: message.timestamp,
-              allowModelMemoryMutation,
-              activeSkillIds: activeSkills.map((skill) => skill.id),
-              contentTrustLevel: currentContextTrustLevel,
-              taintReasons: [...currentTaintReasons],
-              intentDecision: directIntent?.decision ?? undefined,
-              codeContext: effectiveCodeContext,
-              selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
-                ctx,
-                selectedExecutionProfile,
-                directIntent?.decision,
-              ),
-            }) ?? undefined;
-            break;
-          }
-        }
-
-        // Per-tool provider routing: if any executed tool has a routing preference,
-        // swap the provider for the next round so a better model synthesizes the result.
-        if (this.resolveRoutedProviderForTools) {
-          const executedTools = response.toolCalls.map((tc) => {
-            const def = this.tools?.getToolDefinition?.(tc.name);
-            return { name: tc.name, category: def?.category };
-          });
-          const routed = this.resolveRoutedProviderForTools(executedTools);
-          if (routed) {
-            const { provider: routedProvider, locality: routedLocality } = routed;
-            chatFn = async (msgs, opts) => {
-              const mergedOpts = { ...opts, signal: message.abortSignal };
-              try {
-                const startedAt = Date.now();
-                const response = await routedProvider.chat(msgs, mergedOpts);
-                responseSource = buildResponseSourceMetadata({
-                  locality: routedLocality,
-                  providerName: routedProvider.name,
-                  response,
-                  usedFallback: false,
-                  durationMs: Date.now() - startedAt,
-                });
-                return response;
-              } catch (err) {
-                log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
-                  'Routed provider failed, falling back to default');
-                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, mergedOpts, fallbackProviderOrder);
-                responseSource = buildResponseSourceMetadata({
-                  locality: fallback.providerLocality,
-                  providerName: fallback.providerName,
-                  response: fallback.response,
-                  usedFallback: true,
-                  notice: fallback.notice,
-                  durationMs: fallback.durationMs,
-                });
-                return fallback.response;
-              }
-            };
-            toolResultProviderKind = routedLocality;
-            // Re-map tool definitions for the new provider's locality
-            llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, toolResultProviderKind));
-          }
-        }
-
-        rounds += 1;
-      }
-
-      if (
-        (
-          !finalContent
-            || this.looksLikeOngoingWorkResponse(finalContent)
-          || (
-            !!answerFirstFallbackResponse
-            && !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
-          )
-        )
-        && lastToolRoundResults.length > 0
-      ) {
-        finalContent = await this.tryRecoverDirectAnswerAfterTools(
-          llmMessages,
-          chatFn,
-          currentContextTrustLevel,
-          currentTaintReasons,
-        );
-      }
-
-      // Quality-based fallback: if the local LLM produced an empty or degraded
-      // response and we have a fallback chain with an external provider, retry.
-      // Pass tool definitions (re-mapped for external provider) so the fallback
-      // LLM can call tools, not just produce text.
-      if (
-        this.qualityFallbackEnabled
-        && (this.lacksUsableAssistantContent(finalContent) || this.looksLikeOngoingWorkResponse(finalContent))
-        && this.fallbackChain
-        && providerLocality === 'local'
-        // If the tool round already produced concrete results or a real approval,
-        // prefer the local structured fallback paths below over cross-provider retry.
-        && pendingIds.length === 0
-        && lastToolRoundResults.length === 0
-      ) {
-        log.warn({ agent: this.id, contentPreview: finalContent?.slice(0, 100) },
-          'Local LLM produced degraded response, retrying with fallback chain');
-        try {
-          let externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
-          const fbMessages = [...llmMessages];
-          const fallbackResult = await chatWithAlternateProviderHelper({
-            primaryProviderName: ctx.llm?.name ?? 'unknown',
-            messages: fbMessages,
-            options: { tools: externalToolDefs },
-            fallbackProviderOrder,
-            fallbackChain: this.fallbackChain,
-          });
-          if (!fallbackResult) {
-            throw new Error('No alternate providers available in fallback chain');
-          }
-          const fbProvider = fallbackResult.providerName;
-          responseSource = buildResponseSourceMetadata({
-            locality: fallbackResult.providerLocality,
-            providerName: fbProvider,
-            response: fallbackResult.response,
-            usedFallback: fallbackResult.usedFallback,
-            notice: 'Retried with an alternate model after a weak local response.',
-            durationMs: fallbackResult.durationMs,
-          });
-
-          // If the fallback LLM returned tool calls, execute them (single round)
-          const normalizedFallbackToolCalls = normalizeToolCallsForExecution(
-            fallbackResult.response.toolCalls,
-            llmToolDefs,
-          );
-          if (normalizedFallbackToolCalls?.length && this.tools) {
-            log.info({ agent: this.id, provider: fbProvider, toolCount: normalizedFallbackToolCalls.length },
-              'Fallback provider requested tool calls, executing');
-            const fbToolOrigin = {
-              origin: 'assistant' as const,
-              agentId: this.id,
-              userId: conversationUserId,
-              surfaceId: message.surfaceId,
-              principalId: message.principalId ?? conversationUserId,
-              principalRole: message.principalRole ?? 'owner',
-              channel: conversationChannel,
-              requestId: message.id,
-              contentTrustLevel: currentContextTrustLevel,
-              taintReasons: [...currentTaintReasons],
-              derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
-              allowModelMemoryMutation,
-              agentContext: { checkAction: ctx.checkAction },
-              codeContext: effectiveCodeContext,
-              activeSkills: activeSkills.map((skill) => skill.id),
-              requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-            };
-            const fallbackRoundState = {
-              llmMessages: fbMessages,
-              allToolDefs,
-              llmToolDefs: externalToolDefs,
-              contentTrustLevel: currentContextTrustLevel,
-              taintReasons: currentTaintReasons,
-            };
-            const fallbackRoundResult = await executeToolLoopRound({
-              response: {
-                ...fallbackResult.response,
-                toolCalls: normalizedFallbackToolCalls,
-              },
-              state: fallbackRoundState,
-              toolExecOrigin: fbToolOrigin,
-              referenceTime: message.timestamp,
-              intentDecision: directIntent?.decision,
-              tools: this.tools!,
-              secondBrainService: this.secondBrainService,
-              toolResultProviderKind: 'external',
-              sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
-                toolName,
-                result,
-                providerKind,
-              ),
-            });
-            externalToolDefs = fallbackRoundState.llmToolDefs;
-            pendingIds.push(...fallbackRoundResult.pendingIds);
-            currentContextTrustLevel = fallbackRoundResult.contentTrustLevel;
-
-            if (fallbackRoundResult.hasPending) {
-              if (fallbackRoundResult.allBlocked) {
-                toolLoopPendingContinuation = buildBlockedToolLoopPendingApprovalContinuation({
-                  toolResults: fallbackRoundResult.toolResults,
-                  llmMessages: fbMessages,
-                  deferredRemoteToolCallIds: fallbackRoundResult.deferredRemoteToolCallIds,
-                  originalMessage: routedScopedMessage,
-                  requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-                  referenceTime: message.timestamp,
-                  allowModelMemoryMutation,
-                  activeSkillIds: activeSkills.map((skill) => skill.id),
-                  contentTrustLevel: currentContextTrustLevel,
-                  taintReasons: [...currentTaintReasons],
-                  intentDecision: directIntent?.decision ?? undefined,
-                  codeContext: effectiveCodeContext,
-                  selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
-                    ctx,
-                    selectedExecutionProfile,
-                    directIntent?.decision,
-                  ),
-                }) ?? undefined;
-              } else {
-                const finalFb = await chatWithAlternateProviderHelper({
-                  primaryProviderName: fallbackResult.providerName,
-                  messages: fbMessages,
-                  options: { tools: externalToolDefs },
-                  fallbackProviderOrder,
-                  fallbackChain: this.fallbackChain,
-                });
-                if (finalFb?.response.content?.trim()) {
-                  finalContent = finalFb.response.content;
-                  responseSource = buildResponseSourceMetadata({
-                    locality: finalFb.providerLocality,
-                    providerName: finalFb.providerName,
-                    response: finalFb.response,
-                    usedFallback: finalFb.usedFallback,
-                    notice: 'Retried with an alternate model after local execution degraded.',
-                    durationMs: finalFb.durationMs,
-                  });
-                  log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
-                }
-              }
-            } else {
-              // One more chat call to get the final text response from fallback
-              const finalFb = await chatWithAlternateProviderHelper({
-                primaryProviderName: fallbackResult.providerName,
-                messages: fbMessages,
-                options: { tools: externalToolDefs },
-                fallbackProviderOrder,
-                fallbackChain: this.fallbackChain,
-              });
-              if (finalFb?.response.content?.trim()) {
-                finalContent = finalFb.response.content;
-                responseSource = buildResponseSourceMetadata({
-                  locality: finalFb.providerLocality,
-                  providerName: finalFb.providerName,
-                  response: finalFb.response,
-                  usedFallback: finalFb.usedFallback,
-                  notice: 'Retried with an alternate model after local execution degraded.',
-                  durationMs: finalFb.durationMs,
-                });
-                log.info({ agent: this.id, provider: finalFb.providerName }, 'Fallback provider produced response after tool execution');
-              }
-            }
-          } else if (fallbackResult.response.content?.trim()) {
-            finalContent = fallbackResult.response.content;
-            responseSource = buildResponseSourceMetadata({
-              locality: fallbackResult.providerLocality,
-              providerName: fbProvider,
-              response: fallbackResult.response,
-              usedFallback: fallbackResult.usedFallback,
-              notice: 'Retried with an alternate model after a weak local response.',
-              durationMs: fallbackResult.durationMs,
-            });
-            log.info({ agent: this.id, provider: fbProvider },
-              'Fallback provider produced successful response');
-          }
-        } catch (fallbackErr) {
-          log.warn({ agent: this.id, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
-            'Fallback chain also failed');
-        }
-      }
-
-      if (
-        answerFirstFallbackResponse
-        && (
-          !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '', answerFirstOriginalRequest)
-        || this.looksLikeOngoingWorkResponse(finalContent)
-        )
-      ) {
-        finalContent = answerFirstFallbackResponse;
-      }
-
-      const finalizedPendingApprovals = finalizeToolLoopPendingApprovalsHelper({
-        pendingIds,
-        pendingActionUserId,
-        pendingActionChannel,
-        pendingActionSurfaceId,
-        pendingActionUserKey,
-        originalUserContent: routedScopedMessage.content,
-        finalContent,
-        intentDecision: directIntent?.decision,
-        continuation: toolLoopPendingContinuation,
-        codeSessionId: resolvedCodeSession?.session.id,
-        tools: this.tools,
-        getPendingApprovalIds: (userId, channel, surfaceId, nowMs) => this.getPendingApprovalIds(
-          userId,
-          channel,
-          surfaceId,
-          nowMs,
-        ),
-        setPendingApprovals: (userKey, ids, surfaceId, nowMs) => this.setPendingApprovals(
-          userKey,
-          ids,
-          surfaceId,
-          nowMs,
-        ),
-        setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
-          userId,
-          channel,
-          surfaceId,
-          action,
-          nowMs,
-        ),
-        setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
-          userKey,
-          surfaceId,
-          action,
-          nowMs,
-        ),
-        lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
-      });
-      if (finalizedPendingApprovals) {
-        finalContent = finalizedPendingApprovals.finalContent;
-        pendingActionMeta = finalizedPendingApprovals.pendingActionMeta;
-      }
-
-      if ((!finalContent || this.looksLikeOngoingWorkResponse(finalContent)) && lastToolRoundResults.length > 0) {
-        finalContent = summarizeToolRoundStatusMessage(lastToolRoundResults);
-      }
-
-      // Local models sometimes emit generic approval copy without ever producing
-      // a real pending approval object. Never show approval text unless the
-      // runtime actually has pending approval metadata to back it.
-      if (!pendingActionMeta && isPhantomPendingApprovalMessage(finalContent)) {
-        finalContent = lastToolRoundResults.length > 0
-          ? summarizeToolRoundStatusMessage(lastToolRoundResults)
-          : 'I did not create a real approval request for that action. Please try again.';
-      }
-
-      if (!finalContent) {
-        finalContent = 'I could not generate a final response for that request.';
-      }
-    }
-
+    const liveToolLoopResult = await runLiveToolLoopController({
+      agentId: this.id,
+      ctx,
+      message,
+      llmMessages,
+      tools: this.tools,
+      secondBrainService: this.secondBrainService,
+      enabledManagedProviders: this.enabledManagedProviders,
+      resolveGwsProvider: this.resolveGwsProvider,
+      fallbackChain: this.fallbackChain,
+      fallbackProviderOrder,
+      selectedExecutionProfile,
+      qualityFallbackEnabled: this.qualityFallbackEnabled,
+      directIntentDecision: directIntent?.decision,
+      directBrowserIntent,
+      hasResolvedCodeSession: !!resolvedCodeSession,
+      resolvedCodeSessionId: resolvedCodeSession?.session.id,
+      effectiveCodeContext,
+      activeSkills,
+      requestIntentContent,
+      routedScopedMessage,
+      conversationUserId,
+      conversationChannel,
+      allowModelMemoryMutation,
+      defaultToolResultProviderKind,
+      maxToolRounds: this.maxToolRounds,
+      contextBudget: this.contextBudget,
+      pendingActionUserId,
+      pendingActionChannel,
+      pendingActionSurfaceId,
+      pendingActionUserKey,
+      log,
+      chatWithRoutingMetadata: (nextCtx, messages, options, providerOrder) => this.chatWithRoutingMetadata(
+        nextCtx,
+        messages,
+        options,
+        providerOrder,
+      ),
+      resolveToolResultProviderKind: (nextCtx, provider) => this.resolveToolResultProviderKind(nextCtx, provider),
+      isAnswerFirstSkillResponseSufficient: (skills, content, originalRequest) => this.isAnswerFirstSkillResponseSufficient(
+        skills,
+        content,
+        originalRequest,
+      ),
+      shouldRetryPolicyUpdateCorrection: (messages, content, toolDefs) => this.shouldRetryPolicyUpdateCorrection(
+        messages,
+        content,
+        toolDefs,
+      ),
+      buildPolicyUpdateCorrectionPrompt: () => this.buildPolicyUpdateCorrectionPrompt(),
+      buildExplicitMemorySaveCorrectionPrompt: (requestContent) => this.buildExplicitMemorySaveCorrectionPrompt(requestContent),
+      shouldRetryTerminalResultCorrection: (content, correctionContext) => this.shouldRetryTerminalResultCorrection(
+        content,
+        correctionContext,
+      ),
+      buildTerminalResultCorrectionPrompt: () => this.buildTerminalResultCorrectionPrompt(),
+      sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
+        toolName,
+        result,
+        providerKind,
+      ),
+      resolveRoutedProviderForTools: this.resolveRoutedProviderForTools,
+      resolveStoredToolLoopExecutionProfile: (nextCtx, profile, decision) => this.resolveStoredToolLoopExecutionProfile(
+        nextCtx,
+        profile,
+        decision,
+      ),
+      lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
+      looksLikeOngoingWorkResponse: (content) => this.looksLikeOngoingWorkResponse(content),
+      getPendingApprovalIds: (userId, channel, surfaceId, nowMs) => this.getPendingApprovalIds(
+        userId,
+        channel,
+        surfaceId,
+        nowMs,
+      ),
+      setPendingApprovals: (userKey, ids, surfaceId, nowMs) => this.setPendingApprovals(
+        userKey,
+        ids,
+        surfaceId,
+        nowMs,
+      ),
+      setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+    });
+    finalContent = liveToolLoopResult.finalContent;
+    pendingActionMeta = liveToolLoopResult.pendingActionMeta;
+    lastToolRoundResults = liveToolLoopResult.lastToolRoundResults;
+    latestContextCompaction = liveToolLoopResult.latestContextCompaction;
+    responseSource = liveToolLoopResult.responseSource;
     contextAssemblyMeta = applyContextCompactionMetadata(contextAssemblyMeta, latestContextCompaction);
 
     const metadata: Record<string, unknown> = {};
