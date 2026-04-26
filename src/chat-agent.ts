@@ -67,6 +67,10 @@ import {
   dispatchDirectIntentCandidates,
 } from './runtime/chat-agent/direct-intent-dispatch.js';
 import {
+  buildCodingBackendRunResumePayload,
+  executeStoredCodingBackendRun,
+} from './runtime/chat-agent/coding-backend-resume.js';
+import {
   executeToolsConflictAware,
   isDeferredRemoteSandboxToolResult,
   pruneDeferredRemoteSandboxToolCalls,
@@ -4976,16 +4980,12 @@ type DirectIntentShadowCandidate =
           provenance: decision.provenance,
           entities: toPendingActionEntities(decision.entities),
           codeSessionId: effectiveCodeContext?.sessionId,
-          resume: {
-            kind: 'direct_route',
-            payload: {
-              type: 'coding_backend_run',
-              task: delegatedTask,
-              backendId,
-              codeSessionId: effectiveCodeContext?.sessionId,
-              workspaceRoot: effectiveCodeContext?.workspaceRoot,
-            },
-          },
+          resume: buildCodingBackendRunResumePayload({
+            task: delegatedTask,
+            backendId,
+            codeSessionId: effectiveCodeContext?.sessionId,
+            workspaceRoot: effectiveCodeContext?.workspaceRoot,
+          }),
         },
       );
       this.recordIntentRoutingTrace('direct_intent_response', {
@@ -7229,7 +7229,7 @@ type DirectIntentShadowCandidate =
         resume,
         approvalResult,
       ),
-      executeStoredCodingBackendRun: (nextPendingAction, resume, approvalResult) => this.executeStoredCodingBackendRun(
+      executeStoredCodingBackendRun: (nextPendingAction, resume, approvalResult) => executeStoredCodingBackendRun(
         nextPendingAction,
         resume,
         approvalResult,
@@ -7415,50 +7415,6 @@ type DirectIntentShadowCandidate =
         fallbackContent,
       ),
     });
-  }
-
-  private async executeStoredCodingBackendRun(
-    _pendingAction: PendingActionRecord,
-    resume: import('./runtime/chat-agent/direct-route-resume.js').CodingBackendRunResumePayload,
-    approvalResult?: ToolApprovalDecisionResult,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
-    if (!approvalResult || !approvalResult.approved) {
-      const backendName = resume.backendId || 'the coding backend';
-      return { content: `The delegated run for ${backendName} was not approved.` };
-    }
-
-    const runResult = isRecord(approvalResult.result?.output) ? approvalResult.result!.output : null;
-    const backendName = toString(runResult?.backendName) || resume.backendId || 'Coding backend';
-    const assistantResponse = toString(runResult?.assistantResponse)?.trim();
-    const backendOutput = toString(runResult?.output)?.trim();
-    const executionMessage = toString(approvalResult.result?.message)?.trim();
-    const executionError = toString(approvalResult.result?.error)?.trim();
-    const sessionId = resume.codeSessionId || toString(runResult?.codeSessionId);
-
-    const metadata: Record<string, unknown> = {
-      codingBackendDelegated: true,
-      codingBackendId: resume.backendId,
-      responseSource: buildCodingBackendResponseSource({
-        backendId: resume.backendId,
-        backendName,
-        durationMs: toNumber(runResult?.durationMs) ?? undefined,
-      }),
-      ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
-    };
-
-    const content = assistantResponse || backendOutput || `${backendName} completed successfully.`;
-    if (approvalResult.executionSucceeded !== false && (toBoolean(runResult?.success) || !runResult)) {
-      return { content, metadata };
-    }
-
-    const failureMessage = assistantResponse
-      || backendOutput
-      || executionError
-      || executionMessage
-      || approvalResult.message.trim()
-      || toString(runResult?.message)
-      || `${backendName} could not complete the requested task.`;
-    return { content: failureMessage, metadata };
   }
 
   private async executeStoredSecondBrainMutation(
