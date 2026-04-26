@@ -1,6 +1,6 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** Architecture refinement and refactoring phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented, but the current risk is no longer missing primitives. The risk is overlapping orchestration ownership between `ChatAgent`, `WorkerManager`, pending actions, continuity, execution records, and the graph. The next phase must make graph ownership explicit and delete each legacy owner as its replacement lands.
+**Status:** Architecture refinement and verification phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented. The latest debt-burn slice scoped stale continuity/code-session state out of fresh surfaces and split automation direct-vs-worker ownership by planned-step contract. The current risk is no longer missing primitives; it is finishing app-facing proof and deleting the remaining overlapping owners as graph-owned replacements land.
 **Date:** 2026-04-26
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
@@ -16,21 +16,24 @@ This is not a request to import LangGraph, Temporal, or another framework. The p
 
 ## Current Implementation State
 
-As of 2026-04-24:
+As of 2026-04-26:
 
 - Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
 - Phase 3 typed artifact store and grounded synthesis are implemented for the read-only lane: graph-owned artifact storage retains typed artifact contents and refs, direct reasoning emits `SearchResultSet`, `FileReadSet`, `EvidenceLedger`, and `SynthesisDraft` artifacts, and no-tools synthesis consumes bounded evidence artifacts.
 - Phase 4 mutation nodes are implemented for the first structured search/write lane: required write steps now keep top-level requests out of read-only direct reasoning, route read-like coding plans with structured writes to workspace implementer orchestration, synthesize `WriteSpec`, execute `fs_write` through supervisor-owned tool execution, and verify the written contents.
+- Phase 5 graph interrupts are implemented for the first approval/clarification slices and for brokered delegated-worker approval suspension/resume. Several legacy producers have already been deleted, but live chat tool-loop resume and some delegated retry/recovery ownership still need graph-native replacement before their old owners can be removed.
+- Continuity and code-session context are now gated before Intent Gateway classification. Fresh surfaces do not inherit stale owner continuity or same-principal shared code sessions unless the surface was already linked, a pending action is active, an explicit/same-surface code session is present, or the gateway identifies a non-new follow-up.
+- Automation authoring and automation control now have separate planned-step ownership rules: authoring can remain direct for generic read/search/write authoring work, while control defers mixed or answer-only plans instead of overlapping direct automation and worker orchestration.
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
-- Do not move to broader hybrid write behavior until this read-only/artifact lane remains stable through a broader manual web UI pass and the focused verification commands below.
+- Do not move to broader hybrid write behavior until the app-facing API sweep below proves fresh-surface isolation, same-surface continuity, approval continuity, security refusal, and managed-cloud provider fallback after the latest scoping changes.
 
 ### 2026-04-26 Handoff Status
 
 The latest work focused on orchestration quality, evidence grounding, provider fallback, continuation, and approval-resume recovery. These changes are intentionally in shared routing/orchestration/verifier layers, not keyword intent-routing band-aids.
 
-Implemented in the current dirty worktree:
+Implemented in this refinement slice:
 
 - Structured task-plan category matching now lets evidence tools satisfy semantic planned-step categories such as `repo_inspect`, `web_search`, and answer/model-answer steps without adding pre-gateway keyword routing.
 - Direct reasoning now refuses non-read-only planned evidence, retries when a repo-grounded answer appears before read/search evidence, treats weak/empty search evidence as insufficient, and defaults brokered `fs_search` calls to content search when the model omits a mode.
@@ -38,12 +41,17 @@ Implemented in the current dirty worktree:
 - Approval-continuation recovery now carries approved tool results into the resumed tool loop and can synthesize a final answer from those approved tool receipts if the first resumed model turn is empty.
 - Intent Gateway confirmation guidance now makes mixed web+repo requests produce concrete planned steps (`web_search`, `repo_inspect`, answer) so direct read-only reasoning does not accidentally absorb external research requests.
 - Managed-cloud classifier fallback now tries other configured managed-cloud providers when the preferred classifier/profile is unavailable or rate limited.
+- Fresh-surface routing now suppresses stale owner continuity and code-session context before Intent Gateway classification. Shared same-principal code sessions remain usable after a request is explicitly code-related, but the pre-gateway lookup is exact-surface or explicit-session only.
+- ChatAgent prompt/history assembly now uses the same continuity eligibility rule as incoming dispatch. A fresh direct-assistant surface no longer receives old owner conversation history or stale code-session context by default.
+- Automation authoring/control capability resolution now separates generic authoring reads/searches/writes from stricter automation-control execution, preventing mixed direct/worker ownership for answer or cross-domain plans.
 
 Verified locally after these changes:
 
 - Focused Vitest slices passed for direct reasoning, task-plan/verifier, worker-manager, worker-session, tool-loop resume, confirmation pass, intent gateway, and incoming dispatch fallback.
+- Focused orchestration regression suite passed after the latest continuity/code-session scoping slice: `npx vitest run src/runtime/code-sessions.test.ts src/runtime/incoming-dispatch.test.ts src/chat-agent.test.ts src/runtime/intent/capability-resolver.test.ts src/runtime/direct-intent-routing.test.ts` reported 165 passing tests.
 - `npm run check` passed.
 - `npm run build` passed.
+- `npm test` passed after the latest scoping slice: 307 test files, 3257 tests.
 - Live API replay passed the core read-only ladder for:
   - "Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything."
   - "Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything."
@@ -54,17 +62,20 @@ Verified locally after these changes:
 Known remaining problems and risks:
 
 - A live gated approval-resume test is still outstanding. The latest scratch write proved mutation execution, not approval pause/resume, because policy allowed the write without an approval interrupt.
-- Follow-up continuity is improved but not fully proven. A follow-up like "Based on your last answer..." can now recover a useful answer, but one replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-continuation.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
+- Follow-up continuity is improved and now unit-covered for stale-history suppression, but it still needs live same-surface API proof after the latest scoping change. A follow-up like "Based on your last answer..." can recover a useful answer, but earlier replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-continuation.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
+- Fresh-surface isolation is now unit-covered but still needs a live app API replay against the built app. The regression to prove is: an old same-principal code-session attachment must not bias an unrelated fresh API surface into `coding_task` or direct-reasoning mode.
+- One live delegated-worker replay exposed provider alias drift: the supervisor selected `moonshotai/kimi-k2.6`, while the provider response reported `moonshotai/kimi-k2.6-20260420`. If reproduced, fix model/profile verification through provider alias canonicalization or selected-profile identity, not by weakening verification globally.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
-- The full `npm test` suite has not been rerun after the latest continuation/provider-fallback fixes. It must run before commit.
 - The web UI approval experience still needs a manual pass once a policy-gated action is identified reliably.
 
 Recommended next slice before moving into the broader web UI phase:
 
-1. Identify or configure a harmless action that is definitely approval-gated under the current dev policy, then run a live web/API approval-resume smoke that proves pending action creation, decision submission, tool execution, and continuation response.
-2. Add/strengthen tests for follow-up anchoring against the immediately previous answer and its evidence artifacts, especially "based on your last answer" questions.
-3. Run `npm test`, then rerun the short live API replay ladder.
-4. Commit only after the above passes or after explicitly documenting any remaining failures in this plan.
+1. Restart the actual Guardian app from the current build and run the app API replay lane from `docs/guides/INTEGRATION-TEST-HARNESS.md` using managed cloud providers already configured in the operator environment.
+2. Prove fresh-surface isolation with an exact-answer request on a new surface while stale owner code-session state exists. Inspect `~/.guardianagent/routing/intent-routing.jsonl` for the request id and confirm no stale continuity/code-session context biased the gateway.
+3. Prove same-surface conversation continuity with a two-turn exact marker request on the same surface, then inspect the routing trace for intentional history/continuity attachment.
+4. Identify or configure a harmless action that is definitely approval-gated under the current dev policy, then run a live web/API approval-resume smoke that proves pending action creation, decision submission, tool execution, and continuation response.
+5. Run a security refusal API prompt that attempts to read sensitive Guardian config and confirm refusal/redaction without raw secret exposure.
+6. If delegated managed-cloud worker requests reproduce the `moonshotai/kimi-k2.6` vs `moonshotai/kimi-k2.6-20260420` mismatch, fix provider alias verification in the provider/profile layer and add focused coverage.
 
 ### 2026-04-26 Architecture Refinement And Debt-Burn Phase
 
@@ -104,7 +115,7 @@ Refactor sequence:
    - Delete duplicate control-flow decisions from callers as they move behind the controller.
 
 3. Collapse approval and resume state.
-- Remove approval follow-up maps, capability-continuation replay state, and tool-loop replay state as graph equivalents land.
+   - Remove approval follow-up maps, capability-continuation replay state, and tool-loop replay state as graph equivalents land.
    - Pending actions should carry graph interrupt identity and artifact refs, not opaque model-message replay blobs.
 
 4. Demote continuity to context projection.
@@ -129,6 +140,15 @@ Refactor sequence:
    - Run focused Vitest first, then `npm run check`, then the relevant script harness.
    - For approval/continuity/routing slices, run the web/API replay loop from `docs/guides/INTEGRATION-TEST-HARNESS.md`.
    - Update brittle tests, startup scripts, and operator docs in the same slice when behavior changes.
+
+Checkpoint after the continuity/code-session scoping and automation ownership cleanup:
+
+- Incoming dispatch and ChatAgent now share the same continuity eligibility helper. A continuity thread can influence a turn only when the surface was already linked before the turn, a pending action exists, a code session is explicitly/current-surface resolved, or the Intent Gateway classifies the turn as a non-new follow-up.
+- Code-session resolution now has an explicit pre-gateway mode: `allowSharedAttachment: false`. This keeps stale same-principal shared code sessions out of fresh-surface intent classification while preserving explicit session ids and exact-surface attachments.
+- Fresh-surface unit coverage now verifies that old owner history and stale code-session context do not enter direct-assistant prompts or Intent Gateway `recentHistory`.
+- Automation authoring/control planned-step matching now avoids overlapping ownership. Generic read/search/write steps can stay direct for automation authoring, while automation control defers answer-only, uncategorized, or cross-domain plans to the worker path.
+- Verification after this checkpoint: focused orchestration suite, `npm run check`, full `npm test`, and `npm run build` all passed.
+- Remaining proof after this checkpoint: run the actual app API sweep against managed cloud providers to prove fresh-surface isolation, same-surface continuation, approval continuity, security refusal, and provider alias handling in the deployed runtime path.
 
 Checkpoint after the first approval/resume debt-burn slice:
 
@@ -1026,16 +1046,35 @@ The durable execution graph uplift is complete when:
 - all graph events are safe for authenticated operator observability
 - security harnesses and brokered-isolation harnesses pass
 
-## Fresh-Chat Implementation Prompt
+## Fresh-Chat Continuation Prompt
 
-Use this to start the implementation in a fresh chat:
+Use this to continue verification and any remaining uplift work in a fresh chat:
 
 ```text
-Implement the durable execution graph uplift from docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md.
+Continue the GuardianAgent durable execution graph uplift from docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md.
 
-First inspect SECURITY.md, docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md, docs/architecture/FORWARD-ARCHITECTURE.md, docs/design/ORCHESTRATION-DESIGN.md, and docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md.
+First inspect AGENTS.md, SECURITY.md, docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md, docs/architecture/FORWARD-ARCHITECTURE.md, docs/design/ORCHESTRATION-DESIGN.md, docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md, docs/guides/INTEGRATION-TEST-HARNESS.md, and this plan.
 
-Do not commit unless explicitly asked. Do not preserve compatibility shims for replaced graph-owned flows. Do not add keyword/regex intent-routing band-aids. Keep the brokered worker isolated: no direct Runtime, ToolExecutor, provider, channel, or filesystem authority in the worker.
+Context: Phases 1-4 are implemented. Phase 5+ is partially implemented. The latest architecture-refinement slice scoped stale continuity/code-session state out of fresh surfaces and split automation authoring/control planned-step ownership. Focused orchestration tests, npm run check, npm test, and npm run build passed before this handoff. The remaining work is app-facing proof and then only architectural fixes for any failures found.
 
-Start with Phase 1: graph types, graph store, graph events, and run-timeline adapter. Then implement Phase 2 as the first behavioral vertical slice: direct reasoning emits execution graph events that appear in RunTimelineStore.
+Do not start with more refactoring. First run the actual Guardian app and test real requests against the app API from the CLI. Do not use fake model harnesses for this pass. Use managed cloud providers already configured in the operator environment: OpenRouter, NVIDIA, or Ollama Cloud.
+
+Suggested loop:
+1. Confirm the worktree and current branch. Do not create or switch branches.
+2. Run npm run build, start the real app with scripts/start-dev-windows.ps1 -StartOnly, then confirm GET http://localhost:3000/api/status and provider/routing state.
+3. Send exact-answer POST /api/message requests with request-scoped managed-cloud provider metadata. Verify response content, provider metadata, fallback metadata, and request ids.
+4. Prove fresh-surface isolation: on a brand-new surface, an unrelated exact-answer prompt must not inherit old owner continuity or same-principal code-session state. Inspect ~/.guardianagent/routing/intent-routing.jsonl by requestId and confirm no stale context biased the gateway into coding_task/direct reasoning.
+5. Prove same-surface continuity: two-turn exact marker prompt on the same surface should answer from prior chat context, and the routing trace should show intentional continuity/history.
+6. Prove approval continuity: identify or configure a harmless policy-gated write, trigger a pending action through the app/API, approve through the approval decision API, and verify tool execution plus final continuation response.
+7. Prove security refusal: ask for sensitive Guardian config/credentials and confirm refusal/redaction without raw secret leakage in response or timeline.
+8. If delegated managed-cloud worker requests reproduce provider alias drift such as moonshotai/kimi-k2.6 vs moonshotai/kimi-k2.6-20260420, fix provider/model verification in the provider/profile layer with focused tests.
+
+If testing finds failures, fix the owning architecture layer only:
+- intent/routing: Intent Gateway and shared dispatch
+- stale context: continuity/context projection and code-session request scope
+- approval/resume: PendingActionStore and graph interrupts
+- provider fallback/aliasing: execution profiles and runtime provider orchestration
+- delegated execution: graph node runner/delegated-worker node ownership
+
+Do not add keyword/regex intent-routing band-aids, channel-specific exceptions, or compatibility shims. Keep brokered-worker isolation intact: no direct Runtime, ToolExecutor, provider, channel, or filesystem authority in the worker. After any fix, run focused Vitest, npm run check, npm test, npm run build, and the relevant app API/harness sweep. Update this plan with what was proven and what remains.
 ```

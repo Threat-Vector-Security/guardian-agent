@@ -11,6 +11,9 @@ coverage/
 .worktrees/
 tmp/
 
+# PowerShell module analysis cache can be generated in the repo root by hosted shells
+/Microsoft/
+
 # Build artifacts
 build/
 native/windows-helper/target/

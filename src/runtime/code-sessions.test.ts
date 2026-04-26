@@ -344,6 +344,70 @@ describe('CodeSessionStore', () => {
     expect(resolvedFromTelegram?.session.id).toBe(session.id);
   });
 
+  it('can resolve only explicit or same-surface sessions before intent classification', () => {
+    const workspaceRoot = createWorkspace('pre-gateway-scope', {
+      'package.json': JSON.stringify({ name: 'pre-gateway-scope-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Pre Gateway Scope',
+      workspaceRoot,
+    });
+
+    store.attachSession({
+      sessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'code-panel',
+      mode: 'controller',
+    });
+
+    const sameSurface = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'code-panel',
+      touchAttachment: false,
+      allowSharedAttachment: false,
+    });
+    const sharedByDefault = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'fresh-chat',
+      touchAttachment: false,
+    });
+    const crossSurfaceBeforeGateway = store.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'fresh-chat',
+      touchAttachment: false,
+      allowSharedAttachment: false,
+    });
+    const explicitSession = store.resolveForRequest({
+      requestedSessionId: session.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'fresh-chat',
+      touchAttachment: false,
+      allowSharedAttachment: false,
+    });
+
+    expect(sameSurface?.session.id).toBe(session.id);
+    expect(sharedByDefault?.session.id).toBe(session.id);
+    expect(crossSurfaceBeforeGateway).toBeNull();
+    expect(explicitSession?.session.id).toBe(session.id);
+  });
+
   it('switches the shared current coding session when another channel attaches a different repo', () => {
     const firstRoot = createWorkspace('shared-switch-first', {
       'package.json': JSON.stringify({ name: 'first-shared-app' }),
