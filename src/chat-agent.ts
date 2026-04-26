@@ -21,15 +21,11 @@ import {
   shouldRefreshCodeSessionWorkingSet,
   stripLeadingContextPrefix,
   summarizeCodeSessionFocus,
-  summarizeGmailMessage,
-  summarizeM365From,
   summarizeToolRoundStatusMessage,
   toBoolean,
   toLLMToolDef,
-  toNumber,
   toString,
 } from './chat-agent-helpers.js';
-import type { GmailMessageSummary } from './chat-agent-helpers.js';
 import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import type { ContextCompactionResult } from './util/context-budget.js';
 import {
@@ -91,7 +87,6 @@ import {
   type MemoryContextLoadResult,
   type MemoryContextQuery,
 } from './runtime/agent-memory-store.js';
-import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import {
   formatSkillInventoryResponse,
   isSkillInventoryQuery,
@@ -129,11 +124,6 @@ import { shouldAttachCodeSessionForRequest } from './runtime/code-session-reques
 import {
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
-import {
-  buildPagedListContinuationState,
-  readPagedListContinuationState,
-  resolvePagedListWindow,
-} from './runtime/list-continuation.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
 import type { PrincipalRole } from './tools/types.js';
 import {
@@ -297,7 +287,6 @@ import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill, SkillPromptArtifactContext, SkillPromptMaterialResult } from './skills/types.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
-  buildPendingApprovalMetadata,
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
   shouldUseStructuredPendingApprovalMessage,
@@ -346,7 +335,6 @@ import {
   findMatchingRoutineForCreate,
   formatBriefKindLabelForUser,
   getSecondBrainFocusEntry,
-  isDirectMailboxReplyTarget,
   isSecondBrainFocusItemType,
   normalizeRoutineNameForMatch,
   normalizeRoutineQueryTokens,
@@ -363,12 +351,10 @@ import {
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
 import {
-  buildReplySubject,
-  extractEmailAddress,
-  extractMicrosoft365EmailAddress,
-  getDirectMailboxContinuationKind,
-  resolveDirectMailboxReadIntent,
-} from './runtime/chat-agent/direct-mailbox-helpers.js';
+  type DirectMailboxDeps,
+  tryDirectGoogleWorkspaceRead as tryDirectGoogleWorkspaceReadHelper,
+  tryDirectGoogleWorkspaceWrite as tryDirectGoogleWorkspaceWriteHelper,
+} from './runtime/chat-agent/direct-mailbox-runtime.js';
 
 export interface ChatAgentClassDeps {
   log: Logger;
@@ -5252,123 +5238,31 @@ type DirectIntentShadowCandidate =
     userKey: string,
     decision?: IntentGatewayDecision,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
+    return tryDirectGoogleWorkspaceWriteHelper({
+      message,
+      ctx,
+      userKey,
+      decision,
+    }, this.buildDirectMailboxDeps());
+  }
 
-    if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
-      return this.tryDirectMicrosoft365Write(message, ctx, userKey);
-    }
-
-    const intent = parseDirectGmailWriteIntent(message.content);
-    if (!intent) return null;
-
-    let to = intent.to?.trim();
-    let subject = intent.subject?.trim();
-    const body = intent.body?.trim();
-
-    if (intent.replyTarget === 'latest_unread') {
-      if (!body) {
-        return `To ${intent.mode} a reply to the newest unread Gmail message, I need the body.`;
-      }
-      const replyTarget = await this.resolveLatestUnreadGmailReplyTarget(message, ctx, userKey);
-      if (!replyTarget) {
-        return 'I checked Gmail and could not find an unread message to reply to.';
-      }
-      if (typeof replyTarget === 'string') {
-        return replyTarget;
-      }
-      if (!isDirectMailboxReplyTarget(replyTarget)) {
-        return replyTarget;
-      }
-      to = replyTarget.to;
-      subject = replyTarget.subject;
-    }
-
-    if (!to || !subject || !body) {
-      const missing: string[] = [];
-      if (!to) missing.push('recipient email');
-      if (!subject) missing.push('subject');
-      if (!body) missing.push('body');
-      return `To ${intent.mode} a Gmail email, I need the ${missing.join(', ')}.`;
-    }
-
-    const toolRequest = {
-      origin: 'assistant' as const,
+  private buildDirectMailboxDeps(): DirectMailboxDeps {
+    return {
       agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
     };
-
-    const raw = buildGmailRawMessage({
-      to,
-      subject,
-      body,
-    });
-    const method = intent.mode === 'send' ? 'send' : 'create';
-    const resource = intent.mode === 'send' ? 'users messages' : 'users drafts';
-    const json = intent.mode === 'send'
-      ? { raw }
-      : { message: { raw } };
-
-    const toolResult = await this.tools.executeModelTool(
-      'gws',
-      {
-        service: 'gmail',
-        resource,
-        method,
-        params: { userId: 'me' },
-        json,
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(toolResult.success)) {
-      const status = toString(toolResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(toolResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          this.setApprovalFollowUp(approvalId, {
-            approved: intent.mode === 'send'
-              ? 'I sent the Gmail message.'
-              : 'I drafted the Gmail message.',
-            denied: intent.mode === 'send'
-              ? 'I did not send the Gmail message.'
-              : 'I did not draft the Gmail message.',
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          userKey,
-          message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: message.content,
-            route: 'email_task',
-            operation: intent.mode,
-            summary: intent.mode === 'send' ? 'Sends a Gmail message.' : 'Creates a Gmail draft.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-          `I prepared a Gmail ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
-          prompt,
-        ].filter(Boolean).join('\n\n'));
-      }
-      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Google Workspace request failed.';
-      return `I tried to ${intent.mode} the Gmail message, but it failed: ${msg}`;
-    }
-
-    return intent.mode === 'send'
-      ? `I sent the Gmail message to ${to} with subject "${subject}".`
-      : `I drafted a Gmail message to ${to} with subject "${subject}".`;
   }
 
   private buildDirectAutomationDeps(): DirectAutomationDeps {
@@ -5749,720 +5643,13 @@ type DirectIntentShadowCandidate =
     decision?: IntentGatewayDecision,
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
-      return this.tryDirectMicrosoft365Read(message, ctx, userKey, decision, continuityThread);
-    }
-
-    const intent = resolveDirectMailboxReadIntent('gmail', message.content, decision, continuityThread);
-    if (!intent) return null;
-    const continuationKind = getDirectMailboxContinuationKind('gmail', intent.kind);
-    const priorWindow = continuationKind
-      ? readPagedListContinuationState(continuityThread, continuationKind)
-      : null;
-    const requestedWindow = continuationKind
-      ? resolvePagedListWindow({
-          continuityThread,
-          continuationKind,
-          content: message.content,
-          total: priorWindow?.total ?? Math.max(intent.count, 1),
-          turnRelation: decision?.turnRelation,
-          defaultPageSize: Math.max(intent.count, 1),
-        })
-      : null;
-
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const listParams: Record<string, unknown> = {
-      userId: 'me',
-      maxResults: Math.max(
-        intent.count,
-        1,
-        requestedWindow ? requestedWindow.offset + Math.max(requestedWindow.limit, 1) : 0,
-      ),
-    };
-    if (intent.kind === 'gmail_unread') {
-      listParams.q = 'is:unread';
-    }
-
-    const listResult = await this.tools.executeModelTool(
-      'gws',
-      {
-        service: 'gmail',
-        resource: 'users messages',
-        method: 'list',
-        params: listParams,
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(listResult.success)) {
-      const status = toString(listResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(listResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          this.setApprovalFollowUp(approvalId, {
-            approved: 'I completed the Gmail inbox check.',
-            denied: 'I did not check Gmail.',
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          userKey,
-          message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: message.content,
-            route: 'email_task',
-            operation: 'read',
-            summary: 'Checks Gmail for unread messages.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-          'I prepared a Gmail inbox check, but it needs approval first.',
-          prompt,
-        ].filter(Boolean).join('\n\n'));
-      }
-      const msg = toString(listResult.message) || toString(listResult.error) || 'Google Workspace request failed.';
-      return `I tried to check Gmail for unread messages, but it failed: ${msg}`;
-    }
-
-    const output = (listResult.output && typeof listResult.output === 'object'
-      ? listResult.output
-      : null) as { messages?: unknown; resultSizeEstimate?: unknown } | null;
-    const messages = output && Array.isArray(output.messages)
-      ? output.messages as Array<{ id?: unknown }>
-      : [];
-    const resultSizeEstimate = output ? toNumber(output.resultSizeEstimate) : null;
-    const totalMessages = Math.max(resultSizeEstimate ?? 0, messages.length, priorWindow?.total ?? 0);
-    const window = continuationKind
-      ? resolvePagedListWindow({
-          continuityThread,
-          continuationKind,
-          content: message.content,
-          total: totalMessages,
-          turnRelation: decision?.turnRelation,
-          defaultPageSize: Math.max(intent.count, 1),
-        })
-      : {
-          offset: 0,
-          limit: Math.min(messages.length, Math.max(intent.count, 1)),
-          total: totalMessages,
-        };
-    const pageMessages = messages.slice(window.offset, window.offset + window.limit);
-    const continuationState = continuationKind && (window.offset + pageMessages.length) < totalMessages
-      ? buildPagedListContinuationState(continuationKind, {
-          offset: window.offset,
-          limit: Math.max(pageMessages.length, window.limit),
-          total: totalMessages,
-        }) as unknown as Record<string, unknown>
-      : null;
-
-    if (messages.length === 0) {
-      if (intent.kind === 'gmail_recent_senders') {
-        return 'I checked Gmail and could not find any recent messages.';
-      }
-      if (intent.kind === 'gmail_recent_summary') {
-        return 'I checked Gmail and could not find any recent messages to summarize.';
-      }
-      return 'I checked Gmail and found no unread messages.';
-    }
-
-    if (pageMessages.length === 0 && window.offset >= totalMessages) {
-      return continuationState
-        ? { content: 'No additional Gmail messages remain.', metadata: { continuationState } }
-        : 'No additional Gmail messages remain.';
-    }
-
-    const displayLimit = Math.min(pageMessages.length, Math.max(intent.count, 1));
-    const summaries: GmailMessageSummary[] = [];
-    for (const entry of pageMessages.slice(0, displayLimit)) {
-      const id = toString(entry.id);
-      if (!id) continue;
-
-      const detailResult = await this.tools.executeModelTool(
-        'gws',
-        {
-          service: 'gmail',
-          resource: 'users messages',
-          method: 'get',
-          params: {
-            userId: 'me',
-            messageId: id,
-            format: 'metadata',
-            metadataHeaders: ['From', 'Subject', 'Date'],
-          },
-        },
-        toolRequest,
-      );
-
-      if (!toBoolean(detailResult.success)) continue;
-
-      const summary = summarizeGmailMessage(detailResult.output);
-      if (summary) summaries.push(summary);
-    }
-
-    if (intent.kind === 'gmail_recent_senders') {
-      if (summaries.length === 0) {
-        return `I found ${pageMessages.length} recent message${pageMessages.length === 1 ? '' : 's'}, but I could not read their sender metadata.`;
-      }
-      const lines = [`The senders of the last ${summaries.length} email${summaries.length === 1 ? '' : 's'} are:`];
-      for (const [index, summary] of summaries.entries()) {
-        const from = summary.from || 'Unknown sender';
-        const subject = summary.subject || '(no subject)';
-        lines.push(`${index + 1}. ${from} — ${subject}`);
-      }
-      return continuationState
-        ? { content: lines.join('\n'), metadata: { continuationState } }
-        : lines.join('\n');
-    }
-
-    if (intent.kind === 'gmail_recent_summary') {
-      if (summaries.length === 0) {
-        return `I found ${pageMessages.length} recent message${pageMessages.length === 1 ? '' : 's'}, but I could not read enough metadata to summarize them.`;
-      }
-      const lines = [`Here are the last ${summaries.length} email${summaries.length === 1 ? '' : 's'}:`];
-      for (const [index, summary] of summaries.entries()) {
-        const subject = summary.subject || '(no subject)';
-        const from = summary.from || 'Unknown sender';
-        lines.push(`${index + 1}. ${subject} — ${from}`);
-        if (summary.date) lines.push(`   ${summary.date}`);
-        if (summary.snippet) lines.push(`   ${summary.snippet}`);
-      }
-      return continuationState
-        ? { content: lines.join('\n'), metadata: { continuationState } }
-        : lines.join('\n');
-    }
-
-    const lines = [
-      `I checked Gmail and found ${totalMessages} unread message${totalMessages === 1 ? '' : 's'}.`,
-    ];
-
-    if (summaries.length === 0) {
-      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
-        const id = toString(entry.id);
-        if (!id) continue;
-        lines.push(`${index + 1}. Message ID: ${id}`);
-      }
-    } else {
-      for (const [index, summary] of summaries.entries()) {
-        const subject = summary.subject || '(no subject)';
-        const from = summary.from || 'Unknown sender';
-        lines.push(`${index + 1}. ${subject} — ${from}`);
-        if (summary.date) lines.push(`   ${summary.date}`);
-        if (summary.snippet) lines.push(`   ${summary.snippet}`);
-      }
-    }
-
-    if (totalMessages > window.offset + displayLimit) {
-      const remaining = totalMessages - (window.offset + displayLimit);
-      lines.push(`...and ${remaining} more unread message${remaining === 1 ? '' : 's'}.`);
-    }
-
-    if (intent.kind === 'gmail_unread') {
-      lines.push('Ask me to read or summarize any of these if you want the full details.');
-    }
-
-    return continuationState
-      ? { content: lines.join('\n'), metadata: { continuationState } }
-      : lines.join('\n');
-  }
-
-  private async tryDirectMicrosoft365Write(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    const intent = parseDirectGmailWriteIntent(message.content);
-    if (!intent) return null;
-
-    let to = intent.to?.trim();
-    let subject = intent.subject?.trim();
-    const body = intent.body?.trim();
-
-    if (intent.replyTarget === 'latest_unread') {
-      if (!body) {
-        return `To ${intent.mode} a reply to the newest unread Outlook message, I need the body.`;
-      }
-      const replyTarget = await this.resolveLatestUnreadMicrosoft365ReplyTarget(message, ctx, userKey);
-      if (!replyTarget) {
-        return 'I checked Outlook and could not find an unread message to reply to.';
-      }
-      if (typeof replyTarget === 'string') {
-        return replyTarget;
-      }
-      if (!isDirectMailboxReplyTarget(replyTarget)) {
-        return replyTarget;
-      }
-      to = replyTarget.to;
-      subject = replyTarget.subject;
-    }
-
-    if (!to || !subject || !body) {
-      const missing: string[] = [];
-      if (!to) missing.push('recipient email');
-      if (!subject) missing.push('subject');
-      if (!body) missing.push('body');
-      return `To ${intent.mode} an Outlook email, I need the ${missing.join(', ')}.`;
-    }
-    const toolName = intent.mode === 'send' ? 'outlook_send' : 'outlook_draft';
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const toolResult = await this.tools.executeModelTool(
-      toolName,
-      { to, subject, body },
-      toolRequest,
-    );
-
-    if (!toBoolean(toolResult.success)) {
-      const status = toString(toolResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(toolResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          this.setApprovalFollowUp(approvalId, {
-            approved: intent.mode === 'send'
-              ? 'I sent the Outlook message.'
-              : 'I drafted the Outlook message.',
-            denied: intent.mode === 'send'
-              ? 'I did not send the Outlook message.'
-              : 'I did not draft the Outlook message.',
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          userKey,
-          message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: message.content,
-            route: 'email_task',
-            operation: intent.mode,
-            summary: intent.mode === 'send' ? 'Sends an Outlook message.' : 'Creates an Outlook draft.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            entities: { emailProvider: 'm365' },
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-          `I prepared an Outlook ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
-          prompt,
-        ].filter(Boolean).join('\n\n'));
-      }
-      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Microsoft 365 request failed.';
-      return `I tried to ${intent.mode} the Outlook message, but it failed: ${msg}`;
-    }
-
-    return intent.mode === 'send'
-      ? `I sent the Outlook message to ${to} with subject "${subject}".`
-      : `I drafted an Outlook message to ${to} with subject "${subject}".`;
-  }
-
-  private async tryDirectMicrosoft365Read(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision?: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    const intent = resolveDirectMailboxReadIntent('m365', message.content, decision, continuityThread);
-    if (!intent) return null;
-    const continuationKind = getDirectMailboxContinuationKind('m365', intent.kind);
-    const priorWindow = continuationKind
-      ? readPagedListContinuationState(continuityThread, continuationKind)
-      : null;
-    const requestedWindow = continuationKind
-      ? resolvePagedListWindow({
-          continuityThread,
-          continuationKind,
-          content: message.content,
-          total: priorWindow?.total ?? Math.max(intent.count, 1),
-          turnRelation: decision?.turnRelation,
-          defaultPageSize: Math.max(intent.count, 1),
-        })
-      : null;
-
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const listParams: Record<string, unknown> = {
-      $top: Math.max(
-        intent.count,
-        1,
-        requestedWindow ? requestedWindow.offset + Math.max(requestedWindow.limit, 1) : 0,
-      ),
-      $select: 'id,subject,receivedDateTime,from,isRead',
-      $orderby: 'receivedDateTime desc',
-    };
-    if (intent.kind === 'gmail_unread') {
-      listParams.$filter = 'isRead eq false';
-    }
-
-    const listResult = await this.tools.executeModelTool(
-      'm365',
-      {
-        service: 'mail',
-        resource: 'me/messages',
-        method: 'list',
-        params: listParams,
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(listResult.success)) {
-      const status = toString(listResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(listResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          this.setApprovalFollowUp(approvalId, {
-            approved: 'I completed the Outlook inbox check.',
-            denied: 'I did not check Outlook.',
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          userKey,
-          message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: message.content,
-            route: 'email_task',
-            operation: 'read',
-            summary: 'Checks Outlook for recent messages.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            entities: { emailProvider: 'm365' },
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-          'I prepared an Outlook inbox check, but it needs approval first.',
-          prompt,
-        ].filter(Boolean).join('\n\n'));
-      }
-      const msg = toString(listResult.message) || toString(listResult.error) || 'Microsoft 365 request failed.';
-      return `I tried to check Outlook for messages, but it failed: ${msg}`;
-    }
-
-    const output = isRecord(listResult.output) ? listResult.output : null;
-    const messages = Array.isArray(output?.value)
-      ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
-      : [];
-    const hasMore = Boolean(toString(output?.['@odata.nextLink']).trim());
-    const totalMessages = Math.max(
-      messages.length + (hasMore ? 1 : 0),
-      priorWindow?.total ?? 0,
-    );
-    const window = continuationKind
-      ? resolvePagedListWindow({
-          continuityThread,
-          continuationKind,
-          content: message.content,
-          total: totalMessages,
-          turnRelation: decision?.turnRelation,
-          defaultPageSize: Math.max(intent.count, 1),
-        })
-      : {
-          offset: 0,
-          limit: Math.min(messages.length, Math.max(intent.count, 1)),
-          total: totalMessages,
-        };
-    const pageMessages = messages.slice(window.offset, window.offset + window.limit);
-    const continuationState = continuationKind && ((window.offset + pageMessages.length) < totalMessages || hasMore)
-      ? buildPagedListContinuationState(continuationKind, {
-          offset: window.offset,
-          limit: Math.max(pageMessages.length, window.limit),
-          total: totalMessages,
-        }) as unknown as Record<string, unknown>
-      : null;
-
-    if (messages.length === 0) {
-      if (intent.kind === 'gmail_recent_senders') {
-        return 'I checked Outlook and could not find any recent messages.';
-      }
-      if (intent.kind === 'gmail_recent_summary') {
-        return 'I checked Outlook and could not find any recent messages to summarize.';
-      }
-      return 'I checked Outlook and found no unread messages.';
-    }
-
-    if (pageMessages.length === 0 && window.offset >= totalMessages) {
-      return continuationState
-        ? { content: 'No additional Outlook messages remain.', metadata: { continuationState } }
-        : 'No additional Outlook messages remain.';
-    }
-
-    const displayLimit = Math.min(pageMessages.length, Math.max(intent.count, 1));
-
-    if (intent.kind === 'gmail_recent_senders') {
-      const lines = [`The senders of the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'} are:`];
-      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
-        const from = summarizeM365From(entry.from) || 'Unknown sender';
-        const subject = toString(entry.subject) || '(no subject)';
-        lines.push(`${index + 1}. ${from} — ${subject}`);
-      }
-      return continuationState
-        ? { content: lines.join('\n'), metadata: { continuationState } }
-        : lines.join('\n');
-    }
-
-    if (intent.kind === 'gmail_recent_summary') {
-      const lines = [`Here are the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'}:`];
-      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
-        const subject = toString(entry.subject) || '(no subject)';
-        const from = summarizeM365From(entry.from) || 'Unknown sender';
-        lines.push(`${index + 1}. ${subject} — ${from}`);
-        const received = toString(entry.receivedDateTime);
-        if (received) lines.push(`   ${received}`);
-      }
-      return continuationState
-        ? { content: lines.join('\n'), metadata: { continuationState } }
-        : lines.join('\n');
-    }
-
-    const lines = [
-      `Here are the latest ${displayLimit} unread Outlook message${displayLimit === 1 ? '' : 's'}:`,
-    ];
-    for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
-      const subject = toString(entry.subject) || '(no subject)';
-      const from = summarizeM365From(entry.from) || 'Unknown sender';
-      lines.push(`${index + 1}. ${subject} — ${from}`);
-      const received = toString(entry.receivedDateTime);
-      if (received) lines.push(`   ${received}`);
-    }
-    if (totalMessages > window.offset + displayLimit) {
-      const remaining = totalMessages - (window.offset + displayLimit);
-      lines.push(`...and at least ${remaining} more unread Outlook message${remaining === 1 ? '' : 's'}.`);
-    }
-    lines.push('Ask me to read or summarize any of these if you want the full details.');
-    return continuationState
-      ? { content: lines.join('\n'), metadata: { continuationState } }
-      : lines.join('\n');
-  }
-
-  private async resolveLatestUnreadGmailReplyTarget(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-  ): Promise<{ to: string; subject: string } | string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const listResult = await this.tools.executeModelTool(
-      'gws',
-      {
-        service: 'gmail',
-        resource: 'users messages',
-        method: 'list',
-        params: {
-          userId: 'me',
-          maxResults: 1,
-          q: 'is:unread',
-        },
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(listResult.success)) {
-      const blocked = this.buildPendingMailboxReplyLookupApproval(
-        listResult,
-        userKey,
-        message,
-        'Gmail',
-      );
-      if (blocked) return blocked;
-      const msg = toString(listResult.message) || toString(listResult.error) || 'Gmail request failed.';
-      return `I tried to look up the newest unread Gmail message for the reply draft, but it failed: ${msg}`;
-    }
-
-    const output = isRecord(listResult.output) ? listResult.output : null;
-    const messages = Array.isArray(output?.messages)
-      ? output.messages.filter((entry): entry is Record<string, unknown> => isRecord(entry))
-      : [];
-    const newest = messages[0];
-    const id = toString(newest?.id);
-    if (!id) return null;
-
-    const detailResult = await this.tools.executeModelTool(
-      'gws',
-      {
-        service: 'gmail',
-        resource: 'users messages',
-        method: 'get',
-        params: {
-          userId: 'me',
-          messageId: id,
-          format: 'metadata',
-          metadataHeaders: ['From', 'Subject'],
-        },
-      },
-      toolRequest,
-    );
-    if (!toBoolean(detailResult.success)) {
-      const msg = toString(detailResult.message) || toString(detailResult.error) || 'Gmail request failed.';
-      return `I found the newest unread Gmail message, but I couldn't read enough metadata to draft the reply: ${msg}`;
-    }
-
-    const summary = summarizeGmailMessage(detailResult.output);
-    const to = extractEmailAddress(summary?.from);
-    if (!to) {
-      return 'I found the newest unread Gmail message, but I could not determine the sender email address.';
-    }
-    return {
-      to,
-      subject: buildReplySubject(toString(summary?.subject)),
-    };
-  }
-
-  private async resolveLatestUnreadMicrosoft365ReplyTarget(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-  ): Promise<{ to: string; subject: string } | string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    const toolRequest = {
-      origin: 'assistant' as const,
-      agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
-    };
-
-    const listResult = await this.tools.executeModelTool(
-      'm365',
-      {
-        service: 'mail',
-        resource: 'me/messages',
-        method: 'list',
-        params: {
-          $top: 1,
-          $filter: 'isRead eq false',
-          $select: 'id,subject,receivedDateTime,from,isRead',
-          $orderby: 'receivedDateTime desc',
-        },
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(listResult.success)) {
-      const blocked = this.buildPendingMailboxReplyLookupApproval(
-        listResult,
-        userKey,
-        message,
-        'Outlook',
-      );
-      if (blocked) return blocked;
-      const msg = toString(listResult.message) || toString(listResult.error) || 'Microsoft 365 request failed.';
-      return `I tried to look up the newest unread Outlook message for the reply draft, but it failed: ${msg}`;
-    }
-
-    const output = isRecord(listResult.output) ? listResult.output : null;
-    const messages = Array.isArray(output?.value)
-      ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
-      : [];
-    const newest = messages[0];
-    if (!newest) return null;
-    const to = extractMicrosoft365EmailAddress(newest.from);
-    if (!to) {
-      return 'I found the newest unread Outlook message, but I could not determine the sender email address.';
-    }
-    return {
-      to,
-      subject: buildReplySubject(toString(newest.subject)),
-    };
-  }
-
-  private buildPendingMailboxReplyLookupApproval(
-    toolResult: Record<string, unknown>,
-    userKey: string,
-    message: UserMessage,
-    providerLabel: 'Gmail' | 'Outlook',
-  ): string | { content: string; metadata?: Record<string, unknown> } | null {
-    const status = toString(toolResult.status);
-    if (status !== 'pending_approval') return null;
-    const approvalId = toString(toolResult.approvalId);
-    const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-    if (approvalId) {
-      this.setApprovalFollowUp(approvalId, {
-        approved: `I looked up the newest unread ${providerLabel} message.`,
-        denied: `I did not check ${providerLabel}.`,
-      });
-    }
-    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-    const pendingActionResult = this.setPendingApprovalActionForRequest(
+    return tryDirectGoogleWorkspaceReadHelper({
+      message,
+      ctx,
       userKey,
-      message.surfaceId,
-      {
-        prompt,
-        approvalIds: pendingIds,
-        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-        originalUserContent: message.content,
-        route: 'email_task',
-        operation: 'read',
-        summary: `Checks ${providerLabel} for the newest unread message before drafting a reply.`,
-        turnRelation: 'new_request',
-        resolution: 'ready',
-      },
-    );
-    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-      `I prepared a ${providerLabel} inbox check to resolve the reply target, but it needs approval first.`,
-      prompt,
-    ].filter(Boolean).join('\n\n'));
+      decision,
+      continuityThread,
+    }, this.buildDirectMailboxDeps());
   }
 
   private async tryDirectFilesystemIntent(
