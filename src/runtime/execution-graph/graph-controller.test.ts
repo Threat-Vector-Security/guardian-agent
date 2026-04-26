@@ -4,10 +4,17 @@ import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { DelegatedTaskContract } from '../execution/types.js';
 import {
+  buildWriteSpecArtifact,
+  type ExecutionArtifact,
+} from './graph-artifacts.js';
+import {
   buildGraphControlledTaskRunId,
   buildGraphReadOnlyIntentGatewayRecord,
+  createGraphControlledRun,
   shouldUseGraphControlledExecution,
 } from './graph-controller.js';
+import type { ExecutionGraphEvent } from './graph-events.js';
+import { ExecutionGraphStore } from './graph-store.js';
 
 function baseDecision(overrides: Partial<IntentGatewayDecision> = {}): IntentGatewayDecision {
   return {
@@ -137,5 +144,62 @@ describe('graph-controller boundary', () => {
 
   it('keeps graph-controlled task run ids deterministic for request ids', () => {
     expect(buildGraphControlledTaskRunId('request-1')).toBe('graph-run:request-1');
+  });
+
+  it('creates the graph shell and owns graph event/artifact projection', () => {
+    const graphStore = new ExecutionGraphStore({ now: () => 1000 });
+    const timelineEvents: ExecutionGraphEvent[] = [];
+    const run = createGraphControlledRun({
+      graphStore,
+      runTimeline: {
+        ingestExecutionGraphEvent: (event) => {
+          timelineEvents.push(event);
+        },
+      },
+      now: () => 2000,
+      taskRunId: 'graph-run-request-1',
+      requestId: 'request-1',
+      gatewayDecision: baseDecision(),
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      triggerSourceId: 'message-1',
+      codeSessionId: 'code-session-1',
+    });
+
+    expect(run.graphId).toBe('graph:graph-run-request-1');
+    expect(run.nodeIds).toEqual({
+      readNodeId: 'node:graph-run-request-1:explore',
+      synthesisNodeId: 'node:graph-run-request-1:synthesize',
+      mutationNodeId: 'node:graph-run-request-1:mutate',
+      verificationNodeId: 'node:graph-run-request-1:verify',
+    });
+
+    run.emitGraphEvent('graph_started', { controller: 'execution_graph' }, 'graph:started');
+    const artifact: ExecutionArtifact = buildWriteSpecArtifact({
+      graphId: run.graphId,
+      nodeId: run.nodeIds.synthesisNodeId,
+      artifactId: 'write-spec-1',
+      path: 'tmp/example.txt',
+      content: 'hello',
+      append: false,
+      createdAt: 2000,
+    });
+    run.emitArtifact(artifact, run.nodeIds.synthesisNodeId, 'synthesize');
+
+    const snapshot = graphStore.getSnapshot(run.graphId);
+    expect(snapshot?.graph.nodes.map((node) => node.kind)).toEqual([
+      'explore_readonly',
+      'synthesize',
+      'mutate',
+      'verify',
+    ]);
+    expect(snapshot?.events.map((event) => [event.sequence, event.kind, event.nodeId])).toEqual([
+      [1, 'graph_started', undefined],
+      [2, 'artifact_created', run.nodeIds.synthesisNodeId],
+    ]);
+    expect(timelineEvents.map((event) => event.eventId)).toEqual(snapshot?.events.map((event) => event.eventId));
+    expect(graphStore.getArtifact(run.graphId, 'write-spec-1')?.artifactType).toBe('WriteSpec');
   });
 });

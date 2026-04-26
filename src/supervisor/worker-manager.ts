@@ -92,6 +92,7 @@ import {
 import {
   buildGraphControlledTaskRunId,
   buildGraphReadOnlyIntentGatewayRecord,
+  createGraphControlledRun,
   selectGraphControllerExecutionProfile,
   shouldUseGraphControlledExecution,
 } from '../runtime/execution-graph/graph-controller.js';
@@ -695,159 +696,29 @@ export class WorkerManager {
     }
 
     const now = this.observability.now ?? Date.now;
-    const graphId = `graph:${input.taskRunId}`;
-    const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
-    const parentExecutionId = input.request.delegation?.executionId;
     const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
-    const codeSessionId = input.request.delegation?.codeSessionId ?? codeContext?.sessionId;
-    const readNodeId = `node:${input.taskRunId}:explore`;
-    const synthesisNodeId = `node:${input.taskRunId}:synthesize`;
-    const mutationNodeId = `node:${input.taskRunId}:mutate`;
-    const verificationNodeId = `node:${input.taskRunId}:verify`;
-    this.observability.executionGraphStore?.createGraph({
-      graphId,
-      executionId: input.taskRunId,
-      rootExecutionId,
-      ...(parentExecutionId ? { parentExecutionId } : {}),
+    const run = createGraphControlledRun({
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
+      now,
+      taskRunId: input.taskRunId,
       requestId: input.requestId,
-      runId: input.requestId,
-      intent: gatewayRecord.decision,
-      securityContext: {
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        channel: input.request.message.channel,
-        ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
-        ...(codeSessionId ? { codeSessionId } : {}),
-      },
-      trigger: {
-        type: 'user_request',
-        source: input.request.message.channel,
-        sourceId: input.request.message.id,
-      },
-      nodes: [
-        {
-          nodeId: readNodeId,
-          graphId,
-          kind: 'explore_readonly',
-          status: 'pending',
-          title: 'Read-only evidence gathering',
-          requiredInputIds: [],
-          outputArtifactTypes: ['SearchResultSet', 'FileReadSet', 'EvidenceLedger'],
-          allowedToolCategories: ['filesystem.read', 'search.read'],
-          approvalPolicy: 'none',
-          checkpointPolicy: 'phase_boundary',
-        },
-        {
-          nodeId: synthesisNodeId,
-          graphId,
-          kind: 'synthesize',
-          status: 'pending',
-          title: 'Grounded write specification synthesis',
-          requiredInputIds: [],
-          outputArtifactTypes: ['EvidenceLedger', 'SynthesisDraft', 'WriteSpec'],
-          allowedToolCategories: [],
-          approvalPolicy: 'none',
-          checkpointPolicy: 'phase_boundary',
-        },
-        {
-          nodeId: mutationNodeId,
-          graphId,
-          kind: 'mutate',
-          status: 'pending',
-          title: 'Supervisor-owned file mutation',
-          requiredInputIds: [],
-          outputArtifactTypes: ['MutationReceipt', 'VerificationResult'],
-          allowedToolCategories: ['filesystem.write', 'filesystem.read'],
-          approvalPolicy: 'if_required',
-          checkpointPolicy: 'phase_boundary',
-        },
-        {
-          nodeId: verificationNodeId,
-          graphId,
-          kind: 'verify',
-          status: 'pending',
-          title: 'Mutation verification',
-          requiredInputIds: [],
-          outputArtifactTypes: ['VerificationResult'],
-          allowedToolCategories: ['filesystem.read'],
-          approvalPolicy: 'none',
-          checkpointPolicy: 'terminal_only',
-        },
-      ],
-      edges: [
-        {
-          edgeId: `${readNodeId}->${synthesisNodeId}`,
-          graphId,
-          fromNodeId: readNodeId,
-          toNodeId: synthesisNodeId,
-        },
-        {
-          edgeId: `${synthesisNodeId}->${mutationNodeId}`,
-          graphId,
-          fromNodeId: synthesisNodeId,
-          toNodeId: mutationNodeId,
-        },
-        {
-          edgeId: `${mutationNodeId}->${verificationNodeId}`,
-          graphId,
-          fromNodeId: mutationNodeId,
-          toNodeId: verificationNodeId,
-        },
-      ],
+      gatewayDecision: gatewayRecord.decision,
+      agentId: input.target.agentId,
+      userId: input.request.userId,
+      channel: input.request.message.channel,
+      ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+      triggerSourceId: input.request.message.id,
+      ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+      ...(input.request.delegation?.executionId ? { parentExecutionId: input.request.delegation.executionId } : {}),
+      ...(input.request.delegation?.codeSessionId ?? codeContext?.sessionId
+        ? { codeSessionId: input.request.delegation?.codeSessionId ?? codeContext?.sessionId }
+        : {}),
     });
-    let sequence = 0;
-    const emitGraphEvent = (
-      kind: ExecutionGraphEvent['kind'],
-      payload: Record<string, unknown>,
-      eventKey: string,
-      options: {
-        nodeId?: string;
-        nodeKind?: ExecutionGraphEvent['nodeKind'];
-        producer?: ExecutionGraphEvent['producer'];
-      } = {},
-    ): ExecutionGraphEvent => {
-      sequence += 1;
-      const event = createExecutionGraphEvent({
-        eventId: `${graphId}:${eventKey}:${sequence}`,
-        graphId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        ...(parentExecutionId ? { parentExecutionId } : {}),
-        requestId: input.requestId,
-        runId: input.requestId,
-        ...(options.nodeId ? { nodeId: options.nodeId } : {}),
-        ...(options.nodeKind ? { nodeKind: options.nodeKind } : {}),
-        kind,
-        timestamp: now(),
-        sequence,
-        producer: options.producer ?? 'supervisor',
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        ...(codeSessionId ? { codeSessionId } : {}),
-        payload,
-      });
-      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-      this.observability.executionGraphStore?.appendEvent(event);
-      return event;
-    };
-    const emitArtifact = (
-      artifact: ExecutionArtifact,
-      nodeId: string,
-      nodeKind: ExecutionGraphEvent['nodeKind'],
-    ): ExecutionGraphEvent => {
-      const ref = artifactRefFromArtifact(artifact);
-      this.observability.executionGraphStore?.writeArtifact(artifact);
-      return emitGraphEvent('artifact_created', {
-        artifactId: ref.artifactId,
-        artifactType: ref.artifactType,
-        label: ref.label,
-        ...(ref.preview ? { preview: ref.preview } : {}),
-        ...(ref.trustLevel ? { trustLevel: ref.trustLevel } : {}),
-        ...(ref.taintReasons ? { taintReasons: ref.taintReasons } : {}),
-        ...(ref.redactionPolicy ? { redactionPolicy: ref.redactionPolicy } : {}),
-      }, `artifact:${artifact.artifactId}`, { nodeId, nodeKind });
-    };
+    const { graphId, rootExecutionId, parentExecutionId, codeSessionId } = run;
+    const { readNodeId, synthesisNodeId, mutationNodeId, verificationNodeId } = run.nodeIds;
+    const emitGraphEvent = run.emitGraphEvent;
+    const emitArtifact = run.emitArtifact;
     const failGraph = (reason: string, nodeId?: string, nodeKind?: ExecutionGraphEvent['nodeKind']) => {
       if (nodeId && nodeKind) {
         emitGraphEvent('node_failed', { reason }, `${nodeId}:failed`, { nodeId, nodeKind });
@@ -1049,12 +920,10 @@ export class WorkerManager {
         userId: input.request.userId,
         ...(codeSessionId ? { codeSessionId } : {}),
         verificationNodeId,
-        sequenceStart: sequence,
+        sequenceStart: run.currentSequence(),
         now,
         emit: (event) => {
-          sequence = Math.max(sequence, event.sequence);
-          this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-          this.observability.executionGraphStore?.appendEvent(event);
+          run.ingestGraphEvent(event);
         },
       };
       const mutationResult = await executeWriteSpecMutationNode({
@@ -1063,7 +932,7 @@ export class WorkerManager {
         toolRequest,
         context: mutationContext,
       });
-      sequence = Math.max(sequence, ...mutationResult.events.map((event) => event.sequence));
+      run.updateSequenceFromEvents(mutationResult.events);
       const artifactIds = [
         ...sourceArtifacts.map((artifact) => artifact.artifactId),
         ...(ledgerArtifact ? [ledgerArtifact.artifactId] : []),
