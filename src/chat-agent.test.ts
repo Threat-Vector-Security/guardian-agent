@@ -7432,7 +7432,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       expiresAt: 2,
     };
 
-    const result = await (agent as any).continueDirectRouteAfterApproval(
+    const result = await (agent as any).continuePendingActionAfterApproval(
       pendingAction,
       'approval-1',
       'approved',
@@ -7815,7 +7815,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       expiresAt: 2,
     };
 
-    const result = await (agent as any).continueDirectRouteAfterApproval(
+    const result = await (agent as any).continuePendingActionAfterApproval(
       pendingAction,
       'approval-1',
       'approved',

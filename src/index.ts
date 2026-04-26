@@ -1734,22 +1734,23 @@ function buildDashboardCallbacks(
     });
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
     if (allowContinuation) {
-      if (pendingActionForApproval?.resume?.kind === 'execution_graph') {
-        continuedResponse = await runtime.workerManager?.resumeExecutionGraphPendingAction(
-          pendingActionForApproval,
-          {
-            approvalId: input.approvalId,
-            approvalResult: result,
-          },
-        ) ?? undefined;
-      }
       if (!continuedResponse && pendingActionForApproval) {
-        for (const agent of chatAgents.values()) {
-          const followUp = await agent.continueDirectRouteAfterApproval(
+        const scopedAgent = chatAgents.get(pendingActionForApproval.scope.agentId);
+        const continuationAgents = scopedAgent ? [scopedAgent] : [...chatAgents.values()];
+        for (const agent of continuationAgents) {
+          const followUp = await agent.continuePendingActionAfterApproval(
             pendingActionForApproval,
             input.approvalId,
             input.decision,
             result,
+            {
+              resumeStoredExecutionGraphPendingAction: runtime.workerManager
+                ? (pendingAction, resumeOptions) => runtime.workerManager!.resumeExecutionGraphPendingAction(
+                  pendingAction,
+                  resumeOptions,
+                )
+                : undefined,
+            },
           );
           if (followUp) {
             continuedResponse = followUp;
