@@ -48,18 +48,6 @@ export interface StoredToolLoopSanitizedResult {
   taintReasons: string[];
 }
 
-export interface StoredToolLoopSuspendedSessionInput {
-  scope: {
-    userId: string;
-    channel: string;
-    surfaceId?: string;
-  };
-  llmMessages: ChatMessage[];
-  pendingTools: StoredToolLoopPendingTool[];
-  originalMessage: UserMessage;
-  ctx?: AgentContext;
-}
-
 export function buildStoredToolLoopChatRunner(input: {
   ctx?: AgentContext;
   selectedExecutionProfile?: SelectedExecutionProfile;
@@ -182,7 +170,6 @@ export async function resumeStoredToolLoopPendingAction(input: {
     providerKind: 'local' | 'external',
   ) => StoredToolLoopSanitizedResult;
   lacksUsableAssistantContent: (content: string | undefined) => boolean;
-  storeSuspendedSession: (input: StoredToolLoopSuspendedSessionInput) => void;
   setPendingApprovalAction: (
     userId: string,
     channel: string,
@@ -452,17 +439,6 @@ export async function resumeStoredToolLoopPendingAction(input: {
           ...resume.originalMessage,
           ...(resume.originalMessage.metadata ? { metadata: { ...resume.originalMessage.metadata } } : {}),
         };
-        input.storeSuspendedSession({
-          scope: {
-            userId: input.pendingAction.scope.userId,
-            channel: input.pendingAction.scope.channel,
-            surfaceId: input.pendingAction.scope.surfaceId,
-          },
-          llmMessages: [...llmMessages],
-          pendingTools,
-          originalMessage,
-          ctx: input.options?.ctx,
-        });
         const summaries = input.tools.getApprovalSummaries(pendingIds);
         const pendingActionResult = input.setPendingApprovalAction(
           input.pendingAction.scope.userId,

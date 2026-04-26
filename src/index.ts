@@ -1726,16 +1726,7 @@ function buildDashboardCallbacks(
         message: result.message,
       }, 'Dashboard approval decision failed');
     }
-    const continueConversation = [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId, (
-      input.userId?.trim() && input.channel?.trim()
-        ? {
-            userId: input.userId,
-            channel: input.channel,
-            surfaceId: input.surfaceId,
-          }
-        : undefined
-    )))
-      || !!pendingActionForApproval?.resume
+    const continueConversation = !!pendingActionForApproval?.resume
       || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
     const continueAutomation = [...chatAgents.values()].some((agent) => agent.hasAutomationApprovalContinuation(input.approvalId))
       || !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
@@ -1806,7 +1797,6 @@ function buildDashboardCallbacks(
         continuationSource: continuedResponse
           ? (continuedResponse === undefined ? 'none' : 'resolved')
           : 'none',
-        hasSuspendedApproval: [...chatAgents.values()].some((agent) => agent.hasSuspendedApproval(input.approvalId)),
         hasPendingActionResume: !!pendingActionForApproval?.resume,
         workerManagerSuspended: !!runtime.workerManager?.hasSuspendedApproval(input.approvalId),
         hasAutomationContinuation: continueAutomation,

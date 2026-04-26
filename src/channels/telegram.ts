@@ -757,10 +757,8 @@ export class TelegramChannel implements ChannelAdapter {
     const hasExplicitContinuationDirective = results.some((result) => result.continuedResponse || result.continueConversation !== undefined);
     const needsSyntheticContinuation = input.decision === 'approved'
       && this.onDispatchMsg
-      && (
-        results.some((result) => result.continueConversation)
-        || (!hasExplicitContinuationDirective && allSucceeded)
-      );
+      && !hasExplicitContinuationDirective
+      && allSucceeded;
     if (needsSyntheticContinuation && this.onDispatchMsg) {
       const agentId = state?.agentId ?? this.defaultAgent;
       const summary = results.map((result) => `${result.toolName}: ${result.message}`).join('; ');
