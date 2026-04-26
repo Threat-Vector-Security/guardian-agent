@@ -1726,8 +1726,7 @@ function buildDashboardCallbacks(
         message: result.message,
       }, 'Dashboard approval decision failed');
     }
-    const continueConversation = !!pendingActionForApproval?.resume
-      || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
+    const continueConversation = !!pendingActionForApproval?.resume;
     const shouldContinue = continueConversation;
     const allowContinuation = shouldContinueConversationAfterApprovalDecision({
       decision: input.decision,
@@ -1735,13 +1734,7 @@ function buildDashboardCallbacks(
     });
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
     if (allowContinuation) {
-      continuedResponse = await runtime.workerManager?.continueAfterApproval(
-        input.approvalId,
-        input.decision,
-        result.message,
-        pendingActionForApproval,
-      ) ?? undefined;
-      if (!continuedResponse && pendingActionForApproval?.resume?.kind === 'execution_graph') {
+      if (pendingActionForApproval?.resume?.kind === 'execution_graph') {
         continuedResponse = await runtime.workerManager?.resumeExecutionGraphPendingAction(
           pendingActionForApproval,
           {
@@ -1792,7 +1785,6 @@ function buildDashboardCallbacks(
           ? (continuedResponse === undefined ? 'none' : 'resolved')
           : 'none',
         hasPendingActionResume: !!pendingActionForApproval?.resume,
-        workerManagerSuspended: !!runtime.workerManager?.hasSuspendedApproval(input.approvalId),
         continuedContentPreview: continuedResponse?.content?.slice(0, 200),
         displayMessagePreview: displayMessage?.slice(0, 200),
       },
