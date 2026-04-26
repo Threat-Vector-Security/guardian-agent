@@ -11,7 +11,36 @@ import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pen
 import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './runtime/intent-gateway.js';
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
 import { buildToolLoopContinuationPayload, readToolLoopContinuationPayload } from './runtime/chat-agent/tool-loop-continuation.js';
+import { tryDirectAutomationControl } from './runtime/chat-agent/direct-automation.js';
+import { tryDirectGoogleWorkspaceRead } from './runtime/chat-agent/direct-mailbox-runtime.js';
+import {
+  buildDirectAutomationDeps,
+  buildDirectMailboxDeps,
+  type DirectRuntimeDepsInput,
+} from './runtime/chat-agent/direct-runtime-deps.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
+
+function createDirectRuntimeDeps(
+  tools: unknown,
+  overrides: Partial<DirectRuntimeDepsInput> = {},
+): DirectRuntimeDepsInput {
+  return {
+    agentId: 'chat',
+    tools: tools as never,
+    setApprovalFollowUp: vi.fn(),
+    getPendingApprovals: vi.fn(() => null),
+    formatPendingApprovalPrompt: vi.fn(() => ''),
+    parsePendingActionUserKey: vi.fn((userKey: string) => {
+      const [userId, channel = 'web'] = userKey.split(':');
+      return { userId: userId || 'owner', channel };
+    }),
+    setClarificationPendingAction: vi.fn(() => ({ action: null })),
+    setPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
+    setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
+    buildPendingApprovalBlockedResponse: vi.fn((_result, fallbackContent) => ({ content: fallbackContent })),
+    ...overrides,
+  };
+}
 
 function createToolLoopGraphPendingAction(input: {
   executionGraphStore: ExecutionGraphStore;
@@ -2171,8 +2200,6 @@ describe('LLMChatAgent direct intent metadata', () => {
       }),
       getApprovalSummaries: vi.fn(() => new Map()),
     };
-    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
-    (agent as any).continuityThreadStore = continuityThreadStore;
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -2195,54 +2222,60 @@ describe('LLMChatAgent direct intent metadata', () => {
       timestamp: Date.now(),
     };
 
-    const firstResponse = await (agent as any).tryDirectAutomationControl(
-      firstMessage,
-      ctx,
-      'owner:web',
+    const automationDeps = buildDirectAutomationDeps(createDirectRuntimeDeps(tools));
+    const firstResponse = await tryDirectAutomationControl(
       {
-        route: 'automation_control',
-        confidence: 'high',
-        operation: 'read',
-        turnRelation: 'new_request',
-        resolution: 'ready',
-        summary: 'List the automation catalog.',
-        missingFields: [],
-        entities: {},
+        message: firstMessage,
+        ctx,
+        userKey: 'owner:web',
+        intentDecision: {
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'read',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          summary: 'List the automation catalog.',
+          missingFields: [],
+          entities: {},
+        } as never,
+        continuityThread: continuityThreadStore.get({ assistantId: 'chat', userId: 'owner' }),
       },
-      continuityThreadStore.get({ assistantId: 'chat', userId: 'owner' }),
+      automationDeps,
     );
     expect(firstResponse?.content).toContain('Automation catalog (45): showing 1-20');
     expect(firstResponse?.metadata?.continuationState).toEqual({
       kind: 'automation_catalog_list',
       payload: { offset: 0, limit: 20, total: 45 },
     });
-
-    const secondResponse = await (agent as any).tryDirectAutomationControl(
-      secondMessage,
-      ctx,
-      'owner:web',
+    const secondResponse = await tryDirectAutomationControl(
       {
-        route: 'automation_control',
-        confidence: 'high',
-        operation: 'read',
-        turnRelation: 'follow_up',
-        resolution: 'ready',
-        summary: 'List more automations.',
-        missingFields: [],
-        entities: {},
-      },
-      {
-        continuityKey: 'chat:owner',
-        scope: { assistantId: 'chat', userId: 'owner' },
-        linkedSurfaces: [],
-        continuationState: {
-          kind: 'automation_catalog_list',
-          payload: { offset: 0, limit: 20, total: 45 },
+        message: secondMessage,
+        ctx,
+        userKey: 'owner:web',
+        intentDecision: {
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'read',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          summary: 'List more automations.',
+          missingFields: [],
+          entities: {},
+        } as never,
+        continuityThread: {
+          continuityKey: 'chat:owner',
+          scope: { assistantId: 'chat', userId: 'owner' },
+          linkedSurfaces: [],
+          continuationState: {
+            kind: 'automation_catalog_list',
+            payload: { offset: 0, limit: 20, total: 45 },
+          },
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
         },
-        createdAt: 1,
-        updatedAt: 1,
-        expiresAt: 2,
       },
+      automationDeps,
     );
 
     expect(secondResponse?.content).toContain('Automation catalog (45): showing 21-45');
@@ -2340,14 +2373,6 @@ describe('LLMChatAgent direct intent metadata', () => {
   });
 
   it('continues Gmail unread lists from the prior window on follow-up requests', async () => {
-    const ChatAgent = createChatAgentClass({
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      } as never,
-    });
     const tools = {
       isEnabled: vi.fn(() => true),
       executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
@@ -2380,10 +2405,6 @@ describe('LLMChatAgent direct intent metadata', () => {
         throw new Error(`Unexpected tool args ${JSON.stringify(args)}`);
       }),
     };
-    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
-    (agent as any).secondBrainService = {
-      getPersonById: vi.fn(() => null),
-    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -2392,38 +2413,42 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const response = await (agent as any).tryDirectGoogleWorkspaceRead(
+    const mailboxDeps = buildDirectMailboxDeps(createDirectRuntimeDeps(tools));
+    const response = await tryDirectGoogleWorkspaceRead(
       {
-        id: 'msg-gmail',
-        userId: 'owner',
-        channel: 'web',
-        content: 'Show me the additional 2 emails.',
-        timestamp: Date.now(),
-      },
-      ctx,
-      'owner:web',
-      {
-        route: 'email_task',
-        confidence: 'high',
-        operation: 'read',
-        turnRelation: 'follow_up',
-        resolution: 'ready',
-        summary: 'Show more unread Gmail messages.',
-        missingFields: [],
-        entities: { emailProvider: 'gmail' },
-      },
-      {
-        continuityKey: 'chat:owner',
-        scope: { assistantId: 'chat', userId: 'owner' },
-        linkedSurfaces: [],
-        continuationState: {
-          kind: 'gmail_unread_list',
-          payload: { offset: 0, limit: 3, total: 5 },
+        message: {
+          id: 'msg-gmail',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Show me the additional 2 emails.',
+          timestamp: Date.now(),
         },
-        createdAt: 1,
-        updatedAt: 1,
-        expiresAt: 2,
+        ctx,
+        userKey: 'owner:web',
+        decision: {
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          summary: 'Show more unread Gmail messages.',
+          missingFields: [],
+          entities: { emailProvider: 'gmail' },
+        } as never,
+        continuityThread: {
+          continuityKey: 'chat:owner',
+          scope: { assistantId: 'chat', userId: 'owner' },
+          linkedSurfaces: [],
+          continuationState: {
+            kind: 'gmail_unread_list',
+            payload: { offset: 0, limit: 3, total: 5 },
+          },
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        },
       },
+      mailboxDeps,
     );
 
     const content = typeof response === 'string' ? response : response?.content ?? '';
@@ -2443,14 +2468,6 @@ describe('LLMChatAgent direct intent metadata', () => {
   });
 
   it('returns no additional Gmail messages when a natural follow-up exceeds the prior window', async () => {
-    const ChatAgent = createChatAgentClass({
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      } as never,
-    });
     const tools = {
       isEnabled: vi.fn(() => true),
       executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
@@ -2479,10 +2496,6 @@ describe('LLMChatAgent direct intent metadata', () => {
         throw new Error(`Unexpected tool args ${JSON.stringify(args)}`);
       }),
     };
-    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
-    (agent as any).secondBrainService = {
-      getPersonById: vi.fn(() => null),
-    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -2491,38 +2504,42 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const response = await (agent as any).tryDirectGoogleWorkspaceRead(
+    const mailboxDeps = buildDirectMailboxDeps(createDirectRuntimeDeps(tools));
+    const response = await tryDirectGoogleWorkspaceRead(
       {
-        id: 'msg-gmail-2',
-        userId: 'owner',
-        channel: 'web',
-        content: 'Show me 2 more emails.',
-        timestamp: Date.now(),
-      },
-      ctx,
-      'owner:web',
-      {
-        route: 'email_task',
-        confidence: 'high',
-        operation: 'read',
-        turnRelation: 'new_request',
-        resolution: 'ready',
-        summary: 'Show more unread Gmail messages.',
-        missingFields: [],
-        entities: { emailProvider: 'gmail' },
-      },
-      {
-        continuityKey: 'chat:owner',
-        scope: { assistantId: 'chat', userId: 'owner' },
-        linkedSurfaces: [],
-        continuationState: {
-          kind: 'gmail_unread_list',
-          payload: { offset: 0, limit: 1, total: 1 },
+        message: {
+          id: 'msg-gmail-2',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Show me 2 more emails.',
+          timestamp: Date.now(),
         },
-        createdAt: 1,
-        updatedAt: 1,
-        expiresAt: 2,
+        ctx,
+        userKey: 'owner:web',
+        decision: {
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          summary: 'Show more unread Gmail messages.',
+          missingFields: [],
+          entities: { emailProvider: 'gmail' },
+        } as never,
+        continuityThread: {
+          continuityKey: 'chat:owner',
+          scope: { assistantId: 'chat', userId: 'owner' },
+          linkedSurfaces: [],
+          continuationState: {
+            kind: 'gmail_unread_list',
+            payload: { offset: 0, limit: 1, total: 1 },
+          },
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        },
       },
+      mailboxDeps,
     );
 
     expect(response).toBe('No additional Gmail messages remain.');
@@ -2537,14 +2554,6 @@ describe('LLMChatAgent direct intent metadata', () => {
   });
 
   it('uses the gateway mailbox read mode to list the latest Gmail inbox messages', async () => {
-    const ChatAgent = createChatAgentClass({
-      log: {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      } as never,
-    });
     const tools = {
       isEnabled: vi.fn(() => true),
       executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
@@ -2577,10 +2586,6 @@ describe('LLMChatAgent direct intent metadata', () => {
         throw new Error(`Unexpected tool args ${JSON.stringify(args)}`);
       }),
     };
-    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
-    (agent as any).secondBrainService = {
-      getPersonById: vi.fn(() => null),
-    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -2589,33 +2594,37 @@ describe('LLMChatAgent direct intent metadata', () => {
       capabilities: [],
     };
 
-    const response = await (agent as any).tryDirectGoogleWorkspaceRead(
+    const mailboxDeps = buildDirectMailboxDeps(createDirectRuntimeDeps(tools));
+    const response = await tryDirectGoogleWorkspaceRead(
       {
-        id: 'msg-gmail-latest',
-        userId: 'owner',
-        channel: 'web',
-        content: 'Can you show me the newest five emails in Gmail?',
-        timestamp: Date.now(),
+        message: {
+          id: 'msg-gmail-latest',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Can you show me the newest five emails in Gmail?',
+          timestamp: Date.now(),
+        },
+        ctx,
+        userKey: 'owner:web',
+        decision: {
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          summary: 'Shows the latest Gmail inbox messages.',
+          missingFields: [],
+          executionClass: 'provider_crud',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          entities: { emailProvider: 'gws', mailboxReadMode: 'latest' },
+        } as never,
+        continuityThread: null,
       },
-      ctx,
-      'owner:web',
-      {
-        route: 'email_task',
-        confidence: 'high',
-        operation: 'read',
-        turnRelation: 'new_request',
-        resolution: 'ready',
-        summary: 'Shows the latest Gmail inbox messages.',
-        missingFields: [],
-        executionClass: 'provider_crud',
-        preferredTier: 'external',
-        requiresRepoGrounding: false,
-        requiresToolSynthesis: true,
-        expectedContextPressure: 'medium',
-        preferredAnswerPath: 'tool_loop',
-        entities: { emailProvider: 'gws', mailboxReadMode: 'latest' },
-      },
-      null,
+      mailboxDeps,
     );
 
     const content = typeof response === 'string' ? response : response?.content ?? '';

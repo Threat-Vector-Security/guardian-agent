@@ -143,7 +143,6 @@ import {
   type DirectSecondBrainMutationToolName,
 } from './runtime/chat-agent/direct-second-brain-mutation.js';
 import {
-  type DirectAutomationDeps,
   tryDirectAutomationAuthoring as tryDirectAutomationAuthoringHelper,
   tryDirectAutomationControl as tryDirectAutomationControlHelper,
   tryDirectAutomationOutput as tryDirectAutomationOutputHelper,
@@ -152,6 +151,12 @@ import {
 import {
   tryDirectScheduledEmailAutomation as tryDirectScheduledEmailAutomationHelper,
 } from './runtime/chat-agent/direct-scheduled-email-automation.js';
+import {
+  buildDirectAutomationDeps,
+  buildDirectMailboxDeps,
+  buildDirectScheduledEmailAutomationDeps,
+  type DirectRuntimeDepsInput,
+} from './runtime/chat-agent/direct-runtime-deps.js';
 import {
   buildStoredAutomationAuthoringInput,
   executeStoredAutomationAuthoring as executeStoredAutomationAuthoringHelper,
@@ -334,7 +339,6 @@ import {
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
 import {
-  type DirectMailboxDeps,
   tryDirectGoogleWorkspaceRead as tryDirectGoogleWorkspaceReadHelper,
   tryDirectGoogleWorkspaceWrite as tryDirectGoogleWorkspaceWriteHelper,
 } from './runtime/chat-agent/direct-mailbox-runtime.js';
@@ -1776,6 +1780,38 @@ interface DegradedDirectIntentResponseInput {
         continuityThread,
       }))
       : null;
+    const directRuntimeDeps: DirectRuntimeDepsInput = {
+      agentId: this.id,
+      tools: this.tools,
+      conversationService: this.conversationService,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      setChatContinuationGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    };
+    const directMailboxDeps = buildDirectMailboxDeps(directRuntimeDeps);
+    const directAutomationDeps = buildDirectAutomationDeps(directRuntimeDeps);
+    const directScheduledEmailAutomationDeps = buildDirectScheduledEmailAutomationDeps(directRuntimeDeps);
     const directIntentResponse = await runDirectRouteOrchestration({
       skipDirectTools,
       gateway: directIntent,
@@ -1839,55 +1875,55 @@ interface DegradedDirectIntentResponseInput {
           effectiveCodeContext,
           message.content,
         ),
-        scheduled_email_automation: () => this.tryDirectScheduledEmailAutomation(
-          routedScopedMessage,
+        scheduled_email_automation: () => tryDirectScheduledEmailAutomationHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
+          userKey: pendingActionUserKey,
           stateAgentId,
-        ),
-        automation: ({ gatewayDirected }) => this.tryDirectAutomationAuthoring(
-          routedScopedMessage,
+        }, directScheduledEmailAutomationDeps),
+        automation: ({ gatewayDirected }) => tryDirectAutomationAuthoringHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
-          effectiveCodeContext,
-          {
+          userKey: pendingActionUserKey,
+          codeContext: effectiveCodeContext,
+          options: {
             intentDecision: directIntent?.decision,
             assumeAuthoring: gatewayDirected,
           },
-        ),
-        automation_control: () => this.tryDirectAutomationControl(
-          routedScopedMessage,
+        }, directAutomationDeps),
+        automation_control: () => tryDirectAutomationControlHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
-          directIntent?.decision,
+          userKey: pendingActionUserKey,
+          intentDecision: directIntent?.decision,
           continuityThread,
-        ),
-        automation_output: () => this.tryDirectAutomationOutput(
-          routedScopedMessage,
+        }, directAutomationDeps),
+        automation_output: () => tryDirectAutomationOutputHelper({
+          message: routedScopedMessage,
           ctx,
-          directIntent?.decision,
-        ),
-        workspace_write: () => this.tryDirectGoogleWorkspaceWrite(
-          routedScopedMessage,
+          intentDecision: directIntent?.decision,
+        }, directAutomationDeps),
+        workspace_write: () => tryDirectGoogleWorkspaceWriteHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
-          directIntent?.decision,
-        ),
-        workspace_read: () => this.tryDirectGoogleWorkspaceRead(
-          routedScopedMessage,
+          userKey: pendingActionUserKey,
+          decision: directIntent?.decision,
+        }, directMailboxDeps),
+        workspace_read: () => tryDirectGoogleWorkspaceReadHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
-          directIntent?.decision,
+          userKey: pendingActionUserKey,
+          decision: directIntent?.decision,
           continuityThread,
-        ),
-        browser: () => this.tryDirectBrowserAutomation(
-          routedScopedMessage,
+        }, directMailboxDeps),
+        browser: () => tryDirectBrowserAutomationHelper({
+          message: routedScopedMessage,
           ctx,
-          pendingActionUserKey,
-          effectiveCodeContext,
-          directIntent?.decision,
+          userKey: pendingActionUserKey,
+          codeContext: effectiveCodeContext,
+          intentDecision: directIntent?.decision,
           continuityThread,
-        ),
+        }, directAutomationDeps),
         web_search: () => tryDirectWebSearchHelper({
           agentId: this.id,
           tools: this.tools,
@@ -4015,135 +4051,6 @@ interface DegradedDirectIntentResponseInput {
     });
   }
 
-  private async tryDirectGoogleWorkspaceWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision?: IntentGatewayDecision,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectGoogleWorkspaceWriteHelper({
-      message,
-      ctx,
-      userKey,
-      decision,
-    }, this.buildDirectMailboxDeps());
-  }
-
-  private buildDirectMailboxDeps(): DirectMailboxDeps {
-    return {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    };
-  }
-
-  private buildDirectAutomationDeps(): DirectAutomationDeps {
-    return {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
-      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-      ),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      setChatContinuationGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    };
-  }
-
-  private async tryDirectAutomationAuthoring(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    codeContext?: { workspaceRoot?: string },
-    options?: {
-      allowRemediation?: boolean;
-      assumeAuthoring?: boolean;
-      intentDecision?: IntentGatewayDecision | null;
-    },
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectAutomationAuthoringHelper({
-      message,
-      ctx,
-      userKey,
-      codeContext,
-      options,
-    }, this.buildDirectAutomationDeps());
-  }
-
-  private async tryDirectAutomationControl(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    intentDecision?: IntentGatewayDecision | null,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectAutomationControlHelper({
-      message,
-      ctx,
-      userKey,
-      intentDecision,
-      continuityThread,
-    }, this.buildDirectAutomationDeps());
-  }
-
-  private async tryDirectAutomationOutput(
-    message: UserMessage,
-    ctx: AgentContext,
-    intentDecision?: IntentGatewayDecision | null,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectAutomationOutputHelper({
-      message,
-      ctx,
-      intentDecision,
-    }, this.buildDirectAutomationDeps());
-  }
-
-  private async tryDirectBrowserAutomation(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    codeContext?: { workspaceRoot?: string; sessionId?: string },
-    intentDecision?: IntentGatewayDecision | null,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectBrowserAutomationHelper({
-      message,
-      ctx,
-      userKey,
-      codeContext,
-      intentDecision,
-      continuityThread,
-    }, this.buildDirectAutomationDeps());
-  }
-
   private async tryRepairGenericIntentGatewayPlanWithFrontier(input: {
     message: UserMessage;
     ctx: AgentContext;
@@ -4392,52 +4299,6 @@ interface DegradedDirectIntentResponseInput {
       default:
         return new Set(['unknown']);
     }
-  }
-
-  private async tryDirectScheduledEmailAutomation(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    stateAgentId: string,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectScheduledEmailAutomationHelper({
-      message,
-      ctx,
-      userKey,
-      stateAgentId,
-    }, {
-      agentId: this.id,
-      tools: this.tools,
-      conversationService: this.conversationService,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
-  }
-
-  private async tryDirectGoogleWorkspaceRead(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision?: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectGoogleWorkspaceReadHelper({
-      message,
-      ctx,
-      userKey,
-      decision,
-      continuityThread,
-    }, this.buildDirectMailboxDeps());
   }
 
   private async tryDirectFilesystemIntent(

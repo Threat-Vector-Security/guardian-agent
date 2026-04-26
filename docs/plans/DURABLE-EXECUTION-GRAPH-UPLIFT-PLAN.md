@@ -340,6 +340,12 @@ Checkpoint after the direct-route orchestration extraction:
 - The duplicate `DirectIntentShadowCandidate` type was removed; direct response/logging now uses the shared `DirectIntentRoutingCandidate` contract from the intent capability resolver path.
 - Remaining direct-route debt: `src/chat-agent.ts` still builds the capability handler map and owns several dependency-builder callbacks for mailbox, automation, browser, memory, and Second Brain runtimes. The next cleanup should move handler-map construction into composable direct-runtime dependency groups, then retire the remaining ChatAgent wrapper methods.
 
+Checkpoint after the direct-runtime dependency cleanup:
+
+- Mailbox, automation, browser, and scheduled-email direct paths now share `src/runtime/chat-agent/direct-runtime-deps.ts` for their approval/tool dependency contracts.
+- `src/chat-agent.ts` no longer carries private wrapper methods for direct Google Workspace read/write, automation authoring/control/output, browser automation, or scheduled email automation; the route handler calls those runtime helpers directly with composed runtime deps.
+- Tests that previously reached into removed `ChatAgent` private wrappers now exercise the owning direct-runtime modules instead, so private wrapper compatibility is not preserved as test scaffolding.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
