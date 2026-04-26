@@ -66,10 +66,11 @@ import {
   tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
 } from './runtime/chat-agent/direct-coding-backend.js';
 import {
-  executeToolsConflictAware,
-  isDeferredRemoteSandboxToolResult,
   pruneDeferredRemoteSandboxToolCalls,
 } from './runtime/chat-agent/tool-execution.js';
+import {
+  executeToolLoopRound,
+} from './runtime/chat-agent/tool-loop-round.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
@@ -2979,13 +2980,6 @@ type DirectIntentShadowCandidate =
           break;
         }
 
-        llmMessages.push({
-          role: 'assistant',
-          content: response.content ?? '',
-          toolCalls: response.toolCalls,
-        });
-
-        // Parallel tool execution: run all tool calls concurrently
         const toolExecOrigin = {
           origin: 'assistant' as const,
           agentId: this.id,
@@ -3005,121 +2999,42 @@ type DirectIntentShadowCandidate =
           requestText: stripLeadingContextPrefix(routedScopedMessage.content),
         };
 
-        const toolResults = await Promise.allSettled(
-          executeToolsConflictAware({
+        const roundResult = await executeToolLoopRound({
+          response: {
+            ...response,
             toolCalls: response.toolCalls,
-            toolExecOrigin,
-            referenceTime: message.timestamp,
-            intentDecision: directIntent?.decision,
-            tools: this.tools!,
-            secondBrainService: this.secondBrainService,
-          })
-        );
-        lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
-          if (settled.status !== 'fulfilled') return acc;
-          acc.push({
-            toolName: settled.value.toolCall.name,
-            result: settled.value.result,
-          });
-          return acc;
-        }, []);
+          },
+          state: {
+            llmMessages,
+            allToolDefs,
+            llmToolDefs,
+            contentTrustLevel: currentContextTrustLevel,
+            taintReasons: currentTaintReasons,
+          },
+          toolExecOrigin,
+          referenceTime: message.timestamp,
+          intentDecision: directIntent?.decision,
+          tools: this.tools!,
+          secondBrainService: this.secondBrainService,
+          toolResultProviderKind,
+          sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
+            toolName,
+            result,
+            providerKind,
+          ),
+        });
+        pendingIds.push(...roundResult.pendingIds);
+        lastToolRoundResults = roundResult.lastToolRoundResults;
+        currentContextTrustLevel = roundResult.contentTrustLevel;
 
-        let hasPending = false;
-        const deferredRemoteToolCallIds = new Set<string>();
-        for (const settled of toolResults) {
-          if (settled.status === 'fulfilled') {
-            const { toolCall, result: toolResult } = settled.value;
-
-            // Track pending approvals so we can auto-approve on user confirmation
-            if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
-              pendingIds.push(String(toolResult.approvalId));
-              hasPending = true;
-            }
-            if (isDeferredRemoteSandboxToolResult(toolResult)) {
-              deferredRemoteToolCallIds.add(toolCall.id);
-            }
-
-            // Strip approval IDs from pending_approval results so the LLM
-            // doesn't echo them.  The structured metadata handles approval rendering.
-            let resultForLlm = toolResult;
-            if (toolResult.status === 'pending_approval') {
-              const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
-              resultForLlm = { ...rest, message: 'This action needs your approval. The approval UI is shown to the user automatically.' };
-            }
-
-            const scannedToolResult = this.sanitizeToolResultForLlm(
-              toolCall.name,
-              resultForLlm,
-              toolResultProviderKind,
-            );
-            if (scannedToolResult.trustLevel === 'quarantined') {
-              currentContextTrustLevel = 'quarantined';
-            } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
-              currentContextTrustLevel = 'low_trust';
-            }
-            for (const reason of scannedToolResult.taintReasons) {
-              currentTaintReasons.add(reason);
-            }
-
-            llmMessages.push({
-              role: 'tool',
-              toolCallId: toolCall.id,
-              content: formatToolResultForLLM(
-                toolCall.name,
-                scannedToolResult.sanitized,
-                scannedToolResult.threats,
-              ),
-            });
-
-            // Deferred tool loading: if find_tools was called, merge returned definitions
-            if (toolCall.name === 'find_tools' && toolResult.success) {
-              const searchOutput = toolResult.output as { tools?: Array<{ name: string; description: string; parameters: Record<string, unknown>; risk: string; category?: string; examples?: unknown[] }> } | undefined;
-              if (searchOutput?.tools) {
-                for (const discovered of searchOutput.tools) {
-                  if (!llmToolDefs.some((d) => d.name === discovered.name)) {
-                    const disc = {
-                      name: discovered.name,
-                      description: discovered.description,
-                      risk: discovered.risk as import('./tools/types.js').ToolRisk,
-                      parameters: discovered.parameters,
-                      category: discovered.category as import('./tools/types.js').ToolCategory | undefined,
-                    };
-                    allToolDefs.push(disc);
-                    llmToolDefs.push(toLLMToolDef(disc, toolResultProviderKind));
-                  }
-                }
-              }
-            }
-          } else {
-            // Push error result for rejected tool calls
-            const failedTc = response.toolCalls[toolResults.indexOf(settled)];
-            llmMessages.push({
-              role: 'tool',
-              toolCallId: failedTc?.id ?? '',
-              content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
-            });
-          }
-        }
-
-        // Non-blocking approvals: only break if EVERY tool in this round is
-        // pending approval.  When some tools succeeded, the LLM already sees their
-        // results alongside the pending status, so it can compose a natural response
-        // that acknowledges what's waiting and what it plans to do next.
-        if (hasPending) {
-          const allBlocked = toolResults.every(
-            (s) => s.status === 'fulfilled'
-              && (
-                (s.value.result as Record<string, unknown>).status === 'pending_approval'
-                || isDeferredRemoteSandboxToolResult(s.value.result as Record<string, unknown>)
-              ),
-          );
-          if (allBlocked) {
+        if (roundResult.hasPending) {
+          if (roundResult.allBlocked) {
             // Remove the 'pending' tool result messages we just pushed, so we don't send duplicate toolCallIds when resuming
-            llmMessages.splice(-toolResults.length, toolResults.length);
-            pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
+            llmMessages.splice(-roundResult.toolResults.length, roundResult.toolResults.length);
+            pruneDeferredRemoteSandboxToolCalls(llmMessages, roundResult.deferredRemoteToolCallIds);
 
             toolLoopPendingResume = buildToolLoopPendingApprovalResume({
-              toolResults,
+              toolResults: roundResult.toolResults,
               llmMessages,
               originalMessage: routedScopedMessage,
               requestText: stripLeadingContextPrefix(routedScopedMessage.content),
@@ -3247,110 +3162,59 @@ type DirectIntentShadowCandidate =
           if (normalizedFallbackToolCalls?.length && this.tools) {
             log.info({ agent: this.id, provider: fbProvider, toolCount: normalizedFallbackToolCalls.length },
               'Fallback provider requested tool calls, executing');
-            fbMessages.push({ role: 'assistant' as const, content: fallbackResult.response.content ?? '', toolCalls: normalizedFallbackToolCalls });
             const fbToolOrigin = {
               origin: 'assistant' as const,
               agentId: this.id,
               userId: conversationUserId,
+              surfaceId: message.surfaceId,
               principalId: message.principalId ?? conversationUserId,
               principalRole: message.principalRole ?? 'owner',
               channel: conversationChannel,
               requestId: message.id,
+              contentTrustLevel: currentContextTrustLevel,
+              taintReasons: [...currentTaintReasons],
+              derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
               allowModelMemoryMutation,
               agentContext: { checkAction: ctx.checkAction },
               codeContext: effectiveCodeContext,
               activeSkills: activeSkills.map((skill) => skill.id),
               requestText: stripLeadingContextPrefix(routedScopedMessage.content),
             };
-            const fbToolResults = await Promise.allSettled(
-              executeToolsConflictAware({
+            const fallbackRoundState = {
+              llmMessages: fbMessages,
+              allToolDefs,
+              llmToolDefs: externalToolDefs,
+              contentTrustLevel: currentContextTrustLevel,
+              taintReasons: currentTaintReasons,
+            };
+            const fallbackRoundResult = await executeToolLoopRound({
+              response: {
+                ...fallbackResult.response,
                 toolCalls: normalizedFallbackToolCalls,
-                toolExecOrigin: fbToolOrigin,
-                referenceTime: message.timestamp,
-                intentDecision: directIntent?.decision,
-                tools: this.tools!,
-                secondBrainService: this.secondBrainService,
-              })
-            );
-            let fallbackHasPending = false;
-            for (const settled of fbToolResults) {
-              if (settled.status === 'fulfilled') {
-                const { toolCall, result: toolResult } = settled.value;
+              },
+              state: fallbackRoundState,
+              toolExecOrigin: fbToolOrigin,
+              referenceTime: message.timestamp,
+              intentDecision: directIntent?.decision,
+              tools: this.tools!,
+              secondBrainService: this.secondBrainService,
+              toolResultProviderKind: 'external',
+              sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
+                toolName,
+                result,
+                providerKind,
+              ),
+            });
+            externalToolDefs = fallbackRoundState.llmToolDefs;
+            pendingIds.push(...fallbackRoundResult.pendingIds);
+            currentContextTrustLevel = fallbackRoundResult.contentTrustLevel;
 
-                if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
-                  pendingIds.push(String(toolResult.approvalId));
-                  fallbackHasPending = true;
-                }
-
-                let resultForLlm = toolResult;
-                if (toolResult.status === 'pending_approval') {
-                  const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
-                  resultForLlm = {
-                    ...rest,
-                    message: 'This action needs your approval. The approval UI is shown to the user automatically.',
-                  };
-                }
-
-                const scannedToolResult = this.sanitizeToolResultForLlm(
-                  toolCall.name,
-                  resultForLlm,
-                  'external',
-                );
-                fbMessages.push({
-                  role: 'tool' as const,
-                  toolCallId: toolCall.id,
-                  content: formatToolResultForLLM(
-                    toolCall.name,
-                    scannedToolResult.sanitized,
-                    scannedToolResult.threats,
-                  ),
-                });
-
-                if (toolCall.name === 'find_tools' && toolResult.success) {
-                  const searchOutput = toolResult.output as {
-                    tools?: Array<{
-                      name: string;
-                      description: string;
-                      parameters: Record<string, unknown>;
-                      risk: string;
-                      category?: string;
-                    }>;
-                  } | undefined;
-                  if (searchOutput?.tools) {
-                    for (const discovered of searchOutput.tools) {
-                      if (!llmToolDefs.some((d) => d.name === discovered.name)) {
-                        const disc = {
-                          name: discovered.name,
-                          description: discovered.description,
-                          risk: discovered.risk as import('./tools/types.js').ToolRisk,
-                          parameters: discovered.parameters,
-                          category: discovered.category as import('./tools/types.js').ToolCategory | undefined,
-                        };
-                        allToolDefs.push(disc);
-                        llmToolDefs.push(toLLMToolDef(disc, toolResultProviderKind));
-                      }
-                    }
-                    externalToolDefs = allToolDefs.map((d) => toLLMToolDef(d, 'external'));
-                  }
-                }
-              } else {
-                const failedTc = normalizedFallbackToolCalls[fbToolResults.indexOf(settled)];
-                fbMessages.push({
-                  role: 'tool' as const,
-                  toolCallId: failedTc?.id ?? '',
-                  content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
-                });
-              }
-            }
-
-            if (fallbackHasPending) {
-              const allPending = fbToolResults.every(
-                (s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval',
-              );
-              if (allPending) {
-                fbMessages.splice(-fbToolResults.length, fbToolResults.length);
+            if (fallbackRoundResult.hasPending) {
+              if (fallbackRoundResult.allBlocked) {
+                fbMessages.splice(-fallbackRoundResult.toolResults.length, fallbackRoundResult.toolResults.length);
+                pruneDeferredRemoteSandboxToolCalls(fbMessages, fallbackRoundResult.deferredRemoteToolCallIds);
                 toolLoopPendingResume = buildToolLoopPendingApprovalResume({
-                  toolResults: fbToolResults,
+                  toolResults: fallbackRoundResult.toolResults,
                   llmMessages: fbMessages,
                   originalMessage: routedScopedMessage,
                   requestText: stripLeadingContextPrefix(routedScopedMessage.content),
