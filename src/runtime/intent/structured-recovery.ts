@@ -35,7 +35,6 @@ import type {
   IntentGatewayRepairContext,
   IntentGatewayRecord,
 } from './types.js';
-import { repairUnavailableIntentGatewayDecision } from './unstructured-recovery.js';
 import { deriveWorkloadMetadata } from './workload-derivation.js';
 
 export function parseIntentGatewayDecision(
@@ -44,22 +43,10 @@ export function parseIntentGatewayDecision(
   options?: { mode?: IntentGatewayRecord['mode'] },
 ): { decision: IntentGatewayDecision; available: boolean; rawStructuredDecision?: Record<string, unknown> } {
   const classifierSource = classifierProvenanceSourceForMode(options?.mode ?? 'primary');
-  const unstructuredClarificationPrompt = extractUnstructuredClarificationPrompt(response.content);
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content)
     ?? recoverMalformedStructuredContent(response);
   if (!parsed) {
-    const repaired = repairUnavailableIntentGatewayDecision(
-      repairContext,
-      undefined,
-      normalizeIntentGatewayDecision,
-    );
-    if (repaired) {
-      return {
-        decision: applyUnstructuredClarificationIfNeeded(repaired, unstructuredClarificationPrompt),
-        available: true,
-      };
-    }
     return {
       decision: {
         route: 'unknown',
@@ -86,19 +73,6 @@ export function parseIntentGatewayDecision(
     };
   }
   const decision = normalizeIntentGatewayDecision(parsed, repairContext, { classifierSource });
-  if (decision.route === 'unknown') {
-    const repaired = repairUnavailableIntentGatewayDecision(
-      repairContext,
-      parsed,
-      normalizeIntentGatewayDecision,
-    );
-    if (repaired) {
-      return {
-        decision: applyUnstructuredClarificationIfNeeded(repaired, unstructuredClarificationPrompt),
-        available: true,
-      };
-    }
-  }
   return {
     decision,
     available: decision.route !== 'unknown',
@@ -139,91 +113,6 @@ function recoverStructuredGatewayPreview(content: string | undefined): Record<st
     recovered[key] = parsedValue;
   }
   return Object.keys(recovered).length > 0 ? recovered : null;
-}
-
-function applyUnstructuredClarificationIfNeeded(
-  decision: IntentGatewayDecision,
-  clarificationPrompt: string | null,
-): IntentGatewayDecision {
-  if (!clarificationPrompt) {
-    return decision;
-  }
-  const missingFields = new Set(decision.missingFields);
-  for (const field of inferMissingFieldsFromClarificationPrompt(clarificationPrompt, decision.route)) {
-    missingFields.add(field);
-  }
-  return {
-    ...decision,
-    confidence: decision.confidence === 'high' ? 'medium' : decision.confidence,
-    resolution: 'needs_clarification',
-    summary: clarificationPrompt,
-    missingFields: [...missingFields],
-  };
-}
-
-function extractUnstructuredClarificationPrompt(content: string | undefined): string | null {
-  const normalized = collapseIntentGatewayWhitespace(content ?? '');
-  if (!normalized) {
-    return null;
-  }
-  const lower = normalized.toLowerCase();
-  const asksForMissingDetail = /\b(?:please tell me|which|what|where|who|do you want me to|would you like me to|should i use|can you clarify|before i can)\b/.test(lower)
-    || /\b(?:exact path|external path|full file path|which directory|which provider|which automation|which workspace|which session)\b/.test(lower);
-  if (!asksForMissingDetail) {
-    return null;
-  }
-  if (!normalized.includes('?') && !/\bbefore i can\b/.test(lower)) {
-    return null;
-  }
-  if (/\b(?:what else can i help with|let me know if|if you want,? i can)\b/.test(lower)) {
-    return null;
-  }
-  return normalized;
-}
-
-function inferMissingFieldsFromClarificationPrompt(
-  prompt: string,
-  route: IntentGatewayDecision['route'],
-): string[] {
-  const normalized = prompt.toLowerCase();
-  const inferred = new Set<string>();
-  if (/\b(?:exact\s+external\s+path|external\s+path|full\s+file\s+path|file\s+path|path|directory|folder|location|workspace root|project root|repo root)\b/.test(normalized)) {
-    inferred.add('path');
-  }
-  if (/\b(?:gmail|outlook|google workspace|microsoft 365|email provider|mail provider)\b/.test(normalized)) {
-    inferred.add('email_provider');
-  }
-  if (/\b(?:automation|workflow|routine)\b/.test(normalized) && /\b(?:which|what|name)\b/.test(normalized)) {
-    inferred.add('automation_name');
-  }
-  if (/\b(?:coding backend|codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/.test(normalized)) {
-    inferred.add('coding_backend');
-  }
-  if (/\b(?:workspace|session)\b/.test(normalized) && /\b(?:which|what|target|use)\b/.test(normalized)) {
-    inferred.add('session_target');
-  }
-  if (
-    /\b(?:guardian page|external website|repo|repository|workspace\/session|new or existing|create or update)\b/.test(normalized)
-    && /\bor\b/.test(normalized)
-  ) {
-    inferred.add('intent_route');
-  }
-  if (inferred.size === 0) {
-    switch (route) {
-      case 'filesystem_task':
-        inferred.add('path');
-        break;
-      case 'email_task':
-        inferred.add('email_provider');
-        break;
-      case 'automation_control':
-        inferred.add('automation_name');
-        break;
-      default:
-        break;
-    }
-  }
-  return [...inferred];
 }
 
 function parseRecoveredStructuredScalar(rawValue: string): unknown {

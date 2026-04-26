@@ -2728,12 +2728,20 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(llmChat).toHaveBeenCalledTimes(1);
   });
 
-  it('treats unstructured gateway clarification prose as a clarification blocker instead of entering the tool loop', async () => {
+  it('treats structured gateway clarification decisions as blockers instead of entering the tool loop', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
       if (firstTool === 'route_intent') {
         return {
-          content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+          content: JSON.stringify({
+            route: 'filesystem_task',
+            confidence: 'low',
+            operation: 'create',
+            summary: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+            turnRelation: 'new_request',
+            resolution: 'needs_clarification',
+            missingFields: ['path'],
+          }),
           model: 'test-model',
           finishReason: 'stop',
         } satisfies ChatResponse;

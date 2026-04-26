@@ -458,7 +458,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
-  it('synthesizes planned steps for multi-step filesystem work on unstructured fallback paths', async () => {
+  it('synthesizes planned steps for multi-step filesystem work on structured fallback paths', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
@@ -475,7 +475,15 @@ describe('IntentGateway', () => {
         }
         expect(options?.responseFormat).toEqual({ type: 'json_object' });
         return {
-          content: 'I am not sure.',
+          content: JSON.stringify({
+            route: 'filesystem_task',
+            confidence: 'low',
+            operation: 'create',
+            summary: 'Write files and search runtime planned steps.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            path: 'tmp/manual-web/current-time.txt',
+          }),
           model: 'test-model',
           finishReason: 'stop',
         } satisfies ChatResponse;
@@ -491,7 +499,7 @@ describe('IntentGateway', () => {
     ]);
   });
 
-  it('keeps exact-file repo inspection modifiers inside the synthesized answer contract on fallback paths', async () => {
+  it('keeps exact-file repo inspection modifiers inside the synthesized answer contract on structured fallback paths', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
@@ -508,7 +516,14 @@ describe('IntentGateway', () => {
         }
         expect(options?.responseFormat).toEqual({ type: 'json_object' });
         return {
-          content: 'I am not sure.',
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'low',
+            operation: 'inspect',
+            summary: 'Inspect delegated worker completion contract.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+          }),
           model: 'test-model',
           finishReason: 'stop',
         } satisfies ChatResponse;
@@ -533,14 +548,13 @@ describe('IntentGateway', () => {
     ]);
   });
 
-  it('uses the request preview for unstructured recovery summaries and keeps recovery diagnostics out of client metadata', async () => {
+  it('leaves prose-only fallback responses unavailable instead of recovering from request text', async () => {
     const gateway = new IntentGateway();
-    const request = 'Use the external path C:\\tmp\\manual-check.txt.';
     let callCount = 0;
 
     const result = await gateway.classify(
       {
-        content: request,
+        content: 'Use the external path C:\\tmp\\manual-check.txt.',
         channel: 'web',
       },
       async (_messages, options) => {
@@ -558,17 +572,16 @@ describe('IntentGateway', () => {
       },
     );
 
-    expect(callCount).toBe(2);
-    expect(result.mode).toBe('json_fallback');
-    expect(result.decision.route).not.toBe('unknown');
-    expect(result.decision.summary).toBe(request);
-    expect(typeof result.decision.recoveryReason).toBe('string');
-    expect(result.decision.recoveryReason).not.toBe(request);
+    expect(callCount).toBe(3);
+    expect(result.mode).toBe('route_only_fallback');
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('unknown');
+    expect(result.decision.recoveryReason).toBeUndefined();
 
     const metadata = attachPreRoutedIntentGatewayMetadata(undefined, result);
     const restored = readPreRoutedIntentGatewayMetadata(metadata);
-    expect(restored?.decision.summary).toBe(request);
-    expect(restored?.decision.recoveryReason).toBe(result.decision.recoveryReason);
+    expect(restored?.decision.route).toBe('unknown');
+    expect(restored?.decision.recoveryReason).toBeUndefined();
     expect(toIntentGatewayClientMetadata(restored)).not.toHaveProperty('recoveryReason');
   });
 
@@ -743,7 +756,7 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
-  it('recovers explicit coding-backend workspace requests from an unstructured gateway response', async () => {
+  it('infers coding-backend workspace metadata from a structured coding decision', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -752,7 +765,14 @@ describe('IntentGateway', () => {
         channel: 'web',
       },
       async () => ({
-        content: 'I think this is a coding request.',
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'medium',
+          operation: 'create',
+          summary: 'Creates a smoke test file in the requested workspace.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -766,7 +786,7 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
-  it('recovers explicit coding-backend requests when the user says "use the Codex coding assistant"', async () => {
+  it('infers explicit coding-backend requests when the user says "use the Codex coding assistant"', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -775,7 +795,14 @@ describe('IntentGateway', () => {
         channel: 'web',
       },
       async () => ({
-        content: 'This looks like coding work, but I need approval first.',
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'medium',
+          operation: 'run',
+          summary: 'Runs unit tests using the requested coding backend.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -790,7 +817,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('recovers explicit code-test execution requests from an unstructured gateway response without requiring an external backend', async () => {
+  it('infers explicit code-test execution metadata from a structured coding decision without requiring an external backend', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -799,7 +826,14 @@ describe('IntentGateway', () => {
         channel: 'cli',
       },
       async () => ({
-        content: 'This seems like coding work.',
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'medium',
+          operation: 'run',
+          summary: 'Runs the requested unit tests.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -814,7 +848,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('recovers explicit scratch-file create requests with .txt paths into the filesystem lane', async () => {
+  it('infers explicit scratch-file create metadata from a structured filesystem decision', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -823,7 +857,15 @@ describe('IntentGateway', () => {
         channel: 'web',
       },
       async () => ({
-        content: '{',
+        content: JSON.stringify({
+          route: 'filesystem_task',
+          confidence: 'medium',
+          operation: 'create',
+          summary: 'Creates the requested scratch file.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          path: 'tmp/followup-queue-test.txt',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -837,7 +879,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('preserves unstructured missing-detail questions as clarification blockers instead of ready filesystem work', async () => {
+  it('preserves structured missing-detail questions as clarification blockers instead of ready filesystem work', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -846,7 +888,15 @@ describe('IntentGateway', () => {
         channel: 'web',
       },
       async () => ({
-        content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+        content: JSON.stringify({
+          route: 'filesystem_task',
+          confidence: 'low',
+          operation: 'create',
+          summary: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+          turnRelation: 'new_request',
+          resolution: 'needs_clarification',
+          missingFields: ['path'],
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -889,7 +939,7 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBeUndefined();
   });
 
-  it('recovers local Second Brain calendar reads from an unstructured gateway response', async () => {
+  it('infers local Second Brain calendar metadata from a structured personal-assistant decision', async () => {
     const gateway = new IntentGateway();
 
     const result = await gateway.classify(
@@ -898,7 +948,14 @@ describe('IntentGateway', () => {
         channel: 'telegram',
       },
       async () => ({
-        content: 'This looks like a calendar request.',
+        content: JSON.stringify({
+          route: 'personal_assistant_task',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Lists local calendar entries.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -1721,7 +1778,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('recovers AI provider inventory requests from unavailable gateway output', async () => {
+  it('infers AI provider inventory metadata from a structured provider decision', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
       {
@@ -1729,7 +1786,14 @@ describe('IntentGateway', () => {
         channel: 'web',
       },
       async () => ({
-        content: 'This looks like a settings question.',
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Lists configured AI providers.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
@@ -2513,7 +2577,7 @@ describe('IntentGateway', () => {
     expect(callCount).toBe(2);
   });
 
-  it('recovers explicit automation-control requests from unstructured fallback output', async () => {
+  it('recovers explicit automation-control requests from structured fallback output', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
@@ -2532,7 +2596,16 @@ describe('IntentGateway', () => {
         expect(options?.tools).toBeUndefined();
         expect(options?.responseFormat).toEqual({ type: 'json_object' });
         return {
-          content: 'I am not sure.',
+          content: JSON.stringify({
+            route: 'automation_control',
+            confidence: 'low',
+            operation: 'toggle',
+            summary: 'Disable the named automation.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            automationName: 'Daily Inbox Triage',
+            enabled: false,
+          }),
           model: 'test-model',
           finishReason: 'stop',
         } satisfies ChatResponse;
@@ -2547,7 +2620,7 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.enabled).toBe(false);
   });
 
-  it('recovers automation-output analysis requests from unstructured fallback output', async () => {
+  it('recovers automation-output analysis requests from structured fallback output', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
@@ -2566,7 +2639,15 @@ describe('IntentGateway', () => {
         expect(options?.tools).toBeUndefined();
         expect(options?.responseFormat).toEqual({ type: 'json_object' });
         return {
-          content: 'Need to inspect the stored run output.',
+          content: JSON.stringify({
+            route: 'automation_output_task',
+            confidence: 'low',
+            operation: 'inspect',
+            summary: 'Analyze the stored automation run output.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            automationName: 'HN Snapshot Smoke',
+          }),
           model: 'test-model',
           finishReason: 'stop',
         } satisfies ChatResponse;
@@ -3039,7 +3120,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('recovers standalone greetings from unavailable gateway output', async () => {
+  it('leaves standalone greetings unknown when every gateway pass returns structured unknown', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
       {
@@ -3060,9 +3141,9 @@ describe('IntentGateway', () => {
       } satisfies ChatResponse),
     );
 
-    expect(result.available).toBe(true);
-    expect(result.decision.route).toBe('general_assistant');
-    expect(result.decision.operation).toBe('inspect');
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('unknown');
+    expect(result.decision.operation).toBe('unknown');
     expect(result.decision.preferredAnswerPath).toBe('direct');
     expect(result.decision.simpleVsComplex).toBe('simple');
   });
@@ -3199,7 +3280,15 @@ describe('IntentGateway', () => {
         },
       },
       async () => ({
-        content: 'I need the exact external path before I can request approval. Please tell me which directory or full file path you want me to use for brokered-test.txt.',
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Uses the supplied external path.',
+          turnRelation: 'clarification_answer',
+          resolution: 'ready',
+          path: 'C:\\tmp\\brokered-test.txt',
+        }),
         model: 'test-model',
         finishReason: 'stop',
       } satisfies ChatResponse),
