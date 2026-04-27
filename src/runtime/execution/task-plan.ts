@@ -32,6 +32,12 @@ const REPO_INSPECTION_TOOL_NAMES = new Set([
   'fs_list',
   'code_symbol_search',
 ]);
+const BROWSER_READ_TOOL_NAMES = new Set([
+  'browser_read',
+  'browser_links',
+  'browser_extract',
+  'browser_state',
+]);
 
 export interface ToolStepMatchInput {
   hintStepId?: string;
@@ -197,7 +203,9 @@ function isActionToolCategory(value: string): boolean {
     || value === 'fs_read'
     || value === 'fs_list'
     || value === 'web_search'
-    || value === 'web_fetch';
+    || value === 'web_fetch'
+    || value === 'browser'
+    || value.startsWith('browser_');
 }
 
 function ensureExactFileReferenceReadStep(
@@ -722,6 +730,7 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     toolName === 'fs_read'
     || toolName === 'fs_list'
     || toolName === 'web_fetch'
+    || BROWSER_READ_TOOL_NAMES.has(toolName)
     || toolName === 'memory_recall'
     || toolName === 'memory_search'
     || toolName === 'automation_list'
@@ -760,6 +769,7 @@ function expectedToolCategoryMatchesTool(
     || (value === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (value === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (value === 'second_brain' && toolName.startsWith('second_brain_'))
+    || (value === 'browser' && toolName.startsWith('browser_'))
     || (value === 'automation' && toolName.startsWith('automation_'));
 }
 
