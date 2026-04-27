@@ -12,6 +12,7 @@ import type { AgentResponse } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { IntentGatewayDecision, IntentGatewayRecord } from './intent/types.js';
 import type { SelectedExecutionProfile } from './execution-profiles.js';
+import type { AnswerConstraints } from './execution/types.js';
 import type {
   PromptAssemblyAdditionalSection,
   PromptAssemblyHistoryEntry,
@@ -327,6 +328,12 @@ export function buildDirectReasoningSystemPrompt(input: {
   }
   if (constraints.readonly) {
     parts.push('The user explicitly requested read-only inspection. Do not modify files.');
+  }
+  if (constraints.commaSeparatedFilePaths) {
+    parts.push('The final answer must be a single comma-separated list of relative file paths.');
+  }
+  if (constraints.strictOutputOnly) {
+    parts.push('Do not add headings, bullets, explanations, or any text outside the requested answer format.');
   }
   if (workspaceRoot?.trim()) {
     parts.push(`Workspace root: ${workspaceRoot.trim()}`);
@@ -905,12 +912,14 @@ export async function executeDirectReasoningLoop(input: {
           input: input.input,
         });
         if (deterministicCompletion) {
-          synthesisContent = `${synthesisContent.trim()}\n\n${deterministicCompletion.content}`;
+          synthesisContent = deterministicCompletion.replaceContent
+            ? deterministicCompletion.content
+            : `${synthesisContent.trim()}\n\n${deterministicCompletion.content}`;
           recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
             route: input.input.gateway?.decision.route,
             operation: input.input.gateway?.decision.operation,
             phase: 'deterministic_completion',
-            resultStatus: 'appended',
+            resultStatus: deterministicCompletion.replaceContent ? 'replaced' : 'appended',
             missingCoverageFiles: deterministicCompletion.files,
             coverageFileCount: deterministicCompletion.coverageFileCount,
           });
@@ -1615,6 +1624,47 @@ function parseToolArgs(raw: string): Record<string, unknown> | null {
   }
 }
 
+function mergeAnswerConstraints(
+  left: AnswerConstraints | undefined,
+  right: AnswerConstraints | undefined,
+): AnswerConstraints {
+  return {
+    ...(left?.requiresImplementationFiles || right?.requiresImplementationFiles ? { requiresImplementationFiles: true } : {}),
+    ...(left?.requiresSymbolNames || right?.requiresSymbolNames ? { requiresSymbolNames: true } : {}),
+    ...(left?.readonly || right?.readonly ? { readonly: true } : {}),
+    ...(left?.commaSeparatedFilePaths || right?.commaSeparatedFilePaths ? { commaSeparatedFilePaths: true } : {}),
+    ...(left?.strictOutputOnly || right?.strictOutputOnly ? { strictOutputOnly: true } : {}),
+    ...((left?.requestedSymbols?.length || right?.requestedSymbols?.length)
+      ? { requestedSymbols: uniqueStrings([...(left?.requestedSymbols ?? []), ...(right?.requestedSymbols ?? [])]) }
+      : {}),
+  };
+}
+
+function directReasoningAnswerConstraints(input: DirectReasoningInput): AnswerConstraints {
+  const decision = input.gateway?.decision;
+  return mergeAnswerConstraints(
+    deriveAnswerConstraints(decision?.resolvedContent),
+    deriveAnswerConstraints(input.message),
+  );
+}
+
+function directReasoningRequestsCommaSeparatedFilePaths(input: DirectReasoningInput): boolean {
+  const constraints = directReasoningAnswerConstraints(input);
+  return constraints.commaSeparatedFilePaths === true;
+}
+
+function buildDirectReasoningAnswerFormatInstructions(input: DirectReasoningInput): string[] {
+  const constraints = directReasoningAnswerConstraints(input);
+  const lines: string[] = [];
+  if (constraints.commaSeparatedFilePaths) {
+    lines.push('Output format constraint: return a single comma-separated list of relative file paths.');
+  }
+  if (constraints.strictOutputOnly) {
+    lines.push('Output strictness: do not add headings, bullets, explanations, Markdown, or any text outside the requested answer format.');
+  }
+  return lines;
+}
+
 function buildDirectReasoningSynthesisMessages(input: {
   input: DirectReasoningInput;
   artifacts?: ExecutionArtifact[];
@@ -1647,11 +1697,15 @@ function buildDirectReasoningSynthesisMessages(input: {
         '',
       ].join('\n')
     : '';
+  const answerFormatInstructions = buildDirectReasoningAnswerFormatInstructions(input.input);
+  const answerFormatSection = answerFormatInstructions.length > 0
+    ? `${answerFormatInstructions.join('\n')}\n\n`
+    : '';
   return [
     ...messages.slice(0, -1),
     {
       ...last,
-      content: `${last.content}\n\n${exactFileInstructions}${coverage}`,
+      content: `${last.content}\n\n${exactFileInstructions}${answerFormatSection}${coverage}`,
     },
   ];
 }
@@ -1667,6 +1721,7 @@ function buildDirectReasoningSynthesisRevisionMessages(input: {
     .slice(0, MAX_DIRECT_REASONING_SYNTHESIS_COVERAGE_FILES)
     .map((summary) => `- ${summary.file}`)
     .join('\n');
+  const answerFormatInstructions = buildDirectReasoningAnswerFormatInstructions(input.input);
   return [
     {
       role: 'system',
@@ -1693,6 +1748,7 @@ function buildDirectReasoningSynthesisRevisionMessages(input: {
         coverage,
         '',
         'Return the revised final answer. Keep it concise, grounded in the evidence, and include exact file paths for relevant implementation files.',
+        ...answerFormatInstructions,
       ].join('\n'),
     },
   ];
@@ -2332,7 +2388,7 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
   content: string;
   evidence: DirectReasoningEvidenceEntry[];
   input: DirectReasoningInput;
-}): { content: string; files: string[]; coverageFileCount: number } | null {
+}): { content: string; files: string[]; coverageFileCount: number; replaceContent?: boolean } | null {
   if (!directReasoningRequiresImplementationFileCoverage(input.input)) {
     return null;
   }
@@ -2344,9 +2400,31 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
   if (summaries.length < directReasoningSynthesisCoverageMinFiles(input.input)) {
     return null;
   }
+  const strictCommaSeparatedPaths = directReasoningRequestsCommaSeparatedFilePaths(input.input);
   const missing = summaries
     .filter((summary) => !directReasoningAnswerMentionsFile(input.content, summary.file))
     .slice(0, MAX_DIRECT_REASONING_SYNTHESIS_COMPLETION_FILES);
+  if (strictCommaSeparatedPaths) {
+    const summaryFiles = new Set(summaries.map((summary) => summary.file));
+    const mentioned = extractDirectReasoningRelativeFilePathMentions(input.content)
+      .filter((file) => summaryFiles.has(file));
+    const files = mentioned.length > 0
+      ? uniqueStrings(mentioned)
+      : uniqueStrings(missing.map((summary) => summary.file));
+    if (files.length === 0) {
+      return null;
+    }
+    const content = files.join(', ');
+    if (content === input.content.trim()) {
+      return null;
+    }
+    return {
+      content,
+      files: missing.map((summary) => summary.file),
+      coverageFileCount: summaries.length,
+      replaceContent: true,
+    };
+  }
   if (missing.length === 0) {
     return null;
   }
@@ -2369,11 +2447,9 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
 
 function directReasoningRequiresImplementationFileCoverage(input: DirectReasoningInput): boolean {
   const decision = input.gateway?.decision;
-  const decisionConstraints = deriveAnswerConstraints(decision?.resolvedContent);
-  const messageConstraints = deriveAnswerConstraints(input.message);
+  const constraints = directReasoningAnswerConstraints(input);
   return decision?.requireExactFileReferences === true
-    || decisionConstraints.requiresImplementationFiles === true
-    || messageConstraints.requiresImplementationFiles === true;
+    || constraints.requiresImplementationFiles === true;
 }
 
 function selectDirectReasoningAnswerCoverageSummaries(
@@ -2470,6 +2546,11 @@ function directReasoningAnswerMentionsFile(content: string, file: string): boole
   const normalizedContent = content.replace(/\\/g, '/').toLowerCase();
   const normalizedFile = file.replace(/\\/g, '/').toLowerCase();
   return normalizedContent.includes(normalizedFile);
+}
+
+function extractDirectReasoningRelativeFilePathMentions(content: string): string[] {
+  const matches = content.match(/(?:src|lib|pkg|internal|web|native|docs|scripts|policies|skills)[\\/][\w./\\-]+\.(?:ts|tsx|js|mjs|cjs|jsx|rs|go|py|md|json|yml|yaml|css|html)/g) ?? [];
+  return uniqueStrings(matches.map((match) => match.replace(/\\/g, '/')));
 }
 
 function selectDirectReasoningDisplaySymbols(

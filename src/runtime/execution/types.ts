@@ -184,6 +184,8 @@ export interface AnswerConstraints {
   requiresImplementationFiles?: boolean;
   requiresSymbolNames?: boolean;
   readonly?: boolean;
+  commaSeparatedFilePaths?: boolean;
+  strictOutputOnly?: boolean;
   requestedSymbols?: string[];
 }
 

@@ -174,6 +174,8 @@ export function isExplicitCodingExecutionRequest(content: string | undefined): b
 const SYMBOL_REQUEST_PATTERN = /\b(?:functions?|types?|classes?|symbols?|interfaces?|methods?|variables?|constants?|enums?)\b/i;
 const READONLY_MODIFIER_PATTERN = /\b(?:do\s+not\s+edit|don'?t\s+edit|without\s+editing|read[\s-]*only|no\s+(?:editing|modifications?|changes?|writes?))\b/i;
 const IMPLEMENTATION_QUEST_PATTERN = /\b(?:which|what)\s+.*\b(?:implement|define|defines|defined|render|renders|rendered|consume|consumes|consumer|consumers|import|imports|imported|use|uses|used|responsible|own|handles?)\b/i;
+const COMMA_SEPARATED_FILE_PATHS_PATTERN = /\bcomma[-\s]separated\b[^.!?\n]{0,120}\b(?:files?|file\s+paths?|paths?|relative\s+file\s+paths?)\b|\b(?:files?|file\s+paths?|paths?|relative\s+file\s+paths?)\b[^.!?\n]{0,120}\bcomma[-\s]separated\b/i;
+const STRICT_OUTPUT_ONLY_PATTERN = /\b(?:reply|respond|answer|return)\b[^.!?\n]{0,80}\b(?:only|exactly|with\s+only)\b|\b(?:and\s+)?no\s+other\s+text\b|\bonly\s+(?:the\s+)?(?:marker|answer|file\s+paths?|paths?|comma[-\s]separated)/i;
 
 export function deriveAnswerConstraints(content: string | undefined): AnswerConstraints {
   const normalized = normalizeIntentGatewayRepairText(content);
@@ -195,6 +197,15 @@ export function deriveAnswerConstraints(content: string | undefined): AnswerCons
 
   if (IMPLEMENTATION_QUEST_PATTERN.test(normalized)) {
     constraints.requiresImplementationFiles = true;
+  }
+
+  if (COMMA_SEPARATED_FILE_PATHS_PATTERN.test(normalized)) {
+    constraints.commaSeparatedFilePaths = true;
+    constraints.requiresImplementationFiles = true;
+  }
+
+  if (STRICT_OUTPUT_ONLY_PATTERN.test(normalized)) {
+    constraints.strictOutputOnly = true;
   }
 
   return constraints;

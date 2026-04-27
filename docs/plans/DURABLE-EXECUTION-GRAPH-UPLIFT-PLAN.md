@@ -189,6 +189,15 @@ Checkpoint after the automation-control routing and direct-rendering cleanup:
 - Follow-up live `/api/message` smoke on the restarted backend passed for request-scoped `ollama-cloud-direct` without fallback: exact-answer marker `codex-cleanup-exact-940251`, same-surface continuity `codex-cleanup-cont-store-881087` / `codex-cleanup-cont-recall-881087`, and credential-refusal security `codex-cleanup-security-286125` with no obvious raw key/token pattern leakage.
 - The same live replay exposed a separate direct-reasoning synthesis quality issue: the graph gathered the correct delegated retry files but the deterministic coverage completion appended extra explanatory file paths despite the user's strict comma-separated output request. Treat this as answer-format constraint ownership in direct reasoning/synthesis, not as stale context, provider quality, or an Intent Gateway keyword workaround.
 
+> Checkpoint after strict direct-reasoning answer constraints and retry-continuation cleanup:
+
+- Answer constraints now carry strict comma-separated relative file-path output requirements. Direct-reasoning system prompts, grounded synthesis prompts, revision prompts, and deterministic coverage completion preserve that output shape instead of appending Markdown coverage sections.
+- Strict comma-separated deterministic completion now formats only file paths already cited by synthesis when they exist, and falls back to coverage files only when synthesis produced no file paths. Non-strict exact-file requests keep the previous deterministic coverage append behavior.
+- Retry-after-failure continuation detection is now command-shaped. A standalone `retry` or explicit "try that again" still resumes a failed execution, but fresh repo questions containing the noun "retry" no longer restore stale active execution content.
+- Focused coverage passed: `npx vitest run src/runtime/chat-agent/intent-gateway-orchestration.test.ts src/runtime/intent/request-patterns.test.ts src/runtime/direct-reasoning-mode.test.ts` reported 71 passing tests.
+- `npm run check`, `npm test` (311 files / 3329 tests), and `npm run build` passed after the cleanup.
+- Live `/api/message` replay on the rebuilt app with request id `codex-strict-paths-fix2-839125` and request-scoped Ollama Cloud managed-cloud profile `ollama-cloud` / `gpt-oss:120b` returned exactly `src/runtime/execution-graph/delegated-worker-retry.ts` for the strict comma-separated delegated retry-policy repo-inspection prompt. Trace/context assembly stayed on the current repo request, direct reasoning ran in brokered read-only mode, and no stale credential-refusal content leaked into the turn.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
