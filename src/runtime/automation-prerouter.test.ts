@@ -445,6 +445,8 @@ describe('tryAutomationPreRoute', () => {
       }
       throw new Error(`Unexpected tool ${toolName}`);
     });
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ga-automation-preroute-'));
+    writeFileSync(join(workspaceRoot, 'companies.csv'), 'Company Name\nAcme SaaS\n');
 
     const result = await tryAutomationPreRoute({
       agentId: 'default',
@@ -452,6 +454,8 @@ describe('tryAutomationPreRoute', () => {
         ...baseMessage,
         content: 'Create a daily 8:00 AM automation that reads ./companies.csv, writes a summary report to C:\\Temp\\lead-summary.md, and uses built-in Guardian tools only.',
       },
+      workspaceRoot,
+      allowedPaths: [workspaceRoot],
       preflightTools: (requests) => requests.map((request) => {
         if (request.name === 'fs_write' && !pathAllowed) {
           return {
@@ -508,6 +512,8 @@ describe('tryAutomationPreRoute', () => {
       }
       throw new Error(`Unexpected tool ${toolName}`);
     });
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ga-automation-preroute-'));
+    writeFileSync(join(workspaceRoot, 'companies.csv'), 'Company Name\nAcme SaaS\n');
 
     const result = await tryAutomationPreRoute({
       agentId: 'default',
@@ -515,6 +521,8 @@ describe('tryAutomationPreRoute', () => {
         ...baseMessage,
         content: 'Create a daily 8:00 AM automation that reads ./companies.csv, writes a summary report to D:\\\\Repor    ts\\\\lead-summary.md, and uses built-in Guardian tools only.',
       },
+      workspaceRoot,
+      allowedPaths: [workspaceRoot],
       preflightTools: (requests) => requests.map((request) => {
         if (request.name === 'fs_write' && !pathAllowed) {
           return {
@@ -579,6 +587,8 @@ describe('tryAutomationPreRoute', () => {
       }
       throw new Error(`Unexpected tool ${toolName}`);
     });
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ga-automation-preroute-'));
+    writeFileSync(join(workspaceRoot, 'companies.csv'), 'Company Name\nAcme SaaS\n');
 
     const result = await tryAutomationPreRoute({
       agentId: 'default',
@@ -586,6 +596,8 @@ describe('tryAutomationPreRoute', () => {
         ...baseMessage,
         content: 'Build a weekday lead research workflow that reads ./companies.csv, researches each company\'s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ./lead-research-output.csv, and creates ./lead-research-summary.md. Use built-in Guardian tools only. Do not create any shell script, Python script, or code file.',
       },
+      workspaceRoot,
+      allowedPaths: [workspaceRoot],
       preflightTools: (requests) => requests.map((request) => {
         if (request.name === 'fs_write') {
           return {

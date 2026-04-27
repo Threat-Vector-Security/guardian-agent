@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -35,6 +35,12 @@ const workerNotifications: Array<{ method: string; params: Record<string, unknow
 let workerMessageHandler:
   | ((params: Record<string, unknown>) => Promise<{ content: string; metadata?: Record<string, unknown> }> | { content: string; metadata?: Record<string, unknown> })
   | undefined;
+
+function createAutomationFixtureWorkspace(): string {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ga-worker-automation-'));
+  writeFileSync(join(workspaceRoot, 'companies.csv'), 'Company Name\nAcme SaaS\n');
+  return workspaceRoot;
+}
 
 function createMemoryPendingActionStore(now: () => number = () => 1): PendingActionStore {
   return new PendingActionStore({
@@ -5932,6 +5938,7 @@ describe('WorkerManager', () => {
   it('intercepts automation authoring before brokered worker dispatch', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
     const sandbox = await import('../sandbox/index.js');
+    const workspaceRoot = createAutomationFixtureWorkspace();
 
     const executeModelTool = vi.fn(async (toolName: string) => {
       if (toolName === 'automation_list') {
@@ -5954,6 +5961,11 @@ describe('WorkerManager', () => {
         getApprovalSummaries: () => new Map([
           ['approval-automation-1', { toolName: 'automation_save', argsPreview: '{"name":"Weekday Lead Research"}' }],
         ]),
+        getPolicy: () => ({
+          sandbox: {
+            allowedPaths: [workspaceRoot],
+          },
+        }),
         decideApproval: vi.fn(),
       } as never,
       {
@@ -6126,6 +6138,7 @@ describe('WorkerManager', () => {
 
     let pathAllowed = false;
     const externalPath = 'D:\\Reports\\lead-summary.md';
+    const workspaceRoot = createAutomationFixtureWorkspace();
     const executeModelTool = vi.fn(async (toolName: string, args?: Record<string, unknown>) => {
       if (toolName === 'update_tool_policy') {
         return {
@@ -6172,8 +6185,8 @@ describe('WorkerManager', () => {
         getPolicy: () => ({
           sandbox: {
             allowedPaths: pathAllowed
-              ? [process.cwd(), externalPath]
-              : [process.cwd()],
+              ? [workspaceRoot, externalPath]
+              : [workspaceRoot],
           },
         }),
         preflightTools: (requests: Array<{ name: string; args?: Record<string, unknown> }>) => requests.map((request) => {
@@ -6285,6 +6298,7 @@ describe('WorkerManager', () => {
 
     let pathAllowed = false;
     const externalPath = 'D:\\Reports\\lead-research-summary.md';
+    const workspaceRoot = createAutomationFixtureWorkspace();
     const executeModelTool = vi.fn(async (toolName: string, args?: Record<string, unknown>) => {
       if (toolName === 'update_tool_policy') {
         return {
@@ -6332,8 +6346,8 @@ describe('WorkerManager', () => {
         getPolicy: () => ({
           sandbox: {
             allowedPaths: pathAllowed
-              ? [process.cwd(), externalPath]
-              : [process.cwd()],
+              ? [workspaceRoot, externalPath]
+              : [workspaceRoot],
           },
         }),
         preflightTools: (requests: Array<{ name: string; args?: Record<string, unknown> }>) => requests.map((request) => {
