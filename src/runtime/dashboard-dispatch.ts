@@ -51,6 +51,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeProviderIdentity(value: unknown): string {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/[\s_-]+/g, '')
+    : '';
+}
+
+function selectedResponseSourceCanFillRuntimeSource(
+  existingResponseSource: Record<string, unknown> | undefined,
+  selectedResponseSource: ResponseSourceMetadata | undefined,
+): boolean {
+  if (!existingResponseSource || !selectedResponseSource) return false;
+  if (existingResponseSource.usedFallback === true) return false;
+  const existingProvider = normalizeProviderIdentity(existingResponseSource.providerName);
+  if (!existingProvider) return true;
+  const selectedProvider = normalizeProviderIdentity(selectedResponseSource.providerName);
+  const selectedProfile = normalizeProviderIdentity(selectedResponseSource.providerProfileName);
+  return existingProvider === selectedProvider || (!!selectedProfile && existingProvider === selectedProfile);
+}
+
 function buildSelectedResponseSource(
   profile: SelectedExecutionProfile | null,
   config: GuardianAgentConfig,
@@ -203,7 +222,7 @@ export function createDashboardMessageDispatcher(args: {
       const existingCodeContext = isRecord(metadata?.codeContext)
         ? metadata.codeContext
         : undefined;
-      const selectedSourceRecord = existingResponseSource && selectedResponseSource
+      const selectedSourceRecord = selectedResponseSourceCanFillRuntimeSource(existingResponseSource, selectedResponseSource)
         ? selectedResponseSource as unknown as Record<string, unknown>
         : undefined;
       const resolvedLocality = existingResponseSource?.locality === 'local' || existingResponseSource?.locality === 'external'
@@ -212,9 +231,19 @@ export function createDashboardMessageDispatcher(args: {
       const resolvedProviderName = typeof existingResponseSource?.providerName === 'string' && existingResponseSource.providerName.trim()
         ? existingResponseSource.providerName
         : undefined;
+      const selectedProviderName = selectedResponseSource?.providerProfileName?.trim()
+        || selectedResponseSource?.providerName?.trim()
+        || '';
+      const selectedProviderMatchesRuntime = selectedResponseSourceCanFillRuntimeSource(existingResponseSource, selectedResponseSource);
+      const providerFallbackNotice = existingResponseSource?.usedFallback === true
+        && selectedProviderName
+        && resolvedProviderName
+        && !selectedProviderMatchesRuntime
+        ? `Requested provider ${selectedProviderName}, final response came from ${resolvedProviderName}.`
+        : undefined;
       const mismatchNotice = requestedTier && resolvedLocality && requestedTier !== resolvedLocality
         ? `Requested ${requestedTier} route, final response came from ${resolvedLocality}${resolvedProviderName ? ` (${resolvedProviderName})` : ''}.`
-        : undefined;
+        : providerFallbackNotice;
       const mergedResponseSource = existingResponseSource || mismatchNotice
         ? {
             ...(selectedSourceRecord ?? {}),

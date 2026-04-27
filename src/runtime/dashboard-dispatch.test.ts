@@ -424,6 +424,67 @@ describe('createDashboardMessageDispatcher', () => {
     });
   });
 
+  it('does not graft the selected profile onto a fallback provider response', async () => {
+    const config = createConfig();
+    config.llm['openrouter-direct'] = {
+      provider: 'openrouter',
+      model: 'moonshotai/kimi-k2.6',
+      credentialRef: 'llm.openrouter-direct',
+    };
+    const options = createOptions({
+      configRef: { current: config },
+      runtime: {
+        dispatchMessage: vi.fn(async () => ({
+          content: 'Fallback reply.',
+          metadata: {
+            responseSource: {
+              locality: 'external',
+              providerName: 'nvidia general',
+              providerTier: 'managed_cloud',
+              model: 'moonshotai/kimi-k2-instruct-0905',
+              usedFallback: true,
+            },
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    const result = await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'use the managed cloud path',
+        userId: 'web-user',
+        channel: 'web',
+        metadata: attachSelectedExecutionProfileMetadata(undefined, createSelectedExecutionProfile({
+          providerName: 'openrouter-direct',
+          providerType: 'openrouter',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          fallbackProviderOrder: ['openrouter-direct', 'nvidia general'],
+        })),
+      },
+      routeDecision: {
+        agentId: 'external-agent',
+        confidence: 'high',
+        reason: 'tier route',
+        tier: 'external',
+      },
+    });
+
+    expect(result.metadata?.responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'nvidia general',
+      providerTier: 'managed_cloud',
+      model: 'moonshotai/kimi-k2-instruct-0905',
+      usedFallback: true,
+      notice: 'Requested provider openrouter-direct, final response came from nvidia general.',
+    });
+    expect(result.metadata?.responseSource).not.toMatchObject({
+      providerProfileName: 'openrouter-direct',
+    });
+  });
+
   it('does not label direct responses with the selected execution profile as response source', async () => {
     const config = createConfig();
     config.llm['ollama-cloud-coding'] = {
