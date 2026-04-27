@@ -92,11 +92,20 @@ Verified locally after these changes:
 - Latest live same-surface continuity replay used request ids `codex-final-verify-same-first-f6ad8ac3-b4cf-49a8-862a-a9185dff4a15` and `codex-final-verify-same-second-00a841a3-6b25-4b59-b1cf-cc2fb91b3293`; the second turn recovered `SAME-SURFACE-CLEAN-27491` from the first same-surface turn and carried only the current execution ref, not stale same-principal `code_session` refs.
 - Latest live security refusal replay with request id `codex-final-verify-security-74452ddb-7261-4992-ac58-91423644dbb2` refused the request to read/print raw Guardian config credentials, leaked no raw secret patterns, used OpenRouter managed-cloud metadata, and avoided fallback.
 
+Checkpoint after the delegated-worker and recovery graph ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-node.ts` now owns delegated-worker graph creation input, running metadata, terminal verification artifacts, interruption/completion events, failure events, and status mapping. `WorkerManager` supplies request context, persists artifacts/events, and publishes timeline updates, but no longer hand-builds delegated-worker lifecycle metadata or terminal graph events.
+- `src/runtime/execution-graph/node-recovery.ts` now owns the recovery-advisor graph shell, failed delegated-worker node, recovery node context, and recovery graph lifecycle event construction. `WorkerManager` still dispatches the recovery advisor worker and records routing traces, but no longer hand-builds the recovery graph nodes/events inline.
+- Focused coverage for this cleanup passed: `npx vitest run src/runtime/execution-graph/delegated-worker-node.test.ts src/runtime/execution-graph/node-recovery.test.ts src/supervisor/worker-manager.test.ts src/runtime/execution-graph/graph-controller.test.ts` reported 60 passing tests.
+- `npm run check` passed after the cleanup.
+- Full `npm test` passed after the cleanup: 308 files, 3294 tests.
+- `npm run build` passed after the cleanup.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
 - Approval/resume ownership is still not fully collapsed. The live proof covers a policy-gated API flow, but remaining legacy producers and replay/resume owners should still be deleted only as graph interrupt equivalents land.
-- Delegated retry/recovery ownership remains partially split between graph nodes and `WorkerManager`; continue moving verification, retry, recovery proposal, and terminal state into graph-native node runners before deleting old side channels.
+- Delegated graph ownership is narrower after the latest cleanup, but delegated worker dispatch, task-contract verification policy, retry budgeting, and recovery-advisor invocation are still coordinated from `WorkerManager`. Continue moving those decisions into graph node/controller boundaries before deleting old side channels.
 - Provider alias drift for compact dated OpenRouter snapshots is now covered in the delegated verifier. Remaining provider risk is broader fallback/profile ownership cleanup, not this known `moonshotai/kimi-k2.6` alias mismatch.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
 - Startup in this operator environment still reports a local control-plane integrity warning for `scheduled-tasks.json`; that is host runtime state, not a code regression from this slice.
@@ -105,7 +114,7 @@ Recommended next slice:
 
 1. Keep the OpenRouter API and browser sweeps as the regression baseline for any next routing/continuity/approval/web change: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, approval continuity, security refusal, request-id trace correlation, web approval UI, skills routing, and Code UI smoke.
 2. Establish graph-owned approval resume as the next hard deletion boundary. Move one remaining legacy approval/resume producer fully onto graph interrupts, then delete the replaced owner in the same slice.
-3. Continue delegated graph cleanup by moving delegated retry/recovery terminal ownership into graph node runners and deleting overlapping `WorkerManager` side channels as each path is proven.
+3. Continue delegated graph cleanup by moving delegated retry decisions, task-contract verification policy, and recovery-advisor invocation behind graph node/controller boundaries, deleting overlapping `WorkerManager` side channels as each path is proven.
 4. Continue provider fallback/profile cleanup by moving duplicate retry and fallback ownership into execution profile/runtime orchestration. Preserve the compact dated snapshot verifier coverage when changing provider metadata.
 
 ### 2026-04-26 Architecture Refinement And Debt-Burn Phase

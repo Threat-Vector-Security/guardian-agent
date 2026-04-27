@@ -4,12 +4,114 @@ import {
   buildSearchResultSetArtifact,
 } from './graph-artifacts.js';
 import {
+  buildRecoveryAdvisorGraphContext,
+  buildRecoveryAdvisorGraphInput,
+  buildRecoveryAdvisorLifecycleEvent,
   executeRecoveryProposalNode,
   type RecoveryNodeExecutionContext,
 } from './node-recovery.js';
 import type { ExecutionNode } from './types.js';
 
 describe('execution graph recovery node', () => {
+  it('builds the recovery advisor graph shell outside WorkerManager ownership', () => {
+    const context = buildRecoveryAdvisorGraphContext({
+      graphId: 'execution-graph:delegated-task:recovery',
+      executionId: 'delegated-task',
+      rootExecutionId: 'root-task',
+      parentExecutionId: 'parent-task',
+      requestId: 'request-1',
+      runId: 'request-1',
+      channel: 'web',
+      agentId: 'agent-1',
+      userId: 'user-1',
+      codeSessionId: 'code-1',
+    });
+
+    const projection = buildRecoveryAdvisorGraphInput({
+      context,
+      intent: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'modify',
+        summary: 'Modify repository.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      securityContext: {
+        agentId: 'agent-1',
+        userId: 'user-1',
+        channel: 'web',
+        codeSessionId: 'code-1',
+      },
+      failureReason: 'Verification failed.',
+      now: () => 1_234,
+    });
+
+    expect(projection.graphInput).toMatchObject({
+      graphId: context.graphId,
+      executionId: context.executionId,
+      rootExecutionId: context.rootExecutionId,
+      parentExecutionId: context.parentExecutionId,
+      requestId: context.requestId,
+      runId: context.runId,
+      trigger: {
+        type: 'event',
+        source: 'recovery_advisor',
+        sourceId: context.requestId,
+      },
+      nodes: [{
+        nodeId: context.failedNodeId,
+        kind: 'delegated_worker',
+        status: 'failed',
+        terminalReason: 'Verification failed.',
+      }, {
+        nodeId: context.recoveryNodeId,
+        kind: 'recover',
+        status: 'pending',
+      }],
+      edges: [{
+        fromNodeId: context.failedNodeId,
+        toNodeId: context.recoveryNodeId,
+      }],
+    });
+    expect(projection.recoveryNodeContext).toMatchObject({
+      graphId: context.graphId,
+      nodeId: context.recoveryNodeId,
+      channel: 'web',
+      agentId: 'agent-1',
+      userId: 'user-1',
+      codeSessionId: 'code-1',
+    });
+
+    const event = buildRecoveryAdvisorLifecycleEvent(context, {
+      kind: 'graph_started',
+      sequence: 1,
+      timestamp: 2_000,
+      eventId: `${context.graphId}:graph:started:1`,
+      payload: {
+        controller: 'recovery_advisor',
+      },
+    });
+
+    expect(event).toMatchObject({
+      graphId: context.graphId,
+      executionId: context.executionId,
+      rootExecutionId: context.rootExecutionId,
+      parentExecutionId: context.parentExecutionId,
+      requestId: context.requestId,
+      runId: context.runId,
+      kind: 'graph_started',
+      producer: 'supervisor',
+      channel: 'web',
+      agentId: 'agent-1',
+      userId: 'user-1',
+      codeSessionId: 'code-1',
+    });
+  });
+
   it('emits a bounded advisory retry proposal without tool execution', () => {
     const failedNode = buildNode('mutate-1', 'mutate');
     const graph = {

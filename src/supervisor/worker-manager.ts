@@ -67,11 +67,14 @@ import {
 } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
   buildDelegatedWorkerGraphContext,
-  buildDelegatedWorkerGraphEvent,
-  buildDelegatedWorkerNode,
+  buildDelegatedWorkerGraphCompletion,
+  buildDelegatedWorkerGraphFailure,
+  buildDelegatedWorkerGraphInput,
+  buildDelegatedWorkerRunningMetadata,
   buildDelegatedWorkerStartProjection,
-  buildDelegatedWorkerTerminalProjection,
-  type DelegatedWorkerGraphContext,
+  type DelegatedWorkerGraphCompletion,
+  type DelegatedWorkerGraphJobMetadata,
+  type DelegatedWorkerGraphRun,
 } from '../runtime/execution-graph/delegated-worker-node.js';
 import {
   buildWorkerSuspensionArtifact,
@@ -99,10 +102,12 @@ import {
   shouldUseGraphControlledExecution,
 } from '../runtime/execution-graph/graph-controller.js';
 import {
+  buildRecoveryAdvisorGraphContext,
+  buildRecoveryAdvisorGraphInput,
+  buildRecoveryAdvisorLifecycleEvent,
   executeRecoveryProposalNode,
   type RecoveryGraphPatch,
 } from '../runtime/execution-graph/node-recovery.js';
-import type { ExecutionNode as DurableExecutionNode } from '../runtime/execution-graph/types.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
@@ -456,31 +461,6 @@ interface WorkerSuspensionGraphResumeContext {
   artifactIds: string[];
   sequenceStart: number;
   expiresAt: number;
-}
-
-interface DelegatedWorkerGraphRun {
-  context: DelegatedWorkerGraphContext;
-  sequence: number;
-}
-
-interface DelegatedWorkerGraphJobMetadata {
-  graphId: string;
-  nodeId: string;
-  status: 'running' | 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
-  lifecycle: 'running' | 'completed' | 'blocked' | 'failed';
-  verificationArtifactId?: string;
-}
-
-interface DelegatedWorkerGraphCompletionMetadata extends DelegatedWorkerGraphJobMetadata {
-  status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
-  lifecycle: 'completed' | 'blocked' | 'failed';
-  verificationArtifactId: string;
-}
-
-interface DelegatedWorkerGraphCompletion {
-  metadata: DelegatedWorkerGraphCompletionMetadata;
-  interruptEvent?: ExecutionGraphEvent;
-  verificationArtifactRef?: ReturnType<typeof artifactRefFromArtifact>;
 }
 
 interface RecoveryAdvisorGraphResult {
@@ -1921,65 +1901,43 @@ export class WorkerManager {
       return null;
     }
 
-    const graphId = `execution-graph:${input.taskRunId}:recovery`;
     const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
     const parentExecutionId = input.request.delegation?.executionId;
-    const recoveryNodeId = `node:${input.taskRunId}:recover`;
     const now = this.observability.now ?? Date.now;
-    const failedNode: DurableExecutionNode = {
-      nodeId: `node:${input.taskRunId}:delegated_worker`,
-      graphId,
-      kind: 'delegated_worker',
-      status: 'failed',
-      title: 'Delegated worker verification failure',
-      requiredInputIds: [],
-      outputArtifactTypes: ['VerificationResult'],
-      allowedToolCategories: [],
-      retryLimit: 1,
-      completedAt: now(),
-      terminalReason: input.verification.reasons[0] ?? 'Delegated worker failed deterministic verification.',
-    };
-    const recoveryNode: DurableExecutionNode = {
-      nodeId: recoveryNodeId,
-      graphId,
-      kind: 'recover',
-      status: 'pending',
-      title: 'Recovery proposal',
-      requiredInputIds: [],
-      outputArtifactTypes: ['RecoveryProposal'],
-      allowedToolCategories: [],
-      approvalPolicy: 'none',
-      checkpointPolicy: 'phase_boundary',
-    };
-    if (input.effectiveIntentDecision) {
-      this.observability.executionGraphStore?.createGraph({
-        graphId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        ...(parentExecutionId ? { parentExecutionId } : {}),
-        requestId: input.requestId,
-        runId: input.requestId,
-        intent: input.effectiveIntentDecision,
-        securityContext: {
-          agentId: input.target.agentId,
-          userId: input.request.userId,
-          channel: input.request.message.channel,
-          ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
-          ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
-        },
-        trigger: {
-          type: 'event',
-          source: 'recovery_advisor',
-          sourceId: input.requestId,
-        },
-        nodes: [failedNode, recoveryNode],
-        edges: [{
-          edgeId: `${failedNode.nodeId}->${recoveryNode.nodeId}`,
-          graphId,
-          fromNodeId: failedNode.nodeId,
-          toNodeId: recoveryNode.nodeId,
-        }],
-      });
+    const recoveryContext = buildRecoveryAdvisorGraphContext({
+      graphId: `execution-graph:${input.taskRunId}:recovery`,
+      executionId: input.taskRunId,
+      rootExecutionId,
+      ...(parentExecutionId ? { parentExecutionId } : {}),
+      requestId: input.requestId,
+      runId: input.requestId,
+      channel: input.request.message.channel,
+      agentId: input.target.agentId,
+      userId: input.request.userId,
+      ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+      failedNodeId: `node:${input.taskRunId}:delegated_worker`,
+      recoveryNodeId: `node:${input.taskRunId}:recover`,
+    });
+    const recoveryProjection = buildRecoveryAdvisorGraphInput({
+      context: recoveryContext,
+      intent: input.effectiveIntentDecision,
+      securityContext: {
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+      },
+      trigger: {
+        type: 'event',
+        source: 'recovery_advisor',
+        sourceId: input.requestId,
+      },
+      failureReason: input.verification.reasons[0],
+      now,
+    });
+    if (recoveryProjection.graphInput) {
+      this.observability.executionGraphStore?.createGraph(recoveryProjection.graphInput);
     }
     let sequence = 0;
     const emitRecoveryGraphEvent = (
@@ -1988,22 +1946,11 @@ export class WorkerManager {
       eventKey: string,
     ): ExecutionGraphEvent => {
       sequence += 1;
-      const event = createExecutionGraphEvent({
-        eventId: `${graphId}:${eventKey}:${sequence}`,
-        graphId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        ...(parentExecutionId ? { parentExecutionId } : {}),
-        requestId: input.requestId,
-        runId: input.requestId,
+      const event = buildRecoveryAdvisorLifecycleEvent(recoveryContext, {
         kind,
-        timestamp: now(),
         sequence,
-        producer: 'supervisor',
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        timestamp: now(),
+        eventId: `${recoveryContext.graphId}:${eventKey}:${sequence}`,
         payload,
       });
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
@@ -2016,33 +1963,18 @@ export class WorkerManager {
         operation: input.effectiveIntentDecision?.operation,
         executionClass: input.effectiveIntentDecision?.executionClass,
         controller: 'recovery_advisor',
-        failedNodeId: failedNode.nodeId,
+        failedNodeId: recoveryProjection.failedNode.nodeId,
         advisoryOnly: true,
       }, 'graph:started'),
     ];
     const recovery = executeRecoveryProposalNode({
-      graph: {
-        graphId,
-        nodes: [failedNode, recoveryNode],
-        artifacts: [],
-      },
-      failedNode,
+      graph: recoveryProjection.graph,
+      failedNode: recoveryProjection.failedNode,
       context: {
-        graphId,
-        executionId: input.taskRunId,
-        rootExecutionId,
-        ...(parentExecutionId ? { parentExecutionId } : {}),
-        requestId: input.requestId,
-        runId: input.requestId,
-        nodeId: recoveryNodeId,
-        channel: input.request.message.channel,
-        agentId: input.target.agentId,
-        userId: input.request.userId,
-        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        ...recoveryProjection.recoveryNodeContext,
         sequenceStart: sequence,
-        now,
       },
-      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, failedNode.nodeId),
+      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, recoveryProjection.failedNode.nodeId),
     });
     for (const event of recovery.events) {
       sequence = Math.max(sequence, event.sequence);
@@ -2055,7 +1987,7 @@ export class WorkerManager {
     if (recovery.status !== 'proposed' || !recovery.proposalArtifact || !recovery.patch) {
       lifecycleEvents.push(emitRecoveryGraphEvent('graph_failed', {
         reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
-        failedNodeId: failedNode.nodeId,
+        failedNodeId: recoveryProjection.failedNode.nodeId,
         advisoryOnly: true,
       }, 'graph:failed'));
       this.observability.intentRoutingTrace?.record({
@@ -2077,7 +2009,7 @@ export class WorkerManager {
     }
     lifecycleEvents.push(emitRecoveryGraphEvent('graph_completed', {
       proposalArtifactId: recovery.proposalArtifact.artifactId,
-      failedNodeId: failedNode.nodeId,
+      failedNodeId: recoveryProjection.failedNode.nodeId,
       actionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
       advisoryOnly: true,
     }, 'graph:completed'));
@@ -2107,7 +2039,7 @@ export class WorkerManager {
     });
 
     return {
-      graphId,
+      graphId: recoveryContext.graphId,
       proposalArtifactId: recovery.proposalArtifact.artifactId,
       patch: recovery.patch,
       events: [lifecycleEvents[0], ...recovery.events, lifecycleEvents[lifecycleEvents.length - 1]]
@@ -2147,13 +2079,8 @@ export class WorkerManager {
       title: describeDelegatedTarget(input.target),
       decision: input.intentDecision,
     });
-    this.observability.executionGraphStore.createGraph({
-      graphId: context.graphId,
-      executionId: context.executionId,
-      rootExecutionId: context.rootExecutionId,
-      ...(context.parentExecutionId ? { parentExecutionId: context.parentExecutionId } : {}),
-      requestId: context.requestId,
-      runId: context.runId,
+    this.observability.executionGraphStore.createGraph(buildDelegatedWorkerGraphInput({
+      context,
       intent: input.intentDecision,
       securityContext: {
         agentId: input.target.agentId,
@@ -2167,15 +2094,9 @@ export class WorkerManager {
         source: input.request.message.channel,
         sourceId: input.request.message.id,
       },
-      nodes: [
-        buildDelegatedWorkerNode({
-          context,
-          ownerAgentId: input.target.agentId,
-          executionProfileName: input.request.executionProfile?.id ?? input.request.executionProfile?.providerName,
-        }),
-      ],
-      edges: [],
-    });
+      ownerAgentId: input.target.agentId,
+      executionProfileName: input.request.executionProfile?.id ?? input.request.executionProfile?.providerName,
+    }));
     const run: DelegatedWorkerGraphRun = { context, sequence: 0 };
     const projection = buildDelegatedWorkerStartProjection({
       context,
@@ -2227,9 +2148,8 @@ export class WorkerManager {
         : {}),
       ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
     };
-    const projection = buildDelegatedWorkerTerminalProjection({
-      context: run.context,
-      sequenceStart: run.sequence,
+    const completion = buildDelegatedWorkerGraphCompletion({
+      run,
       timestamp: this.observability.now?.() ?? Date.now(),
       lifecycle: options.lifecycle,
       verification: options.verification,
@@ -2237,27 +2157,12 @@ export class WorkerManager {
       blockerKind: options.handoff.unresolvedBlockerKind,
       blockerPrompt: options.handoff.nextAction ?? options.handoff.summary,
     });
-    run.sequence = projection.sequence;
-    this.observability.executionGraphStore?.writeArtifact(projection.verificationArtifact);
-    let interruptEvent: ExecutionGraphEvent | undefined;
-    for (const event of projection.events) {
-      if (event.kind === 'interruption_requested') {
-        interruptEvent = event;
-      }
+    this.observability.executionGraphStore?.writeArtifact(completion.verificationArtifact);
+    for (const event of completion.events) {
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
       this.observability.executionGraphStore?.appendEvent(event);
     }
-    return {
-      metadata: {
-        graphId: run.context.graphId,
-        nodeId: run.context.nodeId,
-        status: mapDelegatedWorkerGraphMetadataStatus(options.lifecycle, options.handoff.unresolvedBlockerKind),
-        lifecycle: options.lifecycle,
-        verificationArtifactId: projection.verificationArtifact.artifactId,
-      },
-      ...(interruptEvent ? { interruptEvent } : {}),
-      verificationArtifactRef: artifactRefFromArtifact(projection.verificationArtifact),
-    };
+    return completion;
   }
 
   private failDelegatedWorkerGraph(
@@ -2273,49 +2178,16 @@ export class WorkerManager {
       summary: reason,
       ...buildDelegatedTaskContractTraceMetadata(taskContract),
     };
-    this.emitDelegatedWorkerGraphEvent(run, 'node_failed', sharedPayload, 'node:failed');
-    this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', sharedPayload, 'graph:failed', { nodeScoped: false });
-    return {
-      graphId: run.context.graphId,
-      nodeId: run.context.nodeId,
-      status: 'failed',
-      lifecycle: 'failed',
-    };
-  }
-
-  private buildDelegatedWorkerGraphRunningMetadata(
-    run: DelegatedWorkerGraphRun | null,
-  ): DelegatedWorkerGraphJobMetadata | undefined {
-    if (!run) return undefined;
-    return {
-      graphId: run.context.graphId,
-      nodeId: run.context.nodeId,
-      status: 'running',
-      lifecycle: 'running',
-    };
-  }
-
-  private emitDelegatedWorkerGraphEvent(
-    run: DelegatedWorkerGraphRun,
-    kind: ExecutionGraphEvent['kind'],
-    payload: Record<string, unknown>,
-    eventKey: string,
-    options: {
-      nodeScoped?: boolean;
-    } = {},
-  ): ExecutionGraphEvent {
-    run.sequence += 1;
-    const event = buildDelegatedWorkerGraphEvent(run.context, {
-      kind,
-      sequence: run.sequence,
+    const failure = buildDelegatedWorkerGraphFailure({
+      run,
       timestamp: this.observability.now?.() ?? Date.now(),
-      eventId: `${run.context.graphId}:${eventKey}:${run.sequence}`,
-      payload,
-      nodeScoped: options.nodeScoped,
+      payload: sharedPayload,
     });
-    this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-    this.observability.executionGraphStore?.appendEvent(event);
-    return event;
+    for (const event of failure.events) {
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
+    }
+    return failure.metadata;
   }
 
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -2424,7 +2296,7 @@ export class WorkerManager {
             lifecycle: 'running',
             workerId: worker.id,
             target: delegatedTarget,
-            executionGraph: this.buildDelegatedWorkerGraphRunningMetadata(delegatedGraphRun),
+            executionGraph: buildDelegatedWorkerRunningMetadata(delegatedGraphRun),
           }),
         },
       });
@@ -6023,15 +5895,6 @@ function resolveDelegatedBlockedKind(
     return 'policy_blocked';
   }
   return readPendingActionKind(metadata);
-}
-
-function mapDelegatedWorkerGraphMetadataStatus(
-  lifecycle: 'completed' | 'blocked' | 'failed',
-  blockerKind: string | undefined,
-): DelegatedWorkerGraphCompletionMetadata['status'] {
-  if (lifecycle === 'failed') return 'failed';
-  if (lifecycle === 'completed') return 'completed';
-  return blockerKind === 'approval' ? 'awaiting_approval' : 'blocked';
 }
 
 function readDelegatedApprovalInterruption(

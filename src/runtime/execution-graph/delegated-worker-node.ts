@@ -12,7 +12,13 @@ import {
   type ExecutionGraphEvent,
   type ExecutionGraphEventKind,
 } from './graph-events.js';
-import type { ExecutionNode, ExecutionNodeKind } from './types.js';
+import type { CreateExecutionGraphInput } from './graph-store.js';
+import type {
+  ExecutionGraphTrigger,
+  ExecutionNode,
+  ExecutionNodeKind,
+  ExecutionSecurityContext,
+} from './types.js';
 
 export interface DelegatedWorkerGraphContext {
   graphId: string;
@@ -28,6 +34,38 @@ export interface DelegatedWorkerGraphContext {
   userId?: string;
   codeSessionId?: string;
   title: string;
+}
+
+export interface DelegatedWorkerGraphRun {
+  context: DelegatedWorkerGraphContext;
+  sequence: number;
+}
+
+export interface DelegatedWorkerGraphJobMetadata {
+  graphId: string;
+  nodeId: string;
+  status: 'running' | 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
+  lifecycle: 'running' | 'completed' | 'blocked' | 'failed';
+  verificationArtifactId?: string;
+}
+
+export interface DelegatedWorkerGraphCompletionMetadata extends DelegatedWorkerGraphJobMetadata {
+  status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
+  lifecycle: 'completed' | 'blocked' | 'failed';
+  verificationArtifactId: string;
+}
+
+export interface DelegatedWorkerGraphCompletion {
+  metadata: DelegatedWorkerGraphCompletionMetadata;
+  verificationArtifact: ExecutionArtifact<VerificationResultContent>;
+  events: ExecutionGraphEvent[];
+  interruptEvent?: ExecutionGraphEvent;
+  verificationArtifactRef: ReturnType<typeof artifactRefFromArtifact>;
+}
+
+export interface DelegatedWorkerGraphFailure {
+  metadata: DelegatedWorkerGraphJobMetadata;
+  events: ExecutionGraphEvent[];
 }
 
 export interface BuildDelegatedWorkerGraphContextInput {
@@ -51,6 +89,12 @@ export interface BuildDelegatedWorkerNodeInput {
   context: DelegatedWorkerGraphContext;
   ownerAgentId?: string;
   executionProfileName?: string;
+}
+
+export interface BuildDelegatedWorkerGraphInputOptions extends BuildDelegatedWorkerNodeInput {
+  intent: IntentGatewayDecision;
+  securityContext?: ExecutionSecurityContext;
+  trigger?: ExecutionGraphTrigger;
 }
 
 export interface DelegatedWorkerGraphEventInput {
@@ -141,6 +185,36 @@ export function buildDelegatedWorkerNode(input: BuildDelegatedWorkerNodeInput): 
     checkpointPolicy: 'phase_boundary',
     ...(normalizeText(input.ownerAgentId) ? { ownerAgentId: normalizeText(input.ownerAgentId) } : {}),
     ...(normalizeText(input.executionProfileName) ? { executionProfileName: normalizeText(input.executionProfileName) } : {}),
+  };
+}
+
+export function buildDelegatedWorkerGraphInput(
+  input: BuildDelegatedWorkerGraphInputOptions,
+): CreateExecutionGraphInput {
+  return {
+    graphId: input.context.graphId,
+    executionId: input.context.executionId,
+    rootExecutionId: input.context.rootExecutionId,
+    ...(input.context.parentExecutionId ? { parentExecutionId: input.context.parentExecutionId } : {}),
+    requestId: input.context.requestId,
+    runId: input.context.runId,
+    intent: input.intent,
+    securityContext: {
+      ...(input.securityContext ?? {}),
+    },
+    trigger: input.trigger ? { ...input.trigger } : {
+      type: 'user_request',
+      ...(input.context.channel ? { source: input.context.channel } : {}),
+      sourceId: input.context.requestId,
+    },
+    nodes: [
+      buildDelegatedWorkerNode({
+        context: input.context,
+        ownerAgentId: input.ownerAgentId,
+        executionProfileName: input.executionProfileName,
+      }),
+    ],
+    edges: [],
   };
 }
 
@@ -295,6 +369,100 @@ export function buildDelegatedWorkerTerminalProjection(
     verificationArtifactId: verificationArtifact.artifactId,
   }, 'graph:completed', false);
   return { verificationArtifact, events, sequence };
+}
+
+export function buildDelegatedWorkerRunningMetadata(
+  run: DelegatedWorkerGraphRun | null,
+): DelegatedWorkerGraphJobMetadata | undefined {
+  if (!run) return undefined;
+  return {
+    graphId: run.context.graphId,
+    nodeId: run.context.nodeId,
+    status: 'running',
+    lifecycle: 'running',
+  };
+}
+
+export function buildDelegatedWorkerGraphCompletion(input: {
+  run: DelegatedWorkerGraphRun;
+  timestamp: number;
+  lifecycle: DelegatedWorkerGraphLifecycle;
+  verification: VerificationDecision;
+  payload: Record<string, unknown>;
+  blockerKind?: string;
+  blockerPrompt?: string;
+  subjectArtifactId?: string;
+}): DelegatedWorkerGraphCompletion {
+  const projection = buildDelegatedWorkerTerminalProjection({
+    context: input.run.context,
+    sequenceStart: input.run.sequence,
+    timestamp: input.timestamp,
+    lifecycle: input.lifecycle,
+    verification: input.verification,
+    payload: input.payload,
+    blockerKind: input.blockerKind,
+    blockerPrompt: input.blockerPrompt,
+    subjectArtifactId: input.subjectArtifactId,
+  });
+  input.run.sequence = projection.sequence;
+  const interruptEvent = projection.events.find((event) => event.kind === 'interruption_requested');
+  return {
+    metadata: {
+      graphId: input.run.context.graphId,
+      nodeId: input.run.context.nodeId,
+      status: mapDelegatedWorkerGraphMetadataStatus(input.lifecycle, input.blockerKind),
+      lifecycle: input.lifecycle,
+      verificationArtifactId: projection.verificationArtifact.artifactId,
+    },
+    verificationArtifact: projection.verificationArtifact,
+    events: projection.events,
+    ...(interruptEvent ? { interruptEvent } : {}),
+    verificationArtifactRef: artifactRefFromArtifact(projection.verificationArtifact),
+  };
+}
+
+export function buildDelegatedWorkerGraphFailure(input: {
+  run: DelegatedWorkerGraphRun;
+  timestamp: number;
+  payload: Record<string, unknown>;
+}): DelegatedWorkerGraphFailure {
+  const events: ExecutionGraphEvent[] = [];
+  const emit = (
+    kind: ExecutionGraphEventKind,
+    payload: Record<string, unknown>,
+    eventKey: string,
+    nodeScoped = true,
+  ) => {
+    input.run.sequence += 1;
+    events.push(buildDelegatedWorkerGraphEvent(input.run.context, {
+      kind,
+      sequence: input.run.sequence,
+      timestamp: input.timestamp,
+      eventId: `${input.run.context.graphId}:${eventKey}:${input.run.sequence}`,
+      payload,
+      nodeScoped,
+    }));
+  };
+  emit('node_failed', input.payload, 'node:failed');
+  emit('graph_failed', input.payload, 'graph:failed', false);
+  return {
+    metadata: {
+      graphId: input.run.context.graphId,
+      nodeId: input.run.context.nodeId,
+      status: 'failed',
+      lifecycle: 'failed',
+    },
+    events,
+  };
+}
+
+export function mapDelegatedWorkerGraphMetadataStatus(
+  lifecycle: DelegatedWorkerGraphLifecycle,
+  blockerKind: string | undefined,
+): DelegatedWorkerGraphCompletionMetadata['status'] {
+  if (lifecycle === 'failed') return 'failed';
+  if (lifecycle === 'completed') return 'completed';
+  return blockerKind === 'approval' ? 'awaiting_approval' : 'blocked';
 }
 
 export function normalizeDelegatedGraphBlockerKind(

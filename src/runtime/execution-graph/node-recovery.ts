@@ -7,7 +7,69 @@ import {
   type RecoveryProposalContent,
 } from './graph-artifacts.js';
 import { createExecutionGraphEvent, type ExecutionGraphEvent } from './graph-events.js';
-import type { ExecutionArtifactRef, ExecutionGraph, ExecutionNode } from './types.js';
+import type { CreateExecutionGraphInput } from './graph-store.js';
+import type {
+  ExecutionArtifactRef,
+  ExecutionGraph,
+  ExecutionGraphTrigger,
+  ExecutionNode,
+  ExecutionSecurityContext,
+} from './types.js';
+
+export interface RecoveryAdvisorGraphContext {
+  graphId: string;
+  executionId: string;
+  rootExecutionId: string;
+  parentExecutionId?: string;
+  requestId: string;
+  runId?: string;
+  channel?: string;
+  agentId?: string;
+  userId?: string;
+  codeSessionId?: string;
+  failedNodeId: string;
+  recoveryNodeId: string;
+}
+
+export interface BuildRecoveryAdvisorGraphContextInput {
+  graphId?: string;
+  executionId: string;
+  rootExecutionId?: string;
+  parentExecutionId?: string;
+  requestId: string;
+  runId?: string;
+  channel?: string;
+  agentId?: string;
+  userId?: string;
+  codeSessionId?: string;
+  failedNodeId?: string;
+  recoveryNodeId?: string;
+}
+
+export interface BuildRecoveryAdvisorGraphInputOptions {
+  context: RecoveryAdvisorGraphContext;
+  intent?: CreateExecutionGraphInput['intent'];
+  securityContext?: ExecutionSecurityContext;
+  trigger?: ExecutionGraphTrigger;
+  failureReason?: string;
+  now?: () => number;
+}
+
+export interface RecoveryAdvisorGraphProjection {
+  graphInput?: CreateExecutionGraphInput;
+  graph: Pick<ExecutionGraph, 'graphId' | 'nodes' | 'artifacts'>;
+  failedNode: ExecutionNode;
+  recoveryNode: ExecutionNode;
+  recoveryNodeContext: RecoveryNodeExecutionContext;
+}
+
+export interface RecoveryAdvisorLifecycleEventInput {
+  kind: ExecutionGraphEvent['kind'];
+  sequence: number;
+  timestamp: number;
+  eventId: string;
+  payload: Record<string, unknown>;
+}
 
 export interface RecoveryNodeExecutionContext {
   graphId: string;
@@ -101,6 +163,132 @@ const EVIDENCE_ARTIFACT_TYPES = new Set([
   'EvidenceLedger',
   'SynthesisDraft',
 ]);
+
+export function buildRecoveryAdvisorGraphContext(
+  input: BuildRecoveryAdvisorGraphContextInput,
+): RecoveryAdvisorGraphContext {
+  const executionId = normalizeText(input.executionId) ?? 'recovery';
+  const requestId = normalizeText(input.requestId) ?? executionId;
+  return {
+    graphId: normalizeText(input.graphId) ?? `execution-graph:${executionId}:recovery`,
+    executionId,
+    rootExecutionId: normalizeText(input.rootExecutionId) ?? executionId,
+    ...(normalizeText(input.parentExecutionId) ? { parentExecutionId: normalizeText(input.parentExecutionId) } : {}),
+    requestId,
+    ...(normalizeText(input.runId) ? { runId: normalizeText(input.runId) } : {}),
+    ...(normalizeText(input.channel) ? { channel: normalizeText(input.channel) } : {}),
+    ...(normalizeText(input.agentId) ? { agentId: normalizeText(input.agentId) } : {}),
+    ...(normalizeText(input.userId) ? { userId: normalizeText(input.userId) } : {}),
+    ...(normalizeText(input.codeSessionId) ? { codeSessionId: normalizeText(input.codeSessionId) } : {}),
+    failedNodeId: normalizeText(input.failedNodeId) ?? `node:${executionId}:delegated_worker`,
+    recoveryNodeId: normalizeText(input.recoveryNodeId) ?? `node:${executionId}:recover`,
+  };
+}
+
+export function buildRecoveryAdvisorGraphInput(
+  input: BuildRecoveryAdvisorGraphInputOptions,
+): RecoveryAdvisorGraphProjection {
+  const now = input.now ?? Date.now;
+  const failedNode: ExecutionNode = {
+    nodeId: input.context.failedNodeId,
+    graphId: input.context.graphId,
+    kind: 'delegated_worker',
+    status: 'failed',
+    title: 'Delegated worker verification failure',
+    requiredInputIds: [],
+    outputArtifactTypes: ['VerificationResult'],
+    allowedToolCategories: [],
+    retryLimit: 1,
+    completedAt: now(),
+    terminalReason: normalizeText(input.failureReason) ?? 'Delegated worker failed deterministic verification.',
+  };
+  const recoveryNode: ExecutionNode = {
+    nodeId: input.context.recoveryNodeId,
+    graphId: input.context.graphId,
+    kind: 'recover',
+    status: 'pending',
+    title: 'Recovery proposal',
+    requiredInputIds: [],
+    outputArtifactTypes: ['RecoveryProposal'],
+    allowedToolCategories: [],
+    approvalPolicy: 'none',
+    checkpointPolicy: 'phase_boundary',
+  };
+  const graphInput: CreateExecutionGraphInput | undefined = input.intent
+    ? {
+        graphId: input.context.graphId,
+        executionId: input.context.executionId,
+        rootExecutionId: input.context.rootExecutionId,
+        ...(input.context.parentExecutionId ? { parentExecutionId: input.context.parentExecutionId } : {}),
+        requestId: input.context.requestId,
+        ...(input.context.runId ? { runId: input.context.runId } : {}),
+        intent: input.intent,
+        securityContext: {
+          ...(input.securityContext ?? {}),
+        },
+        trigger: input.trigger ? { ...input.trigger } : {
+          type: 'event',
+          source: 'recovery_advisor',
+          sourceId: input.context.requestId,
+        },
+        nodes: [failedNode, recoveryNode],
+        edges: [{
+          edgeId: `${failedNode.nodeId}->${recoveryNode.nodeId}`,
+          graphId: input.context.graphId,
+          fromNodeId: failedNode.nodeId,
+          toNodeId: recoveryNode.nodeId,
+        }],
+      }
+    : undefined;
+  return {
+    ...(graphInput ? { graphInput } : {}),
+    graph: {
+      graphId: input.context.graphId,
+      nodes: [failedNode, recoveryNode],
+      artifacts: [],
+    },
+    failedNode,
+    recoveryNode,
+    recoveryNodeContext: {
+      graphId: input.context.graphId,
+      executionId: input.context.executionId,
+      rootExecutionId: input.context.rootExecutionId,
+      ...(input.context.parentExecutionId ? { parentExecutionId: input.context.parentExecutionId } : {}),
+      requestId: input.context.requestId,
+      ...(input.context.runId ? { runId: input.context.runId } : {}),
+      nodeId: input.context.recoveryNodeId,
+      ...(input.context.channel ? { channel: input.context.channel } : {}),
+      ...(input.context.agentId ? { agentId: input.context.agentId } : {}),
+      ...(input.context.userId ? { userId: input.context.userId } : {}),
+      ...(input.context.codeSessionId ? { codeSessionId: input.context.codeSessionId } : {}),
+      now,
+    },
+  };
+}
+
+export function buildRecoveryAdvisorLifecycleEvent(
+  context: RecoveryAdvisorGraphContext,
+  input: RecoveryAdvisorLifecycleEventInput,
+): ExecutionGraphEvent {
+  return createExecutionGraphEvent({
+    eventId: input.eventId,
+    graphId: context.graphId,
+    executionId: context.executionId,
+    rootExecutionId: context.rootExecutionId,
+    ...(context.parentExecutionId ? { parentExecutionId: context.parentExecutionId } : {}),
+    requestId: context.requestId,
+    ...(context.runId ? { runId: context.runId } : {}),
+    kind: input.kind,
+    timestamp: input.timestamp,
+    sequence: input.sequence,
+    producer: 'supervisor',
+    ...(context.channel ? { channel: context.channel } : {}),
+    ...(context.agentId ? { agentId: context.agentId } : {}),
+    ...(context.userId ? { userId: context.userId } : {}),
+    ...(context.codeSessionId ? { codeSessionId: context.codeSessionId } : {}),
+    payload: input.payload,
+  });
+}
 
 export function executeRecoveryProposalNode(
   input: ExecuteRecoveryProposalNodeInput,

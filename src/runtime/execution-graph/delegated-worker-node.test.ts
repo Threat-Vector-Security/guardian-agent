@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDelegatedWorkerGraphCompletion,
   buildDelegatedWorkerGraphContext,
+  buildDelegatedWorkerGraphFailure,
+  buildDelegatedWorkerGraphInput,
+  buildDelegatedWorkerRunningMetadata,
   buildDelegatedWorkerStartProjection,
   buildDelegatedWorkerTerminalProjection,
   normalizeDelegatedGraphBlockerKind,
@@ -57,6 +61,80 @@ describe('delegated worker graph node helpers', () => {
       taskContractKind: 'repo_inspection',
     });
     expect(projection.sequence).toBe(2);
+  });
+
+  it('builds delegated worker graph input outside WorkerManager ownership', () => {
+    const context = buildDelegatedWorkerGraphContext({
+      graphId: 'execution-graph:delegated-task:graph-input:delegated-worker',
+      executionId: 'delegated-task:graph-input',
+      rootExecutionId: 'root-graph-input',
+      parentExecutionId: 'parent-graph-input',
+      requestId: 'request-graph-input',
+      runId: 'request-graph-input',
+      channel: 'web',
+      agentId: 'agent-1',
+      userId: 'user-1',
+      codeSessionId: 'code-session-1',
+      title: 'Workspace Implementer',
+    });
+
+    const graphInput = buildDelegatedWorkerGraphInput({
+      context,
+      intent: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'modify',
+        summary: 'Modify repository.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      securityContext: {
+        agentId: 'agent-1',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        codeSessionId: 'code-session-1',
+      },
+      trigger: {
+        type: 'user_request',
+        source: 'web',
+        sourceId: 'message-1',
+      },
+      ownerAgentId: 'agent-1',
+      executionProfileName: 'managed-cloud',
+    });
+
+    expect(graphInput).toMatchObject({
+      graphId: context.graphId,
+      executionId: context.executionId,
+      rootExecutionId: context.rootExecutionId,
+      parentExecutionId: context.parentExecutionId,
+      requestId: context.requestId,
+      runId: context.runId,
+      securityContext: {
+        agentId: 'agent-1',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        codeSessionId: 'code-session-1',
+      },
+      trigger: {
+        type: 'user_request',
+        source: 'web',
+        sourceId: 'message-1',
+      },
+      nodes: [{
+        nodeId: context.nodeId,
+        graphId: context.graphId,
+        kind: 'delegated_worker',
+        ownerAgentId: 'agent-1',
+        executionProfileName: 'managed-cloud',
+      }],
+      edges: [],
+    });
   });
 
   it('builds completed terminal verification projection events', () => {
@@ -154,6 +232,104 @@ describe('delegated worker graph node helpers', () => {
       prompt: 'Resolve the policy blocker.',
       verificationArtifactId: projection.verificationArtifact.artifactId,
     });
+  });
+
+  it('builds terminal graph completion metadata from the delegated node runner', () => {
+    const run = {
+      context: buildDelegatedWorkerGraphContext({
+        graphId: 'execution-graph:delegated-task:completion:delegated-worker',
+        executionId: 'delegated-task:completion',
+        rootExecutionId: 'root-completion',
+        requestId: 'request-completion',
+        title: 'Workspace Implementer',
+      }),
+      sequence: 2,
+    };
+    const verification: VerificationDecision = {
+      decision: 'blocked',
+      reasons: ['Approval is required.'],
+      retryable: false,
+      requiredNextAction: 'Approve the file write.',
+    };
+
+    expect(buildDelegatedWorkerRunningMetadata(run)).toMatchObject({
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: 'running',
+      lifecycle: 'running',
+    });
+
+    const completion = buildDelegatedWorkerGraphCompletion({
+      run,
+      timestamp: 3_456,
+      lifecycle: 'blocked',
+      verification,
+      payload: {
+        lifecycle: 'blocked',
+        summary: 'Approval is required.',
+      },
+      blockerKind: 'approval',
+      blockerPrompt: 'Approve the file write.',
+    });
+
+    expect(completion.metadata).toMatchObject({
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: 'awaiting_approval',
+      lifecycle: 'blocked',
+      verificationArtifactId: completion.verificationArtifact.artifactId,
+    });
+    expect(completion.verificationArtifactRef).toMatchObject({
+      artifactId: completion.verificationArtifact.artifactId,
+      artifactType: 'VerificationResult',
+    });
+    expect(completion.interruptEvent).toMatchObject({
+      kind: 'interruption_requested',
+      payload: {
+        kind: 'approval',
+        prompt: 'Approve the file write.',
+      },
+    });
+    expect(completion.events.map((event) => [event.sequence, event.kind])).toEqual([
+      [3, 'artifact_created'],
+      [4, 'verification_completed'],
+      [5, 'interruption_requested'],
+    ]);
+    expect(run.sequence).toBe(5);
+  });
+
+  it('builds graph failure events without WorkerManager terminal event ownership', () => {
+    const run = {
+      context: buildDelegatedWorkerGraphContext({
+        graphId: 'execution-graph:delegated-task:failure:delegated-worker',
+        executionId: 'delegated-task:failure',
+        rootExecutionId: 'root-failure',
+        requestId: 'request-failure',
+        title: 'Workspace Implementer',
+      }),
+      sequence: 4,
+    };
+
+    const failure = buildDelegatedWorkerGraphFailure({
+      run,
+      timestamp: 4_567,
+      payload: {
+        lifecycle: 'failed',
+        reason: 'Worker crashed.',
+      },
+    });
+
+    expect(failure.metadata).toMatchObject({
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: 'failed',
+      lifecycle: 'failed',
+    });
+    expect(failure.events.map((event) => [event.sequence, event.kind, event.nodeKind])).toEqual([
+      [5, 'node_failed', 'delegated_worker'],
+      [6, 'graph_failed', undefined],
+    ]);
+    expect(run.sequence).toBe(6);
   });
 
   it('normalizes unknown graph blocker kinds to missing context', () => {
