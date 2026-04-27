@@ -105,10 +105,14 @@ Checkpoint after the chat-continuation approval-resume ownership cleanup:
 
 - `src/runtime/chat-agent/chat-continuation-graph.ts` now owns graph approval-resume lifecycle projection for chat continuations: persisted resume lookup, pending-action completion timing, `interruption_resolved`, denied `graph_failed`, completion `graph_completed`, and execution-graph response metadata.
 - `ChatAgent` still invokes the payload-specific continuation executors for filesystem save, automation authoring, and suspended tool-loop payloads, but it no longer hand-builds chat-continuation graph resume events or terminal graph metadata.
+- `src/runtime/chat-agent/chat-continuation-runtime.ts` now owns chat-continuation payload dispatch. `ChatAgent` binds the concrete filesystem, automation, and suspended tool-loop executors, but no longer switches on continuation payload type.
 - Focused coverage for this cleanup passed: `npx vitest run src/runtime/chat-agent/chat-continuation-graph.test.ts src/runtime/chat-agent/tool-loop-continuation.test.ts src/runtime/chat-agent/orchestration-state.test.ts src/chat-agent.test.ts src/runtime/pending-action-resume.test.ts` reported 105 passing tests.
+- Focused coverage for the payload-dispatch extraction passed: `npx vitest run src/runtime/chat-agent/chat-continuation-runtime.test.ts src/runtime/chat-agent/chat-continuation-graph.test.ts src/runtime/chat-agent/tool-loop-continuation.test.ts src/runtime/chat-agent/tool-loop-runtime.test.ts src/chat-agent.test.ts` reported 98 passing tests.
 - `npm run check` passed after the cleanup.
 - Full `npm test` passed after the cleanup: 309 files, 3296 tests.
 - `npm run build` passed after the cleanup.
+- Full `npm test` passed after the payload-dispatch extraction: 310 files, 3299 tests.
+- `npm run build` passed after the payload-dispatch extraction.
 
 Known remaining problems and risks:
 

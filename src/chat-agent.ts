@@ -138,9 +138,6 @@ import {
   tryDirectRecentToolReport as tryDirectRecentToolReportHelper,
 } from './runtime/chat-agent/recent-tool-report.js';
 import {
-  normalizeChatContinuationPrincipalRole,
-} from './runtime/chat-agent/chat-continuation-payloads.js';
-import {
   buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
   buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
   executeDirectSecondBrainMutation as executeDirectSecondBrainMutationHelper,
@@ -175,6 +172,9 @@ import {
   startChatContinuationGraphApprovalResume,
   type ChatContinuationPayload,
 } from './runtime/chat-agent/chat-continuation-graph.js';
+import {
+  executeChatContinuationPayload,
+} from './runtime/chat-agent/chat-continuation-runtime.js';
 import {
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
   resumeStoredToolLoopContinuation as resumeStoredToolLoopContinuationHelper,
@@ -4000,38 +4000,24 @@ interface DegradedDirectIntentResponseInput {
       return graphResume.deniedResponse ?? null;
     }
 
-    const result = chatResume.payload.type === 'filesystem_save_output'
-      ? await this.executeStoredFilesystemSave({
-          targetPath: chatResume.payload.targetPath,
-          content: chatResume.payload.content,
-          originalUserContent: chatResume.payload.originalUserContent,
-          userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
-          userId: pendingAction.scope.userId,
-          channel: pendingAction.scope.channel,
-          surfaceId: pendingAction.scope.surfaceId,
-          principalId: chatResume.payload.principalId ?? pendingAction.scope.userId,
-          principalRole: normalizeChatContinuationPrincipalRole(chatResume.payload.principalRole) ?? 'owner',
-          requestId: randomUUID(),
-          codeContext: chatResume.payload.codeContext,
-          allowPathRemediation: chatResume.payload.allowPathRemediation,
-        })
-      : chatResume.payload.type === 'automation_authoring'
-        ? await this.executeStoredAutomationAuthoring(
-            pendingAction,
-            chatResume.payload,
-            options.approvalResult,
-          )
-        : await this.resumeStoredToolLoopContinuation(
-            pendingAction,
-            chatResume.payload,
-            {
-              approvalId: options.approvalId,
-              pendingActionAlreadyCleared: true,
-              approvalResult: options.approvalResult,
-            },
-          ) ?? {
-            content: 'I could not resume the pending coding run after approval.',
-          };
+    const result = await executeChatContinuationPayload({
+      pendingAction,
+      resume: chatResume,
+      approvalId: options.approvalId,
+      approvalResult: options.approvalResult,
+      createRequestId: () => randomUUID(),
+      executeStoredFilesystemSave: (request) => this.executeStoredFilesystemSave(request),
+      executeStoredAutomationAuthoring: (action, continuation, approvalResult) => this.executeStoredAutomationAuthoring(
+        action,
+        continuation,
+        approvalResult,
+      ),
+      resumeStoredToolLoopContinuation: (action, continuation, resumeOptions) => this.resumeStoredToolLoopContinuation(
+        action,
+        continuation,
+        resumeOptions,
+      ),
+    });
     const response = typeof result === 'string' ? { content: result } : result;
     return completeChatContinuationGraphResume({
       graphStore: this.executionGraphStore,
