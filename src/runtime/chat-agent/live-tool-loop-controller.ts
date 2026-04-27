@@ -957,6 +957,7 @@ function shouldUseNoToolDirectAnswer(
   decision: IntentGatewayDecision | undefined,
 ): boolean {
   if (!decision) return false;
+  if (decision.route === 'unknown' || decision.confidence === 'low') return false;
   return decision.preferredAnswerPath === 'direct'
     && decision.requiresRepoGrounding !== true
     && decision.requiresToolSynthesis !== true

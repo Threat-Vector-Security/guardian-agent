@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { UserMessage } from '../../agent/types.js';
-import type { ChatMessage, ChatOptions } from '../../llm/types.js';
+import type { ChatMessage, ChatOptions, ToolCall } from '../../llm/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import { runLiveToolLoopController } from './live-tool-loop-controller.js';
 
@@ -118,5 +118,137 @@ describe('runLiveToolLoopController', () => {
     expect(result.finalContent).toBe('Request denied.');
     expect(chatWithRoutingMetadata).toHaveBeenCalledOnce();
     expect(tools.listAlwaysLoadedDefinitions).not.toHaveBeenCalled();
+  });
+
+  it('does not let low-confidence unknown routing bypass model-requested tool loops', async () => {
+    const msg = message('Make the answer 42 in the selected file.');
+    const findToolsDefinition = {
+      name: 'find_tools',
+      description: 'Search available tools.',
+      risk: 'read_only',
+      category: 'system',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const codeEditDefinition = {
+      name: 'code_edit',
+      description: 'Edit code.',
+      risk: 'high',
+      category: 'coding',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const responses: Array<{ content: string; toolCalls?: ToolCall[] }> = [
+      {
+        content: '',
+        toolCalls: [{
+          id: 'find-1',
+          name: 'find_tools',
+          arguments: JSON.stringify({ query: 'code_edit' }),
+        }],
+      },
+      {
+        content: '',
+        toolCalls: [{
+          id: 'edit-1',
+          name: 'code_edit',
+          arguments: JSON.stringify({
+            path: 'src/example.ts',
+            oldString: 'const answerValue = 41;',
+            newString: 'const answerValue = 42;',
+          }),
+        }],
+      },
+      { content: 'Updated the selected file so answerValue is now 42.' },
+    ];
+    const chatWithRoutingMetadata = vi.fn(async (_ctx, _messages: ChatMessage[], _options?: ChatOptions) => {
+      const response = responses.shift() ?? { content: '' };
+      return {
+        response: {
+          content: response.content,
+          model: 'test-model',
+          finishReason: response.toolCalls?.length ? 'tool_calls' as const : 'stop' as const,
+          ...(response.toolCalls ? { toolCalls: response.toolCalls } : {}),
+        },
+        providerName: 'local',
+        providerLocality: 'local' as const,
+        usedFallback: false,
+        durationMs: 5,
+      };
+    });
+    const executeModelTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'find_tools') {
+        return {
+          success: true,
+          output: {
+            tools: [codeEditDefinition],
+          },
+        };
+      }
+      return { success: true, status: 'completed' };
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listAlwaysLoadedDefinitions: vi.fn(() => [findToolsDefinition]),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+      listToolDefinitions: vi.fn(() => []),
+      getToolDefinition: vi.fn((name: string) => (
+        name === 'find_tools' ? findToolsDefinition : name === 'code_edit' ? codeEditDefinition : undefined
+      )),
+      executeModelTool,
+    };
+
+    const result = await runLiveToolLoopController({
+      agentId: 'default',
+      ctx: { llm: { name: 'local' } },
+      message: msg,
+      llmMessages: [{ role: 'user', content: msg.content }],
+      tools,
+      qualityFallbackEnabled: false,
+      directIntentDecision: directDecision({
+        route: 'unknown',
+        confidence: 'low',
+        operation: 'unknown',
+        summary: 'Classifier fallback.',
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        preferredAnswerPath: 'direct',
+      }),
+      directBrowserIntent: false,
+      hasResolvedCodeSession: true,
+      resolvedCodeSessionId: 'code-session-1',
+      effectiveCodeContext: { workspaceRoot: 'S:/repo', sessionId: 'code-session-1' },
+      activeSkills: [],
+      requestIntentContent: msg.content,
+      routedScopedMessage: msg,
+      conversationUserId: 'owner',
+      conversationChannel: 'web',
+      allowModelMemoryMutation: false,
+      defaultToolResultProviderKind: 'local',
+      maxToolRounds: 4,
+      contextBudget: 24_000,
+      pendingActionUserId: 'owner',
+      pendingActionChannel: 'web',
+      pendingActionUserKey: 'owner:web',
+      log: { info: vi.fn(), warn: vi.fn() },
+      chatWithRoutingMetadata,
+      resolveToolResultProviderKind: vi.fn(() => 'local' as const),
+      sanitizeToolResultForLlm: vi.fn((_toolName, result) => ({
+        sanitized: result,
+        threats: [],
+        trustLevel: 'trusted' as const,
+        taintReasons: [],
+      })),
+      resolveStoredToolLoopExecutionProfile: vi.fn(() => null),
+      lacksUsableAssistantContent: vi.fn((content?: string) => !content?.trim()),
+      looksLikeOngoingWorkResponse: vi.fn(() => false),
+      getPendingApprovalIds: vi.fn(() => []),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: null })),
+      setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
+    } as never);
+
+    expect(result.finalContent).toBe('Updated the selected file so answerValue is now 42.');
+    expect(chatWithRoutingMetadata).toHaveBeenCalledTimes(3);
+    expect(chatWithRoutingMetadata.mock.calls[0]?.[2]?.tools).not.toEqual([]);
+    expect(executeModelTool.mock.calls.map((call) => call[0])).toEqual(['find_tools', 'code_edit']);
   });
 });

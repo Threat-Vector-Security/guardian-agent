@@ -1180,13 +1180,37 @@ guardian:
       false,
       `Expected the live delegated bubble to avoid terminal completion wording before the final reply. Bubble: ${JSON.stringify(activeThinkingSummary)}`,
     );
-    await page.waitForFunction(() => {
-      const history = Array.from(document.querySelectorAll('#chat-history .chat-message'));
-      const summaries = history.filter((node) => (node.textContent || '').includes('slow repo summary'));
-      const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));
-      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
-      return summaries.length === 1 && finalReply && !thinking;
-    }, null, { timeout: 30000 });
+    try {
+      await page.waitForFunction(() => {
+        const history = Array.from(document.querySelectorAll('#chat-history .chat-message'));
+        const summaries = Array.from(document.querySelectorAll('#chat-history .chat-message.user'))
+          .filter((node) => (node.textContent || '').includes('slow repo summary'));
+        const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));
+        const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+        return summaries.length === 1 && finalReply && !thinking;
+      }, null, { timeout: 30000 });
+    } catch {
+      const summaryDiagnostics = await page.evaluate(() => {
+        const messages = Array.from(document.querySelectorAll('#chat-history .chat-message'));
+        return {
+          messageCount: messages.length,
+          messages: messages.map((node) => ({
+            className: node.className,
+            text: (node.textContent || '').replace(/\s+/g, ' ').trim(),
+          })),
+          slowSummaryCount: Array.from(document.querySelectorAll('#chat-history .chat-message.user'))
+            .filter((node) => (node.textContent || '').includes('slow repo summary')).length,
+          finalReplyCount: messages.filter((node) => (node.textContent || '').includes('This repo contains a src directory')).length,
+          thinkingText: document.querySelector('#chat-history .chat-message.is-thinking')?.textContent || '',
+        };
+      });
+      throw new assert.AssertionError({
+        message: `Expected slow repo summary final reply before timeout. Diagnostics: ${JSON.stringify(summaryDiagnostics)}`,
+        actual: summaryDiagnostics,
+        expected: 'single prompt, final reply, and no thinking bubble',
+        operator: 'waitForFunction',
+      });
+    }
 
     // The harness marks this workspace as blocked, so mutating code tools may
     // pause for approval before the edit is applied.
