@@ -674,6 +674,8 @@ function buildDashboardCallbacks(
     channelDefault: string | undefined,
     msg: IncomingDispatchMessage,
   ) => Promise<{
+    requestId: string;
+    executionId: string;
     decision: RouteDecision;
     gateway: IntentGatewayRecord | null;
     routedMessage: IncomingDispatchMessage;

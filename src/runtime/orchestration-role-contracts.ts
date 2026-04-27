@@ -10,6 +10,7 @@ import type {
 import {
   hasRequiredToolOrMutationPlannedStep,
   hasRequiredWritePlannedStep,
+  requiresSecurityEvidence,
 } from './intent/planned-steps.js';
 import {
   normalizeOrchestrationRoleDescriptor,
@@ -185,6 +186,7 @@ export function inferDelegatedOrchestrationDescriptor(
     || decision.executionClass === 'repo_grounded';
   const isProviderCrud = decision.executionClass === 'provider_crud';
   const isSecurityAnalysis = decision.executionClass === 'security_analysis';
+  const securityNeedsEvidence = requiresSecurityEvidence(decision);
   const isStructuredToolOrchestration = decision.executionClass === 'tool_orchestration'
     || decision.requiresToolSynthesis
     || decision.preferredAnswerPath === 'tool_loop'
@@ -198,7 +200,7 @@ export function inferDelegatedOrchestrationDescriptor(
     );
   }
 
-  if (decision.route === 'security_task' || isSecurityAnalysis) {
+  if ((decision.route === 'security_task' || isSecurityAnalysis) && securityNeedsEvidence) {
     return buildRoleDescriptor('verifier', 'Security Verifier', ['security']);
   }
 

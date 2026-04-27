@@ -195,6 +195,23 @@ describe('routed tool execution', () => {
     expect(prompt).toContain('After collecting evidence, synthesize the findings');
   });
 
+  it('does not add source-backed tool guidance for no-evidence security refusals', () => {
+    const directSecurityRefusal = securityDecision({
+      operation: 'read',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    });
+    const section = buildRoutedIntentAdditionalSection(directSecurityRefusal);
+    const prompt = buildToolExecutionCorrectionPrompt(directSecurityRefusal);
+
+    expect(section?.content).toContain('security control response request');
+    expect(section?.content).toContain('Answer directly without reading or printing protected credentials');
+    expect(section?.content).not.toContain('Inspect the relevant source files');
+    expect(prompt).toBeUndefined();
+  });
+
   it('builds shared correction guidance for generic tool-backed planned turns', () => {
     const prompt = buildToolExecutionCorrectionPrompt({
       route: 'general_assistant',

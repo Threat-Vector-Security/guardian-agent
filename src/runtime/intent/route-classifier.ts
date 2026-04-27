@@ -4,6 +4,7 @@ import { buildRawResponsePreview, parseIntentGatewayDecision } from './structure
 import { INTENT_GATEWAY_CAPABILITY_INVENTORY_PROMPT_LINES } from './capability-inventory.js';
 import {
   looksLikeContextDependentPromptSelectionTurn,
+  looksLikeSelfContainedDirectAnswerTurn,
   looksLikeStandaloneGreetingTurn,
 } from './request-patterns.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
@@ -230,7 +231,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
   '- coding_task: code execution, code generation, debugging, repo inspection, code review, implementation planning, or programming work within a coding workspace. NOT session management.',
   '- coding_session_control: managing coding workspace sessions — listing sessions, inspecting the current session, inspecting managed sandboxes attached to the current session, switching/attaching, detaching, or creating sessions.',
-  '- security_task: security triage, containment, or security-control operations.',
+  '- security_task: security triage, containment, security-control operations, and requests to disclose protected secrets or credentials.',
   '- channel_delivery: requests to explicitly deliver, post, or send content across communication channels like Telegram, CLI, or Web.',
   '- complex_planning_task: explicitly use Guardian\'s brokered DAG / complex-planning path for a multi-step task. Use this when the user directly asks for the planner path, DAG path, or complex-planning route itself. Do NOT use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
   '- general_assistant: everything else.',
@@ -260,6 +261,8 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, emailProvider, and calendarTarget. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. For those requests, prefer general_assistant with uiSurface=config and workload metadata that keeps the request in provider/tool orchestration rather than personal_assistant_task.',
+  'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task refusal/analysis turns, not filesystem_task, even when the user names local paths or config files.',
+  'For raw-secret disclosure requests, prefer executionClass=security_analysis, preferredTier=external, requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure=low, simpleVsComplex=simple, and preferredAnswerPath=direct unless the user asks for a redacted audit or structural configuration review.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer personal_assistant_task over workspace_task or email_task when the user intent is personal productivity or Second Brain work rather than explicit provider CRUD.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, personal search across email/docs/calendar/notes, outreach review, or "what do I owe this contact?" even when the evidence comes from Google Workspace or Microsoft 365.',
@@ -400,7 +403,7 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   '- filesystem_task: filesystem lookup or read/write operations.',
   '- coding_task: code work inside a workspace, including explicit backend delegation and remote sandbox command execution.',
   '- coding_session_control: list, inspect, switch, attach, detach, or create coding sessions/workspaces.',
-  '- security_task: security triage, containment, or security-control operations.',
+  '- security_task: security triage, containment, security-control operations, and requests to disclose protected secrets or credentials.',
   '- channel_delivery: explicitly deliver, post, or send content across communication channels like Telegram, CLI, or Web.',
   '- complex_planning_task: explicitly use Guardian\'s brokered complex-planning / DAG path. Do not use this for ordinary filesystem or coding work unless the user explicitly asks for the planner path.',
   '- general_assistant: everything else.',
@@ -416,6 +419,7 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   'Set requireExactFileReferences=true only when the user explicitly asks you to name, cite, enumerate, or return the exact file paths, file names, or code paths for a repo-grounded or security inspection request.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. Prefer general_assistant with uiSurface=config and provider/tool orchestration workload metadata for those requests.',
+  'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task refusal/analysis turns, not filesystem_task, even when the user names local paths or config files.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct provider CRUD. Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, or personal retrieval across email/docs/calendar/notes.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
@@ -474,6 +478,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, contact context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
   'Guardian AI provider profile inventory, model catalogs, model routing policy, and AI provider configuration work are not personal_assistant_task. Prefer general_assistant with uiSurface="config" and provider/tool orchestration workload metadata for those requests.',
+  'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task refusal/analysis turns, not filesystem_task, even when the user names local paths or config files. For raw-secret disclosure requests, prefer executionClass="security_analysis", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", simpleVsComplex="simple", and preferredAnswerPath="direct".',
   'Generic planning or advice prompts such as "Give me a concise plan for organizing my week" are general_assistant, not personal_assistant_task, unless the user explicitly asks to inspect, summarize, or update their actual Second Brain tasks, notes, calendar, routines, or Today view.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, outreach review, or personal search across email/docs/calendar/notes even when the data comes from Google Workspace or Microsoft 365.',
   'Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system. Prefer personal_assistant_task when they explicitly ask for a Second Brain routine or mention starter routine concepts such as Morning Brief or Pre-Meeting Brief.',
@@ -571,6 +576,7 @@ const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
   'Prefer personal_assistant_task for Second Brain notes, tasks, calendar planning, briefs, contacts, routines, and personal retrieval.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, or Outlook Calendar CRUD.',
   'Prefer general_assistant for direct advice, explanation, or provider/model configuration work.',
+  'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task, not filesystem_task, even when the user names local paths or config files.',
 ].join(' ');
 
 export async function classifyIntentGatewayPass(
@@ -677,7 +683,7 @@ export function buildIntentGatewayContextSections(input: IntentGatewayInput): st
   const rawRequest = input.content.trim();
   const normalizedRequest = collapseIntentGatewayWhitespace(rawRequest);
   const suppressThreadContext = !input.pendingAction
-    && looksLikeStandaloneGreetingTurn(rawRequest)
+    && (looksLikeStandaloneGreetingTurn(rawRequest) || looksLikeSelfContainedDirectAnswerTurn(rawRequest))
     && !looksLikeContextDependentPromptSelectionTurn(normalizedRequest);
   const historySection = !suppressThreadContext && input.recentHistory && input.recentHistory.length > 0
     ? [

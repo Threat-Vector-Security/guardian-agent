@@ -274,11 +274,15 @@ export function shouldUseContinuityThreadForTurn(input: {
   if (!input.record) {
     return false;
   }
-  if (input.surfaceHadContinuityBeforeTurn || input.hasPendingAction || input.hasResolvedCodeSession) {
-    return true;
-  }
   const turnRelation = input.turnRelation?.trim();
-  return !!turnRelation && turnRelation !== 'new_request';
+  if (turnRelation) {
+    return turnRelation === 'new_request'
+      ? !!input.hasPendingAction || !!input.hasResolvedCodeSession
+      : true;
+  }
+  return !!input.surfaceHadContinuityBeforeTurn
+    || !!input.hasPendingAction
+    || !!input.hasResolvedCodeSession;
 }
 
 export function summarizeContinuityThreadForGateway(

@@ -97,6 +97,16 @@ export function hasRequiredToolOrMutationPlannedStep(
     ));
 }
 
+export function requiresSecurityEvidence(
+  decision: IntentGatewayDecision | null | undefined,
+): boolean {
+  if (!decision) return false;
+  if (decision.requiresRepoGrounding || decision.requiresToolSynthesis || decision.requireExactFileReferences) {
+    return true;
+  }
+  return requiredEvidenceSteps(decision).length > 0;
+}
+
 export function hasRequiredToolBackedAnswerPlan(
   decision: IntentGatewayDecision | null | undefined,
 ): boolean {

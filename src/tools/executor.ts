@@ -3247,6 +3247,13 @@ export class ToolExecutor {
       return null;
     }
 
+    if (toolName === 'update_tool_policy') {
+      const criticalPathError = this.getCriticalFilesystemPathError(toolName, args);
+      if (criticalPathError) {
+        return { reason: criticalPathError };
+      }
+    }
+
     const pathCheck = this.preflightPathArgs(args);
     if (pathCheck) return pathCheck;
 
@@ -4146,6 +4153,10 @@ export class ToolExecutor {
     toolName: string,
     args: Record<string, unknown>,
   ): string | null {
+    if (toolName === 'update_tool_policy' && asString(args.action).trim() === 'add_path') {
+      const rawPath = asString(args.value).trim();
+      return rawPath ? getCriticalFilesystemPathBlockReason(rawPath, toolName) : null;
+    }
     if (toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete') {
       const rawPath = asString(args.path).trim();
       return rawPath ? getCriticalFilesystemPathBlockReason(rawPath, toolName) : null;

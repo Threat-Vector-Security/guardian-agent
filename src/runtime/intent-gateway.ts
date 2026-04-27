@@ -22,6 +22,10 @@ import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
 } from './intent/types.js';
+import {
+  isRawCredentialDisclosureRequest,
+  looksLikeSelfContainedDirectAnswerTurn,
+} from './intent/request-patterns.js';
 import type {
   IntentGatewayChatFn,
   IntentGatewayDecision,
@@ -81,6 +85,10 @@ export class IntentGateway {
     chat: IntentGatewayChatFn,
   ): Promise<IntentGatewayRecord> {
     const startedAt = Date.now();
+    const contentPlanRecord = buildContentPlanIntentGatewayRecord(input, startedAt);
+    if (contentPlanRecord) {
+      return contentPlanRecord;
+    }
     const primaryPromptProfile = selectIntentGatewayPromptProfile(input);
     const primary = await classifyIntentGatewayPass(input, chat, {
       mode: 'primary',
@@ -156,6 +164,72 @@ export class IntentGateway {
       decision,
     };
   }
+}
+
+function buildContentPlanIntentGatewayRecord(
+  input: IntentGatewayInput,
+  startedAt: number,
+): IntentGatewayRecord | null {
+  const sourceContent = input.content;
+  const repairContext = {
+    sourceContent,
+    pendingAction: input.pendingAction,
+    continuity: input.continuity,
+  };
+  const normalize = (raw: Record<string, unknown>, rawResponsePreview: string): IntentGatewayRecord => ({
+    mode: 'primary',
+    available: true,
+    model: 'content-plan',
+    latencyMs: Math.max(0, Date.now() - startedAt),
+    promptProfile: 'compact',
+    rawResponsePreview,
+    decision: normalizeIntentGatewayDecision(raw, repairContext, {
+      classifierSource: 'derived.workload',
+    }),
+  });
+
+  if (looksLikeSelfContainedDirectAnswerTurn(sourceContent)) {
+    return normalize({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Answer the self-contained exact-response request directly.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, 'content-plan:self-contained-exact-answer');
+  }
+
+  if (isRawCredentialDisclosureRequest(sourceContent)) {
+    return normalize({
+      route: 'security_task',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Refuse a request to disclose raw protected credentials or secrets.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'security_analysis',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, 'content-plan:raw-credential-disclosure-refusal');
+  }
+
+  return null;
 }
 
 function normalizeIntentGatewayRecordDecisionForInput(

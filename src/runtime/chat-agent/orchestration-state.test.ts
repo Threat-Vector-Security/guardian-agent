@@ -662,7 +662,7 @@ describe('ChatAgentOrchestrationState', () => {
         confidence: 'high' as const,
         operation: 'answer',
         summary: 'Answer a follow-up about the prior answer.',
-        turnRelation: 'new_request' as const,
+        turnRelation: 'follow_up' as const,
         resolution: 'ready' as const,
         missingFields: [],
         executionClass: 'direct_assistant' as const,
@@ -704,12 +704,102 @@ describe('ChatAgentOrchestrationState', () => {
     expect(updated?.activeExecutionRefs).toEqual([
       {
         kind: 'execution',
-        id: 'exec-follow-up',
-        label: 'Answer a follow-up about the prior answer.',
+        id: 'exec-previous',
+        label: 'Find where run timeline rendering is implemented and where it is consumed.',
       },
       {
         kind: 'code_session',
         id: 'code-session-1',
+      },
+    ]);
+  });
+
+  it('drops stale code-session refs when a fresh non-code request does not resolve a session', () => {
+    const nowMs = 1_710_000_000_075;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+    const existing = continuityStore.upsert({
+      assistantId: 'assistant',
+      userId: 'user-1',
+    }, {
+      touchSurface: {
+        channel: 'web',
+        surfaceId: 'fresh-panel',
+      },
+      activeExecutionRefs: [
+        {
+          kind: 'execution',
+          id: 'exec-previous',
+          label: 'Old coding task.',
+        },
+        {
+          kind: 'code_session',
+          id: 'code-session-1',
+        },
+      ],
+    }, nowMs);
+    const gateway = {
+      mode: 'primary' as const,
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'general_assistant' as const,
+        confidence: 'high' as const,
+        operation: 'read' as const,
+        summary: 'Answer a self-contained marker request.',
+        turnRelation: 'new_request' as const,
+        resolution: 'ready' as const,
+        missingFields: [],
+        executionClass: 'direct_assistant' as const,
+        preferredTier: 'external' as const,
+        preferredAnswerPath: 'direct' as const,
+        expectedContextPressure: 'low' as const,
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        entities: {},
+      },
+    };
+
+    state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-fresh',
+        rootExecutionId: 'exec-fresh',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'fresh-panel',
+      continuityThread: existing,
+      routingContent: 'Reply with exactly this marker and no other text: FRESH-1',
+      gateway,
+      nowMs,
+    });
+    const updated = state.updateContinuityThreadFromIntent({
+      executionIdentity: {
+        executionId: 'exec-fresh',
+        rootExecutionId: 'exec-fresh',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'fresh-panel',
+      continuityThread: existing,
+      routingContent: 'Reply with exactly this marker and no other text: FRESH-1',
+      gateway,
+    });
+
+    expect(updated?.activeExecutionRefs).toEqual([
+      {
+        kind: 'execution',
+        id: 'exec-fresh',
+        label: 'Answer a self-contained marker request.',
       },
     ]);
   });

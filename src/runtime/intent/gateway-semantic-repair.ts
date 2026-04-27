@@ -29,6 +29,7 @@ import {
   isExplicitRepoInspectionRequest,
   isExplicitRepoPlanningRequest,
   isExplicitWorkspaceScopedRepoWorkRequest,
+  isRawCredentialDisclosureRequest,
 } from './request-patterns.js';
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from './text.js';
 import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.js';
@@ -50,6 +51,7 @@ export function repairStructuredIntentGatewayRoute(
   const explicitAutomationControl = isExplicitAutomationControlRequest(rawSourceContent);
   const explicitAutomationOutput = isExplicitAutomationOutputRequest(rawSourceContent);
   const explicitProviderConfig = isExplicitProviderConfigRequest(rawSourceContent);
+  const rawCredentialDisclosure = isRawCredentialDisclosureRequest(rawSourceContent);
   const explicitCodingExecution = isExplicitCodingExecutionRequest(rawSourceContent);
   const explicitWorkspaceScopedRepoWork = isExplicitWorkspaceScopedRepoWorkRequest(rawSourceContent);
   const explicitRepoInspection = isExplicitRepoInspectionRequest(rawSourceContent);
@@ -63,6 +65,9 @@ export function repairStructuredIntentGatewayRoute(
 
   if (route === 'ui_control' && explicitAutomationControl) {
     return 'automation_control';
+  }
+  if (rawCredentialDisclosure) {
+    return 'security_task';
   }
   if (
     (route === 'coding_session_control'
@@ -148,6 +153,9 @@ export function repairStructuredIntentGatewayOperation(
   }
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
+  }
+  if (route === 'security_task' && isRawCredentialDisclosureRequest(rawSourceContent)) {
+    return 'read';
   }
   if (route === 'automation_control' && operation === 'navigate') {
     return 'read';

@@ -234,6 +234,56 @@ describe('execution profiles', () => {
     });
   });
 
+  it('keeps no-evidence security refusals on managed cloud direct routing', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        route: 'security_task',
+        operation: 'read',
+        executionClass: 'security_analysis',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_direct',
+    });
+  });
+
+  it('preserves no-evidence security decisions when delegated profile derivation is invoked defensively', () => {
+    const decision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'security_task',
+        operation: 'read',
+        executionClass: 'security_analysis',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      }),
+      orchestration: {
+        role: 'verifier',
+        label: 'Security Verifier',
+        lenses: ['security'],
+      },
+    });
+
+    expect(decision).toMatchObject({
+      route: 'security_task',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+    });
+  });
+
   it('uses the managed-cloud coding profile when managed-cloud-only mode forces coding through that tier', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),

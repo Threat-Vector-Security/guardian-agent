@@ -3175,7 +3175,7 @@ describe('WebChannel', () => {
     const res = await fetch('http://localhost:18925/api/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ content: 'Hello', surfaceId: 'web-guardian-chat' }),
+      body: JSON.stringify({ content: 'Hello', requestId: 'req-web-message-1', surfaceId: 'web-guardian-chat' }),
     });
 
     const body = await res.json() as { content: string };
@@ -3183,6 +3183,7 @@ describe('WebChannel', () => {
     expect(res.status).toBe(200);
     expect(body.content).toBe('Echo: Hello');
     expect(received.length).toBe(1);
+    expect(received[0]?.id).toBe('req-web-message-1');
     expect(received[0]?.surfaceId).toBe('web-guardian-chat');
   });
 

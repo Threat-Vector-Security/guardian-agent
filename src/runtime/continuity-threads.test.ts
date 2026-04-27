@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ContinuityThreadStore,
   formatContinuityThreadForPrompt,
+  shouldUseContinuityThreadForTurn,
   summarizeContinuityThreadForGateway,
   toContinuityThreadClientMetadata,
   type ContinuityThreadScope,
@@ -139,5 +140,48 @@ describe('ContinuityThreadStore', () => {
       { kind: 'execution', id: 'exec-1' },
     ]);
     expect(toContinuityThreadClientMetadata(record)).not.toHaveProperty('focusSummary');
+  });
+
+  it('uses linked-surface continuity before classification but drops it after a fresh request decision', () => {
+    const store = createStore();
+    const record = store.upsert(createScope(), {
+      touchSurface: { channel: 'web', surfaceId: 'web-guardian-chat' },
+      focusSummary: 'Continue old coding work.',
+      activeExecutionRefs: [{ kind: 'code_session', id: 'old-session' }],
+    });
+
+    expect(shouldUseContinuityThreadForTurn({
+      record,
+      surfaceHadContinuityBeforeTurn: true,
+    })).toBe(true);
+    expect(shouldUseContinuityThreadForTurn({
+      record,
+      surfaceHadContinuityBeforeTurn: true,
+      turnRelation: 'new_request',
+    })).toBe(false);
+    expect(shouldUseContinuityThreadForTurn({
+      record,
+      surfaceHadContinuityBeforeTurn: true,
+      turnRelation: 'follow_up',
+    })).toBe(true);
+  });
+
+  it('keeps pending-action and resolved-code-session continuity even when the turn is a new request', () => {
+    const store = createStore();
+    const record = store.upsert(createScope(), {
+      touchSurface: { channel: 'web', surfaceId: 'web-guardian-chat' },
+      focusSummary: 'Approval is waiting.',
+    });
+
+    expect(shouldUseContinuityThreadForTurn({
+      record,
+      turnRelation: 'new_request',
+      hasPendingAction: true,
+    })).toBe(true);
+    expect(shouldUseContinuityThreadForTurn({
+      record,
+      turnRelation: 'new_request',
+      hasResolvedCodeSession: true,
+    })).toBe(true);
   });
 });

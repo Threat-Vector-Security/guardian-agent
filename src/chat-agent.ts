@@ -32,7 +32,10 @@ import type { ConversationKey } from './runtime/conversation.js';
 import { ConversationService } from './runtime/conversation.js';
 import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
-import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
+import {
+  resolveConversationHistoryChannel,
+  resolveConversationSurfaceId,
+} from './runtime/channel-surface-ids.js';
 import {
   formatCodingBackendApprovalResult,
 } from './runtime/chat-agent/coding-backend-approval-result.js';
@@ -594,11 +597,15 @@ interface DegradedDirectIntentResponseInput {
       requestId?: string;
       details?: Record<string, unknown>;
       contentPreview?: string;
+      continuityThread?: ContinuityThreadRecord | null;
     },
   ): void {
-    const continuity = input.message?.userId
-      ? summarizeContinuityThreadForGateway(this.getContinuityThread(input.message.userId))
-      : null;
+    const hasContinuityOverride = Object.prototype.hasOwnProperty.call(input, 'continuityThread');
+    const continuity = hasContinuityOverride
+      ? summarizeContinuityThreadForGateway(input.continuityThread)
+      : input.message?.userId
+        ? summarizeContinuityThreadForGateway(this.getContinuityThread(input.message.userId))
+        : null;
     const details = {
       ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
       ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
@@ -912,7 +919,11 @@ interface DegradedDirectIntentResponseInput {
       );
     }
     const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? effectiveMessage.userId;
-    const conversationChannel = resolvedCodeSession?.session.conversationChannel ?? effectiveMessage.channel;
+    const conversationChannel = resolvedCodeSession?.session.conversationChannel
+      ?? resolveConversationHistoryChannel({
+        channel: effectiveMessage.channel,
+        surfaceId: effectiveMessage.surfaceId,
+      });
     const selectedExecutionProfile = readSelectedExecutionProfileMetadata(effectiveMessage.metadata);
     const fallbackProviderOrder = selectedExecutionProfile?.fallbackProviderOrder;
     const conversationKey = {
@@ -1323,7 +1334,10 @@ interface DegradedDirectIntentResponseInput {
           surfaceId,
           action,
         ),
-        recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+        recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, {
+          ...traceInput,
+          continuityThread: continuityThreadForContext,
+        }),
         toPendingActionEntities,
       });
       if (clarificationResponse) {
@@ -1816,7 +1830,10 @@ interface DegradedDirectIntentResponseInput {
       activeSkills,
       resolvedCodeSession,
       codeContext: effectiveCodeContext,
-      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, {
+        ...traceInput,
+        continuityThread: continuityThreadForContext,
+      }),
       handlers: directRouteHandlers,
       onHandled: (candidate, result) => buildScopedDirectIntentResponse({
         candidate,
@@ -3756,6 +3773,9 @@ interface DegradedDirectIntentResponseInput {
       ) ?? preRouted;
       this.recordIntentRoutingTrace('gateway_classified', {
         message,
+        ...(options && Object.prototype.hasOwnProperty.call(options, 'continuityThread')
+          ? { continuityThread: options.continuityThread ?? null }
+          : {}),
         details: {
           source: 'pre_routed',
           mode: enrichedPreRouted.mode,
@@ -3826,6 +3846,7 @@ interface DegradedDirectIntentResponseInput {
     }
     this.recordIntentRoutingTrace('gateway_classified', {
       message,
+      continuityThread: gatewayContext.continuityThread,
       details: enrichedClassified
         ? {
             source: 'agent',

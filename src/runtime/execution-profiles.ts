@@ -24,7 +24,10 @@ import type {
   IntentGatewayOperation,
   IntentGatewayPreferredAnswerPath,
 } from './intent-gateway.js';
-import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
+import {
+  hasRequiredWritePlannedStep,
+  requiresSecurityEvidence,
+} from './intent/planned-steps.js';
 import type { RouteDecision } from './message-router.js';
 import type { OrchestrationRoleDescriptor } from './orchestration-role-descriptors.js';
 
@@ -357,7 +360,11 @@ function shouldPreferFrontier(
   if (wouldUseDirectReasoningMode(decision)) {
     return false;
   }
-  if (decision.executionClass === 'security_analysis' && policy.preferFrontierForSecurity) {
+  if (
+    decision.executionClass === 'security_analysis'
+    && policy.preferFrontierForSecurity
+    && requiresSecurityEvidence(decision)
+  ) {
     return true;
   }
   if (
@@ -738,6 +745,9 @@ function deriveDelegatedExecutionDecision(input: {
   });
 
   if (lenses.has('security')) {
+    if (!requiresSecurityEvidence(base)) {
+      return base;
+    }
     return withDerivedWorkload({
       route: 'security_task',
       operation: readOperation,

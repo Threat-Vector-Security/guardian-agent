@@ -1,7 +1,7 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** Architecture refinement and verification phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented. The latest debt-burn slice scoped stale continuity/code-session state out of fresh surfaces and split automation direct-vs-worker ownership by planned-step contract. The current risk is no longer missing primitives; it is finishing app-facing proof and deleting the remaining overlapping owners as graph-owned replacements land.
-**Date:** 2026-04-26
+**Status:** Architecture refinement and verification phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented. The latest app-facing slice proved the current routing, continuity, approval, security, OpenRouter managed-cloud, web approval, skills-routing, and Code UI smoke paths against the actual app and browser/API surfaces. The current risk is no longer missing primitives; it is deleting the remaining overlapping owners as graph-owned replacements land and continuing delegated graph cleanup without weakening brokered-worker isolation.
+**Date:** 2026-04-27
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
 - `docs/plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md`
@@ -16,20 +16,20 @@ This is not a request to import LangGraph, Temporal, or another framework. The p
 
 ## Current Implementation State
 
-As of 2026-04-26:
+As of 2026-04-27:
 
 - Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
 - Phase 3 typed artifact store and grounded synthesis are implemented for the read-only lane: graph-owned artifact storage retains typed artifact contents and refs, direct reasoning emits `SearchResultSet`, `FileReadSet`, `EvidenceLedger`, and `SynthesisDraft` artifacts, and no-tools synthesis consumes bounded evidence artifacts.
 - Phase 4 mutation nodes are implemented for the first structured search/write lane: required write steps now keep top-level requests out of read-only direct reasoning, route read-like coding plans with structured writes to workspace implementer orchestration, synthesize `WriteSpec`, execute `fs_write` through supervisor-owned tool execution, and verify the written contents.
-- Phase 5 graph interrupts are implemented for the first approval/clarification slices and for brokered delegated-worker approval suspension/resume. Several legacy producers have already been deleted, but live chat tool-loop resume and some delegated retry/recovery ownership still need graph-native replacement before their old owners can be removed.
-- Continuity and code-session context are now gated before Intent Gateway classification. Fresh surfaces do not inherit stale owner continuity or same-principal shared code sessions unless the surface was already linked, a pending action is active, an explicit/same-surface code session is present, or the gateway identifies a non-new follow-up.
+- Phase 5 graph interrupts are implemented for the first approval/clarification slices and for brokered delegated-worker approval suspension/resume. A live OpenRouter API sweep proved pending-action creation, approval API decision, tool execution, and final continuation for a harmless policy-gated `fs_write`; several legacy producers have already been deleted, but live chat tool-loop resume and some delegated retry/recovery ownership still need graph-native replacement before their old owners can be removed.
+- Continuity and code-session context are now gated before Intent Gateway classification and normal chat history is scoped to explicit surfaces. Fresh surfaces do not inherit stale owner continuity, unrelated surface chat history, or same-principal shared code sessions unless the surface was already linked, a pending action is active, an explicit/same-surface code session is present, or the gateway identifies a non-new follow-up.
 - Automation authoring and automation control now have separate planned-step ownership rules: authoring can remain direct for generic read/search/write authoring work, while control defers mixed or answer-only plans instead of overlapping direct automation and worker orchestration.
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
-- Do not move to broader hybrid write behavior until the app-facing API sweep below proves fresh-surface isolation, same-surface continuity, approval continuity, security refusal, and managed-cloud provider fallback after the latest scoping changes.
+- Do not move to broader hybrid write behavior until the next slice preserves the proven app-facing API sweep for fresh-surface isolation, same-surface continuity, approval continuity, security refusal, and managed-cloud provider metadata.
 
-### 2026-04-26 Handoff Status
+### 2026-04-27 Handoff Status
 
 The latest work focused on orchestration quality, evidence grounding, provider fallback, continuation, and approval-resume recovery. These changes are intentionally in shared routing/orchestration/verifier layers, not keyword intent-routing band-aids.
 
@@ -44,38 +44,69 @@ Implemented in this refinement slice:
 - Fresh-surface routing now suppresses stale owner continuity and code-session context before Intent Gateway classification. Shared same-principal code sessions remain usable after a request is explicitly code-related, but the pre-gateway lookup is exact-surface or explicit-session only.
 - ChatAgent prompt/history assembly now uses the same continuity eligibility rule as incoming dispatch. A fresh direct-assistant surface no longer receives old owner conversation history or stale code-session context by default.
 - Automation authoring/control capability resolution now separates generic authoring reads/searches/writes from stricter automation-control execution, preventing mixed direct/worker ownership for answer or cross-domain plans.
+- Non-stream `/api/message` explicit-agent dispatch now uses the same shared incoming-dispatch preparation as streaming dispatch, so request-scoped managed-cloud provider metadata, request ids, gateway decisions, and routing trace events are attached consistently.
+- Default non-stream `/api/message` dispatch now preserves the supplied request id through the web route and bootstrap channel adapter, so CLI/API sweeps can correlate the request with `intent-routing.jsonl` by the operator-provided id.
+- Normal chat conversation history now uses a surface-qualified channel key when an explicit surface id is present. This keeps same-surface continuity intact while preventing unrelated web surfaces from feeding fresh direct-assistant prompts or Intent Gateway history.
+- `update_tool_policy add_path` now applies the critical filesystem path denial before creating an approval, so attempts to expand policy access to sensitive Guardian config paths are denied rather than approval-escalated.
+- Code UI route-guard rendering now preserves unsaved editor drafts across same-page re-renders after a cancelled navigation, while sanitizing open-tab draft content out of persisted `localStorage`.
+- The Code UI smoke harness now matches the blocked-workspace policy model: mutating code edits can pause for approval before applying, and harness cleanup retries transient Windows file locks before failing.
+- Structured Intent Gateway recovery now rejects stale model-supplied `resolvedContent` for ordinary fresh/follow-up turns unless the turn is an explicit clarification/correction or pending-action continuation. Direct-assistant turns that require no repo grounding, tool synthesis, or non-answer planned steps are normalized back to the direct answer path, preventing stale security/refusal summaries from replacing unrelated exact-answer prompts.
+- Intent Gateway now emits shared content-plan records for self-contained exact-answer and raw credential-disclosure requests. These records stay inside the gateway contract, skip unnecessary classifier model calls, and keep exact answers and security refusals out of delegated/tool paths when no tool authority is needed.
+- The live tool loop now honors direct/no-tool gateway decisions by sending an empty tool set when the route needs no repo grounding, tool synthesis, or required tool-backed plan. This preserves request-scoped managed-cloud metadata while avoiding accidental tool exposure for simple answer/refusal turns.
+- Continuity projection now uses the same eligibility rule in incoming dispatch, gateway traces, prompt context, and continuity updates. Fresh/new-request turns drop stale owner continuity and same-principal `code_session` refs, while same-surface transcript-reference turns repair to `follow_up` only when real continuity exists.
+- Delegated provider/model verification now treats compact dated provider snapshots such as `moonshotai/kimi-k2.6-20260420` as equivalent to the selected OpenRouter alias `moonshotai/kimi-k2.6`, while still rejecting unrelated model drift.
 
 Verified locally after these changes:
 
 - Focused Vitest slices passed for direct reasoning, task-plan/verifier, worker-manager, worker-session, tool-loop resume, confirmation pass, intent gateway, and incoming dispatch fallback.
 - Focused orchestration regression suite passed after the latest continuity/code-session scoping slice: `npx vitest run src/runtime/code-sessions.test.ts src/runtime/incoming-dispatch.test.ts src/chat-agent.test.ts src/runtime/intent/capability-resolver.test.ts src/runtime/direct-intent-routing.test.ts` reported 165 passing tests.
+- Focused regression suite passed for the latest content-plan/no-tool/continuity/security changes: `src/runtime/intent-gateway.test.ts`, `src/runtime/chat-agent/live-tool-loop-controller.test.ts`, `src/runtime/chat-agent/orchestration-state.test.ts`, `src/runtime/code-session-request-scope.test.ts`, `src/runtime/incoming-dispatch.test.ts`, `src/runtime/orchestration-role-contracts.test.ts`, `src/runtime/execution-profiles.test.ts`, `src/runtime/routed-tool-execution.test.ts`, `src/runtime/intent/request-patterns.test.ts`, `src/runtime/intent/structured-recovery.test.ts`, `src/runtime/execution/verifier.test.ts`, and `src/runtime/continuity-threads.test.ts` reported 308 passing tests.
 - `npm run check` passed.
 - `npm run build` passed.
-- `npm test` passed after the latest scoping slice: 307 test files, 3257 tests.
+- `npm test` passed after the latest content-plan/continuity slice: 308 test files, 3290 tests.
 - Live API replay passed the core read-only ladder for:
   - "Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything."
   - "Inspect this repo and tell me which web pages consume run-timeline-context.js. Do not edit anything."
   - "Inspect this repo and tell me which files implement direct reasoning graph artifacts. Do not edit anything."
 - Live API replay for web+repo comparison succeeded with a planned `web_search` + `repo_inspect` + answer contract and satisfied delegated verification.
 - Live scratch-file write to `tmp/manual-web/approval-resume-smoke.txt` succeeded, but it did not request approval because the current policy allowed that path/action.
+- The actual app was rebuilt, started with `scripts/start-dev-windows.ps1 -StartOnly`, and `GET http://localhost:3000/api/status` confirmed provider/routing state. The sweep used OpenRouter instead of spending time on NVIDIA provider issues.
+- Exact-answer `/api/message` with request id `live-exact-fix-af151bda8ea74d7687625b081e815f91` returned the expected marker and request-scoped OpenRouter managed-cloud metadata (`providerProfileName: openrouter-direct`, `providerTier: managed_cloud`, `usedFallback: false`).
+- Fresh-surface isolation was proven with request id `live-fresh-fix-80f723f1061c403e9e704554f400c938`: the brand-new surface returned the requested fresh marker, routing trace showed `codeSessionResolved=false`, and no stale same-principal code session biased the request into coding/direct-reasoning mode.
+- Same-surface continuity was proven with request ids `live-cont-fix-1-1914af97dba84dfa95760198954ac993` and `live-cont-fix-2-4a9103cb5b48408ca8f1dc6ddeb72a12`: the second turn answered with the marker from the first turn on the same surface.
+- Approval continuity was proven with request id `live-approval-fix-52f05d7a892a4bed8f1bc53dcc34e655`: `fs_write` was temporarily set to manual, the app created pending action `f291c3eb-985c-4271-8a8c-b74e971cc95b`, approval through the API produced a continuation response, and the target file content matched exactly. The policy was restored to `auto`.
+- Security refusal was proven with request id `live-security-fix2-46f01eb5781a48ae95cd99090bca4f4c`: the prompt to read/print sensitive Guardian config credentials was refused/redacted, no pending action was created, and no raw secret pattern leaked in the response.
+- Provider alias drift was reproduced on delegated managed-cloud security refusal as OpenRouter returned `moonshotai/kimi-k2.6-20260420` for selected alias `moonshotai/kimi-k2.6`. Focused verifier coverage now accepts compact dated snapshots for OpenRouter/OpenAI aliases and still rejects unrelated model drift.
+- Focused regression coverage passed for the new fixes: dashboard runtime callbacks, incoming dispatch, ChatAgent surface continuity, and tool executor critical-path policy denial.
+- `npm run check`, full `npm test` (308 files, 3290 tests), and `npm run build` passed after the code changes.
+- Browser/web approval pass proved a real policy-gated write through the visible UI on a wide viewport: pending approval rendered, input locked/unlocked correctly, approval executed `fs_write`, final continuation rendered, and the written marker matched exactly. Screenshots were captured under `tmp/live-web-approval/`.
+- `node scripts/test-web-approvals.mjs` passed for the shared web approval flow.
+- `node --import tsx scripts/test-skills-routing-harness.mjs` passed with 16 passed and 1 expected skipped Outlook real-LLM selection case.
+- `node scripts/test-code-ui-smoke.mjs` passed after updating the harness for blocked-workspace approval behavior and fixing the Code UI dirty-draft route-guard regression.
+- Live `/api/message` request id preservation was proven after restart with request id `req-codexridfixe4306783`: OpenRouter answered the exact marker, response metadata showed `providerProfileName: openrouter-direct`, and `~/.guardianagent/routing/intent-routing.jsonl` recorded `incoming_dispatch`, profile selection, and `dispatch_response` under that same request id.
+- Live regression replay for stale intent content proved the original web failure fixed: request id `req-orfix891579-exact` returned only `WEBFIX2-orfix891579` on a fresh OpenRouter surface after an unrelated credential-refusal prompt, and trace content previews stayed on the current exact-marker request.
+- Live delegated security refusal replay with request id `req-orfix891579-security` completed through the Provider Explorer path using OpenRouter, refused/redacted raw credential exposure, and verifier stage `delegated_verification_decided` returned `satisfied` despite the provider reporting `moonshotai/kimi-k2.6-20260420`.
+- Live same-surface continuity replay with request ids `req-orfix891579-cont1` and `req-orfix891579-cont2` recovered `CONTFIX-orfix891579` on the second turn of the same surface.
+- Live approval continuity replay with request id `req-approveor662103-initial` created pending `fs_write` approval `612caf17-0b4e-42d4-8cf2-bbaf39511e60`, approval through `/api/tools/approvals/decision` resumed the graph, wrote `tmp/live-api-sweep/approval-continuity-openrouter-approveor662103.txt`, and returned exact final marker `APPROVAL-DONE-approveor662103`.
+- Latest live OpenRouter API replay after rebuild/restart proved the content-plan exact-answer path with request id `codex-final-verify-fresh-f42c13a3-f066-43a4-b284-617f0a3f935d`, returning exactly `OR-FRESH-CLEAN-27491` with managed-cloud OpenRouter metadata, no fallback, no continuity context, no active execution refs, and no code-session resolution in the request trace.
+- Latest live same-surface continuity replay used request ids `codex-final-verify-same-first-f6ad8ac3-b4cf-49a8-862a-a9185dff4a15` and `codex-final-verify-same-second-00a841a3-6b25-4b59-b1cf-cc2fb91b3293`; the second turn recovered `SAME-SURFACE-CLEAN-27491` from the first same-surface turn and carried only the current execution ref, not stale same-principal `code_session` refs.
+- Latest live security refusal replay with request id `codex-final-verify-security-74452ddb-7261-4992-ac58-91423644dbb2` refused the request to read/print raw Guardian config credentials, leaked no raw secret patterns, used OpenRouter managed-cloud metadata, and avoided fallback.
 
 Known remaining problems and risks:
 
-- A live gated approval-resume test is still outstanding. The latest scratch write proved mutation execution, not approval pause/resume, because policy allowed the write without an approval interrupt.
-- Follow-up continuity is improved and now unit-covered for stale-history suppression, but it still needs live same-surface API proof after the latest scoping change. A follow-up like "Based on your last answer..." can recover a useful answer, but earlier replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-continuation.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
-- Fresh-surface isolation is now unit-covered but still needs a live app API replay against the built app. The regression to prove is: an old same-principal code-session attachment must not bias an unrelated fresh API surface into `coding_task` or direct-reasoning mode.
-- One live delegated-worker replay exposed provider alias drift: the supervisor selected `moonshotai/kimi-k2.6`, while the provider response reported `moonshotai/kimi-k2.6-20260420`. If reproduced, fix model/profile verification through provider alias canonicalization or selected-profile identity, not by weakening verification globally.
+- The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
+- Approval/resume ownership is still not fully collapsed. The live proof covers a policy-gated API flow, but remaining legacy producers and replay/resume owners should still be deleted only as graph interrupt equivalents land.
+- Delegated retry/recovery ownership remains partially split between graph nodes and `WorkerManager`; continue moving verification, retry, recovery proposal, and terminal state into graph-native node runners before deleting old side channels.
+- Provider alias drift for compact dated OpenRouter snapshots is now covered in the delegated verifier. Remaining provider risk is broader fallback/profile ownership cleanup, not this known `moonshotai/kimi-k2.6` alias mismatch.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
-- The web UI approval experience still needs a manual pass once a policy-gated action is identified reliably.
+- Startup in this operator environment still reports a local control-plane integrity warning for `scheduled-tasks.json`; that is host runtime state, not a code regression from this slice.
 
-Recommended next slice before moving into the broader web UI phase:
+Recommended next slice:
 
-1. Restart the actual Guardian app from the current build and run the app API replay lane from `docs/guides/INTEGRATION-TEST-HARNESS.md` using managed cloud providers already configured in the operator environment.
-2. Prove fresh-surface isolation with an exact-answer request on a new surface while stale owner code-session state exists. Inspect `~/.guardianagent/routing/intent-routing.jsonl` for the request id and confirm no stale continuity/code-session context biased the gateway.
-3. Prove same-surface conversation continuity with a two-turn exact marker request on the same surface, then inspect the routing trace for intentional history/continuity attachment.
-4. Identify or configure a harmless action that is definitely approval-gated under the current dev policy, then run a live web/API approval-resume smoke that proves pending action creation, decision submission, tool execution, and continuation response.
-5. Run a security refusal API prompt that attempts to read sensitive Guardian config and confirm refusal/redaction without raw secret exposure.
-6. If delegated managed-cloud worker requests reproduce the `moonshotai/kimi-k2.6` vs `moonshotai/kimi-k2.6-20260420` mismatch, fix provider alias verification in the provider/profile layer and add focused coverage.
+1. Keep the OpenRouter API and browser sweeps as the regression baseline for any next routing/continuity/approval/web change: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, approval continuity, security refusal, request-id trace correlation, web approval UI, skills routing, and Code UI smoke.
+2. Establish graph-owned approval resume as the next hard deletion boundary. Move one remaining legacy approval/resume producer fully onto graph interrupts, then delete the replaced owner in the same slice.
+3. Continue delegated graph cleanup by moving delegated retry/recovery terminal ownership into graph node runners and deleting overlapping `WorkerManager` side channels as each path is proven.
+4. Continue provider fallback/profile cleanup by moving duplicate retry and fallback ownership into execution profile/runtime orchestration. Preserve the compact dated snapshot verifier coverage when changing provider metadata.
 
 ### 2026-04-26 Architecture Refinement And Debt-Burn Phase
 
@@ -1055,19 +1086,18 @@ Continue the GuardianAgent durable execution graph uplift from docs/plans/DURABL
 
 First inspect AGENTS.md, SECURITY.md, docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md, docs/architecture/FORWARD-ARCHITECTURE.md, docs/design/ORCHESTRATION-DESIGN.md, docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md, docs/guides/INTEGRATION-TEST-HARNESS.md, and this plan.
 
-Context: Phases 1-4 are implemented. Phase 5+ is partially implemented. The latest architecture-refinement slice scoped stale continuity/code-session state out of fresh surfaces and split automation authoring/control planned-step ownership. Focused orchestration tests, npm run check, npm test, and npm run build passed before this handoff. The remaining work is app-facing proof and then only architectural fixes for any failures found.
+Context: Phases 1-4 are implemented. Phase 5+ is partially implemented. The latest architecture-refinement and app-facing slices scoped stale continuity/code-session state out of fresh surfaces, split automation authoring/control planned-step ownership, fixed non-stream `/api/message` request metadata, surface-scoped normal chat history, blocked policy expansion to sensitive Guardian config paths, rejected stale model-supplied `resolvedContent` for ordinary turns, normalized simple direct-assistant workload recovery back to direct answers, and accepted compact dated OpenRouter/OpenAI snapshot model ids as aliases in delegated verification. Focused orchestration tests, npm run check, npm test, npm run build, and the OpenRouter app API sweep passed before this handoff. The remaining work is deletion of overlapping approval/delegated owners as graph-owned replacements land.
 
-Do not start with more refactoring. First run the actual Guardian app and test real requests against the app API from the CLI. Do not use fake model harnesses for this pass. Use managed cloud providers already configured in the operator environment: OpenRouter, NVIDIA, or Ollama Cloud.
+Do not start with broad refactoring. First preserve the proven actual-app API baseline from this plan, then run any changed approval/browser surface against a harmless policy-gated write. Do not use fake model harnesses for this pass. Prefer OpenRouter unless another provider is explicitly needed.
 
 Suggested loop:
 1. Confirm the worktree and current branch. Do not create or switch branches.
 2. Run npm run build, start the real app with scripts/start-dev-windows.ps1 -StartOnly, then confirm GET http://localhost:3000/api/status and provider/routing state.
-3. Send exact-answer POST /api/message requests with request-scoped managed-cloud provider metadata. Verify response content, provider metadata, fallback metadata, and request ids.
-4. Prove fresh-surface isolation: on a brand-new surface, an unrelated exact-answer prompt must not inherit old owner continuity or same-principal code-session state. Inspect ~/.guardianagent/routing/intent-routing.jsonl by requestId and confirm no stale context biased the gateway into coding_task/direct reasoning.
-5. Prove same-surface continuity: two-turn exact marker prompt on the same surface should answer from prior chat context, and the routing trace should show intentional continuity/history.
-6. Prove approval continuity: identify or configure a harmless policy-gated write, trigger a pending action through the app/API, approve through the approval decision API, and verify tool execution plus final continuation response.
-7. Prove security refusal: ask for sensitive Guardian config/credentials and confirm refusal/redaction without raw secret leakage in response or timeline.
-8. If delegated managed-cloud worker requests reproduce provider alias drift such as moonshotai/kimi-k2.6 vs moonshotai/kimi-k2.6-20260420, fix provider/model verification in the provider/profile layer with focused tests.
+3. Re-run the compact OpenRouter API baseline only if your change touches routing, continuity, approval, providers, or security: exact-answer provider metadata, fresh-surface isolation, same-surface continuity, policy-gated approval continuity, and security refusal.
+4. If web approval rendering or browser routing changed, run the manual browser/web UI approval pass for the same harmless policy-gated write shape. Verify pending action rendering, approval/deny controls, input locking/unlocking, final continuation display, and no duplicate replay turn.
+5. Move one remaining approval/resume legacy owner onto graph interrupts and delete the replaced owner in the same slice.
+6. Continue delegated graph cleanup by moving delegated retry/recovery terminal ownership into graph node runners and deleting overlapping WorkerManager side channels as each path is proven.
+7. Keep provider alias verification focused in the provider/profile verifier. Compact dated snapshots such as moonshotai/kimi-k2.6-20260420 are already covered; preserve that coverage while moving broader provider fallback ownership into runtime orchestration.
 
 If testing finds failures, fix the owning architecture layer only:
 - intent/routing: Intent Gateway and shared dispatch

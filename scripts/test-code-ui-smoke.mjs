@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
@@ -52,6 +53,65 @@ async function waitForHealth(baseUrl) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error('GuardianAgent did not become healthy within 180 seconds.');
+}
+
+async function waitForProcessExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return true;
+  }
+  return Promise.race([
+    new Promise((resolve) => child.once('exit', () => resolve(true))),
+    delay(timeoutMs).then(() => false),
+  ]);
+}
+
+async function terminateHarnessProcess(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  if (await waitForProcessExit(child, 2500)) return;
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    await waitForProcessExit(child, 2500);
+  }
+}
+
+async function removeHarnessTempDir(tmpDir) {
+  let lastError;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (!['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(err?.code)) {
+        throw err;
+      }
+      await delay(150 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function waitForFileMatch(filePath, pattern, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastContent = '';
+  while (Date.now() < deadline) {
+    try {
+      lastContent = fs.readFileSync(filePath, 'utf-8');
+      if (pattern.test(lastContent)) {
+        return lastContent;
+      }
+    } catch {
+      // Keep polling until the file appears or the timeout expires.
+    }
+    await delay(150);
+  }
+  throw new assert.AssertionError({
+    message: `Expected ${filePath} to match ${pattern} before timeout.`,
+    actual: lastContent,
+    expected: pattern,
+    operator: 'match',
+  });
 }
 
 function createIsolatedHarnessEnv(tmpDir, extraEnv = {}) {
@@ -1128,16 +1188,45 @@ guardian:
       return summaries.length === 1 && finalReply && !thinking;
     }, null, { timeout: 30000 });
 
-    // Code tools within the workspace are auto-approved, so the edit should
-    // complete without requiring manual approval.
+    // The harness marks this workspace as blocked, so mutating code tools may
+    // pause for approval before the edit is applied.
     await sendGuardianChatMessage('Make the answer 42 in the selected file.');
-    await page.waitForFunction(() => {
-      const messages = document.querySelectorAll('#chat-history .chat-message');
-      const hasEditPrompt = Array.from(messages).some((node) => (node.textContent || '').includes('Make the answer 42'));
-      const hasEditReply = Array.from(messages).some((node) => (node.textContent || '').includes('Updated the selected file so answerValue is now 42.'));
-      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
-      return hasEditPrompt && hasEditReply && !thinking;
-    }, null, { timeout: 30000 });
+    const editOutcome = await Promise.race([
+      page.waitForFunction(() => {
+        const messages = document.querySelectorAll('#chat-history .chat-message');
+        const hasEditPrompt = Array.from(messages).some((node) => (node.textContent || '').includes('Make the answer 42'));
+        const hasEditReply = Array.from(messages).some((node) => (node.textContent || '').includes('Updated the selected file so answerValue is now 42.'));
+        const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+        return hasEditPrompt && hasEditReply && !thinking;
+      }, null, { timeout: 30000 }).then(() => 'completed').catch(() => null),
+      page.getByRole('button', { name: 'Approve' }).waitFor({ state: 'visible', timeout: 30000 }).then(() => 'approval').catch(() => null),
+    ]);
+    if (editOutcome === 'approval') {
+      await page.getByRole('button', { name: 'Approve' }).click();
+      await waitForFileMatch(examplePath, /answerValue = 42/, 30000);
+      await page.waitForFunction(() => {
+        const history = document.querySelector('#chat-history')?.textContent || '';
+        const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+        return !thinking && /approved edit|answerValue is now 42|applied/i.test(history);
+      }, null, { timeout: 30000 });
+    } else if (editOutcome !== 'completed') {
+      const editDiagnostics = await page.evaluate(() => ({
+        chatHistory: document.querySelector('#chat-history')?.textContent || '',
+        pendingActionText: Array.from(document.querySelectorAll('#chat-history .chat-message'))
+          .map((node) => node.textContent || '')
+          .filter((text) => /approval|pending|waiting/i.test(text)),
+        thinkingText: document.querySelector('#chat-history .chat-message.is-thinking')?.textContent || '',
+      }));
+      throw new assert.AssertionError({
+        message: `Expected answerValue edit reply before timeout. Diagnostics: ${JSON.stringify({
+          ...editDiagnostics,
+          fileContent: fs.existsSync(examplePath) ? fs.readFileSync(examplePath, 'utf-8') : '',
+        })}`,
+        actual: editDiagnostics,
+        expected: 'Updated the selected file so answerValue is now 42.',
+        operator: 'waitForFunction',
+      });
+    }
     const editedFileContent = fs.readFileSync(examplePath, 'utf-8');
     if (!/answerValue = 42/.test(editedFileContent)) {
       const editDiagnostics = await page.evaluate(() => ({
@@ -1452,15 +1541,9 @@ guardian:
     if (browser) {
       await browser.close();
     }
-    if (appProcess && !appProcess.killed) {
-      appProcess.kill('SIGTERM');
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      if (!appProcess.killed) {
-        appProcess.kill('SIGKILL');
-      }
-    }
+    await terminateHarnessProcess(appProcess);
     await provider.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    await removeHarnessTempDir(tmpDir);
   }
 }
 

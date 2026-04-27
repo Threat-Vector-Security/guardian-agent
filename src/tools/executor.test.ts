@@ -4810,6 +4810,41 @@ describe('ToolExecutor', () => {
     expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot, existingRoot]);
   });
 
+  it('denies policy path expansion to Guardian config data before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: 'C:\\Users\\user\\.guardianagent',
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('denied');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toMatch(/blocked.*sensitive configuration/i);
+    expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot]);
+  });
+
   it('treats add_path for a subdirectory of an already-allowed root as a no-op before creating approval', async () => {
     const globalRoot = createExecutorRoot();
     const nestedRoot = join(globalRoot, 'nested');

@@ -25,7 +25,9 @@ import {
 } from './normalization.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import {
+  isConversationTranscriptReferenceRequest,
   isExplicitRepoInspectionRequest,
+  isRawCredentialDisclosureRequest,
   requestNeedsExactFileReferences,
 } from './request-patterns.js';
 import type {
@@ -146,7 +148,11 @@ export function normalizeIntentGatewayDecision(
   const recoveryReason = typeof parsed.recoveryReason === 'string' && parsed.recoveryReason.trim()
     ? parsed.recoveryReason.trim()
     : undefined;
-  const turnRelation = normalizeTurnRelation(parsed.turnRelation);
+  const parsedTurnRelation = normalizeTurnRelation(parsed.turnRelation);
+  const turnRelation = repairTurnRelationForConversationReference(
+    parsedTurnRelation,
+    repairContext,
+  );
   const normalizedParsedRoute = normalizeRoute(parsed.route);
   const semanticallyRepairedRoute = repairStructuredIntentGatewayRoute(
     normalizedParsedRoute,
@@ -172,6 +178,7 @@ export function normalizeIntentGatewayDecision(
     turnRelation,
     repairContext,
   );
+  const rawCredentialDisclosure = isRawCredentialDisclosureRequest(repairContext?.sourceContent);
   const routeOrOperationRepaired = route !== normalizedParsedRoute || operation !== parsedOperation;
   const resolution = normalizeResolution(parsed.resolution);
   const missingFields = Array.isArray(parsed.missingFields)
@@ -180,8 +187,27 @@ export function normalizeIntentGatewayDecision(
       .map((value) => value.trim())
       .filter(Boolean)
     : [];
-  const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
+  const clarificationContradictsCurrentRequest = shouldRepairMissingCurrentRequestContentClarification({
+    resolution,
+    missingFields,
+    sourceContent: repairContext?.sourceContent,
+    hasPendingAction: !!repairContext?.pendingAction,
+  });
+  const effectiveMissingFields = clarificationContradictsCurrentRequest
+    ? missingFields.filter((field) => !isCurrentRequestContentMissingField(field))
+    : missingFields;
+  const effectiveResolution = clarificationContradictsCurrentRequest && effectiveMissingFields.length <= 0
+    ? 'ready'
+    : resolution;
+  const rawResolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
     ? parsed.resolvedContent.trim()
+    : undefined;
+  const resolvedContent = shouldAcceptResolvedContent({
+    content: rawResolvedContent,
+    turnRelation,
+    hasPendingAction: !!repairContext?.pendingAction,
+  })
+    ? rawResolvedContent
     : undefined;
   const entityResolution = resolveIntentGatewayEntities(
     parsed,
@@ -195,23 +221,35 @@ export function normalizeIntentGatewayDecision(
     ...entityResolution.entities,
   });
   const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);
-  const executionClass = !routeOrOperationRepaired && normalizedExecutionClass
+  const executionClass = rawCredentialDisclosure
+    ? 'security_analysis'
+    : !routeOrOperationRepaired && normalizedExecutionClass
     ? normalizedExecutionClass
     : derivedWorkload.executionClass;
   const normalizedPreferredTier = normalizePreferredTier(parsed.preferredTier);
-  const preferredTier = !routeOrOperationRepaired && normalizedPreferredTier
+  const preferredTier = rawCredentialDisclosure
+    ? 'external'
+    : !routeOrOperationRepaired && normalizedPreferredTier
     ? normalizedPreferredTier
     : derivedWorkload.preferredTier;
   const hasParsedRequiresRepoGrounding = !routeOrOperationRepaired && typeof parsed.requiresRepoGrounding === 'boolean';
-  const requiresRepoGrounding = hasParsedRequiresRepoGrounding
+  const requiresRepoGrounding = rawCredentialDisclosure
+    ? false
+    : hasParsedRequiresRepoGrounding
     ? parsed.requiresRepoGrounding as boolean
     : derivedWorkload.requiresRepoGrounding;
   const hasParsedRequiresToolSynthesis = !routeOrOperationRepaired && typeof parsed.requiresToolSynthesis === 'boolean';
-  const requiresToolSynthesis = hasParsedRequiresToolSynthesis
+  const requiresToolSynthesis = rawCredentialDisclosure
+    ? false
+    : hasParsedRequiresToolSynthesis
     ? parsed.requiresToolSynthesis as boolean
     : derivedWorkload.requiresToolSynthesis;
   const heuristicRequiresExactFile = (
-    (requiresRepoGrounding || executionClass === 'repo_grounded' || executionClass === 'security_analysis')
+    (
+      requiresRepoGrounding
+      || executionClass === 'repo_grounded'
+      || (executionClass === 'security_analysis' && requiresToolSynthesis)
+    )
     && requestNeedsExactFileReferences(repairContext?.sourceContent)
   );
   const hasParsedRequireExactFileReferences = typeof parsed.requireExactFileReferences === 'boolean';
@@ -219,15 +257,21 @@ export function normalizeIntentGatewayDecision(
   const requireExactFileReferences = (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean)
     || heuristicRequiresExactFile;
   const normalizedExpectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure);
-  const expectedContextPressure = !routeOrOperationRepaired && normalizedExpectedContextPressure
+  const expectedContextPressure = rawCredentialDisclosure
+    ? 'low'
+    : !routeOrOperationRepaired && normalizedExpectedContextPressure
     ? normalizedExpectedContextPressure
     : derivedWorkload.expectedContextPressure;
   const normalizedPreferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath);
-  const preferredAnswerPath = !routeOrOperationRepaired && normalizedPreferredAnswerPath
+  const preferredAnswerPath = rawCredentialDisclosure
+    ? 'direct'
+    : !routeOrOperationRepaired && normalizedPreferredAnswerPath
     ? normalizedPreferredAnswerPath
     : derivedWorkload.preferredAnswerPath;
   const normalizedSimpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex);
-  const simpleVsComplex = !routeOrOperationRepaired && normalizedSimpleVsComplex
+  const simpleVsComplex = rawCredentialDisclosure
+    ? 'simple'
+    : !routeOrOperationRepaired && normalizedSimpleVsComplex
     ? normalizedSimpleVsComplex
     : derivedWorkload.simpleVsComplex;
   const rawPlannedSteps = Array.isArray(parsed.planned_steps)
@@ -269,8 +313,16 @@ export function normalizeIntentGatewayDecision(
     executionClass,
     requireExactFileReferences,
     requiresRepoGrounding,
+    requiresToolSynthesis,
   });
-  const selectedPlannedSteps = shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
+  const selectedPlannedSteps = shouldSuppressSecurityEvidencePlan({
+    route,
+    executionClass,
+    requiresRepoGrounding,
+    requiresToolSynthesis,
+  })
+    ? plannedSteps.filter((step) => step.kind === 'answer')
+    : shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
     ? synthesizedPlannedSteps
     : plannedSteps.length > 0
       ? plannedSteps
@@ -281,12 +333,30 @@ export function normalizeIntentGatewayDecision(
     personalItemType: entityResolution.entities.personalItemType,
   });
   const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(route, effectivePlannedSteps);
+  const structurallyDirectAnswer = isStructurallyDirectAssistantTurn({
+    executionClass,
+    requiresRepoGrounding,
+    requiresToolSynthesis,
+    plannedSteps: effectivePlannedSteps,
+  });
   const effectiveExecutionClass = toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
   const effectivePreferredTier = toolBackedAnswerPlan ? 'external' : preferredTier;
   const effectiveRequiresToolSynthesis = toolBackedAnswerPlan ? true : requiresToolSynthesis;
-  const effectiveExpectedContextPressure = toolBackedAnswerPlan ? 'medium' : expectedContextPressure;
-  const effectivePreferredAnswerPath = toolBackedAnswerPlan ? 'tool_loop' : preferredAnswerPath;
-  const effectiveSimpleVsComplex = toolBackedAnswerPlan ? 'complex' : simpleVsComplex;
+  const effectiveExpectedContextPressure = toolBackedAnswerPlan
+    ? 'medium'
+    : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
+      ? derivedWorkload.expectedContextPressure
+      : expectedContextPressure;
+  const effectivePreferredAnswerPath = toolBackedAnswerPlan
+    ? 'tool_loop'
+    : structurallyDirectAnswer
+      ? 'direct'
+      : preferredAnswerPath;
+  const effectiveSimpleVsComplex = toolBackedAnswerPlan
+    ? 'complex'
+    : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
+      ? derivedWorkload.simpleVsComplex
+      : simpleVsComplex;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -313,12 +383,20 @@ export function normalizeIntentGatewayDecision(
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
     executionClass: toolBackedAnswerPlan
       ? 'derived.workload'
+      : rawCredentialDisclosure
+      ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
     preferredTier: toolBackedAnswerPlan
       ? 'derived.workload'
+      : rawCredentialDisclosure
+      ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
-    requiresRepoGrounding: hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
+    requiresRepoGrounding: rawCredentialDisclosure
+      ? 'derived.workload'
+      : hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
     requiresToolSynthesis: toolBackedAnswerPlan
+      ? 'derived.workload'
+      : rawCredentialDisclosure
       ? 'derived.workload'
       : hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
     ...(hasParsedRequireExactFileReferences || requireExactFileReferences
@@ -328,17 +406,23 @@ export function normalizeIntentGatewayDecision(
             : 'derived.workload',
         }
       : {}),
-    expectedContextPressure: toolBackedAnswerPlan
+    expectedContextPressure: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+      ? 'derived.workload'
+      : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExpectedContextPressure)
       ? classifierSource
       : 'derived.workload',
-    preferredAnswerPath: toolBackedAnswerPlan
+    preferredAnswerPath: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+      ? 'derived.workload'
+      : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
       ? classifierSource
       : 'derived.workload',
-    simpleVsComplex: toolBackedAnswerPlan
+    simpleVsComplex: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+      ? 'derived.workload'
+      : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedSimpleVsComplex)
       ? classifierSource
@@ -352,8 +436,8 @@ export function normalizeIntentGatewayDecision(
     operation,
     summary,
     turnRelation,
-    resolution,
-    missingFields,
+    resolution: effectiveResolution,
+    missingFields: effectiveMissingFields,
     executionClass: effectiveExecutionClass,
     preferredTier: effectivePreferredTier,
     requiresRepoGrounding,
@@ -377,6 +461,64 @@ export function buildRawResponsePreview(response: ChatResponse): string | undefi
   return content ? content.slice(0, 200) : undefined;
 }
 
+function shouldAcceptResolvedContent(input: {
+  content?: string;
+  turnRelation: IntentGatewayDecision['turnRelation'];
+  hasPendingAction: boolean;
+}): boolean {
+  if (!input.content?.trim()) return false;
+  if (input.turnRelation === 'clarification_answer' || input.turnRelation === 'correction') {
+    return true;
+  }
+  return input.hasPendingAction && input.turnRelation !== 'new_request';
+}
+
+function repairTurnRelationForConversationReference(
+  turnRelation: IntentGatewayDecision['turnRelation'],
+  repairContext: IntentGatewayRepairContext | undefined,
+): IntentGatewayDecision['turnRelation'] {
+  if (turnRelation !== 'new_request' || !repairContext?.continuity) {
+    return turnRelation;
+  }
+  return isConversationTranscriptReferenceRequest(repairContext.sourceContent)
+    ? 'follow_up'
+    : turnRelation;
+}
+
+function shouldRepairMissingCurrentRequestContentClarification(input: {
+  resolution: IntentGatewayDecision['resolution'];
+  missingFields: string[];
+  sourceContent?: string;
+  hasPendingAction: boolean;
+}): boolean {
+  if (input.hasPendingAction || input.resolution !== 'needs_clarification') return false;
+  if (!input.missingFields.some(isCurrentRequestContentMissingField)) return false;
+  return collapseIntentGatewayWhitespace(input.sourceContent ?? '').length > 0;
+}
+
+function isCurrentRequestContentMissingField(field: string): boolean {
+  const normalized = field.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return normalized === 'user_request'
+    || normalized === 'request_content'
+    || normalized === 'request'
+    || normalized === 'message'
+    || normalized === 'prompt'
+    || normalized === 'user_prompt'
+    || normalized === 'task'
+    || normalized === 'instruction';
+}
+
+function isStructurallyDirectAssistantTurn(input: {
+  executionClass: IntentGatewayDecision['executionClass'];
+  requiresRepoGrounding: boolean;
+  requiresToolSynthesis: boolean;
+  plannedSteps: IntentGatewayPlannedStep[];
+}): boolean {
+  if (input.executionClass !== 'direct_assistant') return false;
+  if (input.requiresRepoGrounding || input.requiresToolSynthesis) return false;
+  return input.plannedSteps.every((step) => step.required === false || step.kind === 'answer');
+}
+
 function normalizePlannedStepKind(value: unknown): IntentGatewayPlannedStep['kind'] | null {
   switch (value) {
     case 'tool_call':
@@ -398,6 +540,7 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   executionClass: IntentGatewayDecision['executionClass'];
   requireExactFileReferences: boolean;
   requiresRepoGrounding: boolean;
+  requiresToolSynthesis: boolean;
 }): IntentGatewayPlannedStep[] {
   const sourceContent = collapseIntentGatewayWhitespace(input.sourceContent ?? '');
   if (!sourceContent) return [];
@@ -416,7 +559,11 @@ function synthesizeIntentGatewayPlannedSteps(input: {
     });
   }
 
-  if (input.requiresRepoGrounding || input.executionClass === 'repo_grounded' || input.executionClass === 'security_analysis') {
+  if (
+    input.requiresRepoGrounding
+    || input.executionClass === 'repo_grounded'
+    || (input.executionClass === 'security_analysis' && input.requiresToolSynthesis)
+  ) {
     const evidenceSummary = input.executionClass === 'security_analysis' || input.route === 'security_task'
       ? 'Inspect the relevant repo files and collect grounded security evidence.'
       : 'Inspect the relevant repo files and collect grounded repo evidence.';
@@ -440,6 +587,17 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   }
 
   return [];
+}
+
+function shouldSuppressSecurityEvidencePlan(input: {
+  route: IntentGatewayDecision['route'];
+  executionClass: IntentGatewayDecision['executionClass'];
+  requiresRepoGrounding: boolean;
+  requiresToolSynthesis: boolean;
+}): boolean {
+  return (input.route === 'security_task' || input.executionClass === 'security_analysis')
+    && !input.requiresRepoGrounding
+    && !input.requiresToolSynthesis;
 }
 
 function shouldPreferSynthesizedPlannedSteps(

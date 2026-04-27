@@ -14,6 +14,12 @@ const EXACT_FILE_LOOKUP_VERB_PATTERN = /\b(?:which|what|exact|cite|name|list|ide
 const EXACT_FILE_TARGET_PATTERN = /\b(?:web\s+pages?|client-side\s+files?|files?|file\s+paths?|file\s+names?|pages?|modules?|components?|functions?|code\s+paths?|client-side\s+code\s+paths?)\b/i;
 const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|defined|render|renders|rendered|rendering|consume|consumes|consumed|consumer|consumers|import|imports|imported|use|uses|used|using|path|paths|function|functions|keep|keeps|kept|align|aligned|responsible)\b/i;
 
+const RAW_SECRET_DISCLOSURE_VERB_PATTERN = /\b(?:print|show|reveal|display|dump|extract|exfiltrate|leak|return|give|read|open|cat|list)\b/;
+const RAW_SECRET_TARGET_PATTERN = /\b(?:api\s*keys?|bearer\s*tokens?|telegram\s*(?:bot\s*)?tokens?|provider\s+credentials?|credential\s+values?|credentials?|secrets?|secret\s+store|access\s+tokens?|refresh\s+tokens?)\b/;
+const RAW_SECRET_QUALIFIER_PATTERN = /\b(?:raw|actual|full|unredacted|plain\s*text|plaintext|values?)\b/;
+const RAW_SECRET_PROTECTED_SOURCE_PATTERN = /(?:^|[\\/\s.])\.guardianagent\b|\bguardianagent\b.{0,80}\b(?:config|configuration|credential|credentials|secrets?)\b|\b(?:config|configuration|credential|credentials?)\s+files?\b/;
+const RAW_SECRET_REDACTION_REQUEST_PATTERN = /\b(?:redacted|redact|masked|mask|sanitize|sanitized|without\s+(?:printing|revealing|showing|displaying)\s+(?:raw\s+)?(?:secrets?|credentials?|tokens?|api\s*keys?))\b/;
+
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
   if (!normalized || normalized.length > 64) return false;
@@ -49,6 +55,22 @@ export function looksLikeStandaloneGreetingTurn(request: string | undefined): bo
   const normalized = normalizeIntentGatewayRepairText(request);
   if (!normalized || normalized.length > 48) return false;
   return /^(?:hi|hello|hey|hiya|howdy|greetings|good\s+(?:morning|afternoon|evening))(?:[.!?]+)?$/.test(normalized);
+}
+
+export function looksLikeSelfContainedDirectAnswerTurn(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized || normalized.length > 240) return false;
+  return /^(?:reply|respond|answer|say)\b/.test(normalized)
+    && /\b(?:exactly|no other text|only this|just this|marker)\b/.test(normalized);
+}
+
+export function isRawCredentialDisclosureRequest(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized || RAW_SECRET_REDACTION_REQUEST_PATTERN.test(normalized)) return false;
+  if (!RAW_SECRET_DISCLOSURE_VERB_PATTERN.test(normalized)) return false;
+  if (!RAW_SECRET_TARGET_PATTERN.test(normalized)) return false;
+  return RAW_SECRET_QUALIFIER_PATTERN.test(normalized)
+    || RAW_SECRET_PROTECTED_SOURCE_PATTERN.test(normalized);
 }
 
 export function isExplicitComplexPlanningRequest(content: string | undefined): boolean {
